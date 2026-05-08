@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { idempotentOperationNames } from "../domain/operation-names.ts";
 import { allApiCommandContracts } from "./index.ts";
 
 describe("API command contracts", () => {
@@ -34,6 +35,17 @@ describe("API command contracts", () => {
     assert.equal(
       expensive.every((command) => command.idempotencyRequired),
       true,
+    );
+  });
+
+  it("has a command contract for every exported operation name", () => {
+    const contractedOperationNames = new Set(
+      allApiCommandContracts.map((command) => command.operationName),
+    );
+
+    assert.deepEqual(
+      [...idempotentOperationNames].sort(),
+      [...contractedOperationNames].sort(),
     );
   });
 });

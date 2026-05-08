@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+const ignoredDirectories = new Set([
+  "dist",
+  "node_modules",
+]);
+
 const args = process.argv.slice(2);
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
@@ -35,6 +40,10 @@ function collectTests(directory) {
     const stats = statSync(fullPath);
 
     if (stats.isDirectory()) {
+      if (entry.startsWith(".") || ignoredDirectories.has(entry)) {
+        continue;
+      }
+
       files.push(...collectTests(fullPath));
       continue;
     }

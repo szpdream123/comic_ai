@@ -8,6 +8,8 @@
 
 Do not manage P0 by file lists or module names. Manage it by delivered capabilities.
 
+Current executable test command: `npm test -- <target...>`. This is part of the delivery contract because a task that cannot be run by a developer cannot be verified.
+
 Every task must answer:
 
 ```text
@@ -425,6 +427,12 @@ Every batch:
 - Open risks are either burned down or explicitly moved to the next gate with an owner.
 - Demo path is documented.
 
+M1-specific guard:
+
+- M1 cannot exit on pure domain semantics alone.
+- Auth/session, actor context, tenant-safe query, and audit must be proven through persistence-backed or migration-backed tests before M2 Project/Script implementation starts.
+- If `login_codes`, `auth_sessions`, `memberships`, or `audit_events` are absent from the active migration, B1 remains open.
+
 ## 9. Testing and Acceptance Matrix
 
 | Batch | Required Tests |
@@ -545,6 +553,6 @@ Do not start broad UI/product breadth until the thin loop proves:
 ## 14. Immediate Next Actions
 
 1. Convert B1 task cards into implementation issues or a plan file.
-2. Start with B1-T01 and B1-T02; do not start Project module before actor context and tenant-safe query tests exist.
+2. Start with the M1 schema/persistence test harness before B1-T01 and B1-T02; do not start Project module before actor context, tenant-safe query, and audit tests exist.
 3. Add missing contract entries for auth/admin/storage as soon as their command shapes are implemented.
 4. Keep P0-A focused on the thin creator loop; defer commercial payment until B7 gates are legitimately reachable.

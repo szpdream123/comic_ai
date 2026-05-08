@@ -22,10 +22,65 @@
 - Create: `apps/backend/src/modules/organization/tests/actor-context.spec.ts`
 - Create: `apps/backend/src/modules/organization/tests/tenant-permission.spec.ts`
 - Create: `apps/backend/src/modules/shared/db/tenant-scope.ts`
+- Create: `apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`
 - Create: `apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
 - Create: `apps/backend/src/modules/audit/audit.service.ts`
 - Create: `apps/backend/src/modules/audit/tests/audit.spec.ts`
 - Modify: `docs/architecture/p0-verification-plan.md`
+
+## M1 Hard Exit Boundary
+
+M1 is a platform foundation milestone, not a pure-domain utility milestone. It cannot exit unless it proves real authentication, tenant scope, server-side authorization, and audit through persistence-backed or migration-backed tests.
+
+Required before M1 exit:
+
+- `packages/db/migrations/0001_foundation.sql` contains the M1 tables and constraints: `login_codes`, `auth_sessions`, `memberships`, and `audit_events` in addition to `users`, `organizations`, and `workspaces`.
+- Login code tests prove hash-only storage, consume-once semantics, expiry, resend/verify rate limits, lockout, and row-lock or equivalent concurrency behavior.
+- Session tests prove token hash storage, revoke/expiry behavior, and server-side lookup by presented token.
+- Actor context tests read actual user, organization, workspace, and membership facts, then reject disabled users, suspended organizations, missing memberships, and insufficient capabilities before any domain write.
+- Tenant-safe query tests include a cross-organization negative fixture and fail closed when `organizationId` or required `projectId` is absent.
+- Audit tests prove append-only records with actor/scope/target/reason and reject sensitive operations without a reason.
+
+If the test DB/repository harness does not exist yet, creating that harness is the first M1 task. M1 must not be marked `Done` by pure function tests alone.
+
+## Task 0: M1 Schema and Persistence Test Harness
+
+**Files:**
+- Modify: `packages/db/migrations/0001_foundation.sql`
+- Create: `apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`
+- Create if needed: `apps/backend/src/modules/shared/db/tests/test-db-harness.ts`
+
+- [ ] **Step 1: Write failing schema/repository tests**
+
+Cover:
+
+- `login_codes`, `auth_sessions`, `memberships`, and `audit_events` exist with required owner/scope columns
+- login/session plaintext secret columns do not exist
+- uniqueness/check constraints support consume-once sessions and tenant membership lookup
+- test harness can run migration-backed fixtures or equivalent repository tests
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npm test -- apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`
+
+Expected: FAIL until the M1 persistence surface exists.
+
+- [ ] **Step 3: Implement the minimum M1 schema and test harness**
+
+Keep schema changes limited to M1 platform facts. Do not add Project/Script/Shot tables in this task.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npm test -- apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/db/migrations/0001_foundation.sql apps/backend/src/modules/shared/db/tests
+git commit -m "feat: add M1 platform persistence surface"
+```
 
 ## Task 1: Email-Code Login Credentials
 
@@ -61,19 +116,21 @@ describe("login codes", () => {
 });
 ```
 
+The snippet is only the first red test. Completion coverage must also include expiry, consumed-code replay, resend rate limit, verify lockout, IP/email bucket behavior, and row-lock or equivalent consume-once concurrency behavior.
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/identity/tests/login-code.spec.ts`
+Run: `npm test -- apps/backend/src/modules/identity/tests/login-code.spec.ts`
 
 Expected: FAIL because service does not exist.
 
 - [ ] **Step 3: Add minimal implementation**
 
-Implement hash/verify/consume functions. Keep provider delivery out of scope; this task defines credential semantics only.
+Implement hash/verify/consume functions plus the repository boundary needed to persist `login_codes`. Keep email delivery provider out of scope; this task must still prove persisted credential semantics.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test apps/backend/src/modules/identity/tests/login-code.spec.ts`
+Run: `npm test -- apps/backend/src/modules/identity/tests/login-code.spec.ts`
 
 Expected: PASS.
 
@@ -112,19 +169,21 @@ describe("sessions", () => {
 });
 ```
 
+The snippet is only the first red test. Completion coverage must also include token lookup by presented token, expiry, revoke, disabled-user behavior, and proof that plaintext session tokens are never stored.
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/identity/tests/session.spec.ts`
+Run: `npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
 
 Expected: FAIL because service does not exist.
 
 - [ ] **Step 3: Implement minimal session semantics**
 
-Create/revoke/verify active sessions. Persisted repository/API handlers come later in the same module.
+Create/revoke/verify active sessions through persisted session facts. This task is not complete until presented-token lookup, revoke, and expiry can be tested without trusting plaintext token storage.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test apps/backend/src/modules/identity/tests/session.spec.ts`
+Run: `npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
 
 Expected: PASS.
 
@@ -154,17 +213,17 @@ Cover:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm test apps/backend/src/modules/organization/tests`
+Run: `npm test -- apps/backend/src/modules/organization/tests`
 
 Expected: FAIL because services do not exist.
 
 - [ ] **Step 3: Implement minimal actor context and capability helpers**
 
-Use capability names from `packages/contracts/domain/capabilities.ts`.
+Use capability names from `packages/contracts/domain/capabilities.ts`. Resolve actor context from persisted user, organization, workspace, and membership facts; pure in-memory role checks are not enough for M1 exit.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm test apps/backend/src/modules/organization/tests`
+Run: `npm test -- apps/backend/src/modules/organization/tests`
 
 Expected: PASS.
 
@@ -191,7 +250,7 @@ Cover:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
 
 Expected: FAIL because helper does not exist.
 
@@ -201,7 +260,7 @@ Keep this as a pure query-scope guard first; do not introduce a full ORM abstrac
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
 
 Expected: PASS.
 
@@ -228,17 +287,17 @@ Cover:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/audit/tests/audit.spec.ts`
+Run: `npm test -- apps/backend/src/modules/audit/tests/audit.spec.ts`
 
 Expected: FAIL because service does not exist.
 
 - [ ] **Step 3: Implement minimal audit event builder**
 
-Create append-only event semantics. Database repository can be added when backend persistence is wired.
+Create append-only event semantics and the repository boundary for `audit_events`. Sensitive operations without `reason` must fail before append.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test apps/backend/src/modules/audit/tests/audit.spec.ts`
+Run: `npm test -- apps/backend/src/modules/audit/tests/audit.spec.ts`
 
 Expected: PASS.
 
@@ -261,14 +320,16 @@ git commit -m "feat: add audit append helper"
 Run:
 
 ```bash
-pnpm test apps/backend/src/modules/identity
-pnpm test apps/backend/src/modules/organization
-pnpm test apps/backend/src/modules/shared/db
-pnpm test apps/backend/src/modules/audit
+npm test -- apps/backend/src/modules/identity
+npm test -- apps/backend/src/modules/organization
+npm test -- apps/backend/src/modules/shared/db
+npm test -- apps/backend/src/modules/audit
 git diff --check
 ```
 
 Expected: all pass.
+
+Also confirm the migration contains the M1 persistence surface: `login_codes`, `auth_sessions`, `memberships`, and `audit_events`. If any are absent, M1 remains open and M2 Project/Script work cannot start except for test/contract drafts.
 
 - [ ] **Step 2: Update verification plan**
 

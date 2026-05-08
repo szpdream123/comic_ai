@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { p0EventTypes } from "../domain/event-types.ts";
 import { allEventContracts } from "./index.ts";
 
 const requiredEnvelopeFields = [
@@ -35,5 +36,16 @@ describe("event contracts", () => {
     assert.ok(paymentSucceeded.sourceIds.includes("order_id"));
     assert.ok(paymentSucceeded.sourceIds.includes("payment_intent_id"));
     assert.ok(paymentSucceeded.deduplicationKeys.includes("payment_intent_id"));
+  });
+
+  it("has a contract for every exported P0 event type", () => {
+    const contractedEventTypes = new Set(
+      allEventContracts.map((event) => event.eventType),
+    );
+
+    assert.deepEqual(
+      [...p0EventTypes].sort(),
+      [...contractedEventTypes].sort(),
+    );
   });
 });

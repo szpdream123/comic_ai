@@ -973,6 +973,56 @@ When a shot image generation task succeeds:
 - Every task must answer what/why, delivered capability, prerequisites, verification method, failure handling, and whether it advances the main loop.
 - P0-B commerce/payment remains gated by credit ledger reliability, official provider mapping, merchant capability, finance/tax approval, and operational runbooks.
 
+### D-053: M0.1 Deep Review Repairs Contract Drift Before M1
+
+**Decision:** The architecture is accepted as an M0.1-repaired implementation blueprint, and M1 Platform Foundation remains the next implementation milestone. The review record is `docs/architecture/p0-implementation-blueprint-deep-review-2026-05-08.md`.
+
+**Rationale:**
+
+- A deep review found that the architecture direction was sound, but several M0.1 repository artifacts had drifted from the canonical documents.
+- State constants did not fully match `p0-state-dictionary.md`.
+- API command contracts did not cover every exported operation name.
+- Event contracts did not cover every exported P0 event type.
+- The default test runner scanned hidden tool directories, so `npm test` was not a reliable project gate.
+
+**Repairs Applied:**
+
+- State constants and state consistency tests now cover calibration, export, and reconciliation states.
+- Admin/Ops command contracts now cover `ops.manual_settle_task` and `ops.retry_task`.
+- Asset, calibration, and export event contracts now cover `asset.version.created`, `calibration.passed`, and `export.ready`.
+- Contract tests now require complete operation/event coverage.
+- The root `npm test` command now skips hidden tool directories plus dependency/build directories and passes the current project test suite.
+
+**Implications:**
+
+- M1/M2 implementation planning can proceed from a stronger contract baseline.
+- M0.1 still does not mean product implementation is complete.
+- CODEOWNERS placeholder owners must be replaced before real parallel review enforcement.
+- P0-A real provider usage and P0-B payment remain gated by their documented safety and verification gates.
+
+### D-054: Development Tasks Must Be Executable, Persistence-Gated, and Main-Loop Aligned
+
+**Decision:** The P0 development task plan is accepted only after the 2026-05-08 task-plan review repairs. The review record is `docs/architecture/p0-development-task-plan-review-2026-05-08.md`.
+
+**Rationale:**
+
+- A task list is not a delivery system unless every task explains why it exists, what capability it delivers, what it depends on, how it is verified, how failure is handled, and whether it advances the main creator loop or a named release gate.
+- The first review found task-plan drift that would have weakened execution: non-executable `pnpm test` commands, an M1 plan that could pass pure function tests without proving persistence, a B2/A4 dependency contradiction, and Admin/Ops command contracts missing from the collaboration matrix.
+
+**Repairs Applied:**
+
+- Current task-plan commands now use `npm test -- <target...>`, matching the repository's verified test runner.
+- M1 exit now requires persistence-backed or migration-backed proof for login codes, sessions, actor context, tenant-safe query, and audit.
+- M1 now starts with an explicit schema/persistence test harness task before auth/session work.
+- B2 Script Parse is explicitly blocked on A4 Workflow/Task; B can prepare tests/contracts before A4 but cannot implement fake task state.
+- Admin/Ops commands `ops.retry_task` and `ops.manual_settle_task` are now present in the command contract matrix.
+
+**Implications:**
+
+- M2 Project/Script implementation must not start until M1 platform foundation and A4 Workflow/Task prerequisites are factually satisfied.
+- M1 remains open until `login_codes`, `auth_sessions`, `memberships`, and `audit_events` are present in the active migration and covered by tests.
+- C can build E2E harnesses early, but cannot claim closed-loop completion with fake sessions, fake project state, or local-only task status.
+
 ## Open Questions
 
 These are not yet decided:

@@ -32,6 +32,12 @@
 - 有观测字段或说明不需要。
 - PR 引用 verification ID 或明确说明是前置工程任务。
 
+任务进入 `待开发` 的硬要求：
+
+- “背景 / 交付能力 / 前置依赖 / 验证方式 / 异常处理 / 主链路贡献”六项都必须可回答。
+- 任何一项写成“待定”“后补”“实现时再看”，任务只能停在 `待澄清`。
+- 当前仓库唯一已验证的测试入口是 `npm test -- <target...>`。除非新增并验证 package-manager 决策，不得在任务卡里使用其他 test runner。
+
 ## 1. 三人角色与边界
 
 | 人员 | 角色 | 主责 | 不负责 |
@@ -93,6 +99,8 @@
 | 创建订单 | `packages/contracts/api/billing.commands.ts#CreateBillingOrder` | `billing.create_order` | `billing:purchase` | A | A9 |
 | 创建支付意图 | `packages/contracts/api/billing.commands.ts#CreatePaymentIntent` | `billing.create_payment_intent` | `billing:purchase` | A | A9 |
 | 申请退款 | `packages/contracts/api/billing.commands.ts#RequestRefund` | `billing.request_refund` | `billing:refund` | A | A9 |
+| Ops 重试任务 | `packages/contracts/api/admin-ops.commands.ts#AdminRetryTask` | `ops.retry_task` | `ops:settle` | A/C | A7 + C10 |
+| Ops 人工结算未知任务 | `packages/contracts/api/admin-ops.commands.ts#ManualSettleUnknownTask` | `ops.manual_settle_task` | `ops:settle` | A/C | A8 + C10 |
 
 ## 2.7 幂等依赖拆分规则
 
@@ -106,38 +114,40 @@
 
 每个任务的局部测试在任务卡里定义；批次出口必须至少运行下列 gate 中对应部分。
 
+命令约定：当前仓库根部只有 `package.json` 的 `test` script，且测试 runner 支持路径参数；因此统一使用 `npm test -- <target...>`。
+
 ```bash
-pnpm test packages/contracts
+npm test -- packages/contracts
 ```
 
 Expected: API command contracts 和 event contracts 全部通过。
 
 ```bash
-pnpm test apps/backend/src/modules/shared
+npm test -- apps/backend/src/modules/shared
 ```
 
 Expected: state dictionary、idempotency、outbox/inbox shared tests 全部通过。
 
 ```bash
-pnpm test apps/backend/src/modules/identity apps/backend/src/modules/organization
+npm test -- apps/backend/src/modules/identity apps/backend/src/modules/organization
 ```
 
 Expected: M1 auth、actor context、tenant/capability tests 全部通过。
 
 ```bash
-pnpm test apps/backend/src/modules/workflow-task apps/backend/src/modules/model-gateway
+npm test -- apps/backend/src/modules/workflow-task apps/backend/src/modules/model-gateway
 ```
 
 Expected: workflow/task claim、finalization、provider no-blind-retry tests 全部通过。
 
 ```bash
-pnpm test apps/backend/src/modules/project apps/backend/src/modules/asset apps/backend/src/modules/shot apps/backend/src/modules/quality-review apps/backend/src/modules/export
+npm test -- apps/backend/src/modules/project apps/backend/src/modules/asset apps/backend/src/modules/shot apps/backend/src/modules/quality-review apps/backend/src/modules/export
 ```
 
 Expected: P0-A creator domain tests 全部通过。
 
 ```bash
-pnpm test apps/web/e2e/p0
+npm test -- apps/web/e2e/p0
 ```
 
 Expected: login -> create project -> parse script -> confirm assets -> calibrate -> generate image -> export 的 P0-A E2E 通过。
@@ -146,28 +156,59 @@ Expected: login -> create project -> parse script -> confirm assets -> calibrate
 
 ```text
 B0 Contracts
-  -> A1/A2/A3 平台基础
-      -> B1/B2 Project + Script parse
-          -> A4 Workflow/Task + A-S1 Storage + B3/B4 Asset/Shot
-              -> B5 Calibration
-                  -> B6 Generate Image
-                      -> B7 Export
-                          -> C8 P0-A E2E
-                              -> A6 Provider Safety
-                                  -> A7/A8 Reliability + Credit
-                                      -> A9 Payment Gate
-                                          -> C9 Release/Ops
+  -> A0 M1 schema/test harness
+      -> A1 Auth/Session
+          -> A2 Actor/Tenant
+              -> A3 Audit
+                  -> B1 Project/CreateProject
+                  -> A4 Workflow/Task
+                      -> B2 Script parse
+                          -> A-S1 Storage + B3/B4 Asset/Shot
+                              -> B5 Calibration
+                                  -> B6 Generate Image
+                                      -> B7 Export
+                                          -> C8 P0-A E2E
+                                              -> A6 Provider Safety
+                                                  -> A7/A8 Reliability + Credit
+                                                      -> A9 Payment Gate
+                                                          -> C9/C10 Release/Ops
 ```
 
 最关键阻塞：
 
-- B 的 Project/Shot 不能早于 A 的 ActorContext + tenant-safe query。
+- B 的 Project/Shot 不能早于 A 的 ActorContext、tenant-safe query 和 Audit foundation。
+- B2 Script Parse 不能早于 A4 Workflow/Task；B 在此之前只能做 schema/contract/test 草稿和依赖对齐。
 - C 的 E2E 不能用假状态替代后端持久状态。
 - AssetVersion 和 Export 不能早于 A-S1 Storage adapter/signed URL contract。
 - 真 provider 不能早于 A6 ProviderRequest pre-call persistence。
 - 支付不能早于 A8 credit ledger 和官方/财税 gate。
 
 ## 4. 开发 A：Platform / Reliability 任务
+
+### Task A0: M1 Schema and Persistence Test Harness
+
+**背景 / Why:** M1 要证明“真实登录、真实租户、真实权限、真实审计”。如果缺少 schema 和 repository/integration test harness，后续 A1/A2/A3 只能做纯函数，无法支撑 M2。
+
+**交付能力:** `login_codes`、`auth_sessions`、`memberships`、`audit_events` 的最小 schema 和可执行 persistence-backed 测试入口。
+
+**前置依赖:** M0.1 foundation SQL；Node test runner。
+
+**推进主链路:** Yes。它是登录、租户和 Project/CreateProject 的真实数据前提。
+
+**Files:**
+- Modify: `packages/db/migrations/0001_foundation.sql`
+- Create: `apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`
+- Create if needed: `apps/backend/src/modules/shared/db/tests/test-db-harness.ts`
+
+- [ ] Step 1: 写失败测试，覆盖 M1 tables/constraints 存在、secret 明文列不存在、tenant membership lookup 可建 fixture。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts`，确认失败。
+- [ ] Step 3: 实现最小 M1 schema/test harness，不加入 Project/Script/Shot 表。
+- [ ] Step 4: 运行测试，确认通过。
+- [ ] Step 5: Commit: `feat: add M1 platform persistence surface`
+
+**异常处理:** migration/test harness 无法证明 M1 persistence 时，M1 不得退出，B/C 只能继续做测试和契约草稿。
+
+**完成标准:** foundation-schema test 通过；A1/A2/A3 可基于 persistence-backed fixtures 开发。
 
 ### Task A1: Email-Code 登录和 Session
 
@@ -187,15 +228,15 @@ B0 Contracts
 - Test: `apps/backend/src/modules/identity/tests/session.spec.ts`
 
 - [ ] Step 1: 写失败测试，覆盖 code hash、verify、consume once、expired/revoked、resend rate limit、verify lockout、IP/email bucket、session token hash、revoke 后不可用。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/identity`，确认因 service 缺失失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/identity`，确认因 service 缺失失败。
 - [ ] Step 3: 实现最小 login-code/session domain service。明文 code/token 不落库、不进日志。
 - [ ] Step 4: 补错误码：`code_expired`、`code_consumed`、`code_invalid`、`user_disabled`。
-- [ ] Step 5: 运行 `pnpm test apps/backend/src/modules/identity`，确认通过。
+- [ ] Step 5: 运行 `npm test -- apps/backend/src/modules/identity`，确认通过。
 - [ ] Step 6: Commit: `feat: add email-code auth foundation`
 
 **异常处理:** 错码稳定；验证码错误增加 attempt count；resend/verify 触发 rate limit 后返回稳定错误；已消费/过期 code 不能复用；disabled user 拒绝登录。
 
-**完成标准:** 测试通过；无明文敏感信息；session 可撤销；rate limit 和 lockout 可配置；日志只允许 email hash/userId。
+**完成标准:** M1-AUTH-001/M1-AUTH-002 通过；无明文敏感信息；session 可撤销；rate limit 和 lockout 可配置；日志只允许 email hash/userId。
 
 ### Task A2: ActorContext、Capability、Tenant-Safe Query
 
@@ -216,7 +257,7 @@ B0 Contracts
 - Test: `apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts`
 
 - [ ] Step 1: 写失败测试，覆盖 401、403、disabled user、suspended org、missing membership、无 capability、跨 org 查询。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/organization apps/backend/src/modules/shared/db`，确认失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/organization apps/backend/src/modules/shared/db`，确认失败。
 - [ ] Step 3: 实现 `resolveActorContext`、`assertCapability`、tenant scope guard。
 - [ ] Step 4: 所有 tenant-owned query helper 必须要求 `organizationId`；project-owned 还要 `projectId`。
 - [ ] Step 5: 运行对应测试，确认通过。
@@ -224,7 +265,7 @@ B0 Contracts
 
 **异常处理:** command handler 前拒绝；记录 `traceId/userId/organizationId/reason`。
 
-**完成标准:** 所有受保护命令可以复用；跨租户测试失败即阻塞 B1/B2。
+**完成标准:** M1-ORG-001/M1-ORG-002/M1-DB-001 通过；所有受保护命令可以复用；跨租户测试失败即阻塞 B1/B2。
 
 ### Task A3: Audit Append Helper
 
@@ -241,14 +282,14 @@ B0 Contracts
 - Test: `apps/backend/src/modules/audit/tests/audit.spec.ts`
 
 - [ ] Step 1: 写失败测试，覆盖 actor/scope/target/eventType/metadata、append-only、敏感 admin action 缺 reason 拒绝。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/audit/tests/audit.spec.ts`，确认失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/audit/tests/audit.spec.ts`，确认失败。
 - [ ] Step 3: 实现 audit event builder，metadata 必须脱敏。
 - [ ] Step 4: 运行测试，确认通过。
 - [ ] Step 5: Commit: `feat: add audit append helper`
 
 **异常处理:** 高风险命令审计失败不得静默成功；低风险事件可后续进入 outbox repair。
 
-**完成标准:** 审计事件不可变；字段完整；敏感 metadata 不泄露。
+**完成标准:** M1-AUDIT-001 通过；审计事件不可变；字段完整；敏感 metadata 不泄露。
 
 ### Task A-S1: Storage Adapter + Signed URL Contract
 
@@ -268,7 +309,7 @@ B0 Contracts
 - Test: `apps/backend/src/modules/storage/tests/signed-url-authorization.spec.ts`
 
 - [ ] Step 1: 写失败测试，覆盖 object key 必须含 organization/project scope、跨租户 signed URL 拒绝、过期 URL 不可刷新为永久 URL。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/storage`，确认因 adapter/service 缺失失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/storage`，确认因 adapter/service 缺失失败。
 - [ ] Step 3: 实现最小 local/mock adapter；不引入真实云 SDK。
 - [ ] Step 4: 实现 signed URL service，只接受通过 ActorContext/capability 校验的请求。
 - [ ] Step 5: 运行 storage tests，确认通过。
@@ -297,7 +338,7 @@ B0 Contracts
 - Test: `apps/backend/src/modules/workflow-task/tests/manual-review-aggregation.spec.ts`
 
 - [ ] Step 1: 写失败测试：两个 worker 不能 claim 同一 task；finalization 任一步失败回滚；manual_review 阻塞 parent terminal。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/workflow-task`，确认失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/workflow-task`，确认失败。
 - [ ] Step 3: 实现最小 workflow/task/attempt domain service 和 claim 协议。
 - [ ] Step 4: 接入 structured log 字段 `workflowId/taskId/attemptId`。
 - [ ] Step 5: 运行测试，确认通过。
@@ -351,7 +392,7 @@ B0 Contracts
 - Test: `apps/backend/src/modules/model-gateway/tests/crash-after-external-start.spec.ts`
 
 - [ ] Step 1: 写失败测试，覆盖 before external start 可安全重试、after external start 不创建第二个 provider request。
-- [ ] Step 2: 运行 `pnpm test apps/backend/src/modules/model-gateway`，确认失败。
+- [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/model-gateway`，确认失败。
 - [ ] Step 3: 实现 ProviderRequest pre-call persistence 和 policy snapshot。
 - [ ] Step 4: 实现 timeout-after-accept -> `result_unknown`。
 - [ ] Step 5: 运行 A-001/R-026/R-027，确认通过。
@@ -454,7 +495,7 @@ B0 Contracts
 
 **交付能力:** 用户在工作区创建项目并持久化 script。
 
-**前置依赖:** A2 ActorContext；M0.1 idempotency helper；project/script migration。A5 是后续跨模块 hardening，不阻塞 B1 首轮。
+**前置依赖:** A2 ActorContext；A3 Audit；M0.1 idempotency helper；project/script migration。A5 是后续跨模块 hardening，不阻塞 B1 首轮。
 
 **推进主链路:** Yes。
 
@@ -976,7 +1017,7 @@ B0 Contracts
 
 | 人员 | 主任务 | 辅助任务 | 周五验收物 |
 | --- | --- | --- | --- |
-| A | A1 Email-Code 登录和 Session | A2 ActorContext 测试红灯 | identity tests 通过；organization tests 至少红灯可执行 |
+| A | A0 M1 schema/test harness + A1 Email-Code 登录和 Session | A2 ActorContext 测试红灯 | foundation-schema/identity tests 通过；organization tests 至少红灯可执行 |
 | B | B1 Project/CreateProject 测试草稿和 schema 对齐 | B2 Parse workflow 依赖对齐 | CreateProject task 可进入开发；ParseScript 依赖无歧义 |
 | C | C1 Auth UI 壳和 E2E harness | C2 Project Create E2E 草稿 | auth-flow E2E 可启动；不使用假 session |
 
@@ -1015,6 +1056,6 @@ B0 Contracts
 
 ### Loop 5: 是否可以事实性 100% 自信？
 
-结论：对“当前三人任务拆分作为执行系统”可以 100% 自信，因为它覆盖能力、依赖、验证、异常、主链路贡献和风险 gate。对“实际开发一定按期完成”不能 100% 自信，因为那取决于实现质量、外部 provider、财税/部署决策和 CI 执行结果。
+结论：对“当前三人任务拆分作为执行系统”可以 100% 自信，因为它覆盖能力、依赖、验证、异常、主链路贡献和风险 gate，并且已经补齐三类会直接破坏落地的漂移：测试命令统一为当前仓库已验证的 `npm test -- <target...>`；B2 明确不得早于 A4 Workflow/Task；Admin/Ops 命令契约进入协作矩阵。对“实际开发一定按期完成”不能 100% 自信，因为那取决于实现质量、外部 provider、财税/部署决策和 CI 执行结果。
 
 修复：计划不承诺工期确定性，只承诺每个任务的完成证据和 gate。

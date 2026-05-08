@@ -4,7 +4,9 @@ export { shotCommandContracts } from "./shot.commands.ts";
 export { calibrationCommandContracts } from "./calibration.commands.ts";
 export { exportCommandContracts } from "./export.commands.ts";
 export { billingCommandContracts } from "./billing.commands.ts";
+export { adminOpsCommandContracts } from "./admin-ops.commands.ts";
 
+import { adminOpsCommandContracts } from "./admin-ops.commands.ts";
 import { billingCommandContracts } from "./billing.commands.ts";
 import { calibrationCommandContracts } from "./calibration.commands.ts";
 import { exportCommandContracts } from "./export.commands.ts";
@@ -17,4 +19,5 @@ export const allApiCommandContracts = [
   ...calibrationCommandContracts,
   ...exportCommandContracts,
   ...billingCommandContracts,
+  ...adminOpsCommandContracts,
 ];

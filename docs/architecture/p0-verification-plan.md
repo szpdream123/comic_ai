@@ -56,6 +56,19 @@ These tests are now executable repository artifacts. They are contract-level tes
 | IDEMP-006 | M4 | `apps/backend/src/modules/workflow-task/tests/worker-duplicate-delivery.spec.ts` | Proposed | BullMQ duplicate delivery cannot create a second attempt for an already claimed task. |
 | IDEMP-007 | M4 | `apps/backend/src/modules/credit-billing/tests/allocation-settlement-idempotency.spec.ts` | Proposed | Duplicate settlement cannot both consume and release the same allocation. |
 
+## 2.3 M1 Platform Foundation Verification Mapping
+
+M1 cannot exit on pure function tests alone. These tests must be backed by migration-backed fixtures, repository tests, or equivalent integration tests.
+
+| Test ID | Stage | Proposed / Implemented Test File | Status | Must Prove |
+| --- | --- | --- | --- | --- |
+| M1-AUTH-001 | M1 | `apps/backend/src/modules/identity/tests/login-code.spec.ts` | Proposed | `login_codes` store only hashes; verify consumes once; expiry, rate limit, lockout, and row-lock behavior are enforced. |
+| M1-AUTH-002 | M1 | `apps/backend/src/modules/identity/tests/session.spec.ts` | Proposed | `auth_sessions` store only token hashes; presented tokens resolve active sessions; revoked/expired sessions fail closed. |
+| M1-ORG-001 | M1 | `apps/backend/src/modules/organization/tests/actor-context.spec.ts` | Proposed | Actor context resolves from users, organizations, workspaces, and memberships; disabled/suspended/missing membership cases fail before domain writes. |
+| M1-ORG-002 | M1 | `apps/backend/src/modules/organization/tests/tenant-permission.spec.ts` | Proposed | Cross-organization access and missing capability are rejected server-side. |
+| M1-DB-001 | M1 | `apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts` | Proposed | Tenant-owned queries require `organizationId`; project-owned queries require both `organizationId` and `projectId`. |
+| M1-AUDIT-001 | M1 | `apps/backend/src/modules/audit/tests/audit.spec.ts` | Proposed | `audit_events` append immutable actor/scope/target/reason records; sensitive operations without reason are rejected. |
+
 ## 3. PRD Acceptance Tests
 
 | PRD ID | Stage | Test Type | Proposed Test File | Owning Modules | Must Prove |

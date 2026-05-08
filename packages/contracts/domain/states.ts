@@ -107,15 +107,17 @@ export const calibrationSessionStatuses = [
   "passed",
   "failed",
   "skipped",
+  "archived",
 ] as const;
 export type CalibrationSessionStatus =
   (typeof calibrationSessionStatuses)[number];
 
 export const calibrationItemStatuses = [
-  "queued",
+  "pending",
   "generating",
   "succeeded",
   "failed",
+  "review_required",
 ] as const;
 export type CalibrationItemStatus = (typeof calibrationItemStatuses)[number];
 
@@ -146,13 +148,7 @@ export const creditReservationAllocationStatuses = [
 export type CreditReservationAllocationStatus =
   (typeof creditReservationAllocationStatuses)[number];
 
-export const exportStatuses = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "canceled",
-] as const;
+export const exportStatuses = ["preparing", "ready", "failed", "expired"] as const;
 export type ExportStatus = (typeof exportStatuses)[number];
 
 export const creditPackageStatuses = ["active", "inactive", "archived"] as const;
@@ -237,6 +233,7 @@ export const reconciliationRunStatuses = [
   "running",
   "succeeded",
   "failed",
+  "partial_failed",
 ] as const;
 export type ReconciliationRunStatus =
   (typeof reconciliationRunStatuses)[number];
@@ -245,6 +242,7 @@ export const reconciliationItemStatuses = [
   "open",
   "resolved",
   "manual_review_required",
+  "ignored_with_reason",
 ] as const;
 export type ReconciliationItemStatus =
   (typeof reconciliationItemStatuses)[number];

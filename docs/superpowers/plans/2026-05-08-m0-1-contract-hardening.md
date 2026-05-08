@@ -58,7 +58,7 @@ describe('state dictionary consistency', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/shared/contracts/tests/state-dictionary-consistency.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/contracts/tests/state-dictionary-consistency.spec.ts`
 
 Expected: FAIL because `states.ts` does not exist.
 
@@ -68,7 +68,7 @@ Include identity, tenant, workflow, task, attempt, provider request, project pha
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test apps/backend/src/modules/shared/contracts/tests/state-dictionary-consistency.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/contracts/tests/state-dictionary-consistency.spec.ts`
 
 Expected: PASS.
 
@@ -98,7 +98,7 @@ describe('idempotency records', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test apps/backend/src/modules/shared/idempotency/tests/idempotency-records.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/idempotency/tests/idempotency-records.spec.ts`
 
 Expected: FAIL because service/table do not exist.
 
@@ -116,7 +116,7 @@ Implement `beginOrReplayCommand()` with request hash compare, response resource 
 
 - [ ] **Step 6: Run tests**
 
-Run: `pnpm test apps/backend/src/modules/shared/idempotency/tests/idempotency-records.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/idempotency/tests/idempotency-records.spec.ts`
 
 Expected: PASS.
 
@@ -144,7 +144,7 @@ Assert every command exports `operationName`, `capability`, `idempotencyRequired
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test packages/contracts/api/contracts.spec.ts`
+Run: `npm test -- packages/contracts/api/contracts.spec.ts`
 
 Expected: FAIL because contracts do not exist.
 
@@ -154,7 +154,7 @@ Use `docs/architecture/p0-m0-1-contract-hardening.md` and `p0-module-implementat
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm test packages/contracts/api/contracts.spec.ts`
+Run: `npm test -- packages/contracts/api/contracts.spec.ts`
 
 Expected: PASS.
 
@@ -181,7 +181,7 @@ Assert every event schema includes `event_id`, `event_type`, `schema_version`, `
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test packages/contracts/events/contracts.spec.ts`
+Run: `npm test -- packages/contracts/events/contracts.spec.ts`
 
 Expected: FAIL because event schemas do not exist.
 
@@ -191,7 +191,7 @@ Use `docs/architecture/p0-m0-1-contract-hardening.md` §5 as the required minimu
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm test packages/contracts/events/contracts.spec.ts`
+Run: `npm test -- packages/contracts/events/contracts.spec.ts`
 
 Expected: PASS.
 
@@ -216,7 +216,7 @@ Cover outbox duplicate delivery, Redis queued job loss, and credit balance drift
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm test apps/backend/src/modules/shared/outbox/tests/inbox-dedup.spec.ts apps/backend/src/modules/workflow-task/tests/redis-loss-repair.spec.ts apps/backend/src/modules/credit-billing/tests/balance-drift-repair.spec.ts`
+Run: `npm test -- apps/backend/src/modules/shared/outbox/tests/inbox-dedup.spec.ts apps/backend/src/modules/workflow-task/tests/redis-loss-repair.spec.ts apps/backend/src/modules/credit-billing/tests/balance-drift-repair.spec.ts`
 
 Expected: FAIL because implementations do not exist.
 
@@ -277,8 +277,8 @@ git commit -m "chore: add P0 collaboration scaffolding"
 Run:
 
 ```bash
-pnpm test packages/contracts
-pnpm test apps/backend/src/modules/shared
+npm test -- packages/contracts
+npm test -- apps/backend/src/modules/shared
 git diff --check
 ```
 

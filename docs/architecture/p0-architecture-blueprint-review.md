@@ -544,8 +544,8 @@ Created implementation-readiness artifacts:
 Verified gates:
 
 ```text
-pnpm test packages/contracts
-pnpm test apps/backend/src/modules/shared
+npm test -- packages/contracts
+npm test -- apps/backend/src/modules/shared
 git diff --check
 ```
 
