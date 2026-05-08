@@ -1,0 +1,80 @@
+<h2>漫剧制作 SaaS — 整体架构分层</h2>
+<p class="subtitle">核心设计原则：稳定点内聚，变化点隔离</p>
+
+<div class="mockup" style="margin-bottom: 32px;">
+  <div class="mockup-header">系统分层架构</div>
+  <div class="mockup-body" style="font-family: monospace; font-size: 13px; line-height: 2; padding: 20px;">
+    <div style="border: 2px solid #4ade80; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: rgba(74,222,128,0.05);">
+      <strong style="color: #4ade80;">┌─ 表现层 (UI Layer)</strong><br>
+      │  Next.js App Router · React 组件 · 页面路由 · i18n<br>
+      │  <span style="color: #888;">变化点：UI 框架、交互模式、国际化</span>
+    </div>
+    <div style="border: 2px solid #60a5fa; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: rgba(96,165,250,0.05);">
+      <strong style="color: #60a5fa;">├─ 应用层 (Application Layer)</strong><br>
+      │  工作空间管理 · 项目管理 · 协作 & 权限 · 用量计费<br>
+      │  <span style="color: #888;">变化点：业务规则、权限模型、计费策略</span>
+    </div>
+    <div style="border: 2px solid #f59e0b; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: rgba(245,158,11,0.08);">
+      <strong style="color: #f59e0b;">├─ 核心领域层 (Core Domain) ★ 最稳定</strong><br>
+      │  漫剧生成流水线 · 剧本解析 · 角色管理 · 分镜编排<br>
+      │  关键帧生成逻辑 · 视频合成规则<br>
+      │  <span style="color: #888;">不依赖任何框架、数据库、外部服务</span>
+    </div>
+    <div style="border: 2px solid #a78bfa; border-radius: 8px; padding: 12px; margin-bottom: 8px; background: rgba(167,139,250,0.05);">
+      <strong style="color: #a78bfa;">├─ 基础设施层 (Infrastructure Layer)</strong><br>
+      │  AI适配器 · 存储适配器 · 消息推送 · 支付通道<br>
+      │  <span style="color: #888;">变化点：第三方服务、技术实现细节</span>
+    </div>
+    <div style="border: 2px solid #ec4899; border-radius: 8px; padding: 12px; background: rgba(236,72,153,0.05);">
+      <strong style="color: #ec4899;">└─ 平台支撑层 (Platform Layer)</strong><br>
+        数据库 · 消息队列 · 对象存储 · 容器编排<br>
+        <span style="color: #888;">变化点：基础设施选型、部署环境</span>
+    </div>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+  <div style="border: 2px solid #f59e0b; border-radius: 8px; padding: 16px; background: rgba(245,158,11,0.05);">
+    <h3 style="color: #f59e0b; margin-top: 0;">核心领域（稳定）</h3>
+    <ul style="margin: 0; padding-left: 18px;">
+      <li>漫剧生成流水线状态机</li>
+      <li>剧本 → 角色 → 分镜 → 视频</li>
+      <li>角色与镜头的关联规则</li>
+      <li>分镜版本管理</li>
+      <li>视频合成 & 字幕规则</li>
+    </ul>
+  </div>
+  <div style="border: 2px solid #a78bfa; border-radius: 8px; padding: 16px; background: rgba(167,139,250,0.05);">
+    <h3 style="color: #a78bfa; margin-top: 0;">基础设施（变化）</h3>
+    <ul style="margin: 0; padding-left: 18px;">
+      <li>AI 供应商（中转站 / 自带Key）</li>
+      <li>文件存储（OSS / 本地）</li>
+      <li>短信 & 微信 & 支付</li>
+      <li>计费 & 额度管理</li>
+      <li>内容审核策略</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 24px;">
+  <h3>关键架构决策：核心层不依赖任何外部世界</h3>
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>这意味着</h4>
+      <ul>
+        <li>核心流水线可以脱离 Web 框架独立测试</li>
+        <li>换 AI 供应商不影响业务逻辑</li>
+        <li>换数据库、换部署平台不影响核心</li>
+        <li>中转站和漫剧 SaaS 共享核心抽象</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>代价</h4>
+      <ul>
+        <li>需要额外的适配层代码</li>
+        <li>前期设计投入较大</li>
+        <li>不能直接照搬开源项目的直接调用模式</li>
+      </ul>
+    </div>
+  </div>
+</div>
