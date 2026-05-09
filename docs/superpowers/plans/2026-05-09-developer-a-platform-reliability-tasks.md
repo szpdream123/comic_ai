@@ -1,187 +1,187 @@
-# Developer A Task Pack: Platform / Reliability
+# Developer A 任务包：平台 / 可靠性
 
-> Date: 2026-05-09  
-> Owner: Developer A  
-> Role: Platform / Reliability Owner  
-> Mission: 让 P0 的登录、租户、权限、审计、长任务、幂等、存储、Provider、Repair、Credit、Payment 都有可信基础。
+> 日期：2026-05-09  
+> 负责人：Developer A  
+> 角色：平台 / 可靠性负责人  
+> 使命：让 P0 的登录、租户、权限、审计、长任务、幂等、存储、Provider、Repair、Credit、Payment 都有可信基础。
 
-## 1. Can A Start Now?
+## 1. A 可以立即开始吗？
 
-Yes. A can start immediately.
+可以。A 可以立即开始。
 
-Start with A0 and A1. These are on the critical path and do not require B/C implementation to exist.
+从 A0 和 A1 开始。这两项处于关键路径上，不依赖 B/C 的实现。
 
-A must not wait for UI or creator-domain code. A's first job is to make the platform foundation impossible to fake.
+A 不应等待 UI 或创作者域代码。A 的首要任务是让平台基础变得不可伪造。
 
-## 2. Non-Negotiable Rules
+## 2. 不可妥协的规则
 
-- P0 auth is China phone-code login, not email-code login.
-- Current test command is `npm test -- <target...>`.
-- M1 cannot exit on pure function tests. Auth/session, actor context, tenant-safe query, and audit need persistence-backed or migration-backed evidence.
-- Do not implement Project/Shot business rules. Provide the platform boundary B must use.
-- No full phone number, plaintext code, plaintext session token, provider secret, or sensitive payment payload may enter logs.
+- P0 认证为中国手机验证码登录，而非邮箱验证码登录。
+- 当前测试命令为 `npm test -- <target...>`。
+- M1 不得在纯函数测试上退出。认证/会话、Actor 上下文、租户安全查询和审计需要有持久化支持或迁移支持的证据。
+- 不要实现 Project/Shot 业务规则。只需提供 B 必须使用的平台边界。
+- 完整手机号、明文验证码、明文会话令牌、Provider 密钥或敏感支付载荷不得进入日志。
 
-## 3. Outputs A Owes Other Developers
+## 3. A 需要向其他开发者交付的产出
 
-| Consumer | A must provide | Blocks |
+| 消费者 | A 必须提供 | 阻塞项 |
 | --- | --- | --- |
-| B | ActorContext, capability checks, tenant-safe query, audit helper | B1 Project/CreateProject |
-| B | Workflow/Task/Attempt execution spine | B2 Script Parse, B7 Generate Image, B9 Export |
-| B/C | Storage adapter and signed URL service | AssetVersion, Export UI |
-| B/C | Idempotency helper and command semantics | duplicate submit/refresh behavior |
-| B/C/Ops | repair jobs, manual review semantics, trace/log IDs | M4-M6 reliability |
-| C | stable auth/session APIs and error codes | C1 Auth UI/E2E |
+| B | ActorContext、能力检查、租户安全查询、审计辅助 | B1 Project/CreateProject |
+| B | Workflow/Task/Attempt 执行骨架 | B2 Script Parse、B7 Generate Image、B9 Export |
+| B/C | 存储适配器和签名 URL 服务 | AssetVersion、Export UI |
+| B/C | 幂等辅助和命令语义 | 重复提交/刷新行为 |
+| B/C/Ops | 修复作业、人工审核语义、trace/log ID | M4-M6 可靠性 |
+| C | 稳定的认证/会话 API 和错误码 | C1 Auth UI/E2E |
 
-## 4. Task A0: M1 Schema and Persistence Test Harness
+## 4. 任务 A0：M1 Schema 和持久化测试工具
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | M1 must prove real login, tenant scope, permission, and audit. Without schema and persistence tests, the system can pass pure utilities while still being unsafe. |
-| Capability | Add `login_challenges`, `auth_sessions`, `memberships`, and `audit_events` schema surface plus persistence-backed test harness. |
-| Prerequisites | M0.1 foundation SQL; Node test runner. |
-| Verification | `npm test -- apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts` |
-| Failure Handling | If schema/harness cannot prove persistence, M1 stays open and B/C can only prepare tests, contracts, and fixtures. |
-| Main Loop | Yes. It is the real data prerequisite for login -> project creation. |
+| 背景 | M1 必须证明真实登录、租户范围、权限和审计。如果没有 schema 和持久化测试，系统可能在纯工具函数上通过测试，但仍然不安全。 |
+| 能力 | 添加 `login_challenges`、`auth_sessions`、`memberships` 和 `audit_events` 的 schema 层面以及持久化支持的测试工具。 |
+| 前置条件 | M0.1 基础 SQL；Node 测试运行器。 |
+| 验证 | `npm test -- apps/backend/src/modules/shared/db/tests/foundation-schema.spec.ts` |
+| 失败处理 | 如果 schema/工具无法证明持久化，M1 保持未完成状态，B/C 只能准备测试、契约和 fixtures。 |
+| 主循环 | 是。它是登录 -> 项目创建的真正数据前提。 |
 
-Implementation notes:
+实现说明：
 
-- Keep this task limited to platform facts.
-- Do not add Project/Script/Shot tables here.
-- Prove plaintext auth secrets are not modeled as persisted columns.
+- 将此任务限制在平台事实范围内。
+- 不要在此处添加 Project/Script/Shot 表。
+- 证明明文认证密钥没有被建模为持久化列。
 
-## 5. Task A1: Phone-Code Auth and Server Session
+## 5. 任务 A1：手机验证码认证和服务器端会话
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Every P0 command must run under a real user and real session. China-first users expect phone-code login. |
-| Capability | China mainland phone-code challenge, verification, server-side session creation, session revoke/expiry. |
-| Prerequisites | A0; `users`, `login_challenges`, `auth_sessions`. |
-| Verification | `npm test -- apps/backend/src/modules/identity`; M1-AUTH-001 and M1-AUTH-002. |
-| Failure Handling | `invalid_phone`, `phone_mismatch`, `code_expired`, `code_consumed`, `code_invalid`, `user_disabled`; rate-limit resend/verify; lock challenges after max attempts. |
-| Main Loop | Yes. It is the login -> project entry. |
+| 背景 | 每个 P0 命令必须在真实用户和真实会话下运行。以中国优先的用户期望手机验证码登录。 |
+| 能力 | 中国内地手机验证码挑战、验证、服务器端会话创建、会话撤销/过期。 |
+| 前置条件 | A0；`users`、`login_challenges`、`auth_sessions`。 |
+| 验证 | `npm test -- apps/backend/src/modules/identity`；M1-AUTH-001 和 M1-AUTH-002。 |
+| 失败处理 | `invalid_phone`、`phone_mismatch`、`code_expired`、`code_consumed`、`code_invalid`、`user_disabled`；发送/验证速率限制；达到最大尝试次数后锁定挑战。 |
+| 主循环 | 是。它是登录 -> 项目入口。 |
 
-Implementation notes:
+实现说明：
 
-- Normalize mainland phone numbers to `+86` E.164.
-- Store code/session token hashes only.
-- Logs may contain masked phone or phone hash, never full phone.
-- Development-only debug code endpoint must be gated and unavailable in production mode.
+- 将内地手机号标准化为 `+86` E.164 格式。
+- 仅存储验证码/会话令牌的哈希值。
+- 日志可包含掩码手机号或手机号哈希，不得包含完整手机号。
+- 开发专用调试验证码端点必须受限，生产模式下不可用。
 
-## 6. Task A2: ActorContext, Capability, Tenant-Safe Query
+## 6. 任务 A2：ActorContext、能力、租户安全查询
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Multi-tenant leaks are existential. UI hiding is not permission enforcement. |
-| Capability | Resolve ActorContext from session; enforce membership/capability; provide tenant-safe query helper. |
-| Prerequisites | A1; users, organizations, workspaces, memberships. |
-| Verification | M1-ORG-001, M1-ORG-002, M1-DB-001; `npm test -- apps/backend/src/modules/organization apps/backend/src/modules/shared/db`. |
-| Failure Handling | Reject before domain writes; stable 401/403; structured logs with `traceId/userId/organizationId/reason`. |
-| Main Loop | Yes. It unlocks Project/Script/Shot commands. |
+| 背景 | 多租户泄露是致命性的。UI 隐藏不是权限强制执行。 |
+| 能力 | 从会话解析 ActorContext；强制执行 membership/capability；提供租户安全查询辅助。 |
+| 前置条件 | A1；users、organizations、workspaces、memberships。 |
+| 验证 | M1-ORG-001、M1-ORG-002、M1-DB-001；`npm test -- apps/backend/src/modules/organization apps/backend/src/modules/shared/db`。 |
+| 失败处理 | 在域写入前拒绝；稳定的 401/403；带有 `traceId/userId/organizationId/reason` 的结构化日志。 |
+| 主循环 | 是。它解锁 Project/Script/Shot 命令。 |
 
-Implementation notes:
+实现说明：
 
-- Tenant-owned reads require `organizationId`.
-- Project-owned reads require `organizationId` and `projectId`.
-- Cross-org negative tests are mandatory.
+- 租户级读取需要 `organizationId`。
+- 项目级读取需要 `organizationId` 和 `projectId`。
+- 跨组织负面测试是必须的。
 
-## 7. Task A3: Audit Append Helper
+## 7. 任务 A3：审计追加辅助
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Calibration skip, export, Admin/Ops, refunds, and manual settlement need accountability. Audit cannot be bolted on later. |
-| Capability | Append-only audit event builder/repository with actor, scope, target, event type, reason, redacted metadata. |
-| Prerequisites | A2 ActorContext. |
-| Verification | M1-AUDIT-001; `npm test -- apps/backend/src/modules/audit`. |
-| Failure Handling | Sensitive commands without reason fail. High-risk audit failure blocks command success. |
-| Main Loop | Yes. It supports calibration skip, export, and Ops. |
+| 背景 | 校准跳过、导出、Admin/Ops、退款和人工结算需要问责。审计不能在后期才加装。 |
+| 能力 | 追加专用审计事件构建器/仓库，包含 actor、scope、target、event type、reason、redacted metadata。 |
+| 前置条件 | A2 ActorContext。 |
+| 验证 | M1-AUDIT-001；`npm test -- apps/backend/src/modules/audit`。 |
+| 失败处理 | 没有 reason 的敏感命令会失败。高风险审计失败会阻止命令成功。 |
+| 主循环 | 是。它支持校准跳过、导出和 Ops。 |
 
-## 8. Task A4: Workflow/Task/Attempt Execution Spine
+## 8. 任务 A4：Workflow/Task/Attempt 执行骨架
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | P0's hard problem is durable long-running work. Redis/BullMQ is dispatch, not truth. |
-| Capability | Durable workflow/task/attempt create, claim, status query, finalization skeleton. |
-| Prerequisites | A2, A3, M0.1 contracts, foundation SQL. |
-| Verification | `npm test -- apps/backend/src/modules/workflow-task`; R-003, R-010, R-018/R-029. |
-| Failure Handling | Worker crash handled by lease repair; finalization rollback; `result_unknown` and `manual_review_required` do not aggregate to terminal success. |
-| Main Loop | Yes. Script parse, image generation, video, and export depend on it. |
+| 背景 | P0 的难题是持久化长运行工作。Redis/BullMQ 是调度，不是事实源。 |
+| 能力 | 持久化的 workflow/task/attempt 创建、认领、状态查询、终结骨架。 |
+| 前置条件 | A2、A3、M0.1 契约、基础 SQL。 |
+| 验证 | `npm test -- apps/backend/src/modules/workflow-task`；R-003、R-010、R-018/R-029。 |
+| 失败处理 | Worker 崩溃由租约修复处理；终结回滚；`result_unknown` 和 `manual_review_required` 不会汇总为终止成功状态。 |
+| 主循环 | 是。Script Parse、图像生成、视频和导出都依赖它。 |
 
-## 9. Task A-S1: Storage Adapter and Signed URL
+## 9. 任务 A-S1：存储适配器和签名 URL
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | AssetVersion and Export must not invent storage URLs or bypass tenant checks. |
-| Capability | Server-only storage adapter, scoped object keys, metadata validation, short-lived signed URLs. |
-| Prerequisites | A2; AssetVersion/Export schema draft. |
-| Verification | `npm test -- apps/backend/src/modules/storage`; tenant-auth signed URL tests. |
-| Failure Handling | Storage write failure is retryable infrastructure error; incomplete metadata blocks AssetVersion; cross-tenant download is 403 and logged. |
-| Main Loop | Yes. It unlocks generated output and export package download. |
+| 背景 | AssetVersion 和 Export 不得虚构存储 URL 或绕过租户检查。 |
+| 能力 | 仅服务器端存储适配器、范围限定的对象键、元数据验证、短期签名 URL。 |
+| 前置条件 | A2；AssetVersion/Export schema 草案。 |
+| 验证 | `npm test -- apps/backend/src/modules/storage`；租户认证签名 URL 测试。 |
+| 失败处理 | 存储写入失败是可重试的基础设施错误；不完整的元数据阻止 AssetVersion；跨租户下载返回 403 并记录日志。 |
+| 主循环 | 是。它解锁生成输出和导出包下载。 |
 
-## 10. Task A5: Operation-Scoped Idempotency Hardening
+## 10. 任务 A5：操作范围幂等性加固
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Refresh, double-click, and retry must not create duplicate expensive work. |
-| Capability | Idempotency replay/conflict for CreateProject, ParseScript, GenerateShotImage, CreateExport. |
-| Prerequisites | A2, A4, B1/B2/B7/B9 command implementations. |
-| Verification | IDEMP-003, IDEMP-004, R-002. |
-| Failure Handling | Same key/different hash -> `409 idempotency_conflict`; running command returns existing workflow/task. |
-| Main Loop | Yes. It protects the main loop from duplicate side effects. |
+| 背景 | 刷新、双击和重试不应创建重复的昂贵操作。 |
+| 能力 | 为 CreateProject、ParseScript、GenerateShotImage、CreateExport 提供幂等重放/冲突处理。 |
+| 前置条件 | A2、A4、B1/B2/B7/B9 命令实现。 |
+| 验证 | IDEMP-003、IDEMP-004、R-002。 |
+| 失败处理 | 相同 key/不同 hash -> `409 idempotency_conflict`；正在运行的命令返回现有的 workflow/task。 |
+| 主循环 | 是。它保护主循环免受重复副作用的影响。 |
 
-## 11. Task A6: ProviderRequest Side-Effect Protection
+## 11. 任务 A6：ProviderRequest 副作用保护
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Real providers can charge money or produce outputs. After external submission starts, blind retry is unsafe. |
-| Capability | Persist provider request before call; set `external_submission_started_at`; conservative recovery policy. |
-| Prerequisites | A4; B7 mock ModelGateway interface. |
-| Verification | A-001, R-026, R-027. |
-| Failure Handling | Before external start: safe retry. After external start: lookup/manual review/result_unknown, no duplicate request. |
-| Main Loop | Yes. It is the hard gate before real provider dogfood. |
+| 背景 | 真实 Provider 可能收费或产生输出。外部提交开始后，盲目重试是不安全的。 |
+| 能力 | 在调用前持久化 provider 请求；设置 `external_submission_started_at`；保守恢复策略。 |
+| 前置条件 | A4；B7 mock ModelGateway 接口。 |
+| 验证 | A-001、R-026、R-027。 |
+| 失败处理 | 外部开始前：安全重试。外部开始后：查找/人工审核/result_unknown，不重复请求。 |
+| 主循环 | 是。它是真实 Provider 试用前的硬性关卡。 |
 
-## 12. Task A7: Queue/Worker/Outbox Repair
+## 12. 任务 A7：队列/Worker/Outbox 修复
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Redis loss, worker crash, and outbox replay are normal beta incidents. |
-| Capability | Queued task dispatch repair, stale running lease repair, outbox dispatch repair. |
-| Prerequisites | A4, A6, outbox/inbox. |
-| Verification | R-001, R-004, R-014, R-021. |
-| Failure Handling | Duplicate repair is no-op; provider ambiguity becomes `result_unknown`; repair scans use small locked batches. |
-| Main Loop | No direct. It serves M4 reliability gate. |
+| 背景 | Redis 丢失、Worker 崩溃和 Outbox 重放是正常的 beta 事件。 |
+| 能力 | 排队任务调度修复、过期运行租约修复、Outbox 调度修复。 |
+| 前置条件 | A4、A6、outbox/inbox。 |
+| 验证 | R-001、R-004、R-014、R-021。 |
+| 失败处理 | 重复修复为空操作；Provider 歧义变为 `result_unknown`；修复扫描使用小的锁定批次。 |
+| 主循环 | 非直接。它服务于 M4 可靠性关卡。 |
 
-## 13. Task A8: Credit Ledger and Reservation
+## 13. 任务 A8：Credit 账本和预留
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Commercial beta cannot oversell credits or settle one allocation twice. |
-| Capability | Append-only credit ledger, reservation envelope, allocation single settlement, balance drift repair. |
-| Prerequisites | A4, A7, B7 generate task. |
-| Verification | R-008, R-009, R-015, R-028. |
-| Failure Handling | Single settlement constraint; read model repair from ledger; abnormal provider cost does not auto-charge user. |
-| Main Loop | Yes for P0-B commercial loop. |
+| 背景 | 商业 beta 不能超卖 Credit 或对同一次分配结算两次。 |
+| 能力 | 追加专用 Credit 账本、预留信封、分配单次结算、余额漂移修复。 |
+| 前置条件 | A4、A7、B7 生成任务。 |
+| 验证 | R-008、R-009、R-015、R-028。 |
+| 失败处理 | 单次结算约束；从账本修复读取模型；异常 Provider 成本不自动向用户收费。 |
+| 主循环 | 对 P0-B 商业循环是必需的。 |
 
-## 14. Task A9: Commerce/Payment Gate
+## 14. 任务 A9：Commerce/Payment 关卡
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Payment mistakes are financial and compliance incidents. Do not implement before credit/outbox reliability is stable. |
-| Capability | Package/order/payment intent/callback/payment-to-credit/refund gate. |
-| Prerequisites | A8, official payment fields, merchant account capability, finance/tax confirmation. |
-| Verification | Callback signature, callback dedup, amount mismatch, frontend return no grant, paid-without-credit repair. |
-| Failure Handling | Signature/amount/currency/merchant mismatch -> risk/manual review; duplicate callback ACK but no duplicate grant. |
-| Main Loop | No for P0-A; Yes for P0-B commercial loop. |
+| 背景 | 支付错误是财务和合规事件。不要在 Credit/Outbox 可靠性稳定之前实现。 |
+| 能力 | 包/订单/支付意图/回调/支付转 Credit/退款关卡。 |
+| 前置条件 | A8、正式支付字段、商户账户能力、财务/税务确认。 |
+| 验证 | 回调签名、回调去重、金额不匹配、前端返回不授权、已支付未到账修复。 |
+| 失败处理 | 签名/金额/货币/商户不匹配 -> 风险/人工审核；重复回调 ACK 但不重复授权。 |
+| 主循环 | 对 P0-A 否；对 P0-B 商业循环是必需的。 |
 
-## 15. First Week Plan
+## 15. 第一周计划
 
-| Day | Focus | Expected Evidence |
+| 天 | 重点 | 预期证据 |
 | --- | --- | --- |
-| Day 1 | A0 schema/test harness | failing then passing foundation schema test |
-| Day 2 | A1 phone challenge/session tests | identity tests cover phone normalize/hash/consume/revoke |
-| Day 3 | A1 HTTP/session integration | auth handler tests pass; no plaintext leakage |
-| Day 4 | A2 red tests | organization/tenant tests fail for missing services |
-| Day 5 | A2 minimal implementation or clear blocker | org/tenant tests pass or blocker is specific |
+| 第 1 天 | A0 schema/测试工具 | 基础 schema 测试先失败后通过 |
+| 第 2 天 | A1 手机挑战/会话测试 | identity 测试覆盖手机号标准化/哈希/消费/撤销 |
+| 第 3 天 | A1 HTTP/会话集成 | auth handler 测试通过；无明文泄露 |
+| 第 4 天 | A2 红色测试 | organization/tenant 测试因缺少服务而失败 |
+| 第 5 天 | A2 最小实现或明确阻塞项 | org/tenant 测试通过或阻塞项明确 |
 
-## 16. Confidence Check
+## 16. 信心检查
 
-I am 100% confident A can start now because A owns the critical path and its first tasks do not depend on B or C. The only unacceptable path is letting M1 pass without persistence-backed proof.
+我 100% 确信 A 可以立即开始，因为 A 拥有关键路径，且其首批任务不依赖 B 或 C。唯一不可接受的路径是让 M1 在没有持久化支持的证明的情况下通过。

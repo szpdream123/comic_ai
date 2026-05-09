@@ -1,178 +1,178 @@
-# Developer C Task Pack: Experience / QA / Ops
+# Developer C 任务包：体验 / QA / 运维
 
-> Date: 2026-05-09  
-> Owner: Developer C  
-> Role: Experience / QA / Ops Owner  
-> Mission: 让 P0 的真实用户路径可用、可验收、可诊断、可回滚、可人工介入。
+> 日期：2026-05-09  
+> 负责人：Developer C  
+> 角色：体验 / QA / 运维负责人  
+> 使命：让 P0 的真实用户路径可用、可验收、可诊断、可回滚、可人工介入。
 
-## 1. Can C Start Now?
+## 1. C 现在能开始吗？
 
-Yes, but with a strict boundary.
+可以，但必须严格遵守边界。
 
-C can start immediately on:
+C 可以立即开始的工作：
 
-- Phone-code login UI shell and E2E harness.
-- API client contracts that call real endpoints once available.
-- Project/create/parse E2E skeletons.
-- Error-state design and fixture strategy.
-- Runbook skeletons and release checklist skeletons.
+- 手机验证码登录 UI 外壳和 E2E 测试框架。
+- API 客户端契约，在后端可用时调用真实端点。
+- 项目创建 / 解析 E2E 骨架。
+- 错误状态设计和测试数据策略。
+- 运维手册骨架和发布检查清单骨架。
 
-C must not claim a closed loop using fake sessions, fake project state, or local-only task status.
+C 不得使用假会话、假项目状态或仅本地的任务状态来宣称完成了闭环。
 
-## 2. Non-Negotiable Rules
+## 2. 不可妥协的规则
 
-- UI state is presentation only. Backend durable state is truth.
-- Hidden buttons are not authorization. Backend 401/403 behavior must be tested.
-- E2E may use deterministic fixtures, but not fake production code paths.
-- Every user-visible failure should expose a stable message and traceId where appropriate.
-- Flaky E2E is a blocking problem, not something to ignore.
+- UI 状态仅为展示层。后端持久化状态才是真实状态。
+- 隐藏按钮不等于授权。后端 401/403 行为必须经过测试。
+- E2E 可以使用确定性测试数据，但不能伪造生产代码路径。
+- 每个面向用户的失败都应暴露稳定的消息，并在适当位置提供 traceId。
+- 不稳定的 E2E 测试是阻塞性问题，不能忽视。
 
-## 3. Outputs C Owes Other Developers
+## 3. C 需要向其他开发者交付的产出
 
-| Consumer | C must provide | Blocks |
+| 消费者 | C 必须提供 | 阻塞项 |
 | --- | --- | --- |
-| A | Auth/session UX feedback, E2E expectations, error message mapping | A1/A2 polish |
-| B | UI/API contract pressure for Project, Assets, Shots, Export | B1-B9 validation |
-| Team | P0-A E2E regression gate | M2 exit |
-| Ops | Runbooks, release/rollback checklists, Admin/Ops Lite expectations | M4-M6 exit |
+| A | 认证/会话 UX 反馈、E2E 预期、错误消息映射 | A1/A2 优化 |
+| B | 项目、资产、分镜、导出的 UI/API 契约压力测试 | B1-B9 验证 |
+| 团队 | P0-A E2E 回归门禁 | M2 退出标准 |
+| 运维 | 运维手册、发布/回滚检查清单、Admin/Ops Lite 预期 | M4-M6 退出标准 |
 
-## 4. Task C0: E2E Harness and Fixture Strategy
+## 4. 任务 C0：E2E 测试框架与测试数据策略
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | C can parallelize immediately, but only if the harness later drives real APIs and durable state. |
-| Capability | E2E folder, deterministic fixture plan, trace/log capture pattern, auth helper placeholder. |
-| Prerequisites | Current repo test command and planned API contracts. |
-| Verification | `npm test -- apps/web/e2e/p0` once tests exist; skeleton tests fail for missing real endpoints, not for harness wiring. |
-| Failure Handling | If backend endpoint is missing, mark dependency instead of mocking success. |
-| Main Loop | Yes. It becomes the weekly acceptance backbone. |
+| 背景 | C 可以立即并行开展工作，但前提是测试框架后续必须驱动真实 API 和持久化状态。 |
+| 能力 | E2E 目录结构、确定性测试数据计划、trace/log 捕获模式、认证辅助函数占位。 |
+| 前置条件 | 当前仓库的测试命令和计划中的 API 契约。 |
+| 验证方式 | `npm test -- apps/web/e2e/p0`（测试存在后）；骨架测试因缺少真实端点而失败，而非框架连接问题。 |
+| 失败处理 | 若后端端点缺失，标记依赖项，而非模拟成功。 |
+| 主循环 | 是。将成为每周验收的核心支柱。 |
 
-## 5. Task C1: Phone Auth Flow UI
+## 5. 任务 C1：手机验证码登录流程 UI
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | The user path starts with phone-code login. Auth must be real enough to test permissions and session recovery. |
-| Capability | China phone input, code request, code verify, session restore, unauthenticated redirect. |
-| Prerequisites | A1/A2 auth/session API. UI shell can start before APIs, but success path must use real APIs before Done. |
-| Verification | Auth-flow E2E: unauthenticated redirect, valid login enters project entry, invalid/expired code messages. |
-| Failure Handling | Network failure retry; `invalid_phone`, `code_invalid`, `code_expired`, `phone_mismatch` map to stable user messages; no token/code leakage. |
-| Main Loop | Yes. It opens login -> create project. |
+| 背景 | 用户路径从手机验证码登录开始。认证必须足够真实，以测试权限和会话恢复。 |
+| 能力 | 中国手机号输入、验证码请求、验证码验证、会话恢复、未认证重定向。 |
+| 前置条件 | A1/A2 认证/会话 API。UI 外壳可以在 API 之前启动，但完成前必须使用真实 API。 |
+| 验证方式 | 认证流程 E2E：未认证重定向、有效登录进入项目入口、无效/过期验证码消息提示。 |
+| 失败处理 | 网络失败重试；`invalid_phone`、`code_invalid`、`code_expired`、`phone_mismatch` 映射到稳定的用户消息；无 token/验证码泄露。 |
+| 主循环 | 是。打通登录 -> 创建项目的流程。 |
 
-Implementation notes:
+实现说明：
 
-- Display masked phone after challenge request.
-- Do not show dev debug code in production mode.
-- Session restore must call backend current-session endpoint.
+- 在 challenge 请求后显示脱敏手机号。
+- 生产模式下不显示开发者调试验证码。
+- 会话恢复必须调用后端 current-session 端点。
 
-## 6. Task C2: Project Create and Script Input UI
+## 6. 任务 C2：项目创建与剧本输入 UI
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | This is the first creator action. It must call CreateProject/ParseScript, not create local-only project state. |
-| Capability | Project creation form, script input, parse start, queued/loading state. |
-| Prerequisites | B1/B2 APIs, C1 auth. Skeleton can start earlier; Done requires real APIs. |
-| Verification | TC-P0-001; fill form, submit, queued/loading within 1 second, refresh restores status. |
-| Failure Handling | Field validation stays on form; duplicate replay shows same workflow; 409 gives recovery hint. |
-| Main Loop | Yes. It moves login -> create project -> parse script. |
+| 背景 | 这是创作者的第一个操作。必须调用 CreateProject/ParseScript，而非创建仅本地的项目状态。 |
+| 能力 | 项目创建表单、剧本输入、解析启动、排队/加载状态。 |
+| 前置条件 | B1/B2 API、C1 认证。骨架可提前启动；完成需要真实 API。 |
+| 验证方式 | TC-P0-001；填写表单、提交、1 秒内进入排队/加载状态、刷新恢复状态。 |
+| 失败处理 | 字段验证停留在表单层；重复提交显示相同工作流；409 给出恢复提示。 |
+| 主循环 | 是。推进登录 -> 创建项目 -> 解析剧本的流程。 |
 
-## 7. Task C3: Project Workspace Phase Navigation
+## 7. 任务 C3：项目工作台阶段导航
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Users need to know where the project is blocked. Main CTA must follow backend state and readiness flags. |
-| Capability | Phase router for `script_input`, `asset_review`, `shot_generation`, `exportable`, error/recovery states. |
-| Prerequisites | B2 status query and readiness fields. |
-| Verification | Workspace routing E2E for major phases. |
-| Failure Handling | Unknown state shows recoverable error and traceId; UI does not guess next command. |
-| Main Loop | Yes. It keeps users moving through the creator loop. |
+| 背景 | 用户需要知道项目当前阻塞在哪个阶段。主要 CTA 必须跟随后端状态和就绪标志。 |
+| 能力 | `script_input`、`asset_review`、`shot_generation`、`exportable`、错误/恢复状态的阶段路由。 |
+| 前置条件 | B2 状态查询和就绪字段。 |
+| 验证方式 | 主要阶段的工作台路由 E2E。 |
+| 失败处理 | 未知状态显示可恢复错误和 traceId；UI 不猜测下一步操作。 |
+| 主循环 | 是。保持用户在创作者循环中持续前进。 |
 
-## 8. Task C4: Public Asset Review UI
+## 8. 任务 C4：公开资产审核 UI
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Asset confirmation is the first high-volume human decision point. It must make blockers obvious. |
-| Capability | Roles/scenes/props tabs, asset cards, edit/confirm, blockers display. |
-| Prerequisites | B5 APIs. |
-| Verification | TC-P0-002; key assets block progress until confirmed. |
-| Failure Handling | Single-card save failure does not affect other cards; permission failure disables editing and shows stable message. |
-| Main Loop | Yes. It moves parsed assets toward calibration/generation. |
+| 背景 | 资产确认是第一个高流量的人工决策点。必须让阻塞项显而易见。 |
+| 能力 | 角色/场景/道具标签页、资产卡片、编辑/确认、阻塞项展示。 |
+| 前置条件 | B5 API。 |
+| 验证方式 | TC-P0-002；关键资产在确认前阻塞流程推进。 |
+| 失败处理 | 单卡片保存失败不影响其他卡片；权限失败禁用编辑并显示稳定消息。 |
+| 主循环 | 是。将解析后的资产推向校准/生成阶段。 |
 
-## 9. Task C5: Shot List and Calibration UI
+## 9. 任务 C5：分镜列表与校准 UI
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Calibration is a quality gate. Users must not bypass backend gate through UI affordances. |
-| Capability | Shot list, three calibration slots, generate calibration, pass/skip operation, gate reason display. |
-| Prerequisites | B4/B6 APIs. |
-| Verification | TC-P0-003, TC-P0-009. |
-| Failure Handling | Backend rejection displays gate reason; calibration failure shows failed items and retry path; skip requires confirmation/reason. |
-| Main Loop | Yes. It unlocks generation only after durable calibration. |
+| 背景 | 校准是质量门禁。用户不能通过 UI 设计绕过后端门禁。 |
+| 能力 | 分镜列表、三个校准槽位、生成校准、通过/跳过操作、门禁原因展示。 |
+| 前置条件 | B4/B6 API。 |
+| 验证方式 | TC-P0-003、TC-P0-009。 |
+| 失败处理 | 后端拒绝显示门禁原因；校准失败显示失败项和重试路径；跳过需要确认/填写原因。 |
+| 主循环 | 是。仅在持久化校准完成后才解锁生成。 |
 
-## 10. Task C6: Generation Status and Retry UX
+## 10. 任务 C6：生成状态与重试 UX
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Long-running task experience is central to the product. Users need per-shot status and repair paths. |
-| Capability | Generating/completed/failed/stale display, failed edit/retry panel, refresh recovery. |
-| Prerequisites | B7/B8 APIs, A4 task status. |
-| Verification | TC-P0-004, TC-P0-005, TC-P0-006, TC-P0-011, TC-P0-012. |
-| Failure Handling | Single shot failure does not block other shots; stale output remains visible as history; duplicate click does not create duplicate task. |
-| Main Loop | Yes. It makes generation usable and recoverable. |
+| 背景 | 长时间运行任务的体验是产品核心。用户需要每条分镜的状态和修复路径。 |
+| 能力 | 生成中/已完成/失败/过期状态展示、失败编辑/重试面板、刷新恢复。 |
+| 前置条件 | B7/B8 API、A4 任务状态。 |
+| 验证方式 | TC-P0-004、TC-P0-005、TC-P0-006、TC-P0-011、TC-P0-012。 |
+| 失败处理 | 单条分镜失败不阻塞其他分镜；过期输出作为历史记录保留可见；重复点击不创建重复任务。 |
+| 主循环 | 是。使生成可用且可恢复。 |
 
-## 11. Task C7: Export UI
+## 11. 任务 C7：导出 UI
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Export is the material delivery endpoint. Missing assets must be explicit and actionable. |
-| Capability | Export panel, completeness check, missing item list, incomplete confirmation, manifest/download state. |
-| Prerequisites | B9 Export API, A-S1 signed URL. |
-| Verification | TC-P0-007, TC-P0-014. |
-| Failure Handling | Missing assets block by default; export failure shows retry and traceId; expired download link can refresh. |
-| Main Loop | Yes. It closes P0-A from script to asset package. |
+| 背景 | 导出是素材交付的终点。缺失资产必须明确且可操作。 |
+| 能力 | 导出面板、完整性检查、缺失项列表、不完整确认、清单/下载状态。 |
+| 前置条件 | B9 导出 API、A-S1 签名 URL。 |
+| 验证方式 | TC-P0-007、TC-P0-014。 |
+| 失败处理 | 缺失资产默认阻塞导出；导出失败显示重试和 traceId；过期下载链接可刷新。 |
+| 主循环 | 是。从剧本到资产包完成 P0-A 闭环。 |
 
-## 12. Task C8: P0-A E2E Regression Harness
+## 12. 任务 C8：P0-A E2E 回归测试框架
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Weekly acceptance must be automated. Manual demos are not enough to protect the loop. |
-| Capability | Full creator-loop E2E from phone login to export, plus key abnormal regressions. |
-| Prerequisites | C1-C7, A/B fixtures and real APIs. |
-| Verification | `npm test -- apps/web/e2e/p0`; TC-P0-001 through TC-P0-014 P0-A subset. |
-| Failure Handling | Flaky tests are blocking; failures must capture traceId and point to API/worker logs. |
-| Main Loop | Yes. It is the M2 exit evidence. |
+| 背景 | 每周验收必须自动化。手动演示不足以保护循环。 |
+| 能力 | 从手机登录到导出的完整创作者循环 E2E，加上关键异常回归。 |
+| 前置条件 | C1-C7、A/B 测试数据和真实 API。 |
+| 验证方式 | `npm test -- apps/web/e2e/p0`；TC-P0-001 到 TC-P0-014 的 P0-A 子集。 |
+| 失败处理 | 不稳定测试为阻塞性问题；失败必须捕获 traceId 并指向 API/worker 日志。 |
+| 主循环 | 是。这是 M2 退出标准的证据。 |
 
-## 13. Task C9: Observability, Runbook, Release
+## 13. 任务 C9：可观测性、运维手册、发布
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | A loop that runs but cannot be diagnosed or rolled back is not beta-ready. |
-| Capability | Log field checklist, basic dashboard metrics, stuck-task/provider/export runbooks, staging smoke, rollback checklist. |
-| Prerequisites | A/B emit trace/log/metric IDs. Skeleton can start now. |
-| Verification | Ops drill: locate failure layer within 5 minutes; release and rollback checklist review. |
-| Failure Handling | Each runbook includes signal, query entry, repair command/manual path, rollback condition. |
-| Main Loop | No direct. It serves M6 release gate. |
+| 背景 | 一个能运行但无法诊断或回滚的循环不具备 beta 就绪条件。 |
+| 能力 | 日志字段检查清单、基础仪表盘指标、卡住任务/提供方/导出运维手册、预发布冒烟测试、回滚检查清单。 |
+| 前置条件 | A/B 发出 trace/log/metric ID。骨架可立即启动。 |
+| 验证方式 | 运维演练：5 分钟内定位故障层；发布和回滚检查清单评审。 |
+| 失败处理 | 每份运维手册包含：信号、查询入口、修复命令/手动路径、回滚条件。 |
+| 主循环 | 非直接。服务于 M6 发布门禁。 |
 
-## 14. Task C10: Admin/Ops Lite Manual Intervention
+## 14. 任务 C10：Admin/Ops Lite 人工介入
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | `manual_review` and `result_unknown` are not operationally useful unless Ops can see and act on them safely. |
-| Capability | Admin/Ops Lite view for stuck tasks, `result_unknown`, paid-without-credit, payment risk; retry/settle/mark-reviewed commands. |
-| Prerequisites | A3 Audit, A7 Repair, A8 Credit, A9 Payment, C9 runbooks. |
-| Verification | Ordinary user 403; Ops action requires reason; operation writes audit; runbooks link to the item. |
-| Failure Handling | Failed operation shows traceId; duplicate settle/retry no-op or stable conflict; high-risk payment/credit action requires confirmation. |
-| Main Loop | No direct. It serves M4-M6 reliability/commercial gate. |
+| 背景 | `manual_review` 和 `result_unknown` 如果运维无法安全查看和处理，就没有运营价值。 |
+| 能力 | Admin/Ops Lite 视图，查看卡住任务、`result_unknown`、付费未到账、支付风险；重试/结算/标记已审核操作。 |
+| 前置条件 | A3 审计、A7 修复、A8 计费、A9 支付、C9 运维手册。 |
+| 验证方式 | 普通用户 403；运维操作需要填写原因；操作写入审计日志；运维手册关联到具体条目。 |
+| 失败处理 | 失败操作显示 traceId；重复结算/重试为空操作或稳定冲突提示；高风险支付/计费操作需要二次确认。 |
+| 主循环 | 非直接。服务于 M4-M6 可靠性/商业化门禁。 |
 
-## 15. First Week Plan
+## 15. 第一周计划
 
-| Day | Focus | Expected Evidence |
+| 日期 | 重点 | 预期产出 |
 | --- | --- | --- |
-| Day 1 | C0 E2E harness and fixture strategy | harness exists; missing backend is explicit blocker |
-| Day 2 | C1 phone auth UI shell | phone form, code step, error states, no fake Done |
-| Day 3 | Auth-flow E2E skeleton | test fails only on missing/real API behavior |
-| Day 4 | C2/C3 project UI skeleton | CreateProject/ParseScript clients call planned API surface |
-| Day 5 | Runbook/release skeleton | stuck task/export failed/provider unknown runbook shells |
+| 第 1 天 | C0 E2E 测试框架与测试数据策略 | 测试框架存在；后端缺失为明确阻塞项 |
+| 第 2 天 | C1 手机验证码登录 UI 外壳 | 手机表单、验证码步骤、错误状态、无假 Done |
+| 第 3 天 | 认证流程 E2E 骨架 | 测试仅在缺失/真实 API 行为时失败 |
+| 第 4 天 | C2/C3 项目 UI 骨架 | CreateProject/ParseScript 客户端调用计划中的 API 接口 |
+| 第 5 天 | 运维手册/发布骨架 | 卡住任务/导出失败/提供方未知运维手册骨架 |
 
-## 16. Confidence Check
+## 16. 信心检查
 
-I am 100% confident C can start now if C treats early work as harness, shell, error mapping, and acceptance design. C must not claim the creator loop complete until it uses real backend auth, project, workflow, task, generation, and export state.
+我 100% 确信 C 现在可以开始，前提是 C 将早期工作视为测试框架、UI 外壳、错误映射和验收设计。在使用真实后端的认证、项目、工作流、任务、生成和导出状态之前，C 不得宣称创作者循环已完成。

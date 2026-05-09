@@ -1,185 +1,185 @@
-# Developer B Task Pack: Creator Domain
+# 开发者 B 任务包：创作域
 
-> Date: 2026-05-09  
-> Owner: Developer B  
-> Role: Creator Domain Owner  
-> Mission: 把创作主链路的业务事实做扎实：Project、Script、Asset、Shot、Calibration、Generation、Export。
+> 日期：2026-05-09
+> 负责人：Developer B
+> 角色：创作域负责人
+> 使命：把创作主链路的业务事实做扎实：Project、Script、Asset、Shot、Calibration、Generation、Export。
 
-## 1. Can B Start Now?
+## 1. B 现在能开始吗？
 
-Yes, but with a strict boundary.
+可以，但必须严格限定边界。
 
-B can start immediately on:
+B 可以立即开始以下工作：
 
-- Project/Script/Asset/Shot/Export schema review.
-- Command contract review and test skeletons.
-- Fixtures for CreateProject and ParseScript.
-- Domain state machine drafts that do not bypass A's ActorContext, Audit, Workflow/Task, or idempotency.
+- Project/Script/Asset/Shot/Export 的 schema 审查。
+- Command 契约审查和测试骨架。
+- CreateProject 和 ParseScript 的 fixtures。
+- 创作域状态机草案（不得绕过 A 的 ActorContext、Audit、Workflow/Task 或幂等性机制）。
 
-B must not start real Project write commands until A2/A3 exist. B must not implement Script Parse workflow until A4 exists.
+在 A2/A3 就绪之前，B 不得开始真正的 Project 写入命令。在 A4 就绪之前，B 不得实现 Script Parse 工作流。
 
-## 2. Non-Negotiable Rules
+## 2. 不可妥协的规则
 
-- Do not bypass ActorContext, capability checks, tenant scope, or audit.
-- Do not create local/fake task state. Long work must use A4 Workflow/Task.
-- Do not call real providers directly. Use ModelGateway boundary.
-- Do not overwrite generated assets. Always create immutable AssetVersion.
-- Do not silently export incomplete work. Missing assets must be explicit.
+- 不得绕过 ActorContext、capability 检查、tenant 范围或 audit 审计。
+- 不得创建本地/模拟的 task 状态。长时间运行的任务必须使用 A4 的 Workflow/Task。
+- 不得直接调用真实的 provider。必须使用 ModelGateway 边界。
+- 不得覆写已生成的 asset。必须始终创建不可变的 AssetVersion。
+- 不得静默导出不完整的成果。缺失的 asset 必须显式标注。
 
-## 3. Outputs B Owes Other Developers
+## 3. B 对其他开发者的交付物
 
-| Consumer | B must provide | Blocks |
+| 消费者 | B 必须提供 | 阻塞项 |
 | --- | --- | --- |
-| C | Project create/parse/status APIs and stable errors | C2/C3 UI |
-| C | Asset review blockers and readiness flags | C4 |
-| C | Shot/calibration/generation/export APIs | C5-C7 |
-| A | Command integration points for idempotency and workflow | A5 hardening |
-| A/C | ModelGateway mock behavior and fixture outputs | A6/C8 |
+| C | Project 创建/解析/status API 及稳定的错误码 | C2/C3 UI |
+| C | Asset 审核阻塞项和就绪标志 | C4 |
+| C | Shot/calibration/generation/export API | C5-C7 |
+| A | 用于幂等性和工作流的 Command 集成点 | A5 加固 |
+| A/C | ModelGateway mock 行为及 fixture 输出 | A6/C8 |
 
-## 4. Task B0: Creator Domain Contract and Fixture Prep
+## 4. 任务 B0：创作域契约和 Fixture 准备
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | B can work in parallel before A's platform foundation is complete, but only on artifacts that do not fake platform behavior. |
-| Capability | Creator-domain test fixtures, command contract review, schema alignment notes, failing tests for B1/B2. |
-| Prerequisites | M0.1 contracts and current task split. |
-| Verification | Failing test files exist and reference TC/IDEMP IDs; no production command bypasses A2/A3/A4. |
-| Failure Handling | If a missing platform dependency appears, record it as a blocker rather than implementing a shortcut. |
-| Main Loop | Yes. It shortens B1/B2 once A unblocks the platform boundary. |
+| 背景 | 在 A 的平台基础完成之前，B 可以并行工作，但仅限于不伪造平台行为的制品。 |
+| 能力 | 创作域测试 fixtures、command 契约审查、schema 对齐说明、为 B1/B2 编写失败测试。 |
+| 前置条件 | M0.1 契约及当前任务分工。 |
+| 验证 | 失败测试文件存在且引用了 TC/IDEMP ID；没有 production command 绕过 A2/A3/A4。 |
+| 失败处理 | 如果发现缺失的平台依赖，应将其记录为阻塞项，而非实现变通方案。 |
+| 主循环 | 是。一旦 A 解除平台边界限制，此任务将缩短 B1/B2 的实施时间。 |
 
-## 5. Task B1: Project/CreateProject and Script Storage
+## 5. 任务 B1：Project/CreateProject 和 Script 存储
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | The creator loop starts with a real project and real script. Frontend-only temporary state would make downstream parse/generation impossible to trust. |
-| Capability | Create a project in a workspace and persist script input under tenant scope. |
-| Prerequisites | A2 ActorContext, A3 Audit, M0.1 idempotency helper, project/script migration. |
-| Verification | `npm test -- apps/backend/src/modules/project`; create-project success, invalid input, forbidden, replay, 409 conflict. |
-| Failure Handling | 403 for missing capability; validation errors return stable field errors; duplicate replay returns the same project. |
-| Main Loop | Yes. It starts login -> create project -> parse script. |
+| 背景 | 创作循环从真实的项目和真实的脚本开始。纯前端的临时状态会使下游的解析/生成无法被信任。 |
+| 能力 | 在工作区中创建项目，并在 tenant 范围内持久化脚本输入。 |
+| 前置条件 | A2 ActorContext、A3 Audit、M0.1 幂等性辅助工具、project/script 迁移脚本。 |
+| 验证 | `npm test -- apps/backend/src/modules/project`；create-project 成功、无效输入、forbidden、replay、409 冲突。 |
+| 失败处理 | 缺少 capability 时返回 403；校验错误返回稳定的字段级错误；重复 replay 返回相同的 project。 |
+| 主循环 | 是。它启动了 login -> create project -> parse script 的流程。 |
 
-Implementation notes:
+实现说明：
 
-- Create project and script in one transaction.
-- Use `project.create` operation name.
-- Write audit where required.
-- Initial project phase should be `script_input`.
+- 在同一个事务中创建 project 和 script。
+- 使用 `project.create` 操作名称。
+- 在需要的地方写入 audit 日志。
+- 初始 project 阶段应为 `script_input`。
 
-## 6. Task B2: Script Parse Workflow with Mock Output
+## 6. 任务 B2：带 Mock 输出的 Script Parse 工作流
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | This is the first long task. It must prove durable workflow/task status, not a frontend loading flag. |
-| Capability | ParseScript command creates workflow/task; mock provider produces episodes, candidate assets, and draft/ready shots. |
-| Prerequisites | A4 Workflow/Task, B1, M0.1 idempotency helper. Before A4, only tests/contracts/fixtures are allowed. |
-| Verification | TC-P0-001, TC-P0-010, TC-P0-011, IDEMP-003. |
-| Failure Handling | Parse failure leaves repairable state; duplicate parse returns existing workflow; worker failure writes no partial business facts. |
-| Main Loop | Yes. It turns script input into creator workspace state. |
+| 背景 | 这是第一个长时间运行的任务。它必须证明持久化的工作流/task 状态，而非前端的 loading 标志。 |
+| 能力 | ParseScript command 创建 workflow/task；mock provider 生成 episodes、候选 assets 和 draft/ready 状态的 shots。 |
+| 前置条件 | A4 Workflow/Task、B1、M0.1 幂等性辅助工具。在 A4 就绪之前，仅允许测试/契约/fixtures。 |
+| 验证 | TC-P0-001、TC-P0-010、TC-P0-011、IDEMP-003。 |
+| 失败处理 | 解析失败应保留可修复的状态；重复解析返回已有的 workflow；worker 失败时不得写入部分业务事实。 |
+| 主循环 | 是。它将脚本输入转换为创作者工作区状态。 |
 
-Implementation notes:
+实现说明：
 
-- Status query must read PostgreSQL/domain state.
-- Mock output must be deterministic for E2E fixtures.
-- Finalization writes domain facts transactionally.
+- 状态查询必须读取 PostgreSQL/领域状态。
+- Mock 输出必须对 E2E fixtures 具有确定性。
+- 完成时以事务方式写入领域事实。
 
-## 7. Task B3: Asset and Immutable AssetVersion
+## 7. 任务 B3：Asset 和不可变 AssetVersion
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Generated output must be historical and reproducible. Overwriting current assets destroys auditability and regeneration safety. |
-| Capability | Asset represents business object; AssetVersion represents immutable binary/output version. |
-| Prerequisites | B2 candidate assets, A-S1 storage adapter. |
-| Verification | `npm test -- apps/backend/src/modules/asset`; version number monotonic, old versions retained, metadata enrichment safe. |
-| Failure Handling | Version write failure rolls back finalization; missing storage metadata is retryable failure. |
-| Main Loop | Yes. It makes generation/export trustworthy. |
+| 背景 | 生成的输出必须是可追溯和可复现的。覆写当前 asset 会破坏可审计性和重新生成的安全性。 |
+| 能力 | Asset 代表业务对象；AssetVersion 代表不可变的二进制/输出版本。 |
+| 前置条件 | B2 候选 assets、A-S1 存储适配器。 |
+| 验证 | `npm test -- apps/backend/src/modules/asset`；版本号单调递增、旧版本保留、元数据增强安全。 |
+| 失败处理 | 版本写入失败回滚 finalization；缺失存储元数据为可重试失败。 |
+| 主循环 | 是。它使 generation/export 可信。 |
 
-## 8. Task B4: Shot State and Current Pointer Safety
+## 8. 任务 B4：Shot 状态和 Current 指针安全
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Shot edits and generation can complete out of order. Current pointer must reflect current user intent, not whichever task finishes last. |
-| Capability | Shot content/image/video state machine plus current pointer guard. |
-| Prerequisites | B3, A4. |
-| Verification | R-011, R-012; stale completion and out-of-order regeneration tests. |
-| Failure Handling | Late success writes historical AssetVersion only; abnormal state enters repair/admin visibility. |
-| Main Loop | Yes. It protects generated storyboard state. |
+| 背景 | Shot 编辑和生成可能乱序完成。Current 指针必须反映当前用户的意图，而非最后一个完成的 task。 |
+| 能力 | Shot 内容/图片/视频状态机及 current 指针保护机制。 |
+| 前置条件 | B3、A4。 |
+| 验证 | R-011、R-012；过时完成和乱序重新生成测试。 |
+| 失败处理 | 延迟成功仅写入历史 AssetVersion；异常状态进入修复/管理员可见范围。 |
+| 主循环 | 是。它保护已生成的 storyboard 状态。 |
 
-Implementation notes:
+实现说明：
 
-- Use content revision and active task ID.
-- Never update current pointer from stale task completion.
+- 使用 content revision 和 active task ID。
+- 绝不从过时的 task 完成事件中更新 current 指针。
 
-## 9. Task B5: Public Asset Confirm
+## 9. 任务 B5：Public Asset 确认
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Asset confirmation is the business gate between script parse and reliable shot/calibration generation. |
-| Capability | Confirm/edit key roles, major scenes, important props, and compute blockers/readiness flags. |
-| Prerequisites | B2, B3, A2. |
-| Verification | TC-P0-002; key roles/scenes block progress until confirmed; key props may warn without blocking. |
-| Failure Handling | Single-card save failure does not affect other cards; unauthorized edit is 403. |
-| Main Loop | Yes. It moves parsed candidates toward generation readiness. |
+| 背景 | Asset 确认是脚本解析与可靠的 shot/calibration 生成之间的业务关卡。 |
+| 能力 | 确认/编辑关键角色、主要场景、重要道具，并计算阻塞项/就绪标志。 |
+| 前置条件 | B2、B3、A2。 |
+| 验证 | TC-P0-002；关键角色/场景在确认前阻塞进度；重要道具可能发出警告但不阻塞。 |
+| 失败处理 | 单卡片保存失败不影响其他卡片；未授权编辑返回 403。 |
+| 主循环 | 是。它将解析后的候选项推向生成就绪状态。 |
 
-## 10. Task B6: Calibration Session and Gate
+## 10. 任务 B6：Calibration 会话和门控
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Calibration must be a durable business fact. A UI checkbox is not a generation gate. |
-| Capability | Three-shot calibration session, pass/skip/override decision, backend gate for batch generation. |
-| Prerequisites | B4, B5, A3 Audit. |
-| Verification | TC-P0-003, TC-P0-009, R-016, R-024. |
-| Failure Handling | Wrong shot count rejected; failed quality cannot pass; skip requires reason and audit. |
-| Main Loop | Yes. It gates batch image generation. |
+| 背景 | Calibration 必须是持久化的业务事实。UI 复选框不是生成的门控。 |
+| 能力 | 三镜头 calibration 会话、pass/skip/override 决策、批量生成的后端门控。 |
+| 前置条件 | B4、B5、A3 Audit。 |
+| 验证 | TC-P0-003、TC-P0-009、R-016、R-024。 |
+| 失败处理 | 错误的 shot 数量会被拒绝；未通过质量检查的无法 pass；skip 需要原因和 audit 记录。 |
+| 主循环 | 是。它控制批量图片生成的门控。 |
 
-## 11. Task B7: GenerateShotImage with Mock ModelGateway
+## 11. 任务 B7：带 Mock ModelGateway 的 GenerateShotImage
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | This is the P0-A core AI capability. It must be driven by durable tasks and produce immutable versions. |
-| Capability | Single/batch shot image generation, partial success, retry, AssetVersion finalization. |
-| Prerequisites | A4/A5, B3/B4/B6. |
-| Verification | TC-P0-004, TC-P0-012, R-002, R-016. |
-| Failure Handling | One shot failure does not block successful shots; repeated click replays existing task; retry is reachable within 3 user steps. |
-| Main Loop | Yes. It creates the core generated output. |
+| 背景 | 这是 P0-A 的核心 AI 能力。它必须由持久化的 task 驱动，并生成不可变版本。 |
+| 能力 | 单/批量 shot 图片生成、部分成功、重试、AssetVersion finalization。 |
+| 前置条件 | A4/A5、B3/B4/B6。 |
+| 验证 | TC-P0-004、TC-P0-012、R-002、R-016。 |
+| 失败处理 | 单个 shot 失败不阻塞成功的 shot；重复点击回放已有 task；重试在 3 步用户操作内可达。 |
+| 主循环 | 是。它创建核心生成输出。 |
 
-Implementation notes:
+实现说明：
 
-- Use mock ModelGateway first.
-- Write success to AssetVersion and guarded current pointer.
-- Failed items must be visible and retryable.
+- 首先使用 mock ModelGateway。
+- 将成功结果写入 AssetVersion 和受保护的 current 指针。
+- 失败项必须可见且可重试。
 
-## 12. Task B8: GenerateShotVideo Minimum
+## 12. 任务 B8：GenerateShotVideo 最小实现
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | P0 includes single-shot image-to-video, but it should not delay the image-generation loop. |
-| Capability | Start video task when current image exists; complete/fail/stale states are correct. |
-| Prerequisites | B7. |
-| Verification | TC-P0-006. |
-| Failure Handling | Missing current image is rejected; old video not overwritten; failure can retry. |
-| Main Loop | Yes. It completes P0 media capability, after image path is stable. |
+| 背景 | P0 包含单镜头图片转视频，但不应延迟图片生成循环。 |
+| 能力 | 当存在 current 图片时启动视频 task；complete/fail/stale 状态正确。 |
+| 前置条件 | B7。 |
+| 验证 | TC-P0-006。 |
+| 失败处理 | 缺少 current 图片时被拒绝；旧视频不被覆写；失败可重试。 |
+| 主循环 | 是。它在图片路径稳定后完成 P0 媒体能力。 |
 
-## 13. Task B9: Export Manifest
+## 13. 任务 B9：Export Manifest
 
-| Field | Content |
+| 字段 | 内容 |
 | --- | --- |
-| Background | Export is the endpoint of script -> assets. Missing assets must be visible, not silently ignored. |
-| Capability | Create export record and manifest; identify missing assets; support incomplete export confirmation. |
-| Prerequisites | B3, B7, A-S1, at least one completed image. |
-| Verification | TC-P0-007, TC-P0-014, R-017. |
-| Failure Handling | Missing assets block by default; export failure retryable; signed download link can refresh. |
-| Main Loop | Yes. It closes the P0-A creator loop. |
+| 背景 | Export 是脚本 -> asset 流程的终点。缺失的 asset 必须可见，而非被静默忽略。 |
+| 能力 | 创建导出记录和 manifest；标识缺失的 asset；支持不完整导出确认。 |
+| 前置条件 | B3、B7、A-S1、至少一个已完成的图片。 |
+| 验证 | TC-P0-007、TC-P0-014、R-017。 |
+| 失败处理 | 缺失 asset 默认阻塞；导出失败可重试；签名下载链接可刷新。 |
+| 主循环 | 是。它关闭 P0-A 创作者循环。 |
 
-## 14. First Week Plan
+## 14. 第一周计划
 
-| Day | Focus | Expected Evidence |
+| 天数 | 重点 | 预期产出 |
 | --- | --- | --- |
-| Day 1 | B0 contract/schema/test review | blocker list, fixture plan, failing B1 tests drafted |
-| Day 2 | B1 CreateProject test skeleton | tests reference A2/A3 dependencies rather than bypassing them |
-| Day 3 | B2 ParseScript fixture/mock output draft | deterministic mock output shape documented |
-| Day 4 | Asset/Shot state review | versioning and pointer safety tests drafted |
-| Day 5 | Ready-for-A-unblock package | B can begin B1 implementation as soon as A2/A3 land |
+| 第 1 天 | B0 契约/schema/测试审查 | 阻塞项列表、fixture 计划、B1 失败测试草案 |
+| 第 2 天 | B1 CreateProject 测试骨架 | 测试引用 A2/A3 依赖而非绕过它们 |
+| 第 3 天 | B2 ParseScript fixture/mock 输出草案 | 确定性 mock 输出结构文档 |
+| 第 4 天 | Asset/Shot 状态审查 | 版本控制和指针安全测试草案 |
+| 第 5 天 | 准备好等待 A 解除阻塞的交付包 | A2/A3 上线后 B 可立即开始 B1 实现 |
 
-## 15. Confidence Check
+## 15. 信心检查
 
-I am 100% confident B can start now if B treats early work as test/contract/fixture preparation and does not fake platform boundaries. B's true implementation path is deliberately gated by A2/A3/A4 because that is what protects the product long term.
+我 100% 确信 B 可以现在开始，前提是 B 将早期工作视为测试/契约/fixture 准备，且不伪造平台边界。B 的真正实现路径被有意地设置为需要 A2/A3/A4 的门控，因为这是保护产品长期健康的关键。

@@ -1,40 +1,40 @@
-# Phone Auth Implementation Plan
+# 手机号认证实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **面向智能代理工作者：** 必须使用子技能：推荐使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans` 逐任务实现本计划。步骤采用复选框（`- [ ]`）语法进行任务跟踪。
 
-**Goal:** Build a frontend-connectable phone verification login slice with development-only code debugging, server-side sessions, minimal auth APIs, and a simple login page.
+**目标：** 构建一个可与前端对接的手机号验证码登录模块，包含开发环境专用的代码调试功能、服务端会话管理、最小化的认证 API，以及一个简洁的登录页面。
 
-**Architecture:** Keep the implementation modular inside the existing monorepo by adding an `identity` slice under `apps/backend` and a minimal static web shell under `apps/web`. Use persistence-friendly TypeScript services and thin HTTP handlers so the login core can later plug into a fuller modular-monolith backend without being rewritten.
+**架构设计：** 在现有 monorepo 架构中保持模块化实现，在 `apps/backend` 下新增 `identity` 模块，在 `apps/web` 下新增最小化的静态 Web 外壳。使用支持持久化的 TypeScript 服务和轻量级 HTTP 处理器，以便登录核心功能后续可以无缝接入更完整的模块化单体后端，无需重写。
 
-**Tech Stack:** TypeScript, Node test runner, SQL migration draft updates, built-in Node crypto/HTTP primitives, static HTML/CSS/JS for the first login page.
+**技术栈：** TypeScript、Node 测试运行器、SQL 迁移草稿更新、内置 Node crypto/HTTP 原语、用于首个登录页面的静态 HTML/CSS/JS。
 
 ---
 
-## File Structure
+## 文件结构
 
-- Modify: `packages/db/migrations/0001_foundation.sql`
-- Modify: `package.json`
-- Create: `apps/backend/src/modules/identity/phone-auth.types.ts`
-- Create: `apps/backend/src/modules/identity/phone-auth.utils.ts`
-- Create: `apps/backend/src/modules/identity/login-challenge.service.ts`
-- Create: `apps/backend/src/modules/identity/session.service.ts`
-- Create: `apps/backend/src/modules/identity/auth-http.handlers.ts`
-- Create: `apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
-- Create: `apps/backend/src/modules/identity/tests/session.spec.ts`
-- Create: `apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
-- Create: `apps/web/login.html`
-- Create: `apps/web/login.css`
-- Create: `apps/web/login.js`
-- Create: `apps/web/tests/login-page.spec.ts`
-- Modify: `scripts/run-tests.mjs`
+- 修改：`packages/db/migrations/0001_foundation.sql`
+- 修改：`package.json`
+- 新建：`apps/backend/src/modules/identity/phone-auth.types.ts`
+- 新建：`apps/backend/src/modules/identity/phone-auth.utils.ts`
+- 新建：`apps/backend/src/modules/identity/login-challenge.service.ts`
+- 新建：`apps/backend/src/modules/identity/session.service.ts`
+- 新建：`apps/backend/src/modules/identity/auth-http.handlers.ts`
+- 新建：`apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+- 新建：`apps/backend/src/modules/identity/tests/session.spec.ts`
+- 新建：`apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
+- 新建：`apps/web/login.html`
+- 新建：`apps/web/login.css`
+- 新建：`apps/web/login.js`
+- 新建：`apps/web/tests/login-page.spec.ts`
+- 修改：`scripts/run-tests.mjs`
 
-## Task 1: Add Identity Schema Surface
+## Task 1: 新增身份认证数据库表结构
 
-**Files:**
-- Modify: `packages/db/migrations/0001_foundation.sql`
-- Test: `apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+**涉及文件：**
+- 修改：`packages/db/migrations/0001_foundation.sql`
+- 测试：`apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -55,15 +55,15 @@ describe("login challenge schema assumptions", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-Expected: FAIL because the identity files and challenge surface do not exist yet.
+预期结果：失败，因为 identity 相关文件和验证挑战表结构尚不存在。
 
-- [ ] **Step 3: Write minimal schema updates**
+- [ ] **步骤 3：编写最小化的数据库表结构更新**
 
-Update `packages/db/migrations/0001_foundation.sql` to:
+更新 `packages/db/migrations/0001_foundation.sql`，内容如下：
 
 ```sql
 ALTER TABLE users
@@ -106,28 +106,28 @@ CREATE TABLE auth_sessions (
 );
 ```
 
-- [ ] **Step 4: Run test to verify it still fails for the right reason**
+- [ ] **步骤 4：运行测试验证其仍然失败（且失败原因正确）**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-Expected: FAIL because the service implementation is still missing, not because of a syntax or import problem.
+预期结果：失败，原因是服务实现尚未完成，而非语法或导入错误。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add packages/db/migrations/0001_foundation.sql
 git commit -m "feat: add phone auth schema surface"
 ```
 
-## Task 2: Implement Phone Normalization and Login Challenges
+## Task 2: 实现手机号标准化与登录挑战服务
 
-**Files:**
-- Create: `apps/backend/src/modules/identity/phone-auth.types.ts`
-- Create: `apps/backend/src/modules/identity/phone-auth.utils.ts`
-- Create: `apps/backend/src/modules/identity/login-challenge.service.ts`
-- Test: `apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+**涉及文件：**
+- 新建：`apps/backend/src/modules/identity/phone-auth.types.ts`
+- 新建：`apps/backend/src/modules/identity/phone-auth.utils.ts`
+- 新建：`apps/backend/src/modules/identity/login-challenge.service.ts`
+- 测试：`apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -169,15 +169,15 @@ describe("login challenges", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-Expected: FAIL because the types, utils, and service do not exist yet.
+预期结果：失败，因为类型定义、工具函数和服务实现文件尚不存在。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的服务实现**
 
-Create `apps/backend/src/modules/identity/phone-auth.types.ts`:
+新建 `apps/backend/src/modules/identity/phone-auth.types.ts`：
 
 ```ts
 export type LoginChallengeStatus =
@@ -200,7 +200,7 @@ export interface LoginChallenge {
 }
 ```
 
-Create `apps/backend/src/modules/identity/phone-auth.utils.ts` with:
+新建 `apps/backend/src/modules/identity/phone-auth.utils.ts`，包含以下内容：
 
 ```ts
 import { createHash, randomInt, randomUUID } from "node:crypto";
@@ -232,7 +232,7 @@ export function generateId(): string {
 }
 ```
 
-Create `apps/backend/src/modules/identity/login-challenge.service.ts` with:
+新建 `apps/backend/src/modules/identity/login-challenge.service.ts`，包含以下内容：
 
 ```ts
 import type { LoginChallenge } from "./phone-auth.types.ts";
@@ -259,26 +259,26 @@ export async function createLoginChallenge(input: {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 
-Expected: PASS.
+预期结果：通过。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add apps/backend/src/modules/identity
 git commit -m "feat: add phone normalization and challenge service"
 ```
 
-## Task 3: Implement Session Semantics
+## Task 3: 实现会话管理语义
 
-**Files:**
-- Create: `apps/backend/src/modules/identity/session.service.ts`
-- Test: `apps/backend/src/modules/identity/tests/session.spec.ts`
+**涉及文件：**
+- 新建：`apps/backend/src/modules/identity/session.service.ts`
+- 测试：`apps/backend/src/modules/identity/tests/session.spec.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -315,15 +315,15 @@ describe("auth sessions", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
 
-Expected: FAIL because the session service does not exist.
+预期结果：失败，因为会话服务尚不存在。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的服务实现**
 
-Create `apps/backend/src/modules/identity/session.service.ts`:
+新建 `apps/backend/src/modules/identity/session.service.ts`：
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -373,26 +373,26 @@ export function revokeAuthSession(session: AuthSession, now: Date): AuthSession 
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/session.spec.ts`
 
-Expected: PASS.
+预期结果：通过。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add apps/backend/src/modules/identity/session.service.ts apps/backend/src/modules/identity/tests/session.spec.ts
 git commit -m "feat: add auth session semantics"
 ```
 
-## Task 4: Add Minimal Auth HTTP Handlers
+## Task 4: 新增最小化的认证 HTTP 处理器
 
-**Files:**
-- Create: `apps/backend/src/modules/identity/auth-http.handlers.ts`
-- Test: `apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
+**涉及文件：**
+- 新建：`apps/backend/src/modules/identity/auth-http.handlers.ts`
+- 测试：`apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -417,26 +417,26 @@ describe("auth HTTP handlers", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
 
-Expected: FAIL because the handler module does not exist.
+预期结果：失败，因为处理器模块尚不存在。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的实现**
 
-Create `apps/backend/src/modules/identity/auth-http.handlers.ts` with:
-- an in-memory challenge store
-- an in-memory user store
-- an in-memory session store
-- handlers for:
-  - `requestCode`
-  - `verifyCode`
-  - `getSession`
-  - `logout`
-  - `getDevChallenge`
+新建 `apps/backend/src/modules/identity/auth-http.handlers.ts`，包含以下组件：
+- 内存中的挑战存储
+- 内存中的用户存储
+- 内存中的会话存储
+- 处理以下请求的处理器：
+  - `requestCode` — 请求验证码
+  - `verifyCode` — 验证验证码
+  - `getSession` — 获取会话
+  - `logout` — 退出登录
+  - `getDevChallenge` — 获取开发调试用挑战信息
 
-Core response shape:
+核心响应结构：
 
 ```ts
 export interface AuthHttpResponse<T> {
@@ -446,34 +446,34 @@ export interface AuthHttpResponse<T> {
 }
 ```
 
-Cookie format:
+Cookie 格式：
 
 ```ts
 `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax`
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test -- apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
+运行命令：`npm test -- apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts`
 
-Expected: PASS.
+预期结果：通过。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add apps/backend/src/modules/identity/auth-http.handlers.ts apps/backend/src/modules/identity/tests/auth-http.handlers.spec.ts
 git commit -m "feat: add minimal auth HTTP handlers"
 ```
 
-## Task 5: Add the Login Page Shell
+## Task 5: 新增登录页面外壳
 
-**Files:**
-- Create: `apps/web/login.html`
-- Create: `apps/web/login.css`
-- Create: `apps/web/login.js`
-- Create: `apps/web/tests/login-page.spec.ts`
+**涉及文件：**
+- 新建：`apps/web/login.html`
+- 新建：`apps/web/login.css`
+- 新建：`apps/web/login.js`
+- 新建：`apps/web/tests/login-page.spec.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -490,15 +490,15 @@ describe("login page shell", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/web/tests/login-page.spec.ts`
+运行命令：`npm test -- apps/web/tests/login-page.spec.ts`
 
-Expected: FAIL because the page files do not exist.
+预期结果：失败，因为页面文件尚不存在。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的实现**
 
-Create `apps/web/login.html`:
+新建 `apps/web/login.html`：
 
 ```html
 <!doctype html>
@@ -535,27 +535,27 @@ Create `apps/web/login.html`:
 </html>
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test -- apps/web/tests/login-page.spec.ts`
+运行命令：`npm test -- apps/web/tests/login-page.spec.ts`
 
-Expected: PASS.
+预期结果：通过。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add apps/web/login.html apps/web/login.css apps/web/login.js apps/web/tests/login-page.spec.ts
 git commit -m "feat: add login page shell"
 ```
 
-## Task 6: Wire Frontend Requests and Development Debug Flow
+## Task 6: 接通前端请求与开发调试流程
 
-**Files:**
-- Modify: `apps/web/login.js`
-- Modify: `apps/web/login.css`
-- Test: `apps/web/tests/login-page.spec.ts`
+**涉及文件：**
+- 修改：`apps/web/login.js`
+- 修改：`apps/web/login.css`
+- 测试：`apps/web/tests/login-page.spec.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **步骤 1：编写预期失败的测试**
 
 ```ts
 import assert from "node:assert/strict";
@@ -572,21 +572,21 @@ describe("login page client flow", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试验证其失败**
 
-Run: `npm test -- apps/web/tests/login-page.spec.ts`
+运行命令：`npm test -- apps/web/tests/login-page.spec.ts`
 
-Expected: FAIL because the client script does not yet contain the flow.
+预期结果：失败，因为客户端脚本中尚未包含完整的请求流程。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的实现**
 
-Add to `apps/web/login.js`:
-- request-code flow
-- verify flow
-- dev debug fetch flow
-- session check on load
+在 `apps/web/login.js` 中添加以下功能：
+- 请求验证码流程（request-code flow）
+- 验证验证码流程（verify flow）
+- 开发调试请求流程（dev debug fetch flow）
+- 页面加载时检查会话状态
 
-Core request snippets:
+核心请求代码片段：
 
 ```js
 const requestResponse = await fetch("/api/auth/code/request", {
@@ -611,66 +611,66 @@ const sessionResponse = await fetch("/api/auth/session", {
 });
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test -- apps/web/tests/login-page.spec.ts`
+运行命令：`npm test -- apps/web/tests/login-page.spec.ts`
 
-Expected: PASS.
+预期结果：通过。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add apps/web/login.js apps/web/login.css apps/web/tests/login-page.spec.ts
 git commit -m "feat: wire login page to auth APIs"
 ```
 
-## Task 7: Keep the Root Test Runner Green
+## Task 7: 保持根测试运行器正常
 
-**Files:**
-- Modify: `scripts/run-tests.mjs`
-- Modify if needed: `package.json`
+**涉及文件：**
+- 修改：`scripts/run-tests.mjs`
+- 根据需要修改：`package.json`
 
-- [ ] **Step 1: Write the failing integration expectation**
+- [ ] **步骤 1：编写预期失败的集成测试预期**
 
-The failing signal for this task is the full suite not discovering the new `apps/backend/src/modules/identity/tests` and `apps/web/tests` files.
+本任务的失败信号为：完整测试套件无法发现新增的 `apps/backend/src/modules/identity/tests` 和 `apps/web/tests` 测试文件。
 
-- [ ] **Step 2: Run test to verify current behavior**
+- [ ] **步骤 2：运行测试验证当前行为**
 
-Run: `npm test`
+运行命令：`npm test`
 
-Expected: FAIL or miss new auth test coverage until the runner includes the new paths.
+预期结果：失败或遗漏新增的认证测试覆盖，直到测试运行器包含新路径。
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **步骤 3：编写最小化的实现**
 
-Update `scripts/run-tests.mjs` so recursive discovery includes the new test directories and continues skipping hidden directories, `node_modules`, and `dist`.
+更新 `scripts/run-tests.mjs`，使递归发现机制包含新增的测试目录，同时继续跳过隐藏目录、`node_modules` 和 `dist`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试验证其通过**
 
-Run: `npm test`
+运行命令：`npm test`
 
-Expected: PASS with the identity and login page tests included.
+预期结果：通过，且包含 identity 和 login page 相关测试。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：提交代码**
 
 ```bash
 git add scripts/run-tests.mjs package.json
 git commit -m "test: include phone auth and login page coverage"
 ```
 
-## Self-Review
+## 自我审查
 
-- Spec coverage:
-  - phone auth API: covered by Task 4
-  - session model: covered by Task 3
-  - debug challenge flow: covered by Tasks 4 and 6
-  - login page: covered by Tasks 5 and 6
-  - schema changes: covered by Task 1
-- Placeholder scan:
-  - no `TODO` / `TBD`
-  - each task includes explicit files, commands, and code snippets
-- Type consistency:
-  - `phoneE164`, `challengeId`, `auth_session`, `sessionTokenHash`, and `AuthHttpResponse` names are consistent across tasks
+- 需求覆盖情况：
+  - 手机号认证 API：由 Task 4 覆盖
+  - 会话模型：由 Task 3 覆盖
+  - 开发调试验证流程：由 Task 4 和 Task 6 覆盖
+  - 登录页面：由 Task 5 和 Task 6 覆盖
+  - 数据库表结构变更：由 Task 1 覆盖
+- 占位符扫描：
+  - 无 `TODO` / `TBD` 标记
+  - 每个任务均包含明确的文件、命令和代码片段
+- 类型一致性：
+  - `phoneE164`、`challengeId`、`auth_session`、`sessionTokenHash` 和 `AuthHttpResponse` 命名在各任务间保持一致
 
-## Execution Handoff
+## 执行交接
 
-Plan complete and saved to `docs/superpowers/plans/2026-05-09-phone-auth-implementation.md`. I am proceeding with **Inline Execution** in this session because you explicitly asked to enter development now.
+计划已完成并保存至 `docs/superpowers/plans/2026-05-09-phone-auth-implementation.md`。由于您明确要求立即进入开发阶段，本会话将直接进行**内联执行**。
