@@ -62,7 +62,7 @@ M1 cannot exit on pure function tests alone. These tests must be backed by migra
 
 | Test ID | Stage | Proposed / Implemented Test File | Status | Must Prove |
 | --- | --- | --- | --- | --- |
-| M1-AUTH-001 | M1 | `apps/backend/src/modules/identity/tests/login-code.spec.ts` | Proposed | `login_codes` store only hashes; verify consumes once; expiry, rate limit, lockout, and row-lock behavior are enforced. |
+| M1-AUTH-001 | M1 | `apps/backend/src/modules/identity/tests/login-challenge.spec.ts` | Proposed | `login_challenges` store only hashes for normalized China phone numbers; verify consumes once; expiry, resend/verify rate limit, lockout, and row-lock behavior are enforced. |
 | M1-AUTH-002 | M1 | `apps/backend/src/modules/identity/tests/session.spec.ts` | Proposed | `auth_sessions` store only token hashes; presented tokens resolve active sessions; revoked/expired sessions fail closed. |
 | M1-ORG-001 | M1 | `apps/backend/src/modules/organization/tests/actor-context.spec.ts` | Proposed | Actor context resolves from users, organizations, workspaces, and memberships; disabled/suspended/missing membership cases fail before domain writes. |
 | M1-ORG-002 | M1 | `apps/backend/src/modules/organization/tests/tenant-permission.spec.ts` | Proposed | Cross-organization access and missing capability are rejected server-side. |

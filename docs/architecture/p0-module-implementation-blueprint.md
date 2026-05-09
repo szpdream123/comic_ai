@@ -572,7 +572,7 @@ Current confidence is high for architecture direction, but not 100% for implemen
 
 | Risk | Why It Matters | Burn-Down Action | Gate |
 | --- | --- | --- | --- |
-| Email-code delivery and abuse controls | Auth method is frozen as email-code login, but provider delivery, TTL, resend limits, IP/email buckets, and lockout thresholds affect security and UX. | Choose delivery provider/config; implement hashed codes, row-locked consume, resend/verify rate limits, and audit/risk events. | Before M1 auth implementation. |
+| Phone-code delivery and abuse controls | Auth method is frozen as China phone-code login, but SMS provider delivery, TTL, resend limits, IP/phone buckets, and lockout thresholds affect security and UX. | Choose delivery provider/config; implement normalized phone identity, hashed codes, row-locked consume, resend/verify rate limits, and audit/risk events. | Before M1 auth implementation. |
 | State dictionary drift | DB/API/UI/worker can disagree. | Generate or manually validate all enums/check constraints from `p0-state-dictionary.md`. | Before M0 exit. |
 | API/event contracts too informal | Teams cannot parallelize safely. | Create contract package and schema tests. | Before M2 parallel work. |
 | Provider side-effect ambiguity | Real provider calls can double-charge or duplicate expensive work. | Implement ProviderRequest pre-call persistence and `result_unknown` handling tests. | Before real paid provider dogfood. |

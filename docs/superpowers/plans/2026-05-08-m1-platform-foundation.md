@@ -1,8 +1,9 @@
 # M1 Platform Foundation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Superseded auth note:** P0 identity has shifted from email-code to China phone-code login. Use `docs/superpowers/plans/2026-05-09-phone-auth-implementation.md` and `docs/superpowers/plans/2026-05-09-p0-three-developer-task-breakdown.md` for auth execution. Any email examples below are historical and must not be used as the current P0 auth entry.
 
-**Goal:** Build the first real platform foundation batch: email-code auth, sessions, actor context, capability checks, tenant-safe query helpers, and audit append support.
+**Goal:** Build the first real platform foundation batch: phone-code auth, sessions, actor context, capability checks, tenant-safe query helpers, and audit append support.
 
 **Architecture:** M1 sits between M0.1 contracts and M2 creator-loop implementation. It must prove real authentication, tenant scope, and server-side authorization before any project/script/asset/shot command can safely be implemented.
 

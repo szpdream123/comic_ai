@@ -97,7 +97,7 @@ Checks:
 
 - [ ] M0 freeze record marks document-level freeze separately from code/migration/provider readiness.
 - [ ] Frozen artifact register covers domain dictionary, module boundaries, data ownership, states, commands, events, idempotency, outbox/inbox, repair jobs, verification matrix, and payment design.
-- [ ] Frozen decisions include P0 email-code auth, one-time credit purchase, WeChat Pay + Alipay, payment-to-credit event boundary, refund policy, invoice/fapiao workflow, payment risk, reconciliation, and provider adapter normalization.
+- [ ] Frozen decisions include P0 China phone-code auth, one-time credit purchase, WeChat Pay + Alipay, payment-to-credit event boundary, refund policy, invoice/fapiao workflow, payment risk, reconciliation, and provider adapter normalization.
 - [ ] Frozen command classes include auth, project/workflow, generation, credit settlement, provider submission, order/payment, callback, credit grant, refund, and repair/reconciliation.
 - [ ] Frozen event classes include workflow/task lifecycle, provider results, payment/refund success, credit grant, invoice issued, and audit events.
 - [ ] Non-frozen gates are explicit and assigned to the milestone they block.

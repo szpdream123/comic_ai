@@ -44,23 +44,24 @@ Recommended indexes:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `email` | Unique normalized email. |
+| `email` | Nullable normalized email for invoice/notification/future overseas adapters. |
+| `phone_e164` | Unique normalized China phone login identity. |
 | `display_name` | Nullable. |
-| `password_hash` | Nullable. P0 uses email-code login; password is a future credential adapter. |
+| `password_hash` | Nullable. P0 uses phone-code login; password is a future credential adapter. |
 | `status` | `active`, `disabled`. |
 | `last_login_at` | Nullable. |
 
-### `login_codes`
+### `login_challenges`
 
-P0 email-code login credentials.
+P0 China phone-code login challenges.
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `email` | Normalized email. |
+| `phone_e164` | Normalized China phone number. |
 | `code_hash` | Hash of one-time code. |
 | `purpose` | `login`. |
-| `status` | `issued`, `consumed`, `expired`, `revoked`. |
+| `status` | `issued`, `consumed`, `expired`, `revoked`, `locked`. |
 | `expires_at` | Required short TTL. |
 | `attempt_count` | Failed verification attempts. |
 | `created_ip_hash` | Nullable safe abuse metadata. |
@@ -69,7 +70,7 @@ P0 email-code login credentials.
 Constraints:
 
 - Code values are never stored in plaintext.
-- Active code issuance is rate-limited by email and IP bucket.
+- Active code issuance is rate-limited by phone and IP bucket.
 - Consuming a code is a single row-locked transition from `issued` to `consumed`.
 
 ### `auth_sessions`

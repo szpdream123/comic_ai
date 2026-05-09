@@ -230,7 +230,7 @@ Redis/BullMQ owns dispatch.
 **P0 direction:**
 
 - Users, organizations, memberships, roles, and project permissions live in the platform database.
-- P0 primary login is email-code, as frozen by D-046.
+- P0 primary login is China phone-code, as superseded and frozen by D-055.
 - Password, OAuth, and SSO can be added later through adapters.
 
 **Rationale:**
@@ -856,7 +856,7 @@ When a shot image generation task succeeds:
 
 ### D-046: P0 Authentication Method
 
-**Decision:** P0 uses email-code login as the primary authentication method. Password credentials remain a future credential adapter and may be added without changing the user, organization, membership, or permission model.
+**Decision:** Superseded by D-055. This earlier decision selected email-code login as the primary authentication method.
 
 **Rationale:**
 
@@ -1020,8 +1020,30 @@ When a shot image generation task succeeds:
 **Implications:**
 
 - M2 Project/Script implementation must not start until M1 platform foundation and A4 Workflow/Task prerequisites are factually satisfied.
-- M1 remains open until `login_codes`, `auth_sessions`, `memberships`, and `audit_events` are present in the active migration and covered by tests.
+- M1 remains open until `login_challenges`, `auth_sessions`, `memberships`, and `audit_events` are present in the active migration and covered by tests.
 - C can build E2E harnesses early, but cannot claim closed-loop completion with fake sessions, fake project state, or local-only task status.
+
+### D-055: P0 Authentication Method Shifts to China Phone-Code Login
+
+**Decision:** P0 primary authentication uses mainland China phone-code login. Email is not the P0 login identity; it remains available for invoice/fapiao delivery, notifications, and future overseas/account adapters.
+
+**Rationale:**
+
+- The product is China-first, and domestic users expect手机号验证码登录 as the low-friction default.
+- Phone-code login aligns better with payment, finance contact, and operational support workflows in the initial market.
+- The existing identity model can preserve server-controlled sessions, memberships, capabilities, and audit ownership without depending on email as the unique login credential.
+
+**Repairs Applied:**
+
+- New task breakdown and delivery plans now refer to phone-code auth, `login_challenges`, phone normalization, phone/IP rate limits, and masked/hashed phone observability.
+- The phone auth implementation plan is the executable auth slice for M1.
+- The contract-change record is `docs/architecture/contract-changes/2026-05-09-phone-auth-identity-shift.md`.
+
+**Implications:**
+
+- M1 auth tasks must validate normalized `+86` phone numbers, `login_challenges`, code hash storage, consume-once verification, resend/verify rate limits, lockout, and server-side sessions.
+- Logs and audit/security events must avoid full phone number leakage; use masked phone or phone hash.
+- Any remaining email-code references are historical unless explicitly marked as a future adapter.
 
 ## Open Questions
 

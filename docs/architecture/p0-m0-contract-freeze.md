@@ -48,7 +48,7 @@ The freeze answers:
 
 | Decision | Frozen Outcome | Source |
 | --- | --- | --- |
-| P0 auth method | Primary login is email-code. Password, OAuth, and SSO are future adapters unless explicitly pulled forward. Sessions are server-controlled and revocable. | D-046, schema draft, state dictionary |
+| P0 auth method | Primary login is China phone-code. Email is for invoice/notification/future overseas adapters unless explicitly pulled forward. Sessions are server-controlled and revocable. | D-055, phone auth contract change, schema draft |
 | Commercial model | P0-B supports one-time credit package purchase, not subscription, auto-renewal, postpaid, or coupon/marketing pricing. | D-037 |
 | Payment providers | P0-B integrates WeChat Pay and Alipay behind a normalized provider adapter. | D-040, D-045 |
 | Payment-to-credit boundary | Commerce/Payment owns payment truth; Credit/Billing owns credit ledger. Credits are granted only by consuming `payment.succeeded`. | D-038, D-039 |
@@ -143,7 +143,7 @@ These items are not blockers for document-level M0, but they are blockers before
 | Concrete API and event JSON schemas | M0 freezes inventory and semantics; codegen/schema package is implementation work. | M2 parallel module work |
 | Physical DB migrations and indexes | Schema draft freezes ownership/constraints; migrations require implementation stack conventions. | Module implementation of each table |
 | Customer-facing order history and credit ledger pages | Product scope can choose Admin/Ops-only first or user-visible pages. | M5 product acceptance |
-| Provider delivery choices for email code | Auth method is frozen, but email/SMS provider and rate-limit thresholds are implementation config. | M1 auth implementation |
+| Provider delivery choices for phone code | Auth method is frozen, but SMS provider and rate-limit thresholds are implementation config. | M1 auth implementation |
 
 ## 10. M0 Exit Checklist
 
@@ -151,7 +151,7 @@ These items are not blockers for document-level M0, but they are blockers before
 - [x] Business modules and non-responsibilities are explicit.
 - [x] Each durable business fact has one writing owner.
 - [x] Canonical state values exist for identity, tenant, workflow, task, provider, credit, commerce, refund, invoice, risk, and reconciliation.
-- [x] P0 auth method is frozen as email-code login.
+- [x] P0 auth method is frozen as China phone-code login.
 - [x] Commerce/Payment and Credit/Billing are separated by event and ledger contracts.
 - [x] Idempotency protocol is mandatory for expensive/external commands.
 - [x] Outbox/inbox and repair jobs are mandatory for eventual-consistency gaps.

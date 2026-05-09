@@ -175,7 +175,7 @@ Repair applied:
 
 These are not architecture-direction blockers. They are implementation gates.
 
-1. Real M1 platform modules are not implemented: email-code login, sessions, actor context, capability resolver, tenant-safe query helper, and audit append helper.
+1. Real M1 platform modules are not implemented: China phone-code login, sessions, actor context, capability resolver, tenant-safe query helper, and audit append helper.
 2. Real M2 creator loop is not implemented: Project/Script, Workflow/Task execution, Asset/AssetVersion, Shot, Calibration, ModelGateway mock, and Export.
 3. M0.1 API/event "schemas" are metadata contracts, not full Zod/runtime validation schemas yet.
 4. Foundation SQL is not the full schema. It currently covers the first contract skeleton, not all PRD/domain tables.

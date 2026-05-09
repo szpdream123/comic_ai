@@ -209,25 +209,25 @@ Blocks:
 
 ## 7. Initial Task Cards
 
-### B1-T01 Email-Code Login
+### B1-T01 Phone-Code Login
 
 | Field | Content |
 | --- | --- |
 | Epic | Platform Foundation |
-| Capability | M1-01 Email-code issue/verify login |
+| Capability | M1-01 China phone-code issue/verify login |
 | Batch | B1 |
 | Value / Risk | High / High |
-| Prerequisites | `users`, `login_codes`, `auth_sessions` migration decisions; error response shape |
-| Inputs | Email, login purpose, verification code |
+| Prerequisites | `users`, `login_challenges`, `auth_sessions` migration decisions; error response shape |
+| Inputs | Mainland China phone number, login purpose, verification code |
 | Outputs | Server-controlled session |
-| Data Written | `login_codes`, `auth_sessions`, `users.last_login_at` |
+| Data Written | `login_challenges`, `auth_sessions`, `users.last_login_at` |
 | Command Contract | Auth command class from M0 freeze; no public API command yet in contracts package |
-| Failure Scenarios | Expired code, consumed code, wrong code, disabled user, rate limit |
-| Idempotency | Issue throttle by email/IP; verify consumes code once with row lock |
-| Security | Hash code and session tokens; never log plaintext code |
-| Observability | `traceId`, email hash, issue/verify result, rate-limit bucket |
-| Tests | Unit: code hashing/consume; API: issue/verify/expired/wrong; Security: no plaintext storage |
-| Acceptance Criteria | User can obtain and verify email code; repeated verification cannot create multiple sessions from one code; disabled user denied |
+| Failure Scenarios | Invalid phone, phone mismatch, expired code, consumed code, wrong code, disabled user, rate limit |
+| Idempotency | Issue throttle by phone/IP; verify consumes code once with row lock |
+| Security | Hash code and session tokens; never log plaintext code or full phone number |
+| Observability | `traceId`, phone hash/masked phone, issue/verify result, rate-limit bucket |
+| Tests | Unit: phone normalization, code hashing/consume; API: issue/verify/expired/wrong; Security: no plaintext storage |
+| Acceptance Criteria | User can obtain and verify phone code; repeated verification cannot create multiple sessions from one code; disabled user denied |
 | DoD | Code, migration, tests, docs, error codes, logs, audit event if applicable |
 
 ### B1-T02 Actor Context and Capability Resolver
@@ -431,7 +431,7 @@ M1-specific guard:
 
 - M1 cannot exit on pure domain semantics alone.
 - Auth/session, actor context, tenant-safe query, and audit must be proven through persistence-backed or migration-backed tests before M2 Project/Script implementation starts.
-- If `login_codes`, `auth_sessions`, `memberships`, or `audit_events` are absent from the active migration, B1 remains open.
+- If `login_challenges`, `auth_sessions`, `memberships`, or `audit_events` are absent from the active migration, B1 remains open.
 
 ## 9. Testing and Acceptance Matrix
 

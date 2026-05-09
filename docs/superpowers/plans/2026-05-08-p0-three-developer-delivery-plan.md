@@ -38,6 +38,8 @@
 - 任何一项写成“待定”“后补”“实现时再看”，任务只能停在 `待澄清`。
 - 当前仓库唯一已验证的测试入口是 `npm test -- <target...>`。除非新增并验证 package-manager 决策，不得在任务卡里使用其他 test runner。
 
+P0 默认认证方式：面向国内用户，主路径采用中国大陆手机号验证码登录。Email 只作为发票/通知/未来海外账号适配字段，不作为 P0 登录主入口。
+
 ## 1. 三人角色与边界
 
 | 人员 | 角色 | 主责 | 不负责 |
@@ -189,7 +191,7 @@ B0 Contracts
 
 **背景 / Why:** M1 要证明“真实登录、真实租户、真实权限、真实审计”。如果缺少 schema 和 repository/integration test harness，后续 A1/A2/A3 只能做纯函数，无法支撑 M2。
 
-**交付能力:** `login_codes`、`auth_sessions`、`memberships`、`audit_events` 的最小 schema 和可执行 persistence-backed 测试入口。
+**交付能力:** `login_challenges`、`auth_sessions`、`memberships`、`audit_events` 的最小 schema 和可执行 persistence-backed 测试入口。
 
 **前置依赖:** M0.1 foundation SQL；Node test runner。
 
@@ -210,33 +212,35 @@ B0 Contracts
 
 **完成标准:** foundation-schema test 通过；A1/A2/A3 可基于 persistence-backed fixtures 开发。
 
-### Task A1: Email-Code 登录和 Session
+### Task A1: 手机号验证码登录和 Session
 
 **背景 / Why:** 所有 P0 能力都必须在真实用户、真实 session、真实租户上下文下运行。没有这个，Project/Shot 即使写完也不能证明权限和数据隔离正确。
 
-**交付能力:** 用户通过 email-code 登录，系统创建可撤销 server-side session。
+**交付能力:** 用户通过中国大陆手机号验证码登录，系统创建可撤销 server-side session。
 
-**前置依赖:** M0.1 foundation SQL；`users`、`login_codes`、`auth_sessions` 表；Node test runner。
+**前置依赖:** M0.1 foundation SQL；`users`、`login_challenges`、`auth_sessions` 表；Node test runner。
 
 **推进主链路:** Yes。它是“登录 -> 创建项目”的入口。
 
 **Files:**
 - Modify: `packages/db/migrations/0001_foundation.sql`
-- Create: `apps/backend/src/modules/identity/login-code.service.ts`
+- Create: `apps/backend/src/modules/identity/phone-auth.types.ts`
+- Create: `apps/backend/src/modules/identity/phone-auth.utils.ts`
+- Create: `apps/backend/src/modules/identity/login-challenge.service.ts`
 - Create: `apps/backend/src/modules/identity/session.service.ts`
-- Test: `apps/backend/src/modules/identity/tests/login-code.spec.ts`
+- Test: `apps/backend/src/modules/identity/tests/login-challenge.spec.ts`
 - Test: `apps/backend/src/modules/identity/tests/session.spec.ts`
 
-- [ ] Step 1: 写失败测试，覆盖 code hash、verify、consume once、expired/revoked、resend rate limit、verify lockout、IP/email bucket、session token hash、revoke 后不可用。
+- [ ] Step 1: 写失败测试，覆盖手机号规范化为 `+86` E.164、code hash、verify、consume once、expired/revoked、resend rate limit、verify lockout、IP/phone bucket、session token hash、revoke 后不可用。
 - [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/identity`，确认因 service 缺失失败。
-- [ ] Step 3: 实现最小 login-code/session domain service。明文 code/token 不落库、不进日志。
-- [ ] Step 4: 补错误码：`code_expired`、`code_consumed`、`code_invalid`、`user_disabled`。
+- [ ] Step 3: 实现最小 login-challenge/session domain service。明文 code/token 不落库、不进日志。
+- [ ] Step 4: 补错误码：`invalid_phone`、`code_expired`、`code_consumed`、`code_invalid`、`phone_mismatch`、`user_disabled`。
 - [ ] Step 5: 运行 `npm test -- apps/backend/src/modules/identity`，确认通过。
-- [ ] Step 6: Commit: `feat: add email-code auth foundation`
+- [ ] Step 6: Commit: `feat: add phone-code auth foundation`
 
 **异常处理:** 错码稳定；验证码错误增加 attempt count；resend/verify 触发 rate limit 后返回稳定错误；已消费/过期 code 不能复用；disabled user 拒绝登录。
 
-**完成标准:** M1-AUTH-001/M1-AUTH-002 通过；无明文敏感信息；session 可撤销；rate limit 和 lockout 可配置；日志只允许 email hash/userId。
+**完成标准:** M1-AUTH-001/M1-AUTH-002 通过；无明文敏感信息；session 可撤销；rate limit 和 lockout 可配置；日志只允许 phone hash/userId。
 
 ### Task A2: ActorContext、Capability、Tenant-Safe Query
 
@@ -1017,7 +1021,7 @@ B0 Contracts
 
 | 人员 | 主任务 | 辅助任务 | 周五验收物 |
 | --- | --- | --- | --- |
-| A | A0 M1 schema/test harness + A1 Email-Code 登录和 Session | A2 ActorContext 测试红灯 | foundation-schema/identity tests 通过；organization tests 至少红灯可执行 |
+| A | A0 M1 schema/test harness + A1 Phone-Code 登录和 Session | A2 ActorContext 测试红灯 | foundation-schema/identity tests 通过；organization tests 至少红灯可执行 |
 | B | B1 Project/CreateProject 测试草稿和 schema 对齐 | B2 Parse workflow 依赖对齐 | CreateProject task 可进入开发；ParseScript 依赖无歧义 |
 | C | C1 Auth UI 壳和 E2E harness | C2 Project Create E2E 草稿 | auth-flow E2E 可启动；不使用假 session |
 
