@@ -8,6 +8,7 @@ import {
   createInMemoryAuthContext,
   type AuthHttpResponse,
 } from "../modules/identity/auth-http.handlers.ts";
+import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
 
@@ -76,6 +77,7 @@ async function serveStatic(
 
 export function createPhoneAuthDevServer(): PhoneAuthDevServer {
   const authHandlers = createAuthHandlers(createInMemoryAuthContext());
+  const creatorApp = new CreatorDevApp();
   const httpServer = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -132,6 +134,68 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
             params: { challengeId },
           }),
         );
+      }
+
+      if (request.method === "GET" && pathname === "/api/creator/state") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.getState(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/project/create") {
+        const body = (await readJsonBody(request)) as {
+          name: string;
+          scriptInput: string;
+          aspectRatio: string;
+          resolution: string;
+        };
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.createProject(body),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/parse") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.parseScript(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/assets/confirm-all") {
+        return writeJson(response, {
+          status: 200,
+          body: creatorApp.confirmAllAssets(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/calibration/run") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.runCalibration(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/images/generate") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.generateImages(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/videos/generate") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.generateVideos(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/creator/export/preview") {
+        return writeJson(response, {
+          status: 200,
+          body: await creatorApp.previewExport(),
+        });
       }
 
       if (request.method === "GET") {

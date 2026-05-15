@@ -66,6 +66,123 @@ CREATE TABLE auth_sessions (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE projects (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  name text NOT NULL,
+  aspect_ratio text NOT NULL CHECK (aspect_ratio IN ('9:16', '16:9')),
+  resolution text NOT NULL CHECK (resolution IN ('720p', '1080p')),
+  phase text NOT NULL CHECK (phase IN ('script_input', 'asset_review', 'shot_generation', 'export')),
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX projects_workspace_idx
+  ON projects (organization_id, workspace_id, created_at DESC);
+
+CREATE TABLE scripts (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  status text NOT NULL CHECK (status IN ('draft', 'ready', 'parsed', 'failed')),
+  input_text text NOT NULL,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX scripts_project_idx
+  ON scripts (organization_id, project_id, created_at DESC);
+
+CREATE TABLE assets (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  asset_type text NOT NULL CHECK (asset_type IN ('character_sheet', 'scene_reference', 'prop_reference', 'shot_image', 'shot_video')),
+  asset_key text NOT NULL,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, project_id, asset_type, asset_key)
+);
+
+CREATE INDEX assets_project_idx
+  ON assets (organization_id, project_id, asset_type, created_at DESC);
+
+CREATE TABLE asset_versions (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  asset_id uuid NOT NULL REFERENCES assets(id),
+  version_number integer NOT NULL CHECK (version_number >= 1),
+  storage_object_key text NOT NULL,
+  metadata_json jsonb NOT NULL,
+  source_task_id uuid NULL,
+  source_attempt_id uuid NULL,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (asset_id, version_number)
+);
+
+CREATE INDEX asset_versions_asset_idx
+  ON asset_versions (organization_id, asset_id, version_number DESC);
+
+CREATE TABLE shots (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  title text NOT NULL,
+  content_revision integer NOT NULL DEFAULT 1 CHECK (content_revision >= 1),
+  content_status text NOT NULL CHECK (content_status IN ('draft', 'ready', 'stale')),
+  image_status text NOT NULL CHECK (image_status IN ('draft', 'ready', 'generating', 'completed', 'failed', 'stale')),
+  video_status text NOT NULL CHECK (video_status IN ('not_ready', 'ready', 'generating', 'completed', 'failed', 'stale')),
+  current_image_asset_version_id uuid NULL,
+  active_image_task_id uuid NULL,
+  active_image_revision integer NULL CHECK (active_image_revision >= 1),
+  current_video_asset_version_id uuid NULL,
+  active_video_task_id uuid NULL,
+  active_video_image_asset_version_id uuid NULL,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX shots_project_idx
+  ON shots (organization_id, project_id, created_at DESC);
+
+CREATE TABLE calibration_sessions (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  status text NOT NULL CHECK (status IN ('draft', 'generating', 'ready_for_review', 'passed', 'failed', 'skipped', 'archived')),
+  decision_type text NULL CHECK (decision_type IN ('passed', 'skipped', 'override')),
+  decision_reason text NULL,
+  decided_by_user_id uuid NULL REFERENCES users(id),
+  decided_at timestamptz NULL,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX calibration_sessions_project_idx
+  ON calibration_sessions (organization_id, project_id, created_at DESC);
+
+CREATE TABLE calibration_items (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  calibration_session_id uuid NOT NULL REFERENCES calibration_sessions(id),
+  shot_id uuid NOT NULL REFERENCES shots(id),
+  status text NOT NULL CHECK (status IN ('pending', 'generating', 'succeeded', 'failed', 'review_required')),
+  quality_review_result text NOT NULL CHECK (quality_review_result IN ('not_checked', 'passed', 'failed', 'review_required')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (calibration_session_id, shot_id)
+);
+
+CREATE INDEX calibration_items_session_idx
+  ON calibration_items (organization_id, calibration_session_id);
+
 CREATE TABLE idempotency_records (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organizations(id),

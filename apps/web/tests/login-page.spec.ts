@@ -6,16 +6,23 @@ describe("login page shell", () => {
   it("contains phone and code steps", async () => {
     const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
 
-    assert.match(html, /手机号登录/);
-    assert.match(html, /验证码/);
     assert.match(html, /id="login-form"/);
+    assert.match(html, /request-code-button/);
+    assert.match(html, /verify-button/);
   });
 
-  it("includes an authenticated placeholder page", async () => {
+  it("includes a creator workspace shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
-    assert.match(html, /已登录/);
-    assert.match(html, /退出登录/);
+    assert.match(html, /Comic AI Studio/);
+    assert.match(html, /id="creator-app"/);
+    assert.match(html, /create-project-button/);
+    assert.match(html, /parse-script-button/);
+    assert.match(html, /confirm-assets-button/);
+    assert.match(html, /run-calibration-button/);
+    assert.match(html, /generate-images-button/);
+    assert.match(html, /generate-videos-button/);
+    assert.match(html, /preview-export-button/);
   });
 });
 
@@ -29,5 +36,17 @@ describe("login page client flow", () => {
     assert.match(js, /\/api\/auth\/dev\/challenges\//);
     assert.match(js, /debug-panel/);
     assert.match(js, /\/app\.html/);
+  });
+
+  it("wires the creator workspace to the mock creator APIs", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+
+    assert.match(js, /\/api\/creator\/project\/create/);
+    assert.match(js, /\/api\/creator\/parse/);
+    assert.match(js, /\/api\/creator\/assets\/confirm-all/);
+    assert.match(js, /\/api\/creator\/calibration\/run/);
+    assert.match(js, /\/api\/creator\/images\/generate/);
+    assert.match(js, /\/api\/creator\/videos\/generate/);
+    assert.match(js, /\/api\/creator\/export\/preview/);
   });
 });
