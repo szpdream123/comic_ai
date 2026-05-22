@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+const runtime = findNodeRuntime(18);
 const serverEntrypoint = join(
   process.cwd(),
   "apps",
@@ -18,20 +20,100 @@ if (!existsSync(serverEntrypoint)) {
 
 loadDotEnvFile(envFilePath);
 
-try {
-  const { createPhoneAuthDevServer } = await import(pathToFileUrl(serverEntrypoint));
-  const server = createPhoneAuthDevServer();
-  const port = Number(process.env.PORT ?? "4310");
-  await server.listen(port);
-  console.log("Phone auth dev server listening on " + server.origin);
-  setInterval(() => {}, 1000);
-} catch (error) {
-  console.error(error);
-  process.exit(1);
-}
+const result = spawnSync(
+  runtime,
+  [
+    ...resolveTsxRuntimeArgs(runtime),
+    "--input-type=module",
+    "--eval",
+    `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
+      const server = createPhoneAuthDevServer();
+      const port = Number(process.env.PORT ?? "4310");
+      await server.listen(port);
+      console.log("Phone auth dev server listening on " + server.origin);
+      setInterval(() => {}, 1000);
+    }).catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });`,
+  ],
+  {
+    env: process.env,
+    stdio: "inherit",
+  },
+);
+
+process.exit(result.status ?? 1);
 
 function pathToFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, "/")}`;
+}
+
+function findNodeRuntime(minMajor) {
+  const candidates = [];
+  const seen = new Set();
+
+  addCandidate(process.execPath);
+
+  const nodeLocator = process.platform === "win32" ? "where.exe" : "which";
+  const whereNode = spawnSync(nodeLocator, ["node"], {
+    encoding: "utf8",
+  });
+
+  if (whereNode.status === 0) {
+    for (const line of whereNode.stdout.split(/\r?\n/)) {
+      addCandidate(line.trim());
+    }
+  }
+
+  for (const candidate of candidates) {
+    const version = spawnSync(candidate, ["--version"], {
+      encoding: "utf8",
+    });
+
+    if (version.status !== 0) {
+      continue;
+    }
+
+    const match = version.stdout.trim().match(/^v(\d+)\./);
+    if (match && Number(match[1]) >= minMajor) {
+      return candidate;
+    }
+  }
+
+  console.error(`Unable to find a Node.js runtime >= ${minMajor}.`);
+  process.exit(1);
+
+  function addCandidate(candidate) {
+    if (!candidate || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    candidates.push(candidate);
+  }
+}
+
+function resolveTsxRuntimeArgs(runtime) {
+  const version = spawnSync(runtime, ["--version"], {
+    encoding: "utf8",
+  });
+
+  if (version.status !== 0) {
+    return ["--loader", "tsx"];
+  }
+
+  const match = version.stdout.trim().match(/^v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return ["--loader", "tsx"];
+  }
+
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (major > 18 || (major === 18 && minor >= 19)) {
+    return ["--import", "tsx"];
+  }
+
+  return ["--loader", "tsx"];
 }
 
 function loadDotEnvFile(envFilePath) {

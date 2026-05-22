@@ -3,14 +3,15 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 describe("test runner", () => {
-  it("loads tsx with --import for modern Node runtimes", async () => {
+  it("loads tsx with --import for modern Node runtimes while keeping the old-runtime fallback", async () => {
     const runner = await readFile(
       new URL("../../../../../scripts/run-tests.mjs", import.meta.url),
       "utf8",
     );
 
+    assert.match(runner, /resolveTsxRuntimeArgs\(runtime\)/);
     assert.match(runner, /"--import",\s*"tsx"/);
-    assert.doesNotMatch(runner, /"--loader",\s*"tsx"/);
+    assert.match(runner, /"--loader",\s*"tsx"/);
   });
 
   it("does not enable shell when locating the Node runtime", async () => {

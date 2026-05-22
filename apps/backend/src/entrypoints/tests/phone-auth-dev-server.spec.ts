@@ -331,6 +331,237 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("exposes project management, asset library, shot editing, and parameterized generation routes", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Creator backend gap coverage",
+          scriptInput: "Episode 6: Backend gap coverage needs editable shots.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const projectsResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const projects = await projectsResponse.json();
+
+      const patchResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          name: "Creator backend gap coverage renamed",
+        }),
+      });
+      const patched = await patchResponse.json();
+
+      const coverResponse = await fetch(`${server.origin}/api/creator/project/cover`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          coverImageUrl: "data:image/png;base64,cover",
+        }),
+      });
+      const covered = await coverResponse.json();
+
+      const generatedAssetResponse = await fetch(
+        `${server.origin}/api/creator/assets/generate`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            kind: "character",
+            name: "Hero Library Asset",
+            prompt: "hero with blue coat",
+            model: "jimeng-4",
+          }),
+        },
+      );
+      const generatedAsset = await generatedAssetResponse.json();
+
+      const importedAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          kind: "scene",
+          name: "Imported Alley",
+          storageObjectKey: "uploads/imported-alley.png",
+          mimeType: "image/png",
+          width: 1280,
+          height: 720,
+        }),
+      });
+      const importedAsset = await importedAssetResponse.json();
+
+      const libraryResponse = await fetch(`${server.origin}/api/creator/assets/library`, {
+        headers: { cookie },
+      });
+      const library = await libraryResponse.json();
+
+      const versionsResponse = await fetch(
+        `${server.origin}/api/creator/assets/versions/${generatedAsset.asset.id}`,
+        {
+          headers: { cookie },
+        },
+      );
+      const versions = await versionsResponse.json();
+
+      await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: { cookie },
+      });
+
+      const createShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ title: "Inserted manual shot" }),
+      });
+      const createdShot = await createShotResponse.json();
+
+      const updateShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          shotId: createdShot.shot.id,
+          title: "Updated manual shot",
+        }),
+      });
+      const updatedShot = await updateShotResponse.json();
+
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const state = await stateResponse.json();
+      const reorderedIds = [...state.shots].reverse().map((shot: { id: string }) => shot.id);
+      const reorderResponse = await fetch(`${server.origin}/api/creator/shots/reorder`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ shotIds: reorderedIds }),
+      });
+      const reordered = await reorderResponse.json();
+
+      const deleteShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ shotId: createdShot.shot.id }),
+      });
+      const deletedShot = await deleteShotResponse.json();
+
+      await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      await fetch(`${server.origin}/api/creator/calibration/run`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      const latestStateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const latestState = await latestStateResponse.json();
+      const firstShotId = latestState.shots[0]?.id;
+      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          shotId: firstShotId,
+          promptOverride: "single shot prompt",
+          model: "image-model-test",
+          parameters: { seed: 42 },
+        }),
+      });
+      const imageResult = await imageResponse.json();
+
+      const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId: created.project.id }),
+      });
+      const deletedProject = await deleteProjectResponse.json();
+
+      assert.equal(projectsResponse.status, 200);
+      assert.equal(projects.projects.length, 1);
+      assert.equal(patchResponse.status, 200);
+      assert.equal(patched.project.name, "Creator backend gap coverage renamed");
+      assert.equal(coverResponse.status, 200);
+      assert.equal(covered.project.coverImageUrl, "data:image/png;base64,cover");
+      assert.equal(generatedAssetResponse.status, 200);
+      assert.equal(generatedAsset.asset.assetType, "character_sheet");
+      assert.equal(importedAssetResponse.status, 200);
+      assert.equal(importedAsset.asset.assetType, "scene_reference");
+      assert.equal(libraryResponse.status, 200);
+      assert.equal(library.assets.length, 2);
+      assert.equal(versionsResponse.status, 200);
+      assert.equal(versions.versions.length, 1);
+      assert.equal(createShotResponse.status, 200);
+      assert.equal(createdShot.shot.title, "Inserted manual shot");
+      assert.equal(updateShotResponse.status, 200);
+      assert.equal(updatedShot.shot.title, "Updated manual shot");
+      assert.equal(reorderResponse.status, 200);
+      assert.deepEqual(
+        reordered.shots.map((shot: { id: string }) => shot.id),
+        reorderedIds,
+      );
+      assert.equal(deleteShotResponse.status, 200);
+      assert.equal(
+        deletedShot.shots.some((shot: { id: string }) => shot.id === createdShot.shot.id),
+        false,
+      );
+      assert.equal(imageResponse.status, 200);
+      assert.equal(imageResult.platform.tasks.length, 1);
+      assert.equal(imageResult.request.promptOverride, "single shot prompt");
+      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(deletedProject.deleted, true);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects creator-side single shot retry routes before a shot has failed", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -427,7 +658,11 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /server\.listen\(port\)/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);
-    assert.doesNotMatch(launcherScript, /--loader/);
+    assert.match(launcherScript, /--import|--loader/);
+    assert.match(launcherScript, /resolveTsxRuntimeArgs\(runtime\)/);
+    assert.doesNotMatch(launcherScript, /shell:\s*process\.platform/);
+    assert.doesNotMatch(launcherScript, /shell:\s*true/);
+    assert.match(launcherScript, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
   });
