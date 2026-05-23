@@ -10,3 +10,4 @@ artifacts/worker-c-preview/
 dist
 .next
 .turbo
+.worktrees/

@@ -1,4 +1,5 @@
 import { renderProjectDetail } from "./project-detail.js";
+import { buildProjectCreateRequest } from "./project-create-request.js";
 import {
   addStoryboard,
   createStoryboardList,
@@ -91,6 +92,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       deleteProjectId: null,
       selectedProjectCardId: null,
       isScriptModalOpen: false,
+      isOriginalScriptModalOpen: false,
+      originalScriptDraft: {
+        fileName: "",
+        audience: "女频",
+        genre: "逆袭爽感",
+        episodeCount: "",
+        cardSetting: "自动分卡",
+        episodeLength: "约 1 分钟",
+        inspiration: "",
+      },
       scriptTab: "script-upload",
       scriptSubmitAction: "create-project",
       scriptSubmitLabel: "确认上传",
@@ -186,6 +197,36 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (target?.matches?.('input[name="project-type"]')) {
       workbench.ui.createProjectType = target.value;
       render(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-audience")) {
+      workbench.ui.originalScriptDraft.audience = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-genre")) {
+      workbench.ui.originalScriptDraft.genre = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-episode-count")) {
+      workbench.ui.originalScriptDraft.episodeCount = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-card-setting")) {
+      workbench.ui.originalScriptDraft.cardSetting = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-episode-length")) {
+      workbench.ui.originalScriptDraft.episodeLength = target.value;
+      updateOriginalScriptSubmitState(workbench);
       return;
     }
 
@@ -290,6 +331,26 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#original-script-file-name")) {
+      workbench.ui.originalScriptDraft.fileName = target.value;
+      const counter = target.closest(".control-field")?.querySelector("small");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/50`;
+      }
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-inspiration")) {
+      workbench.ui.originalScriptDraft.inspiration = target.value;
+      const counter = target.closest(".control-field")?.querySelector("small");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/460`;
+      }
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
     if (target?.matches?.("#calibration-skip-reason-input")) {
       workbench.ui.calibrationSkipReason = target.value;
       return;
@@ -312,7 +373,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       }
       const counter = workbench.root.querySelector(".rename-project-count");
       if (counter) {
-        counter.textContent = `${[...target.value].length}`;
+        counter.textContent = `${[...target.value].length}/50`;
       }
       const notice = workbench.root.querySelector(".rename-project-actions .modal-inline-status");
       if (notice) {
@@ -588,6 +649,33 @@ async function handleAction(workbench, target) {
     workbench.ui.scriptSubmitAction = "create-project";
     workbench.ui.scriptSubmitLabel = "确认上传";
     workbench.ui.uploadNotice = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-original-script-modal") {
+    workbench.ui.isOriginalScriptModalOpen = true;
+    workbench.ui.toast = "正在设置 AI 原创剧本规划。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-original-script-modal") {
+    workbench.ui.isOriginalScriptModalOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-original-script-settings") {
+    const draft = workbench.ui.originalScriptDraft;
+    if (!(draft.fileName?.trim() && draft.inspiration?.trim() && draft.episodeCount)) {
+      workbench.ui.toast = "请补全文件名称、创作灵感和拆分集数";
+      render(workbench);
+      return;
+    }
+
+    workbench.ui.isOriginalScriptModalOpen = false;
+    workbench.ui.toast = "已保存剧本规划设置。生成规划方案将在后端生成接入后启用。";
     render(workbench);
     return;
   }
@@ -1331,35 +1419,31 @@ async function handleAction(workbench, target) {
     return;
   }
 
-  await runAction(workbench, statusForAction(action), async () => {
-    if (action === "create-project") {
-      const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
-      if (!name) {
-        workbench.ui.createProjectNotice = "请先填写项目名称";
-        render(workbench);
-        return;
-      }
+  if (action === "create-project") {
+    const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
+    const aspectRatio = getCheckedValue(workbench.root, "input[name=\"project-aspect-ratio\"]", "");
+    const projectType = getCheckedValue(workbench.root, "input[name=\"project-type\"]", "anime");
+    if (!name || !aspectRatio) {
+      const message = "请填写项目名称和画面比例";
+      workbench.ui.createProjectNotice = message;
+      workbench.ui.toast = message;
+      render(workbench);
+      return;
+    }
+    if (!projectType) {
+      const message = "请选择剧目类型";
+      workbench.ui.createProjectNotice = message;
+      workbench.ui.toast = message;
+      render(workbench);
+      return;
+    }
 
-      const aspectRatio = getCheckedValue(workbench.root, "input[name=\"project-aspect-ratio\"]", "9:16");
-      const projectType = getCheckedValue(workbench.root, "input[name=\"project-type\"]", "anime");
-      if (!aspectRatio) {
-        workbench.ui.createProjectNotice = "璇烽€夋嫨鐢婚潰姣斾緥";
-        render(workbench);
-        return;
-      }
-      if (!projectType) {
-        workbench.ui.createProjectNotice = "璇烽€夋嫨鍓х洰绫诲瀷";
-        render(workbench);
-        return;
-      }
-
-      const scriptInput = buildProjectSeedScript({ name, projectType });
-      await workbench.api.createProject({
+    await runAction(workbench, statusForAction(action), async () => {
+      await workbench.api.createProject(buildProjectCreateRequest({
         name,
-        scriptInput,
         aspectRatio,
-        resolution: "1080p",
-      });
+        projectType,
+      }));
       workbench.ui.projectLibraryPage = 1;
       workbench.ui.activeNavTab = "project";
       workbench.ui.projectPanelMode = "library";
@@ -1371,9 +1455,11 @@ async function handleAction(workbench, target) {
       workbench.ui.isScriptModalOpen = false;
       workbench.ui.uploadNotice = "";
       window.location.hash = "project";
-      return;
-    }
+    });
+    return;
+  }
 
+  await runAction(workbench, statusForAction(action), async () => {
     if (action === "parse-script") {
       await workbench.api.parseScript();
       return;
@@ -2116,6 +2202,20 @@ function getCheckedValue(root, selector, fallback) {
   return root.querySelector(`${selector}:checked`)?.value ?? fallback;
 }
 
+function updateOriginalScriptSubmitState(workbench) {
+  const draft = workbench.ui.originalScriptDraft;
+  const submit = workbench.root.querySelector('[data-action="submit-original-script-settings"]');
+  if (!submit) {
+    return;
+  }
+
+  submit.disabled = !(
+    draft.fileName?.trim() &&
+    draft.inspiration?.trim() &&
+    draft.episodeCount
+  );
+}
+
 function deriveInitialNavTab(hash) {
   const token = String(hash || "").replace(/^#/, "");
   if (!token) {
@@ -2190,20 +2290,6 @@ function libraryAssetScopeLabel(scope) {
       team: "团队资产库",
     }[scope] ?? "资产库"
   );
-}
-
-function buildProjectSeedScript({ name, projectType }) {
-  const typeLabel =
-    {
-      "domestic-live": "国内真人剧",
-      "overseas-live": "海外真人剧",
-      anime: "2D/3D 动漫",
-    }[projectType] ?? "2D/3D 动漫";
-
-  return `${name}
-
-项目类型：${typeLabel}
-第一集：请根据项目名称和剧目类型生成一版可继续拆分分镜的初始故事梗概。`;
 }
 
 function applyProjectDetail(workbench, detail) {
@@ -2348,6 +2434,3 @@ function readFileAsDataUrl(file) {
     reader.readAsDataURL(file);
   });
 }
-
-
-
