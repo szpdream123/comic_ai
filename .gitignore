@@ -9,3 +9,4 @@ tmp-ui-screenshots/
 dist
 .next
 .turbo
+.worktrees/
