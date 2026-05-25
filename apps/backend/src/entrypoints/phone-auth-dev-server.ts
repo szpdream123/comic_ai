@@ -98,6 +98,18 @@ function writeIdempotencyKeyRequired(response: ServerResponse) {
   });
 }
 
+function writeKnownError(response: ServerResponse, error: unknown): boolean {
+  if (error instanceof SyntaxError) {
+    writeJson(response, {
+      status: 400,
+      body: { error: "invalid_json" },
+    });
+    return true;
+  }
+
+  return false;
+}
+
 function writeJson(response: ServerResponse, payload: AuthHttpResponse<unknown>) {
   response.statusCode = payload.status;
   response.setHeader("content-type", "application/json; charset=utf-8");
@@ -591,6 +603,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/project/create") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const body = (await readJsonBody(request)) as {
             name: string;
             scriptInput: string;
@@ -605,7 +621,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
-              idempotencyKey: `dev-create-${authenticated.user.id}-${Date.now()}`,
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -667,6 +683,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/parse") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           return writeJson(
             response,
             await creatorApplication.parseScript({
@@ -674,7 +694,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
-              idempotencyKey: `dev-parse-${authenticated.user.id}-${Date.now()}`,
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -856,6 +876,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/calibration/run") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           return writeJson(
             response,
             await creatorApplication.runCalibration({
@@ -863,12 +887,17 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
+              idempotencyKey,
               now: new Date(),
             }),
           );
         }
 
         if (request.method === "POST" && pathname === "/api/creator/calibration/skip") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const body = (await readJsonBody(request)) as {
             reason: string;
           };
@@ -880,12 +909,17 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              idempotencyKey,
               now: new Date(),
             }),
           );
         }
 
         if (request.method === "POST" && pathname === "/api/creator/calibration/override") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const body = (await readJsonBody(request)) as {
             reason?: string | null;
           };
@@ -897,6 +931,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -973,6 +1008,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/images/generate") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const body = (await readJsonBody(request)) as {
             shotId?: string | null;
             promptOverride?: string | null;
@@ -987,6 +1026,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -1012,6 +1052,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/videos/generate") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const body = (await readJsonBody(request)) as {
             shotId?: string | null;
             motionPrompt?: string | null;
@@ -1029,6 +1073,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -1054,6 +1099,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         }
 
         if (request.method === "POST" && pathname === "/api/creator/export/preview") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           return writeJson(
             response,
             await creatorApplication.previewExport({
@@ -1061,6 +1110,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
+              idempotencyKey,
               now: new Date(),
             }),
           );
@@ -1206,6 +1256,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
       response.statusCode = 404;
       response.end("Not Found");
     } catch (error) {
+      if (writeKnownError(response, error)) {
+        return;
+      }
+
       response.statusCode = 500;
       response.setHeader("content-type", "application/json; charset=utf-8");
       response.end(

@@ -510,6 +510,442 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("replays idempotent generation, calibration, and export without duplicate side effects", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-idempotent-actions");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      await creator.createProject({
+        user,
+        body: {
+          name: "Creator idempotent actions",
+          scriptInput: "Episode 8: Replayed generation must not spend twice.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-idempotent-actions-create",
+        now: new Date("2026-05-18T15:00:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-idempotent-actions-parse",
+        now: new Date("2026-05-18T15:01:00.000Z"),
+      });
+      await creator.confirmAllAssets({ user });
+
+      const invalidSkip = await (creator as any).skipCalibration({
+        user,
+        body: {
+          reason: " ",
+        },
+        idempotencyKey: "creator-application-calibration-invalid-skip-replay",
+        now: new Date("2026-05-18T15:01:30.000Z"),
+      });
+      const invalidSkipReplay = await (creator as any).skipCalibration({
+        user,
+        body: {
+          reason: " ",
+        },
+        idempotencyKey: "creator-application-calibration-invalid-skip-replay",
+        now: new Date("2026-05-18T15:01:45.000Z"),
+      });
+
+      const skipped = await (creator as any).skipCalibration({
+        user,
+        body: {
+          reason: "Existing approved calibration covers this test.",
+        },
+        idempotencyKey: "creator-application-calibration-skip-replay",
+        now: new Date("2026-05-18T15:02:00.000Z"),
+      });
+      const skippedReplay = await (creator as any).skipCalibration({
+        user,
+        body: {
+          reason: "Existing approved calibration covers this test.",
+        },
+        idempotencyKey: "creator-application-calibration-skip-replay",
+        now: new Date("2026-05-18T15:02:30.000Z"),
+      });
+      const skippedConflict = await (creator as any).skipCalibration({
+        user,
+        body: {
+          reason: "A different reason should conflict.",
+        },
+        idempotencyKey: "creator-application-calibration-skip-replay",
+        now: new Date("2026-05-18T15:02:45.000Z"),
+      });
+
+      const images = await (creator as any).generateImages({
+        user,
+        idempotencyKey: "creator-application-image-generate-replay",
+        now: new Date("2026-05-18T15:03:00.000Z"),
+      });
+      const imagesReplay = await (creator as any).generateImages({
+        user,
+        idempotencyKey: "creator-application-image-generate-replay",
+        now: new Date("2026-05-18T15:03:30.000Z"),
+      });
+      const videos = await (creator as any).generateVideos({
+        user,
+        idempotencyKey: "creator-application-video-generate-replay",
+        now: new Date("2026-05-18T15:04:00.000Z"),
+      });
+      const videosReplay = await (creator as any).generateVideos({
+        user,
+        idempotencyKey: "creator-application-video-generate-replay",
+        now: new Date("2026-05-18T15:04:30.000Z"),
+      });
+      const exportPreview = await (creator as any).previewExport({
+        user,
+        idempotencyKey: "creator-application-export-preview-replay",
+        now: new Date("2026-05-18T15:05:00.000Z"),
+      });
+      const exportReplay = await (creator as any).previewExport({
+        user,
+        idempotencyKey: "creator-application-export-preview-replay",
+        now: new Date("2026-05-18T15:05:30.000Z"),
+      });
+
+      const counts = await db.query<{
+        provider_request_count: number;
+        export_record_count: number;
+        calibration_audit_count: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM provider_requests) AS provider_request_count,
+            (SELECT count(*)::int FROM export_records) AS export_record_count,
+            (SELECT count(*)::int FROM audit_events WHERE event_type = 'calibration.skipped') AS calibration_audit_count
+        `,
+      );
+
+      assert.equal(skipped.status, 200);
+      assert.equal(skippedReplay.status, 200);
+      assert.equal(skippedConflict.status, 409);
+      assert.deepEqual(skippedConflict.body, { error: "idempotency_conflict" });
+      assert.equal(skipped.body.auditEvent.id, skippedReplay.body.auditEvent.id);
+      assert.equal(invalidSkip.status, 400);
+      assert.deepEqual(invalidSkip.body, { error: "reason_required" });
+      assert.equal(invalidSkipReplay.status, 400);
+      assert.deepEqual(invalidSkipReplay.body, invalidSkip.body);
+      assert.equal(images.status, 200);
+      assert.equal(imagesReplay.status, 200);
+      assert.equal(images.body.platform.workflowId, imagesReplay.body.platform.workflowId);
+      assert.equal(videos.status, 200);
+      assert.equal(videosReplay.status, 200);
+      assert.equal(videos.body.platform.workflowId, videosReplay.body.platform.workflowId);
+      assert.equal(exportPreview.status, 200);
+      assert.equal(exportReplay.status, 200);
+      assert.equal(exportPreview.body.exportRecord.id, exportReplay.body.exportRecord.id);
+      assert.deepEqual(counts.rows[0], {
+        provider_request_count: 6,
+        export_record_count: 1,
+        calibration_audit_count: 1,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps replayed parse, calibration errors, and export preview idempotency stable", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-replay-stability");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      await creator.createProject({
+        user,
+        body: {
+          name: "Creator replay stability",
+          scriptInput: "Episode 9: Replay should not mint phantom shots.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-replay-stability-create",
+        now: new Date("2026-05-18T16:00:00.000Z"),
+      });
+
+      const invalidCalibration = await creator.runCalibration({
+        user,
+        idempotencyKey: "creator-application-invalid-calibration-replay",
+        now: new Date("2026-05-18T16:00:30.000Z"),
+      });
+      const invalidCalibrationReplay = await creator.runCalibration({
+        user,
+        idempotencyKey: "creator-application-invalid-calibration-replay",
+        now: new Date("2026-05-18T16:00:45.000Z"),
+      });
+
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-parse-state-replay",
+        now: new Date("2026-05-18T16:01:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-parse-state-replay",
+        now: new Date("2026-05-18T16:01:30.000Z"),
+      });
+
+      const sqlShots = await db.query<{ id: string }>(
+        "SELECT id FROM shots ORDER BY sort_order ASC, id ASC",
+      );
+      const sqlShotIds = new Set(sqlShots.rows.map((shot) => shot.id));
+
+      await creator.confirmAllAssets({ user });
+      await (creator as any).skipCalibration({
+        user,
+        body: { reason: "Replay stability test bypass." },
+        idempotencyKey: "creator-application-replay-stability-calibration",
+        now: new Date("2026-05-18T16:02:00.000Z"),
+      });
+
+      const images = await (creator as any).generateImages({
+        user,
+        idempotencyKey: "creator-application-parse-replay-image-generation",
+        now: new Date("2026-05-18T16:03:00.000Z"),
+      });
+      const firstExport = await (creator as any).previewExport({
+        user,
+        idempotencyKey: "creator-application-export-derived-state-replay",
+        now: new Date("2026-05-18T16:03:30.000Z"),
+      });
+      await (creator as any).generateImages({
+        user,
+        idempotencyKey: "creator-application-export-state-change-image-generation",
+        now: new Date("2026-05-18T16:04:00.000Z"),
+      });
+      const exportReplay = await (creator as any).previewExport({
+        user,
+        idempotencyKey: "creator-application-export-derived-state-replay",
+        now: new Date("2026-05-18T16:04:30.000Z"),
+      });
+
+      assert.equal(invalidCalibration.status, 409);
+      assert.deepEqual(invalidCalibration.body, { error: "invalid_calibration_selection" });
+      assert.equal(invalidCalibrationReplay.status, 409);
+      assert.deepEqual(invalidCalibrationReplay.body, invalidCalibration.body);
+      assert.equal(images.status, 200);
+      for (const task of images.body.platform.tasks) {
+        assert.equal(sqlShotIds.has(task.shotId), true);
+      }
+      assert.equal(firstExport.status, 200);
+      assert.equal(exportReplay.status, 200);
+      assert.equal(exportReplay.body.exportRecord.id, firstExport.body.exportRecord.id);
+      assert.deepEqual(exportReplay.body.export, firstExport.body.export);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("replays create and parse from the original idempotency snapshots", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-snapshot-replay");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+      const createBody = {
+        name: "Creator snapshot replay",
+        scriptInput: "Episode 10: Replay must not drift with live state.",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: createBody,
+        idempotencyKey: "creator-application-snapshot-create",
+        now: new Date("2026-05-18T16:10:00.000Z"),
+      });
+      const parsed = await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-snapshot-parse",
+        now: new Date("2026-05-18T16:11:00.000Z"),
+      });
+      const createReplay = await creator.createProject({
+        user,
+        body: createBody,
+        idempotencyKey: "creator-application-snapshot-create",
+        now: new Date("2026-05-18T16:12:00.000Z"),
+      });
+      const parseReplay = await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-snapshot-parse",
+        now: new Date("2026-05-18T16:13:00.000Z"),
+      });
+
+      assert.equal(created.status, 200);
+      assert.equal(createReplay.status, 200);
+      assert.deepEqual(createReplay.body.project, created.body.project);
+      assert.deepEqual(createReplay.body.script, created.body.script);
+      assert.equal(parsed.status, 202);
+      assert.equal(parseReplay.status, 202);
+      assert.deepEqual(parseReplay.body.workflow, parsed.body.workflow);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("continues write workflows from SQL-hydrated state after application reload", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-reload-writes");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      await creator.createProject({
+        user,
+        body: {
+          name: "Creator reload writes",
+          scriptInput: "Episode 11: Reloaded app should still write.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-reload-create",
+        now: new Date("2026-05-18T16:20:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-reload-parse",
+        now: new Date("2026-05-18T16:21:00.000Z"),
+      });
+      await creator.confirmAllAssets({ user });
+
+      const reloadedCreator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const reloadedState = await reloadedCreator.getState({ user });
+      const calibration = await reloadedCreator.runCalibration({
+        user,
+        idempotencyKey: "creator-application-reload-calibration",
+        now: new Date("2026-05-18T16:22:00.000Z"),
+      });
+      const images = await reloadedCreator.generateImages({
+        user,
+        idempotencyKey: "creator-application-reload-images",
+        now: new Date("2026-05-18T16:23:00.000Z"),
+      });
+
+      assert.equal(reloadedState.status, 200);
+      assert.equal(reloadedState.body.shots.length, 3);
+      assert.equal(calibration.status, 200);
+      assert.equal(calibration.body.calibration.status, "passed");
+      assert.equal(images.status, 200);
+      assert.equal(images.body.successes.length, 3);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("treats reordered nested generation parameters as the same idempotent request", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-canonical-hash");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      await creator.createProject({
+        user,
+        body: {
+          name: "Creator canonical hash",
+          scriptInput: "Episode 12: Request key order should not matter.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-canonical-create",
+        now: new Date("2026-05-18T16:30:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-canonical-parse",
+        now: new Date("2026-05-18T16:31:00.000Z"),
+      });
+      await creator.confirmAllAssets({ user });
+      await creator.runCalibration({
+        user,
+        idempotencyKey: "creator-application-canonical-calibration",
+        now: new Date("2026-05-18T16:32:00.000Z"),
+      });
+
+      const first = await creator.generateImages({
+        user,
+        body: {
+          parameters: {
+            size: "1024x1024",
+            style: { contrast: "high", lighting: "soft" },
+          },
+        },
+        idempotencyKey: "creator-application-canonical-images",
+        now: new Date("2026-05-18T16:33:00.000Z"),
+      });
+      const replay = await creator.generateImages({
+        user,
+        body: {
+          parameters: {
+            style: { lighting: "soft", contrast: "high" },
+            size: "1024x1024",
+          },
+        },
+        idempotencyKey: "creator-application-canonical-images",
+        now: new Date("2026-05-18T16:34:00.000Z"),
+      });
+      const providerRequests = await db.query<{ count: number }>(
+        "SELECT count(*)::int FROM provider_requests",
+      );
+
+      assert.equal(first.status, 200);
+      assert.equal(replay.status, 200);
+      assert.equal(replay.body.platform.workflowId, first.body.platform.workflowId);
+      assert.equal(providerRequests.rows[0]!.count, 3);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("retries a single failed image and video shot through creator-facing APIs", async () => {
     const db = await createMigratedTestDb();
 

@@ -34,7 +34,7 @@ Developer B owns:
 - Workbench action wiring to real backend routes.
 - Frontend state recovery from API responses.
 - User-facing error handling for known backend errors.
-- Browser dogfood support with Developer C.
+- Chrome dogfood support with Developer C.
 
 Developer B does not own:
 
@@ -49,7 +49,9 @@ Done for Developer B:
 - API failures expose structured `status`, `code`, and `fieldErrors`.
 - Workbench refreshes from backend after main actions.
 - Business facts are not restored from localStorage.
-- Web tests and Browser dogfood support pass.
+- Developer B has used `@chrome` to validate the real user journey and frontend integration behavior.
+- Chrome acceptance evidence or bugs are recorded in `docs/local-dev/local-runnable-alpha-bug-log.md`.
+- Web tests and Chrome dogfood support pass.
 
 ## 1. Shared R0 Contract for Frontend
 
@@ -84,6 +86,8 @@ Frontend rules:
 - Modify: `apps/web/tests/project-workbench-generation.spec.ts` - workbench behavior.
 - Modify: `apps/web/tests/assets-team-commercial-qa.spec.ts` - ensure library/team surfaces still render.
 - Modify: `apps/web/tests/login-page.spec.ts` - if auth redirect/error behavior changes.
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md` - Chrome self-acceptance protocol.
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md` - B-owned PASS/BUG evidence.
 
 ## 3. Tasks
 
@@ -155,27 +159,30 @@ Frontend rules:
 - [ ] Step 4: 表单类错误写入 modal notice，非表单错误写入 toast。
 - [ ] Step 5: 增加测试覆盖 create project invalid input 和 idempotency conflict copy。
 
-### Task B4: Browser Dogfood Support
+### Task B4: Chrome Self-Acceptance for Frontend User Journey
 
 | 字段 | 内容 |
 | --- | --- |
-| 背景 | Developer C 的 Browser dogfood gate 需要真实 UI 能点击完成主链路，而不是只有 render tests 通过。 |
-| 交付能力 | 页面 action、button state、toast、refresh behavior 支持真实浏览器从登录后完成 create -> parse -> confirm assets -> calibration -> generate -> export。 |
-| 前置依赖 | B1-B3；Developer C 的 checklist 或 browser e2e harness。 |
-| 验证方式 | Browser dogfood gate from `docs/local-dev/local-runnable-alpha.md`。 |
-| 异常处理 | 任何 UI action 失败时能看到稳定 toast；console 不应出现 uncaught runtime error。 |
+| 背景 | 前端 owner 必须证明真实用户点击路径可用，而不是 render test 通过但按钮、toast、busy state 或 refresh recovery 在 Chrome 里坏掉。 |
+| 交付能力 | Developer B 使用 `@chrome` 完整跑用户旅途，重点验收交互、可见反馈、错误提示、刷新恢复、console/runtime 稳定性。 |
+| 前置依赖 | B1-B3；Developer A 的 A1/A2；Developer C 的 C1。 |
+| 验证方式 | 按 `docs/local-dev/local-runnable-chrome-acceptance.md` 执行；在 `docs/local-dev/local-runnable-alpha-bug-log.md` 写入 B 的 PASS/BUG。 |
+| 异常处理 | 任何 UI action 失败时必须记录问题现场、root cause、长期修复；console 不应出现 blocking uncaught runtime error。 |
 | 主链路贡献 | Yes。 |
 
 **Files:**
 
 - Modify as needed: `apps/web/src/features/production-workbench/index.js`
 - Modify tests under `apps/web/tests/*`
-- Coordinate with: `docs/local-dev/local-runnable-alpha.md`
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
 
-- [ ] Step 1: 对照 Browser dogfood checklist 确认每个 required action 有 `data-action` 并触发 API。
-- [ ] Step 2: 确认 busy state 不会永久锁死后续操作。
-- [ ] Step 3: 确认 successful actions call `refresh()` and render updated API state.
-- [ ] Step 4: 与 Developer C 执行一次 Browser dogfood，修复前端阻断项。
+- [ ] Step 1: 用 `@chrome` 从登录开始跑完整主链路，不跳过用户实际会点击的 UI。
+- [ ] Step 2: 确认每个 required action 有明确可点击入口并触发对应 creator API。
+- [ ] Step 3: 确认 busy state 不会永久锁死，toast/notice 可理解，错误不会只停留在 console。
+- [ ] Step 4: 确认 successful actions call `refresh()` and render updated API state.
+- [ ] Step 5: 刷新页面，确认项目、资产、分镜、导出历史从后端恢复，而不是 localStorage 假恢复。
+- [ ] Step 6: 将 PASS 或 BUG 写入 bug log；BUG 必须包含问题现场、根本原因、长期解决方案。
 
 ## 4. Handoff Checks
 
@@ -195,5 +202,7 @@ Frontend integration status:
 - Local-only UI state remaining:
 - Business state source:
 - Error codes mapped:
+- Chrome acceptance evidence:
+- Bug log entries:
 - Tests run:
 ```

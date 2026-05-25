@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Harden the local creator backend/API contract so frontend actions, HTTP smoke, and Browser dogfood all use real authenticated, tenant-scoped, idempotent creator routes.
+**Goal:** Harden the local creator backend/API contract so frontend actions, HTTP smoke, and Chrome dogfood all use real authenticated, tenant-scoped, idempotent creator routes.
 
 **Architecture:** Keep the existing single-process phone-auth dev server for Local Runnable Alpha, but make creator write routes behave like real platform commands: stable `Idempotency-Key` protocol, predictable error mapping, and application-service boundaries. Developer A owns the backend side of the R0 Creator API Contract Matrix and must keep response shapes aligned with Developer B and smoke assertions owned by Developer C.
 
@@ -48,6 +48,8 @@ Done for Developer A:
 - Required creator write routes reject missing keys.
 - Replay/conflict behavior is covered for create, parse, generation, calibration, and export.
 - Known business errors no longer collapse into opaque 500s.
+- Developer A has used `@chrome` to validate the backend contract through the real frontend journey.
+- Chrome acceptance evidence or bugs are recorded in `docs/local-dev/local-runnable-alpha-bug-log.md`.
 - Project/backend tests named in this plan pass.
 
 ## 1. R0 Creator API Contract Matrix
@@ -84,6 +86,8 @@ Rules:
 - Modify: `apps/backend/src/modules/project/tests/creator-application.service.spec.ts` - replay/conflict and boundary behavior.
 - Modify: `apps/backend/src/modules/project/tests/creator-platform.service.spec.ts` - provider/storage workflow safety where needed.
 - Modify if drift is found: `packages/contracts/api/*.ts`.
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md` - Chrome self-acceptance protocol.
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md` - A-owned PASS/BUG evidence.
 
 ## 3. Tasks
 
@@ -202,6 +206,31 @@ Rules:
 - [ ] Step 4: 保持 `createCreatorApplication` public API 和所有 HTTP response shape 不变。
 - [ ] Step 5: 运行 project module tests。
 
+### Task A4: Chrome Self-Acceptance for Backend Contract
+
+| 字段 | 内容 |
+| --- | --- |
+| 背景 | 后端契约如果只在单元测试里通过，仍可能在真实页面里因为 cookie、header、body shape、route wiring 或 error mapping 漏掉。 |
+| 交付能力 | Developer A 使用 `@chrome` 跑完整用户旅途，并从 network/state 角度证明 R0 required routes、idempotency、错误码和 replay 副作用符合预期。 |
+| 前置依赖 | A1/A1.5/A2；Developer B 的 B1 至少能发送 idempotency key；Developer C 的 C1 可启动本地 dev。 |
+| 验证方式 | 按 `docs/local-dev/local-runnable-chrome-acceptance.md` 执行；在 `docs/local-dev/local-runnable-alpha-bug-log.md` 写入 A 的 PASS/BUG。 |
+| 异常处理 | 发现问题时，必须记录问题现场、根本原因、长期主义修复方案；Blocker/High 不允许进入 Done。 |
+| 主链路贡献 | Yes。它证明后端契约被真实 UI 消费。 |
+
+**Files:**
+
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
+- Modify if bugs are found: `apps/backend/src/entrypoints/phone-auth-dev-server.ts`
+- Modify if bugs are found: `apps/backend/src/modules/project/creator-application.service.ts`
+
+- [ ] Step 1: 运行 `npm run dev`，用 `@chrome` 打开本地 URL 并完成 phone-auth 登录。
+- [ ] Step 2: 完成 create -> parse -> confirm assets -> calibration -> image -> video -> export -> refresh recovery。
+- [ ] Step 3: 在 Chrome network 里核对 R0 required routes 都带 `Idempotency-Key`，且 status/error code/response shape 与矩阵一致。
+- [ ] Step 4: 对 create、parse、generation 或 export 至少选择一类写操作做重复触发/刷新重试观察，确认没有重复资源或重复 provider/export 副作用。
+- [ ] Step 5: 若发现问题，先查 root cause 再写修复方案；不能只记录“接口失败”。
+- [ ] Step 6: 在 bug log 写 A 的 PASS 或 BUG 记录。
+
 ## 4. Handoff Checks
 
 Developer A should run these before handing work to B/C:
@@ -221,5 +250,7 @@ Backend R0 matrix status:
 - Required idempotent routes implemented:
 - Any downgraded routes:
 - Known response-shape changes:
+- Chrome acceptance evidence:
+- Bug log entries:
 - Tests run:
 ```

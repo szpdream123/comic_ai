@@ -38,6 +38,25 @@ describe("API command contracts", () => {
     );
   });
 
+  it("declares an explicit calibration override command", () => {
+    const command = allApiCommandContracts.find(
+      (candidate) => candidate.name === "OverrideCalibration",
+    );
+
+    assert.ok(command);
+    assert.equal(command.operationName, "calibration.override");
+    assert.equal(command.idempotencyRequired, true);
+    assert.deepEqual(command.requestSchema, {
+      calibrationSessionId: "uuid",
+      reason: "required text",
+    });
+    assert.deepEqual(command.responseSchema, {
+      calibrationSessionId: "uuid",
+      status: "skipped",
+      decisionType: "override",
+    });
+  });
+
   it("has a command contract for every exported operation name", () => {
     const contractedOperationNames = new Set(
       allApiCommandContracts.map((command) => command.operationName),

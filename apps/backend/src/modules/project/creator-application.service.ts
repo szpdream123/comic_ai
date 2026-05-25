@@ -3,7 +3,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
 import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
+import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import {
+  beginOrReplayCommand,
+  IdempotencyConflictError,
+  IdempotencyProcessingError,
+} from "../shared/idempotency/idempotency.service.ts";
+import { SqlIdempotencyRecordStore } from "../shared/idempotency/persistent-idempotency.store.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
@@ -20,8 +28,18 @@ import {
   replaceAssetReviewCandidatesForProject,
   updateAssetReviewCandidateRecordLabel,
 } from "./asset-review-record.service.ts";
-import { replaceCalibrationSessionForProject, getLatestCalibrationSessionForProject } from "./calibration-record.service.ts";
+import { replaceCalibrationSessionForProject } from "./calibration-record.service.ts";
 import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
+import {
+  ensureCreatorSqlState,
+  getCreatorDevState,
+  type CreatorSqlState,
+} from "./creator-dev-state.service.ts";
+import {
+  hydrateStateFromSql,
+  loadProjectBundleFromSql,
+  seedCreatorAppFromSql,
+} from "./creator-state-hydration.service.ts";
 import { CalibrationRuleError } from "./calibration.service.ts";
 import {
   createCreatorExportArtifact,
@@ -60,11 +78,6 @@ interface AuthenticatedCreatorUser {
   sessionToken: string;
 }
 
-interface CreatorSqlState {
-  projectId: string | null;
-  scriptId: string | null;
-}
-
 export interface CreatorHttpResponse<T> {
   status: number;
   body: T;
@@ -82,55 +95,35 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   const creatorSqlStates = deps.creatorSqlStates ?? new Map<string, CreatorSqlState>();
 
   function getCreatorState(userId: string) {
-    const creatorApp = creatorApps.get(userId) ?? new CreatorDevApp();
-    creatorApps.set(userId, creatorApp);
-
-    const sqlState = creatorSqlStates.get(userId) ?? {
-      projectId: null,
-      scriptId: null,
-    };
-    creatorSqlStates.set(userId, sqlState);
-
-    return {
-      creatorApp,
-      sqlState,
-    };
+    return getCreatorDevState({ userId, creatorApps, creatorSqlStates });
   }
 
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
-    if (sqlState.projectId && sqlState.scriptId) {
-      return sqlState;
+    return ensureCreatorSqlState({
+      db: deps.db,
+      workspaceId: deps.workspaceId,
+      userId,
+      sqlState,
+    });
+  }
+
+  async function hydrateActiveCreatorApp(input: {
+    user: AuthenticatedCreatorUser;
+    creatorApp: CreatorDevApp;
+    sqlState: CreatorSqlState;
+    now: Date;
+  }) {
+    await ensureSqlState(input.user.id, input.sqlState);
+    if (!input.sqlState.projectId) {
+      return null;
     }
 
-    const project = await deps.db.query<{
-      project_id: string;
-      script_id: string | null;
-    }>(
-      `
-        SELECT
-          p.id AS project_id,
-          (
-            SELECT s.id
-            FROM scripts s
-            WHERE s.project_id = p.id
-            ORDER BY s.created_at DESC, s.id DESC
-            LIMIT 1
-          ) AS script_id
-        FROM projects p
-        WHERE p.workspace_id = $1
-          AND p.created_by_user_id = $2
-        ORDER BY p.created_at DESC, p.id DESC
-        LIMIT 1
-      `,
-      [deps.workspaceId, userId],
-    );
-    const row = project.rows[0];
-    if (row) {
-      sqlState.projectId = row.project_id;
-      sqlState.scriptId = row.script_id;
-    }
-
-    return sqlState;
+    return seedCreatorAppFromSql(deps.db, input.creatorApp, {
+      projectId: input.sqlState.projectId,
+      scriptId: input.sqlState.scriptId,
+      sessionToken: input.user.sessionToken,
+      now: input.now,
+    });
   }
 
   async function writeLibraryAsset(input: {
@@ -226,6 +219,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<CreatorDevStateSnapshot>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
+      if (sqlState.projectId) {
+        await seedCreatorAppFromSql(deps.db, creatorApp, {
+          projectId: sqlState.projectId,
+          scriptId: sqlState.scriptId,
+          sessionToken: input.user.sessionToken,
+          now: new Date(),
+        });
+      }
       const state = await creatorApp.getState();
       const hydrated = sqlState.projectId
         ? await hydrateStateFromSql(deps.db, state, {
@@ -459,6 +460,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
 
       const handleParseScript = createSqlParseScriptCommandHandler({ db: deps.db });
       const result = await handleParseScript({
@@ -475,96 +482,120 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return result as CreatorHttpResponse<Record<string, unknown>>;
       }
 
-      const parsed = await creatorApp.parseScript({
-        episodeIdForSourceId: (sourceEpisodeId) =>
-          stableEpisodeUuid(sqlState.projectId!, sourceEpisodeId),
-      });
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: sqlState.projectId,
         now: input.now,
       });
-      const claim = await claimQueuedTask(deps.db, {
-        taskId: result.body.taskId,
-        workerId: "creator-parse-finalizer",
-        now: input.now,
-        leaseMs: 60_000,
-      });
-      if (!claim) {
-        throw new Error(`parse_task_claim_failed:${result.body.taskId}`);
+      if (result.idempotencyResult === "replayed") {
+        const records = await listAssetReviewCandidatesForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId: sqlState.projectId,
+        });
+        const assetCandidates = assetReviewStateFromRecords(records);
+        const shots = await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId: sqlState.projectId,
+        });
+        await creatorApp.seedShotRecords(shots);
+        return {
+          status: result.status,
+          body: {
+            workflow: result.body,
+            assetReview: computeAssetReviewSummary(assetCandidates),
+            assetCandidates,
+            shots,
+          },
+        };
       }
-      await finalizeTaskAttempt(deps.db, {
-        taskId: result.body.taskId,
-        attemptId: claim.attempt.id,
-        status: "succeeded",
-        now: input.now,
-        finalize: async () => {
-          await replaceAssetReviewCandidatesForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            now: input.now,
-            candidates: parsed.parse.candidateAssets.map((candidate) => ({
-              group: candidate.kind,
-              assetKey: candidate.id,
-              label: candidate.name,
-              required: candidate.kind !== "prop",
-            })),
-          });
-          await replaceEpisodesForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            createdByUserId: actor.actorId,
-            now: input.now,
-            episodes: parsed.parse.episodes.map((episode) => ({
-              id: stableEpisodeUuid(sqlState.projectId!, episode.id),
-              title: episode.title,
-              sequence: episode.sequence,
-              status: "draft",
-            })),
-          });
-          const episodeIdBySourceId = new Map(
-            parsed.parse.episodes.map((episode) => [
-              episode.id,
-              stableEpisodeUuid(sqlState.projectId!, episode.id),
-            ]),
-          );
-          const shotEpisodeIdByIndex = new Map(
-            parsed.parse.shots.map((shot, index) => [
-              index,
-              episodeIdBySourceId.get(shot.episodeId) ?? null,
-            ]),
-          );
-          await replaceShotsForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            createdByUserId: actor.actorId,
-            shots: (parsed.shots as ShotRecord[]).map((shot, index) => ({
-              ...shot,
-              episodeId: shotEpisodeIdByIndex.get(index) ?? null,
-            })),
-            now: input.now,
-          });
-          await deps.db.query(
-            `
-              UPDATE projects
-              SET phase = 'asset_review',
-                  updated_at = $2
-              WHERE id = $1
-            `,
-            [sqlState.projectId, input.now],
-          );
-          await deps.db.query(
-            `
-              UPDATE scripts
-              SET status = 'parsed',
-                  updated_at = $2
-              WHERE id = $1
-            `,
-            [sqlState.scriptId, input.now],
-          );
-        },
+
+      const parsed = await creatorApp.parseScript({
+        episodeIdForSourceId: (sourceEpisodeId) =>
+          stableEpisodeUuid(sqlState.projectId!, sourceEpisodeId),
       });
-      await aggregateWorkflowStatus(deps.db, result.body.workflowId);
+      if (result.body.taskStatus === "queued") {
+        const claim = await claimQueuedTask(deps.db, {
+          taskId: result.body.taskId,
+          workerId: "creator-parse-finalizer",
+          now: input.now,
+          leaseMs: 60_000,
+        });
+        if (!claim) {
+          throw new Error(`parse_task_claim_failed:${result.body.taskId}`);
+        }
+        await finalizeTaskAttempt(deps.db, {
+          taskId: result.body.taskId,
+          attemptId: claim.attempt.id,
+          status: "succeeded",
+          now: input.now,
+          finalize: async () => {
+            await replaceAssetReviewCandidatesForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              now: input.now,
+              candidates: parsed.parse.candidateAssets.map((candidate) => ({
+                group: candidate.kind,
+                assetKey: candidate.id,
+                label: candidate.name,
+                required: candidate.kind !== "prop",
+              })),
+            });
+            await replaceEpisodesForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              createdByUserId: actor.actorId,
+              now: input.now,
+              episodes: parsed.parse.episodes.map((episode) => ({
+                id: stableEpisodeUuid(sqlState.projectId!, episode.id),
+                title: episode.title,
+                sequence: episode.sequence,
+                status: "draft",
+              })),
+            });
+            const episodeIdBySourceId = new Map(
+              parsed.parse.episodes.map((episode) => [
+                episode.id,
+                stableEpisodeUuid(sqlState.projectId!, episode.id),
+              ]),
+            );
+            const shotEpisodeIdByIndex = new Map(
+              parsed.parse.shots.map((shot, index) => [
+                index,
+                episodeIdBySourceId.get(shot.episodeId) ?? null,
+              ]),
+            );
+            await replaceShotsForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              createdByUserId: actor.actorId,
+              shots: (parsed.shots as ShotRecord[]).map((shot, index) => ({
+                ...shot,
+                episodeId: shotEpisodeIdByIndex.get(index) ?? null,
+              })),
+              now: input.now,
+            });
+            await deps.db.query(
+              `
+                UPDATE projects
+                SET phase = 'asset_review',
+                    updated_at = $2
+                WHERE id = $1
+              `,
+              [sqlState.projectId, input.now],
+            );
+            await deps.db.query(
+              `
+                UPDATE scripts
+                SET status = 'parsed',
+                    updated_at = $2
+                WHERE id = $1
+              `,
+              [sqlState.scriptId, input.now],
+            );
+          },
+        });
+        await aggregateWorkflowStatus(deps.db, result.body.workflowId);
+      }
       const records = await listAssetReviewCandidatesForProject(deps.db, {
         organizationId: actor.organizationId,
         projectId: sqlState.projectId,
@@ -900,7 +931,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -928,7 +964,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -956,7 +997,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -986,7 +1032,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1011,10 +1062,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async runCalibration(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      const result = await creatorApp.runCalibration();
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1023,35 +1079,57 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.calibrationGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId },
+          now: input.now,
+          execute: async () => runCalibrationAction(),
+        });
+      }
 
-      const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        calibrationId: result.calibration.id,
-        decisionType: result.calibration.decision?.decisionType ?? "passed",
-        reason: result.calibration.decision?.reason ?? null,
-        shotIds: result.calibration.items.map((item) => item.shotId),
-        now: input.now,
-      });
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      await replaceCalibrationSessionForProject(deps.db, {
-        organizationId: actor.organizationId,
-        projectId,
-        session: result.calibration,
-        now: input.now,
-      });
+      return runCalibrationAction();
 
-      return {
-        status: 200,
-        body: {
-          ...result,
-          auditEvent,
-        },
-      };
+      async function runCalibrationAction() {
+        try {
+          const result = await creatorApp.runCalibration();
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: result.calibration.decision?.decisionType ?? "passed",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
+      }
     },
 
     async skipCalibration(input: {
@@ -1060,52 +1138,75 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         reason: string;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      try {
-        const result = await creatorApp.skipCalibration({
-          reason: input.body.reason,
-        });
-        const state = await creatorApp.getState();
-        const projectId = sqlState.projectId ?? state.project?.id ?? null;
-        if (!projectId) {
-          return {
-            status: 409,
-            body: { error: "creator_project_missing" },
-          };
-        }
-
-        const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          calibrationId: result.calibration.id,
-          decisionType: "skipped",
-          reason: result.calibration.decision?.reason ?? null,
-          shotIds: result.calibration.items.map((item) => item.shotId),
-          now: input.now,
-        });
-        const actor = await resolveActorContext(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          now: input.now,
-        });
-        await replaceCalibrationSessionForProject(deps.db, {
-          organizationId: actor.organizationId,
-          projectId,
-          session: result.calibration,
-          now: input.now,
-        });
-
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
+      const state = await creatorApp.getState();
+      const projectId = sqlState.projectId ?? state.project?.id ?? null;
+      if (!projectId) {
         return {
-          status: 200,
-          body: {
-            ...result,
-            auditEvent,
-          },
+          status: 409,
+          body: { error: "creator_project_missing" },
         };
-      } catch (error) {
-        return calibrationErrorResponse(error);
+      }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.projectEdit,
+          operationName: operationNames.calibrationSkip,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId, reason: input.body.reason },
+          now: input.now,
+          execute: async () => skipCalibrationAction(),
+        });
+      }
+
+      return skipCalibrationAction();
+
+      async function skipCalibrationAction() {
+        try {
+          const result = await creatorApp.skipCalibration({
+            reason: input.body.reason,
+          });
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: "skipped",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
       }
     },
 
@@ -1115,52 +1216,79 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         reason?: string | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      try {
-        const result = await creatorApp.overrideCalibration({
-          reason: input.body.reason ?? null,
-        });
-        const state = await creatorApp.getState();
-        const projectId = sqlState.projectId ?? state.project?.id ?? null;
-        if (!projectId) {
-          return {
-            status: 409,
-            body: { error: "creator_project_missing" },
-          };
-        }
-
-        const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          calibrationId: result.calibration.id,
-          decisionType: "override",
-          reason: result.calibration.decision?.reason ?? null,
-          shotIds: result.calibration.items.map((item) => item.shotId),
-          now: input.now,
-        });
-        const actor = await resolveActorContext(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          now: input.now,
-        });
-        await replaceCalibrationSessionForProject(deps.db, {
-          organizationId: actor.organizationId,
-          projectId,
-          session: result.calibration,
-          now: input.now,
-        });
-
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
+      const state = await creatorApp.getState();
+      const projectId = sqlState.projectId ?? state.project?.id ?? null;
+      if (!projectId) {
         return {
-          status: 200,
-          body: {
-            ...result,
-            auditEvent,
-          },
+          status: 409,
+          body: { error: "creator_project_missing" },
         };
-      } catch (error) {
-        return calibrationErrorResponse(error);
+      }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.projectEdit,
+          operationName: operationNames.calibrationOverride,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            action: "override",
+            reason: input.body.reason ?? null,
+          },
+          now: input.now,
+          execute: async () => overrideCalibrationAction(),
+        });
+      }
+
+      return overrideCalibrationAction();
+
+      async function overrideCalibrationAction() {
+        try {
+          const result = await creatorApp.overrideCalibration({
+            reason: input.body.reason ?? null,
+          });
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: "override",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
       }
     },
 
@@ -1173,8 +1301,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         parameters?: Record<string, unknown> | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const before = await creatorApp.getState();
       const projectId = sqlState.projectId ?? before.project?.id;
       if (!projectId) {
@@ -1185,91 +1320,114 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
-      const platform = await requestCreatorImageGenerationPlatformBatch(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        options: {
-          shotId: input.body?.shotId ?? null,
-          promptOverride: input.body?.promptOverride ?? null,
-          model: input.body?.model ?? null,
-          parameters: input.body?.parameters ?? null,
-        },
-        shots: requestedShots.map((shot) => ({
-          id: shot.id,
-          title: shot.title,
-          contentRevision: shot.contentRevision,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-        })),
-      }, {
-        deferFinalization: true,
-      });
-      const generated = await creatorApp.generateImagesForTasks(
-        platform.tasks.map((task) => ({
-          shotId: task.shotId,
-          taskId: task.taskId,
-          storageObjectKey: task.storageObjectKey,
-          sourceAttemptId: task.attemptId,
-        })),
-      );
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      const successByTaskId = new Map(
-        (generated.successes as Array<{
-          shot: ShotRecord;
-          asset: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
-          version: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
-        }>).map((success) => [success.version.sourceTaskId, success] as const),
-      );
-      const shotById = new Map(
-        (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
-      );
-
-      for (const task of platform.tasks) {
-        const success = successByTaskId.get(task.taskId);
-        const shot = shotById.get(task.shotId);
-        if (!shot) {
-          throw new Error(`creator_image_shot_missing:${task.shotId}`);
-        }
-
-        await finalizeTaskAttempt(deps.db, {
-          taskId: task.taskId,
-          attemptId: task.attemptId,
-          status: success ? "succeeded" : "failed",
-          failureCode: success ? null : "generation_failed",
-          now: input.now,
-          finalize: async () => {
-            if (success) {
-              await upsertAssetVersionSnapshot(deps.db, {
-                asset: success.asset,
-                version: success.version,
-                now: input.now,
-              });
-            }
-            await upsertShotsForProject(deps.db, {
-              organizationId: actor.organizationId,
-              projectId,
-              createdByUserId: actor.actorId,
-              shots: [shot],
-              now: input.now,
-            });
-            await updateProjectPhase(deps.db, projectId, "shot_generation");
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.shotImageGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            shotIds: requestedShots.map((shot) => shot.id),
+            body: input.body ?? {},
           },
+          now: input.now,
+          execute: async () => generateImagesAction(requestedShots),
         });
       }
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
 
-      return {
-        status: 200,
-        body: {
-          ...generated,
-          platform,
-          request: input.body ?? {},
-        },
-      };
+      return generateImagesAction(requestedShots);
+
+      async function generateImagesAction(
+        selectedShots: CreatorDevStateSnapshot["shots"],
+      ) {
+        const platform = await requestCreatorImageGenerationPlatformBatch(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          options: {
+            shotId: input.body?.shotId ?? null,
+            promptOverride: input.body?.promptOverride ?? null,
+            model: input.body?.model ?? null,
+            parameters: input.body?.parameters ?? null,
+          },
+          shots: selectedShots.map((shot) => ({
+            id: shot.id,
+            title: shot.title,
+            contentRevision: shot.contentRevision,
+            currentImageAssetVersionId: shot.currentImageAssetVersionId,
+          })),
+        }, {
+          deferFinalization: true,
+        });
+        const generated = await creatorApp.generateImagesForTasks(
+          platform.tasks.map((task) => ({
+            shotId: task.shotId,
+            taskId: task.taskId,
+            storageObjectKey: task.storageObjectKey,
+            sourceAttemptId: task.attemptId,
+          })),
+        );
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        const successByTaskId = new Map(
+          (generated.successes as Array<{
+            shot: ShotRecord;
+            asset: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
+            version: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
+          }>).map((success) => [success.version.sourceTaskId, success] as const),
+        );
+        const shotById = new Map(
+          (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
+        );
+
+        for (const task of platform.tasks) {
+          const success = successByTaskId.get(task.taskId);
+          const shot = shotById.get(task.shotId);
+          if (!shot) {
+            throw new Error(`creator_image_shot_missing:${task.shotId}`);
+          }
+
+          await finalizeTaskAttempt(deps.db, {
+            taskId: task.taskId,
+            attemptId: task.attemptId,
+            status: success ? "succeeded" : "failed",
+            failureCode: success ? null : "generation_failed",
+            now: input.now,
+            finalize: async () => {
+              if (success) {
+                await upsertAssetVersionSnapshot(deps.db, {
+                  asset: success.asset,
+                  version: success.version,
+                  now: input.now,
+                });
+              }
+              await upsertShotsForProject(deps.db, {
+                organizationId: actor.organizationId,
+                projectId,
+                createdByUserId: actor.actorId,
+                shots: [shot],
+                now: input.now,
+              });
+              await updateProjectPhase(deps.db, projectId, "shot_generation");
+            },
+          });
+        }
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+
+        return {
+          status: 200,
+          body: {
+            ...generated,
+            platform,
+            request: input.body ?? {},
+          },
+        };
+      }
     },
 
     async retryShotImage(input: {
@@ -1278,7 +1436,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const projectId = sqlState.projectId;
       if (!projectId) {
         return {
@@ -1435,8 +1598,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         lipSyncEnabled?: boolean | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const before = await creatorApp.getState();
       const projectId = sqlState.projectId ?? before.project?.id;
       if (!projectId) {
@@ -1447,96 +1617,122 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
-      const platform = await requestCreatorVideoGenerationPlatformBatch(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        options: {
-          shotId: input.body?.shotId ?? null,
-          motionPrompt: input.body?.motionPrompt ?? null,
-          model: input.body?.model ?? null,
-          parameters: input.body?.parameters ?? null,
-          audioEnabled: input.body?.audioEnabled ?? null,
-          musicEnabled: input.body?.musicEnabled ?? null,
-          lipSyncEnabled: input.body?.lipSyncEnabled ?? null,
-        },
-        shots: requestedShots.map((shot) => ({
-          id: shot.id,
-          title: shot.title,
-          contentRevision: shot.contentRevision,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-        })),
-      }, {
-        deferFinalization: true,
-      });
-      const generated = await creatorApp.generateVideosForTasks(
-        platform.tasks.map((task) => ({
-          shotId: task.shotId,
-          taskId: task.taskId,
-          storageObjectKey: task.storageObjectKey,
-          sourceAttemptId: task.attemptId,
-        })),
-      );
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      const resultByTaskId = new Map(
-        (generated.results as Array<{
-          shot: ShotRecord;
-          asset?: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
-          version?: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
-        }>).map((result) => [result.version?.sourceTaskId ?? `failed:${result.shot.activeVideoTaskId}`, result] as const),
-      );
-      const shotById = new Map(
-        (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
-      );
-
-      for (const task of platform.tasks) {
-        const result =
-          resultByTaskId.get(task.taskId) ??
-          resultByTaskId.get(`failed:${task.taskId}`);
-        const shot = shotById.get(task.shotId);
-        if (!result || !shot) {
-          throw new Error(`creator_video_result_missing:${task.taskId}`);
-        }
-
-        await finalizeTaskAttempt(deps.db, {
-          taskId: task.taskId,
-          attemptId: task.attemptId,
-          status: result.asset && result.version ? "succeeded" : "failed",
-          failureCode: result.asset && result.version ? null : "generation_failed",
-          now: input.now,
-          finalize: async () => {
-            if (result.asset && result.version) {
-              await upsertAssetVersionSnapshot(deps.db, {
-                asset: result.asset,
-                version: result.version,
-                now: input.now,
-              });
-            }
-            await upsertShotsForProject(deps.db, {
-              organizationId: actor.organizationId,
-              projectId,
-              createdByUserId: actor.actorId,
-              shots: [shot],
-              now: input.now,
-            });
-            await updateProjectPhase(deps.db, projectId, "shot_generation");
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.shotVideoGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            shotIds: requestedShots.map((shot) => shot.id),
+            body: input.body ?? {},
           },
+          now: input.now,
+          execute: async () => generateVideosAction(requestedShots),
         });
       }
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
 
-      return {
-        status: 200,
-        body: {
-          ...generated,
-          platform,
-          request: input.body ?? {},
-        },
-      };
+      return generateVideosAction(requestedShots);
+
+      async function generateVideosAction(
+        selectedShots: CreatorDevStateSnapshot["shots"],
+      ) {
+        const platform = await requestCreatorVideoGenerationPlatformBatch(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          options: {
+            shotId: input.body?.shotId ?? null,
+            motionPrompt: input.body?.motionPrompt ?? null,
+            model: input.body?.model ?? null,
+            parameters: input.body?.parameters ?? null,
+            audioEnabled: input.body?.audioEnabled ?? null,
+            musicEnabled: input.body?.musicEnabled ?? null,
+            lipSyncEnabled: input.body?.lipSyncEnabled ?? null,
+          },
+          shots: selectedShots.map((shot) => ({
+            id: shot.id,
+            title: shot.title,
+            contentRevision: shot.contentRevision,
+            currentImageAssetVersionId: shot.currentImageAssetVersionId,
+          })),
+        }, {
+          deferFinalization: true,
+        });
+        const generated = await creatorApp.generateVideosForTasks(
+          platform.tasks.map((task) => ({
+            shotId: task.shotId,
+            taskId: task.taskId,
+            storageObjectKey: task.storageObjectKey,
+            sourceAttemptId: task.attemptId,
+          })),
+        );
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        const resultByTaskId = new Map(
+          (generated.results as Array<{
+            shot: ShotRecord;
+            asset?: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
+            version?: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
+          }>).map((result) => [
+            result.version?.sourceTaskId ?? `failed:${result.shot.activeVideoTaskId}`,
+            result,
+          ] as const),
+        );
+        const shotById = new Map(
+          (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
+        );
+
+        for (const task of platform.tasks) {
+          const result =
+            resultByTaskId.get(task.taskId) ??
+            resultByTaskId.get(`failed:${task.taskId}`);
+          const shot = shotById.get(task.shotId);
+          if (!result || !shot) {
+            throw new Error(`creator_video_result_missing:${task.taskId}`);
+          }
+
+          await finalizeTaskAttempt(deps.db, {
+            taskId: task.taskId,
+            attemptId: task.attemptId,
+            status: result.asset && result.version ? "succeeded" : "failed",
+            failureCode: result.asset && result.version ? null : "generation_failed",
+            now: input.now,
+            finalize: async () => {
+              if (result.asset && result.version) {
+                await upsertAssetVersionSnapshot(deps.db, {
+                  asset: result.asset,
+                  version: result.version,
+                  now: input.now,
+                });
+              }
+              await upsertShotsForProject(deps.db, {
+                organizationId: actor.organizationId,
+                projectId,
+                createdByUserId: actor.actorId,
+                shots: [shot],
+                now: input.now,
+              });
+              await updateProjectPhase(deps.db, projectId, "shot_generation");
+            },
+          });
+        }
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+
+        return {
+          status: 200,
+          body: {
+            ...generated,
+            platform,
+            request: input.body ?? {},
+          },
+        };
+      }
     },
 
     async retryShotVideo(input: {
@@ -1545,7 +1741,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const projectId = sqlState.projectId;
       if (!projectId) {
         return {
@@ -1704,9 +1905,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async previewExport(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      const exportPreview = await creatorApp.previewExport();
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id;
       if (!projectId) {
@@ -1715,60 +1922,77 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
-
-      const platform = await createCreatorExportArtifact(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        manifest: exportPreview.export,
-      }, {
-        deferFinalization: true,
-      });
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      await finalizeTaskAttempt(deps.db, {
-        taskId: platform.taskId,
-        attemptId: platform.attemptId,
-        status: "succeeded",
-        now: input.now,
-        finalize: async () => {
-          await createExportRecord(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId!,
-            projectId,
-            workflowId: platform.workflowId,
-            storageObjectId: platform.storageObjectId,
-            manifestStatus: exportPreview.export.status,
-            allowPartialExport: exportPreview.export.allowPartialExport,
-            itemCount: exportPreview.export.items.length,
-            missingAssetCount: exportPreview.export.missingAssets.length,
-            latestSignedUrlExpiresAt: platform.expiresAt,
-            createdByUserId: actor.actorId,
-            now: input.now,
-          });
-          await updateProjectPhase(deps.db, projectId, "export");
-        },
-      });
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
-      const exportRecord = (
-        await listExportRecordsForProject(deps.db, {
-          organizationId: actor.organizationId,
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
           projectId,
-          limit: 1,
-        })
-      )[0];
+          capability: capabilities.exportCreate,
+          operationName: operationNames.exportCreate,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId },
+          now: input.now,
+          execute: async () => previewExportAction(),
+        });
+      }
 
-      return {
-        status: 200,
-        body: {
-          ...exportPreview,
-          exportRecord,
-          platform,
-        },
-      };
+      return previewExportAction();
+
+      async function previewExportAction() {
+        const exportPreview = await creatorApp.previewExport();
+        const platform = await createCreatorExportArtifact(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          manifest: exportPreview.export,
+        }, {
+          deferFinalization: true,
+        });
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        await finalizeTaskAttempt(deps.db, {
+          taskId: platform.taskId,
+          attemptId: platform.attemptId,
+          status: "succeeded",
+          now: input.now,
+          finalize: async () => {
+            await createExportRecord(deps.db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId!,
+              projectId,
+              workflowId: platform.workflowId,
+              storageObjectId: platform.storageObjectId,
+              manifestStatus: exportPreview.export.status,
+              allowPartialExport: exportPreview.export.allowPartialExport,
+              itemCount: exportPreview.export.items.length,
+              missingAssetCount: exportPreview.export.missingAssets.length,
+              latestSignedUrlExpiresAt: platform.expiresAt,
+              createdByUserId: actor.actorId,
+              now: input.now,
+            });
+            await updateProjectPhase(deps.db, projectId, "export");
+          },
+        });
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+        const exportRecord = (
+          await listExportRecordsForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            limit: 1,
+          })
+        )[0];
+
+        return {
+          status: 200,
+          body: {
+            ...exportPreview,
+            exportRecord,
+            platform,
+          },
+        };
+      }
     },
 
     async listExportHistory(input: {
@@ -1776,6 +2000,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id;
       if (!projectId) {
@@ -1845,6 +2075,259 @@ async function releaseVideoRetryClaimIfSafe(
   }
 
   await releaseShotVideoRetryClaim(db, input);
+}
+
+async function runIdempotentCreatorAction(
+  db: SqlDatabase,
+  input: {
+    sessionToken: string;
+    projectId: string;
+    capability: Capability;
+    operationName: OperationName;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+    now: Date;
+    execute: () => Promise<CreatorHttpResponse<Record<string, unknown>>>;
+  },
+): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+  let transactionOpen = false;
+  let startedRecord:
+    | Awaited<ReturnType<typeof beginOrReplayCommand>>["record"]
+    | null = null;
+
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+
+    const actor = await resolveActorContext(db, {
+      sessionToken: input.sessionToken,
+      projectId: input.projectId,
+      capability: input.capability,
+      now: input.now,
+    });
+    const store = new SqlIdempotencyRecordStore(db);
+    const started = await beginOrReplayCommand(store, {
+      organizationId: actor.organizationId,
+      operationName: input.operationName,
+      idempotencyKey: input.idempotencyKey,
+      requestHash: hashJson(input.request),
+    });
+
+    if (started.kind === "replayed") {
+      await db.query("COMMIT");
+      transactionOpen = false;
+      return {
+        status: responseStatusFromSnapshot(started.record.responseSnapshot),
+        body: responseBodyFromSnapshot(started.record.responseSnapshot),
+      };
+    }
+
+    if (started.kind === "processing") {
+      throw new IdempotencyProcessingError(started.record);
+    }
+
+    startedRecord = started.record;
+    await db.query("COMMIT");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+
+    if (error instanceof IdempotencyConflictError) {
+      return {
+        status: 409,
+        body: { error: error.code },
+      };
+    }
+
+    if (error instanceof IdempotencyProcessingError) {
+      return {
+        status: 202,
+        body: { error: error.code },
+      };
+    }
+
+    throw error;
+  }
+
+  if (!startedRecord) {
+    throw new Error("idempotency_started_record_missing");
+  }
+
+  const response = await input.execute();
+  const store = new SqlIdempotencyRecordStore(db);
+
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+    await store.update({
+      ...startedRecord,
+      responseResourceType: responseResourceTypeForResponse(
+        input.operationName,
+        response,
+      ),
+      responseResourceId: responseResourceIdForResponse(
+        input.operationName,
+        response,
+      ),
+      responseSnapshot: responseSnapshotForResponse(response),
+      status: idempotencyStatusForResponse(response),
+      updatedAt: input.now,
+    });
+
+    await db.query("COMMIT");
+    transactionOpen = false;
+    return response;
+  } catch (error) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+
+    throw error;
+  }
+}
+
+function hashJson(value: unknown) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeJson(value)))
+    .digest("hex");
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJson(item));
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalizeJson(item)]),
+    );
+  }
+
+  return value;
+}
+
+const idempotencyHttpStatusSnapshotKey = "__creatorHttpStatus";
+
+function idempotencyStatusForResponse(
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  return response.status >= 200 && response.status < 300 ? "succeeded" : "failed_terminal";
+}
+
+function responseSnapshotForResponse(
+  response: CreatorHttpResponse<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (response.status >= 200 && response.status < 300) {
+    return response.body;
+  }
+
+  return {
+    ...response.body,
+    [idempotencyHttpStatusSnapshotKey]: response.status,
+  };
+}
+
+function responseResourceTypeForResponse(
+  operationName: OperationName,
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  if (response.status < 200 || response.status >= 300) {
+    return undefined;
+  }
+
+  if (
+    operationName === operationNames.shotImageGenerate ||
+    operationName === operationNames.shotVideoGenerate
+  ) {
+    return "workflow";
+  }
+
+  if (operationName === operationNames.exportCreate) {
+    return "export_record";
+  }
+
+  return "calibration_session";
+}
+
+function responseStatusFromSnapshot(snapshot?: Record<string, unknown>) {
+  if (snapshot) {
+    const parsed = snapshot[idempotencyHttpStatusSnapshotKey];
+    if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 100 && parsed <= 599) {
+      return parsed;
+    }
+    if (typeof parsed === "string") {
+      const parsedNumber = Number(parsed);
+      if (Number.isInteger(parsedNumber) && parsedNumber >= 100 && parsedNumber <= 599) {
+        return parsedNumber;
+      }
+    }
+  }
+
+  return 200;
+}
+
+function responseBodyFromSnapshot(
+  snapshot?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!snapshot) {
+    return {};
+  }
+
+  if (Object.hasOwn(snapshot, idempotencyHttpStatusSnapshotKey)) {
+    const { [idempotencyHttpStatusSnapshotKey]: _status, ...body } = snapshot;
+    return body;
+  }
+
+  return snapshot;
+}
+
+function responseResourceIdForResponse(
+  operationName: OperationName,
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  if (response.status < 200 || response.status >= 300) {
+    return undefined;
+  }
+
+  return responseResourceIdFromBody(operationName, response.body);
+}
+
+function responseResourceIdFromBody(
+  operationName: OperationName,
+  body: Record<string, unknown>,
+) {
+  if (
+    operationName === operationNames.shotImageGenerate ||
+    operationName === operationNames.shotVideoGenerate
+  ) {
+    const platform = body.platform as { workflowId?: string } | undefined;
+    if (!platform?.workflowId) {
+      throw new Error("idempotency_response_resource_missing:workflow");
+    }
+    return platform.workflowId;
+  }
+
+  if (operationName === operationNames.exportCreate) {
+    const exportRecord = body.exportRecord as { id?: string } | undefined;
+    if (!exportRecord?.id) {
+      throw new Error("idempotency_response_resource_missing:export_record");
+    }
+    return exportRecord.id;
+  }
+
+  const calibration = body.calibration as { id?: string } | undefined;
+  if (!calibration?.id) {
+    throw new Error("idempotency_response_resource_missing:calibration_session");
+  }
+  return calibration.id;
 }
 
 async function appendCalibrationAuditEvent(
@@ -2471,145 +2954,4 @@ async function findProjectShot(
     projectId: input.projectId,
   });
   return shots.find((shot) => shot.id === input.shotId);
-}
-
-async function hydrateStateFromSql(
-  db: SqlDatabase,
-  state: CreatorDevStateSnapshot,
-  input: {
-    projectId: string;
-    scriptId: string | null;
-    sessionToken: string;
-    now: Date;
-  },
-): Promise<CreatorDevStateSnapshot> {
-  const actor = await resolveActorContext(db, {
-    sessionToken: input.sessionToken,
-    projectId: input.projectId,
-    now: input.now,
-  });
-  const records = await listAssetReviewCandidatesForProject(db, {
-    organizationId: actor.organizationId,
-    projectId: input.projectId,
-  });
-  const projectBundle = await loadProjectBundleFromSql(db, {
-    projectId: input.projectId,
-    scriptId: input.scriptId,
-  });
-  const shots = await listShotsForProject(db, {
-    organizationId: actor.organizationId,
-    projectId: input.projectId,
-  });
-  const calibration = await getLatestCalibrationSessionForProject(db, {
-    organizationId: actor.organizationId,
-    projectId: input.projectId,
-  });
-  const assetCandidates = records.length > 0 ? assetReviewStateFromRecords(records) : state.assetCandidates;
-  return {
-    ...state,
-    project: projectBundle?.project ?? state.project,
-    script: projectBundle?.script ?? state.script,
-    shots: shots.length > 0
-      ? shots.map((shot) => ({
-          id: shot.id,
-          episodeId: shot.episodeId,
-          title: shot.title,
-          contentRevision: shot.contentRevision,
-          imageStatus: shot.imageStatus,
-          videoStatus: shot.videoStatus,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-          currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
-        }))
-      : state.shots,
-    calibration: calibration ?? state.calibration,
-    assetCandidates,
-    assetReview: assetCandidates ? computeAssetReviewSummary(assetCandidates) : state.assetReview,
-  };
-}
-
-async function loadProjectBundleFromSql(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-    scriptId: string | null;
-  },
-): Promise<{
-  project: CreatorDevStateSnapshot["project"];
-  script: CreatorDevStateSnapshot["script"];
-} | null> {
-  const projectResult = await db.query<{
-    id: string;
-    organization_id: string;
-    workspace_id: string;
-    name: string;
-    cover_image_url: string | null;
-    aspect_ratio: string;
-    resolution: string;
-    phase: "script_input" | "asset_review" | "shot_generation" | "export";
-    created_by_user_id: string | null;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }>(
-    `
-      SELECT *
-      FROM projects
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [input.projectId],
-  );
-  const project = projectResult.rows[0];
-  if (!project) {
-    return null;
-  }
-
-  const scriptResult = await db.query<{
-    id: string;
-    organization_id: string;
-    project_id: string;
-    status: "draft" | "ready" | "parsed" | "failed";
-    input_text: string;
-    created_by_user_id: string | null;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }>(
-    `
-      SELECT *
-      FROM scripts
-      WHERE project_id = $1
-        AND ($2::uuid IS NULL OR id = $2::uuid)
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `,
-    [input.projectId, input.scriptId],
-  );
-  const script = scriptResult.rows[0];
-
-  return {
-    project: {
-      id: project.id,
-      organizationId: project.organization_id,
-      workspaceId: project.workspace_id,
-      name: project.name,
-      coverImageUrl: project.cover_image_url,
-      aspectRatio: project.aspect_ratio,
-      resolution: project.resolution,
-      phase: project.phase,
-      createdByUserId: project.created_by_user_id,
-      createdAt: new Date(project.created_at),
-      updatedAt: new Date(project.updated_at),
-    },
-    script: script
-      ? {
-          id: script.id,
-          organizationId: script.organization_id,
-          projectId: script.project_id,
-          status: script.status,
-          inputText: script.input_text,
-          createdByUserId: script.created_by_user_id,
-          createdAt: new Date(script.created_at),
-          updatedAt: new Date(script.updated_at),
-        }
-      : null,
-  };
 }

@@ -113,6 +113,20 @@ export class CreatorDevApp {
     }
   }
 
+  async seedState(input: {
+    bundle: ProjectBundle;
+    assetCandidates: AssetReviewState | null;
+    calibration: CalibrationSessionRecord | null;
+    shots: ShotRecord[];
+    exportPreview?: ExportManifest | null;
+  }) {
+    this.activeBundle = input.bundle;
+    this.activeAssetReview = input.assetCandidates;
+    this.activeCalibration = input.calibration;
+    this.exportPreview = input.exportPreview ?? null;
+    await this.seedShotRecords(input.shots);
+  }
+
   async parseScript(input?: { episodeIdForSourceId?: (sourceEpisodeId: string) => string }) {
     const bundle = this.requireBundle();
     const parsed = createDeterministicMockParseResult(bundle.script.inputText);

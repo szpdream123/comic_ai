@@ -57,6 +57,29 @@ npm run dev
 - Idempotent creator 写操作不得在 route 层使用 `Date.now()` 生成 replay key。
 - 业务事实不得靠 localStorage 恢复。
 - 当前测试入口继续使用 `npm test -- <target...>`。
+- 每个开发 owner 都必须用 `@chrome` 对自己负责的前后端串联部分做真实浏览器自验；不能只把单元测试或 HTTP smoke 当作完成。
+- 所有 Chrome 自验发现的问题都写入 `docs/local-dev/local-runnable-alpha-bug-log.md`，并满足“问题现场、根本原因、长期主义解决方案”三段式记录。
+
+## 0.1 Chrome 自验与 Bug 记录 Gate
+
+推荐方案：把 Chrome 自验下沉到 A/B/C 每个人的 Definition of Done，而不是只让 Developer C 在最后兜底。
+
+Why:
+
+- A 最懂后端契约，必须亲眼看到真实页面流量是否命中正确 route、header、错误码。
+- B 最懂用户交互，必须亲手验证按钮、表单、toast、refresh recovery 没有用假状态糊过去。
+- C 最懂 DX/gate，必须验证一个新研发能按文档从零跑通，并能复现 A/B 记录的问题。
+
+How:
+
+- Shared guide: [local-runnable-chrome-acceptance.md](../../local-dev/local-runnable-chrome-acceptance.md)
+- Bug log: [local-runnable-alpha-bug-log.md](../../local-dev/local-runnable-alpha-bug-log.md)
+- 每个 owner 至少记录一条 `PASS-YYYYMMDD-NN` 或一个 `BUG-YYYYMMDD-NN`。
+- Bug 记录必须包含：
+  - 问题现场：URL、前置条件、精确步骤、期望、实际、console、network、截图或页面状态。
+  - 根本原因：归属层、why chain、涉及文件/函数、为什么之前没挡住。
+  - 长期解决方案：推荐修复、为什么这是长期正确方案、替代方案、回归测试/gate、owner。
+- `BUG` 为 `Blocker` 或 `High` 时，Local Runnable Alpha 不允许标记 Done，除非明确降级并写入 out-of-scope。
 
 ## 1. 三人角色和边界
 
@@ -74,8 +97,8 @@ npm run dev
 | R1 | 后端 route 硬化 | 主责 | API 对齐 | route smoke 草稿 | creator write routes 要求真实 key |
 | R2 | 前端真实串联 | 支持 | 主责 | UI smoke 支持 | 刷新后 state 从 API 恢复 |
 | R3 | DX + Smoke | 支持 | 支持 | 主责 | `npm run dev` + `npm run smoke:local` 可用 |
-| R4 | Browser Dogfood | 支持 | 主责 | 主责 | 真实页面主链路通过 |
-| R5 | 回归验收 | Review | Review | 主责 | `npm test`、HTTP smoke、Browser dogfood 全绿 |
+| R4 | Chrome 自验 | 主责后端契约旅途 | 主责前端用户旅途 | 主责新研发旅途 | A/B/C 都在 bug log 留证据 |
+| R5 | 回归验收 | Review | Review | 主责 | `npm test`、HTTP smoke、Chrome dogfood 全绿 |
 
 ## 1.1 R0 Creator API Contract Matrix
 
@@ -218,6 +241,29 @@ Decision:
 - [ ] Step 4: 保持 `createCreatorApplication` public API 和所有 HTTP response shape 不变。
 - [ ] Step 5: 运行 project module tests。
 
+### A4: Chrome 自验 - Backend Contract Journey
+
+| 字段 | 内容 |
+| --- | --- |
+| 背景 | 后端 owner 如果只跑 API tests，可能看不到真实页面是否真的发送 header、cookie、body，以及错误码是否能被前端消费。 |
+| 交付能力 | Developer A 使用 `@chrome` 从登录跑到刷新恢复，重点验收 R0 route 的网络请求、状态副作用、错误码和 replay 行为。 |
+| 前置依赖 | A1/A1.5/A2；B1 至少能发送 idempotency key；C1 能启动本地 dev。 |
+| 验证方式 | 按 `docs/local-dev/local-runnable-chrome-acceptance.md` 执行，并在 `docs/local-dev/local-runnable-alpha-bug-log.md` 留下 PASS/BUG 记录。 |
+| 异常处理 | 发现后端契约问题时，记录 network request/response、root cause、长期修复；Blocker/High 不允许进入 Done。 |
+| 主链路贡献 | Yes。证明后端契约真的被真实 UI 消费。 |
+
+**Files:**
+
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
+- Modify if bugs are found: backend files from A1/A1.5/A2
+
+- [ ] Step 1: 运行 `npm run dev`，用 `@chrome` 打开本地 URL 并完成登录。
+- [ ] Step 2: 完成 create -> parse -> assets -> calibration -> image -> video -> export -> refresh recovery。
+- [ ] Step 3: 在 Chrome network 中核对 R0 required routes 都带 `Idempotency-Key` 且响应 code/shape 稳定。
+- [ ] Step 4: 尝试重复触发一个写操作或刷新重试，确认不会出现重复项目、重复 workflow、重复 provider request 或重复 export history。
+- [ ] Step 5: 将 PASS 或 BUG 写入 bug log；BUG 必须包含问题现场、根本原因、长期解决方案。
+
 ## 3. 开发 B：Frontend Integration 任务
 
 ### B1: Idempotent Creator API Client
@@ -288,6 +334,30 @@ Decision:
 - [ ] Step 4: 表单类错误写入 modal notice，非表单错误写入 toast。
 - [ ] Step 5: 增加测试覆盖 create project invalid input 和 idempotency conflict copy。
 
+### B4: Chrome 自验 - Frontend User Journey
+
+| 字段 | 内容 |
+| --- | --- |
+| 背景 | 前端 owner 必须证明用户真实点击路径可用，而不是 render test 通过但按钮、toast、busy state 或 refresh recovery 在浏览器里坏掉。 |
+| 交付能力 | Developer B 使用 `@chrome` 完整跑用户旅途，重点验收交互、可见反馈、错误提示、刷新恢复和 console/runtime 稳定性。 |
+| 前置依赖 | B1/B2/B3；A1/A2 后端契约；C1 本地启动脚本。 |
+| 验证方式 | 按 `docs/local-dev/local-runnable-chrome-acceptance.md` 执行，并在 `docs/local-dev/local-runnable-alpha-bug-log.md` 留下 PASS/BUG 记录。 |
+| 异常处理 | 发现前端问题时，记录页面状态、用户动作、console、network、root cause 和长期修复；不能只写“按钮没反应”。 |
+| 主链路贡献 | Yes。证明前端真的串上后端。 |
+
+**Files:**
+
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
+- Modify if bugs are found: `apps/web/src/shared/creator-api.js`
+- Modify if bugs are found: `apps/web/src/features/production-workbench/index.js`
+
+- [ ] Step 1: 用 `@chrome` 从登录开始跑完整主链路，不跳过用户实际会点击的 UI。
+- [ ] Step 2: 每个 action 后确认按钮 busy state 会结束、toast/notice 可理解、页面状态来自 API refresh。
+- [ ] Step 3: 刷新页面，确认项目、资产、分镜、导出历史从后端恢复，而不是 localStorage 假恢复。
+- [ ] Step 4: 检查 console 没有 blocking uncaught error，network 没有意外 4xx/5xx。
+- [ ] Step 5: 将 PASS 或 BUG 写入 bug log；BUG 必须包含问题现场、根本原因、长期解决方案。
+
 ## 4. 开发 C：DX / QA / Ops 任务
 
 ### C1: Local Dev Scripts
@@ -335,14 +405,14 @@ Decision:
 - [ ] Step 4: 每个步骤输出简短 label：auth、create、parse、assets、calibration、image、video、export。
 - [ ] Step 5: 最终断言 export ready、history 非空、state 可恢复。
 
-### C2.5: Browser Dogfood Gate
+### C2.5: Chrome Dogfood Gate
 
 | 字段 | 内容 |
 | --- | --- |
 | 背景 | HTTP smoke 只能证明 API 可用，不能证明真实前端事件、cookie、hash、表单和 toast 与后端串联。用户目标是整个项目真正可运行。 |
-| 交付能力 | 提供一条真实页面验收路径，打开本地 URL 并在 UI 内完成登录到导出；可以先手工 checklist，优先自动化。 |
+| 交付能力 | 提供一条 `@chrome` 真实页面验收路径，打开本地 URL 并在 UI 内完成登录到导出；可以先手工 checklist，优先自动化。 |
 | 前置依赖 | A1/A1.5/B1/B2/C1。 |
-| 验证方式 | `npm run dev` 后执行 Browser/Playwright dogfood，或按文档 checklist 记录通过步骤和截图。 |
+| 验证方式 | `npm run dev` 后执行 `@chrome` dogfood，或按文档 checklist 记录通过步骤和截图。 |
 | 异常处理 | 任一步失败记录页面、action、API response、console error；失败即不能进入 Local Alpha Done。 |
 | 主链路贡献 | Yes。它证明前后端真的打通。 |
 
@@ -352,10 +422,34 @@ Decision:
 - Modify: `docs/local-dev/local-runnable-alpha.md`
 - Modify: `docs/ops/p0-release-rollback-checklist.md`
 
-- [ ] Step 1: 写 Browser dogfood checklist：登录、创建、解析、确认资产、校准、生成、导出、刷新恢复。
+- [ ] Step 1: 写 Chrome dogfood checklist：登录、创建、解析、确认资产、校准、生成、导出、刷新恢复。
 - [ ] Step 2: 如果使用自动化，添加最小 browser e2e；如果先手工，记录所需截图/日志。
-- [ ] Step 3: 把 Browser dogfood 作为 R5 必跑 gate 写入 release checklist。
+- [ ] Step 3: 把 Chrome dogfood 作为 R5 必跑 gate 写入 release checklist。
 - [ ] Step 4: 执行一次 gate，记录结果。
+
+### C2.6: Chrome 自验 - New Developer Journey
+
+| 字段 | 内容 |
+| --- | --- |
+| 背景 | C 的职责不是替 A/B 测一遍功能，而是证明 DX 能让一个新研发按文档从零启动、验收、记录问题。 |
+| 交付能力 | Developer C 用 `@chrome` 按文档执行完整用户旅途，并核对 A/B 的 PASS/BUG 记录是否可复现、可修复、可回归。 |
+| 前置依赖 | C1/C2/C2.5/C3；A4/B4 至少各有一条证据记录。 |
+| 验证方式 | `npm test`、`npm run smoke:local`、`npm run dev` + `@chrome` journey；bug log 中有 C 的 PASS/BUG。 |
+| 异常处理 | 如果文档缺步骤、命令失效或 bug 记录不可复现，按 DX bug 记录 root cause 和长期修复。 |
+| 主链路贡献 | Yes。它是最终 Local Runnable Alpha gate。 |
+
+**Files:**
+
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
+- Modify if gaps are found: `docs/local-dev/local-runnable-alpha.md`
+- Modify if gaps are found: `docs/ops/p0-release-rollback-checklist.md`
+
+- [ ] Step 1: 从新 shell 按 docs 启动，不使用口头知识或隐藏命令。
+- [ ] Step 2: 运行 `npm test` 和 `npm run smoke:local`，记录命令结果。
+- [ ] Step 3: 用 `@chrome` 完成完整主链路和刷新恢复。
+- [ ] Step 4: 抽查 A/B 的 bug log 记录，确认问题现场足以复现，root cause 足以指导修复，长期方案有回归 gate。
+- [ ] Step 5: 将 C 的 PASS 或 BUG 写入 bug log；文档/DX 问题也必须按同一模板记录。
 
 ### C3: Local Dev Documentation
 
@@ -387,7 +481,7 @@ Decision:
 | 交付能力 | 更新 P0 release/rollback checklist，把 Local Runnable Alpha gate 纳入合并检查。 |
 | 前置依赖 | C1/C2/C3。 |
 | 验证方式 | `npm test -- apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts`。 |
-| 异常处理 | smoke 失败不能进入 Done；允许跳过真实 provider/payment gate，但必须注明不在本次范围。 |
+| 异常处理 | smoke 或 Chrome dogfood 失败不能进入 Done；允许跳过真实 provider/payment gate，但必须注明不在本次范围。 |
 | 主链路贡献 | Yes。 |
 
 **Files:**
@@ -397,7 +491,7 @@ Decision:
 - Modify: `apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts`
 
 - [ ] Step 1: 在 release checklist 增加 Local Runnable Alpha section。
-- [ ] Step 2: 写合并前命令：`npm test`、`npm run smoke:local`。
+- [ ] Step 2: 写合并前命令：`npm test`、`npm run smoke:local`、`npm run dev` + `@chrome`。
 - [ ] Step 3: 写失败处理：回滚本次改动、保留日志、记录失败步骤。
 - [ ] Step 4: 更新 docs readiness test。
 
@@ -418,13 +512,13 @@ R2 前端接入
 R3 DX/Smoke
   C1 + C2 + C3 pass
 
-R4 Browser Dogfood
+R4 Chrome Dogfood
   C2.5 real page gate passes
 
 R5 全量验收
   npm test
   npm run smoke:local
-  browser dogfood evidence
+  Chrome dogfood evidence
 ```
 
 并行建议：
@@ -455,7 +549,7 @@ Expected: 完整打印 auth/create/parse/assets/calibration/image/video/export P
 
 ```bash
 npm run dev
-# then run browser dogfood gate from docs/local-dev/local-runnable-alpha.md
+# then run Chrome dogfood gate from docs/local-dev/local-runnable-alpha.md
 ```
 
 Expected: 真实页面完成登录到导出，并在刷新后恢复项目状态。
@@ -473,7 +567,7 @@ Expected: 分组测试均通过。
 - 本次默认使用现有 PGlite memory DB；每次 dev server 重启会重置数据，这是 Local Alpha 可接受行为。
 - 本次默认 provider/storage 使用 `.env.example` 中的 dev mode。
 - 本次不要求 browser E2E；`smoke:local` 先用 Node fetch 覆盖真实 HTTP 主链路。
-- 本次要求 Browser dogfood gate；可以先手工 checklist，后续再自动化。
+- 本次要求 Chrome dogfood gate；可以先手工 checklist，后续再自动化。
 - 本次不要求支付和 Admin/Ops 页面进入主链路。
 - 本次不提交真实 API key、不新增生产部署配置。
 - 本次不改变视觉设计，只做行为、错误体验和可运行性改进。

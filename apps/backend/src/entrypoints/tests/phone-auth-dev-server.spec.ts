@@ -98,6 +98,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "workflow-create-key",
           cookie,
         },
         body: JSON.stringify({
@@ -111,7 +112,10 @@ describe("phone auth dev server", () => {
 
       const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "workflow-parse-key",
+          cookie,
+        },
       });
       const parsed = await parseResponse.json();
 
@@ -123,19 +127,28 @@ describe("phone auth dev server", () => {
 
       const calibrationResponse = await fetch(`${server.origin}/api/creator/calibration/run`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "workflow-calibration-key",
+          cookie,
+        },
       });
       const calibration = await calibrationResponse.json();
 
       const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "workflow-image-key",
+          cookie,
+        },
       });
       const imageBatch = await imageResponse.json();
 
       const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "workflow-export-key",
+          cookie,
+        },
       });
       const exportPreview = await exportResponse.json();
 
@@ -157,6 +170,139 @@ describe("phone auth dev server", () => {
       assert.ok(imageBatch.successes.length > 0);
       assert.equal(exportPreview.export.status, "ready");
       assert.equal(exportPreview.exportRecord.manifestStatus, "ready");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires and replays Idempotency-Key for creator project creation", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const body = {
+        name: "Creator idempotency contract",
+        scriptInput: "Episode 1: A creator double-clicks the create action.",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      };
+
+      const missingKeyResponse = await fetch(
+        `${server.origin}/api/creator/project/create`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      const missingKey = await missingKeyResponse.json();
+
+      const firstResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-create-replay-key",
+          cookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const first = await firstResponse.json();
+      const replayResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-create-replay-key",
+          cookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const replay = await replayResponse.json();
+      const conflictResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-create-replay-key",
+          cookie,
+        },
+        body: JSON.stringify({
+          ...body,
+          name: "Creator idempotency conflict",
+        }),
+      });
+      const conflict = await conflictResponse.json();
+      const projectsResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const projects = await projectsResponse.json();
+
+      assert.equal(missingKeyResponse.status, 400);
+      assert.deepEqual(missingKey, { error: "idempotency_key_required" });
+      assert.equal(firstResponse.status, 200);
+      assert.equal(replayResponse.status, 200);
+      assert.equal(conflictResponse.status, 409);
+      assert.equal(first.project.id, replay.project.id);
+      assert.equal(first.script.id, replay.script.id);
+      assert.deepEqual(conflict, { error: "idempotency_conflict" });
+      assert.equal(projects.projects.length, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires and replays Idempotency-Key for creator script parsing", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-parse-create-key",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Creator parse idempotency contract",
+          scriptInput: "Episode 1: A creator retries script parsing.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+
+      const missingKeyResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      const missingKey = await missingKeyResponse.json();
+
+      const firstResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-parse-replay-key",
+          cookie,
+        },
+      });
+      const first = await firstResponse.json();
+      const replayResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-parse-replay-key",
+          cookie,
+        },
+      });
+      const replay = await replayResponse.json();
+
+      assert.equal(missingKeyResponse.status, 400);
+      assert.deepEqual(missingKey, { error: "idempotency_key_required" });
+      assert.equal(firstResponse.status, 202);
+      assert.equal(replayResponse.status, 202);
+      assert.equal(first.workflow.workflowId, replay.workflow.workflowId);
     } finally {
       await server.close();
     }
@@ -193,6 +339,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "asset-controls-create-key",
           cookie,
         },
         body: JSON.stringify({
@@ -205,7 +352,10 @@ describe("phone auth dev server", () => {
 
       const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "asset-controls-parse-key",
+          cookie,
+        },
       });
       const parsed = await parseResponse.json();
       const firstCharacter = parsed.parse.candidateAssets.find(
@@ -216,6 +366,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "asset-controls-skip-key",
           cookie,
         },
         body: JSON.stringify({
@@ -250,6 +401,7 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "idempotency-key": "asset-controls-skip-invalid-key",
             cookie,
           },
           body: JSON.stringify({
@@ -263,6 +415,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "asset-controls-skip-key",
           cookie,
         },
         body: JSON.stringify({
@@ -277,6 +430,7 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "idempotency-key": "asset-controls-override-key",
             cookie,
           },
           body: JSON.stringify({
@@ -288,11 +442,17 @@ describe("phone auth dev server", () => {
 
       await fetch(`${server.origin}/api/creator/images/generate`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "asset-controls-image-key",
+          cookie,
+        },
       });
       await fetch(`${server.origin}/api/creator/export/preview`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "asset-controls-export-key",
+          cookie,
+        },
       });
 
       const historyResponse = await fetch(`${server.origin}/api/creator/export/history`, {
@@ -331,6 +491,251 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("requires and replays Idempotency-Key for creator generation, calibration, and export routes", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-expensive-create-key",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Creator expensive route idempotency",
+          scriptInput: "Episode 4: Expensive routes must not replay side effects.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-expensive-parse-key",
+          cookie,
+        },
+      });
+      await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
+        method: "POST",
+        headers: { cookie },
+      });
+
+      for (const [path, body] of [
+        ["/api/creator/calibration/run", undefined],
+        ["/api/creator/calibration/skip", { reason: "Already approved." }],
+        ["/api/creator/calibration/override", { reason: "Director approved." }],
+        ["/api/creator/images/generate", undefined],
+        ["/api/creator/videos/generate", undefined],
+        ["/api/creator/export/preview", undefined],
+      ] as const) {
+        const response = await fetch(`${server.origin}${path}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 400, path);
+        assert.deepEqual(payload, { error: "idempotency_key_required" }, path);
+      }
+
+      const calibrationResponse = await fetch(
+        `${server.origin}/api/creator/calibration/run`,
+        {
+          method: "POST",
+          headers: {
+            "idempotency-key": "http-calibration-run-replay-key",
+            cookie,
+          },
+        },
+      );
+      const calibration = await calibrationResponse.json();
+      const calibrationReplayResponse = await fetch(
+        `${server.origin}/api/creator/calibration/run`,
+        {
+          method: "POST",
+          headers: {
+            "idempotency-key": "http-calibration-run-replay-key",
+            cookie,
+          },
+        },
+      );
+      const calibrationReplay = await calibrationReplayResponse.json();
+
+      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-image-generate-replay-key",
+          cookie,
+        },
+      });
+      const image = await imageResponse.json();
+      const imageReplayResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-image-generate-replay-key",
+          cookie,
+        },
+      });
+      const imageReplay = await imageReplayResponse.json();
+
+      const videoResponse = await fetch(`${server.origin}/api/creator/videos/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-video-generate-replay-key",
+          cookie,
+        },
+      });
+      const video = await videoResponse.json();
+      const videoReplayResponse = await fetch(`${server.origin}/api/creator/videos/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-video-generate-replay-key",
+          cookie,
+        },
+      });
+      const videoReplay = await videoReplayResponse.json();
+
+      const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-export-preview-replay-key",
+          cookie,
+        },
+      });
+      const exportPreview = await exportResponse.json();
+      const exportReplayResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-export-preview-replay-key",
+          cookie,
+        },
+      });
+      const exportReplay = await exportReplayResponse.json();
+      const historyResponse = await fetch(`${server.origin}/api/creator/export/history`, {
+        headers: { cookie },
+      });
+      const history = await historyResponse.json();
+
+      assert.equal(calibrationResponse.status, 200);
+      assert.equal(calibrationReplayResponse.status, 200);
+      assert.equal(calibration.auditEvent.id, calibrationReplay.auditEvent.id);
+      assert.equal(imageResponse.status, 200);
+      assert.equal(imageReplayResponse.status, 200);
+      assert.equal(image.platform.workflowId, imageReplay.platform.workflowId);
+      assert.equal(videoResponse.status, 200);
+      assert.equal(videoReplayResponse.status, 200);
+      assert.equal(video.platform.workflowId, videoReplay.platform.workflowId);
+      assert.equal(exportResponse.status, 200);
+      assert.equal(exportReplayResponse.status, 200);
+      assert.equal(exportPreview.exportRecord.id, exportReplay.exportRecord.id);
+      assert.equal(history.records.length, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("maps creator route validation and state errors to stable responses", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const unauthenticatedResponse = await fetch(
+        `${server.origin}/api/creator/project/create`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "unauthenticated-create-key",
+          },
+          body: JSON.stringify({
+            name: "Unauthorized",
+            scriptInput: "Episode 1: No session.",
+            aspectRatio: "9:16",
+            resolution: "1080p",
+          }),
+        },
+      );
+      const unauthenticated = await unauthenticatedResponse.json();
+
+      const cookie = await login(server.origin, "13800138000");
+      const invalidJsonResponse = await fetch(
+        `${server.origin}/api/creator/project/create`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "invalid-json-create-key",
+            cookie,
+          },
+          body: "{",
+        },
+      );
+      const invalidJson = await invalidJsonResponse.json();
+
+      const invalidCreateResponse = await fetch(
+        `${server.origin}/api/creator/project/create`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "invalid-create-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            name: " ",
+            scriptInput: " ",
+            aspectRatio: "1:1",
+            resolution: "4k",
+          }),
+        },
+      );
+      const invalidCreate = await invalidCreateResponse.json();
+
+      const parseWithoutProjectResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "parse-without-project-key",
+          cookie,
+        },
+      });
+      const parseWithoutProject = await parseWithoutProjectResponse.json();
+      const exportWithoutProjectResponse = await fetch(
+        `${server.origin}/api/creator/export/preview`,
+        {
+          method: "POST",
+          headers: {
+            "idempotency-key": "export-without-project-key",
+            cookie,
+          },
+        },
+      );
+      const exportWithoutProject = await exportWithoutProjectResponse.json();
+
+      assert.equal(unauthenticatedResponse.status, 401);
+      assert.deepEqual(unauthenticated, { error: "unauthenticated" });
+      assert.equal(invalidJsonResponse.status, 400);
+      assert.deepEqual(invalidJson, { error: "invalid_json" });
+      assert.equal(invalidCreateResponse.status, 400);
+      assert.equal(invalidCreate.error, "invalid_project_input");
+      assert.equal(typeof invalidCreate.fieldErrors.name, "string");
+      assert.equal(parseWithoutProjectResponse.status, 409);
+      assert.deepEqual(parseWithoutProject, { error: "creator_project_missing" });
+      assert.equal(exportWithoutProjectResponse.status, 409);
+      assert.deepEqual(exportWithoutProject, { error: "creator_project_missing" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes project management, asset library, shot editing, and parameterized generation routes", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -343,6 +748,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "management-create-key",
           cookie,
         },
         body: JSON.stringify({
@@ -435,7 +841,10 @@ describe("phone auth dev server", () => {
 
       await fetch(`${server.origin}/api/creator/parse`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "management-parse-key",
+          cookie,
+        },
       });
 
       const detailResponse = await fetch(
@@ -559,7 +968,10 @@ describe("phone auth dev server", () => {
       });
       await fetch(`${server.origin}/api/creator/calibration/run`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "management-calibration-key",
+          cookie,
+        },
       });
       const latestStateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
@@ -570,6 +982,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "management-image-key",
           cookie,
         },
         body: JSON.stringify({
@@ -672,6 +1085,7 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "retry-route-create-key",
           cookie,
         },
         body: JSON.stringify({
@@ -683,7 +1097,10 @@ describe("phone auth dev server", () => {
       });
       await fetch(`${server.origin}/api/creator/parse`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "retry-route-parse-key",
+          cookie,
+        },
       });
       await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
         method: "POST",
@@ -691,7 +1108,10 @@ describe("phone auth dev server", () => {
       });
       await fetch(`${server.origin}/api/creator/calibration/run`, {
         method: "POST",
-        headers: { cookie },
+        headers: {
+          "idempotency-key": "retry-route-calibration-key",
+          cookie,
+        },
       });
 
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {

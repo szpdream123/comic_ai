@@ -171,4 +171,31 @@ describe("calibration service", () => {
     assert.equal(overridden.decision?.decisionType, "override");
     assert.equal(overridden.decision?.reason, "Director approved the stylized mismatch.");
   });
+
+  it("requires a reason when overriding calibration", async () => {
+    let session = createCalibrationSession({
+      organizationId: "org_1",
+      projectId: "project_1",
+      shotIds: ["shot_1", "shot_2", "shot_3"],
+      createdByUserId: "user_1",
+    });
+
+    session = markCalibrationItemReviewed(session, {
+      shotId: "shot_1",
+      qualityReviewResult: "failed",
+    });
+
+    assert.throws(
+      () =>
+        overrideCalibrationSession(session, {
+          decidedByUserId: "user_3",
+          reason: " ",
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof CalibrationRuleError);
+        assert.equal(error.code, "reason_required");
+        return true;
+      },
+    );
+  });
 });

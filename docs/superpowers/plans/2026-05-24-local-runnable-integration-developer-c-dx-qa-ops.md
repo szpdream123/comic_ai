@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Local Runnable Alpha easy to start, easy to verify, and hard to falsely mark done by adding scripts, smoke tests, browser dogfood evidence, and local-dev documentation.
+**Goal:** Make Local Runnable Alpha easy to start, easy to verify, and hard to falsely mark done by adding scripts, smoke tests, Chrome dogfood evidence, and local-dev documentation.
 
-**Architecture:** Keep the existing dev server as the local runtime. Add a thin DX layer around it: memorable npm scripts, an HTTP smoke harness for API truth, a Browser dogfood gate for product truth, and docs/runbooks that make the expected workflow explicit.
+**Architecture:** Keep the existing dev server as the local runtime. Add a thin DX layer around it: memorable npm scripts, an HTTP smoke harness for API truth, a Chrome dogfood gate for product truth, and docs/runbooks that make the expected workflow explicit.
 
-**Tech Stack:** Node scripts, npm scripts, existing phone-auth dev server, Node test runner, local docs, optional Browser/Playwright automation.
+**Tech Stack:** Node scripts, npm scripts, existing phone-auth dev server, Node test runner, local docs, optional Chrome/Playwright automation.
 
 ---
 
@@ -32,7 +32,7 @@ Developer C owns:
 
 - `npm run dev`, grouped test scripts, and `npm run smoke:local`.
 - HTTP smoke harness.
-- Browser dogfood checklist/evidence or automation.
+- Chrome dogfood checklist/evidence or automation.
 - Local runnable documentation and release checklist updates.
 - Final integration gate.
 
@@ -47,9 +47,10 @@ Done for Developer C:
 
 - A new developer can run the local stack from docs.
 - HTTP smoke verifies backend/API truth.
-- Browser dogfood verifies real page/product truth.
+- `@chrome` dogfood verifies real page/product truth.
+- A/B/C self-acceptance evidence and bugs are recorded in Markdown.
 - Release/rollback docs include Local Runnable Alpha gates.
-- `npm test`, `npm run smoke:local`, and Browser dogfood evidence are recorded.
+- `npm test`, `npm run smoke:local`, and Chrome dogfood evidence are recorded.
 
 ## 1. Shared Gate Definitions
 
@@ -61,7 +62,7 @@ HTTP smoke proves:
 - Backend state persists for the server lifetime.
 - Export reaches `ready`.
 
-Browser dogfood proves:
+Chrome dogfood proves:
 
 - Real login page and workbench JavaScript load.
 - Real browser cookies work.
@@ -87,7 +88,9 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 - Modify if needed: `scripts/run-phone-auth-dev-server.mjs` - script behavior and env loading.
 - Create: `scripts/run-local-smoke.mjs` - HTTP smoke harness.
 - Create if automated: `apps/web/e2e/local-runnable-alpha.spec.ts` - browser automation.
-- Create: `docs/local-dev/local-runnable-alpha.md` - local workflow guide and Browser dogfood checklist.
+- Create: `docs/local-dev/local-runnable-alpha.md` - local workflow guide and Chrome dogfood checklist.
+- Create or modify: `docs/local-dev/local-runnable-chrome-acceptance.md` - shared Chrome acceptance and bug protocol.
+- Create or modify: `docs/local-dev/local-runnable-alpha-bug-log.md` - Markdown PASS/BUG evidence log.
 - Modify: `docs/local-dev/creator-platform-runtime.md` - link to local alpha guide and clarify runtime modes.
 - Modify: `docs/ops/p0-release-rollback-checklist.md` - add Local Runnable Alpha gate.
 - Modify: `docs/ops/p0-creator-ops-runbook.md` - add smoke/debug notes if needed.
@@ -141,14 +144,14 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 - [ ] Step 5: 最终断言 export ready、history 非空、state 可恢复。
 - [ ] Step 6: 对 R0 中 full replay/conflict 的 route 加 smoke idempotency assertion。
 
-### Task C2.5: Browser Dogfood Gate
+### Task C2.5: Chrome Dogfood Gate
 
 | 字段 | 内容 |
 | --- | --- |
 | 背景 | HTTP smoke 只能证明 API 可用，不能证明真实前端事件、cookie、hash、表单和 toast 与后端串联。用户目标是整个项目真正可运行。 |
-| 交付能力 | 提供一条真实页面验收路径，打开本地 URL 并在 UI 内完成登录到导出；可以先手工 checklist，优先自动化。 |
+| 交付能力 | 提供一条 `@chrome` 真实页面验收路径，打开本地 URL 并在 UI 内完成登录到导出；可以先手工 checklist，优先自动化。 |
 | 前置依赖 | Developer A A1/A1.5；Developer B B1/B2；C1。 |
-| 验证方式 | `npm run dev` 后执行 Browser/Playwright dogfood，或按文档 checklist 记录通过步骤和截图。 |
+| 验证方式 | `npm run dev` 后执行 `@chrome` dogfood，或按文档 checklist 记录通过步骤和截图。 |
 | 异常处理 | 任一步失败记录页面、action、API response、console error；失败即不能进入 Local Alpha Done。 |
 | 主链路贡献 | Yes。它证明前后端真的打通。 |
 
@@ -156,19 +159,45 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 
 - Create if automated: `apps/web/e2e/local-runnable-alpha.spec.ts`
 - Create: `docs/local-dev/local-runnable-alpha.md`
+- Create or modify: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Create or modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
 - Modify: `docs/ops/p0-release-rollback-checklist.md`
 
-- [ ] Step 1: 写 Browser dogfood checklist：登录、创建、解析、确认资产、校准、生成、导出、刷新恢复。
+- [ ] Step 1: 写 Chrome dogfood checklist：登录、创建、解析、确认资产、校准、生成、导出、刷新恢复。
 - [ ] Step 2: 如果使用自动化，添加最小 browser e2e；如果先手工，记录所需截图/日志。
-- [ ] Step 3: 把 Browser dogfood 作为 R5 必跑 gate 写入 release checklist。
+- [ ] Step 3: 把 Chrome dogfood 作为 R5 必跑 gate 写入 release checklist。
 - [ ] Step 4: 执行一次 gate，记录结果。
+
+### Task C2.6: Chrome Self-Acceptance for New Developer Journey
+
+| 字段 | 内容 |
+| --- | --- |
+| 背景 | C 的职责不是替 A/B 测一遍功能，而是证明 DX 能让一个新研发按文档从零启动、验收、记录问题。 |
+| 交付能力 | Developer C 用 `@chrome` 按文档执行完整用户旅途，并核对 A/B 的 PASS/BUG 记录是否可复现、可修复、可回归。 |
+| 前置依赖 | C1/C2/C2.5/C3；Developer A/B 至少各有一条 Chrome evidence。 |
+| 验证方式 | `npm test`、`npm run smoke:local`、`npm run dev` + `@chrome` journey；bug log 中有 C 的 PASS/BUG。 |
+| 异常处理 | 如果文档缺步骤、命令失效或 bug 记录不可复现，按 DX bug 记录 root cause 和长期修复。 |
+| 主链路贡献 | Yes。它是最终 Local Runnable Alpha gate。 |
+
+**Files:**
+
+- Read: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
+- Modify if gaps are found: `docs/local-dev/local-runnable-alpha.md`
+- Modify if gaps are found: `docs/ops/p0-release-rollback-checklist.md`
+
+- [ ] Step 1: 从新 shell 按 docs 启动，不使用口头知识或隐藏命令。
+- [ ] Step 2: 运行 `npm test` 和 `npm run smoke:local`，记录命令结果。
+- [ ] Step 3: 用 `@chrome` 完成完整主链路和刷新恢复。
+- [ ] Step 4: 抽查 A/B 的 bug log 记录，确认问题现场足以复现，root cause 足以指导修复，长期方案有回归 gate。
+- [ ] Step 5: 将 C 的 PASS 或 BUG 写入 bug log；文档/DX 问题也必须按同一模板记录。
 
 ### Task C3: Local Dev Documentation
 
 | 字段 | 内容 |
 | --- | --- |
 | 背景 | DX 的核心是让后来的人少猜。当前 runtime 文档已有 provider/storage 配置，但缺一份从 0 到跑通的 local alpha 指南。 |
-| 交付能力 | 文档说明启动、登录、验证码 debug、脚本、smoke、Browser dogfood、常见错误、provider/storage 模式。 |
+| 交付能力 | 文档说明启动、登录、验证码 debug、脚本、smoke、Chrome dogfood、常见错误、provider/storage 模式。 |
 | 前置依赖 | C1/C2 脚本命名稳定。 |
 | 验证方式 | `npm test -- apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts` 或新增 docs spec。 |
 | 异常处理 | 文档必须说明端口占用、401、idempotency_key_required、provider mode 缺 env 的处理。 |
@@ -178,11 +207,13 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 
 - Modify: `docs/local-dev/creator-platform-runtime.md`
 - Create: `docs/local-dev/local-runnable-alpha.md`
+- Create or modify: `docs/local-dev/local-runnable-chrome-acceptance.md`
+- Create or modify: `docs/local-dev/local-runnable-alpha-bug-log.md`
 - Modify: `apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts`
 
 - [ ] Step 1: 写 local runnable alpha 指南。
 - [ ] Step 2: 补脚本表和 smoke 期望输出。
-- [ ] Step 3: 补 Browser dogfood checklist 和证据要求。
+- [ ] Step 3: 补 Chrome dogfood checklist、Bug 记录模板和证据要求。
 - [ ] Step 4: 补常见错误表。
 - [ ] Step 5: 写 docs readiness test，确保关键命令不会从文档消失。
 
@@ -192,9 +223,9 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 | --- | --- |
 | 背景 | 三人并行容易出现“我这里通过了，但主链路坏了”。需要一个合并前共同 gate。 |
 | 交付能力 | 更新 P0 release/rollback checklist，把 Local Runnable Alpha gate 纳入合并检查。 |
-| 前置依赖 | C1/C2/C2.5/C3。 |
+| 前置依赖 | C1/C2/C2.5/C2.6/C3。 |
 | 验证方式 | `npm test -- apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts`。 |
-| 异常处理 | smoke 或 Browser dogfood 失败不能进入 Done；允许跳过真实 provider/payment gate，但必须注明不在本次范围。 |
+| 异常处理 | smoke 或 Chrome dogfood 失败不能进入 Done；允许跳过真实 provider/payment gate，但必须注明不在本次范围。 |
 | 主链路贡献 | Yes。 |
 
 **Files:**
@@ -204,7 +235,7 @@ If Developer A downgrades a route in the R0 matrix, remove that route from smoke
 - Modify: `apps/backend/src/entrypoints/tests/ops-readiness-docs.spec.ts`
 
 - [ ] Step 1: 在 release checklist 增加 Local Runnable Alpha section。
-- [ ] Step 2: 写合并前命令：`npm test`、`npm run smoke:local`、Browser dogfood gate。
+- [ ] Step 2: 写合并前命令：`npm test`、`npm run smoke:local`、`npm run dev` + `@chrome` dogfood gate。
 - [ ] Step 3: 写失败处理：回滚本次改动、保留日志、记录失败步骤。
 - [ ] Step 4: 更新 docs readiness test。
 
@@ -216,14 +247,14 @@ Developer C owns final Local Runnable Alpha gate:
 npm test
 npm run smoke:local
 npm run dev
-# then complete Browser dogfood from docs/local-dev/local-runnable-alpha.md
+# then complete Chrome dogfood from docs/local-dev/local-runnable-alpha.md
 ```
 
 Expected:
 
 - `npm test` passes.
 - `npm run smoke:local` exits 0 and prints auth/create/parse/assets/calibration/image/video/export PASS.
-- Browser dogfood evidence shows login -> export and refresh recovery through the real page.
+- Chrome dogfood evidence shows login -> export and refresh recovery through the real page.
 
 Developer C must provide this handoff note:
 
@@ -231,7 +262,8 @@ Developer C must provide this handoff note:
 Local Runnable Alpha gate:
 - npm test:
 - npm run smoke:local:
-- Browser dogfood evidence:
+- Chrome dogfood evidence:
+- Bug log entries:
 - Known skipped tests:
 - Known out-of-scope gates:
 ```
