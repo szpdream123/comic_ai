@@ -15,6 +15,7 @@ import {
   sortStoryboardsByIndex,
 } from "../src/features/production-workbench/storyboard-state.js";
 import { renderProjectCreateModal } from "../src/features/production-workbench/project-create-modal.js";
+import { buildProjectCreateRequest } from "../src/features/production-workbench/project-create-request.js";
 import {
   validateVideoGeneration,
   videoModels,
@@ -44,6 +45,110 @@ describe("production workbench home shell", () => {
     assert.match(html, /data-action="set-nav-tab"/);
     assert.match(html, /data-action="open-create-modal"/);
     assert.match(html, /hero-avatar/);
+  });
+});
+
+describe("production workbench script entry", () => {
+  it("renders the ReelMate script management entry instead of a generic upload placeholder", () => {
+    const html = renderProductionWorkbench({
+      state: {},
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "script",
+        storyboards: [],
+        selectedStoryboard: null,
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        validationMessage: "",
+        toast: "",
+        isScriptModalOpen: false,
+        isOriginalScriptModalOpen: false,
+        scriptTab: "script-upload",
+        uploadNotice: "",
+        defaultScript: "Episode 1",
+      },
+    });
+
+    assert.match(html, /从分析开始改编小说/);
+    assert.match(html, /直接开始改编小说/);
+    assert.match(html, /从故事灵感创作剧本/);
+    assert.match(html, /从剧本创作衍生剧本/);
+    assert.match(html, /我的剧本/);
+    assert.match(html, /placeholder="搜索剧本名称"/);
+    assert.match(html, /类型筛选/);
+    assert.match(html, /排序/);
+    assert.match(html, /积分详情/);
+  });
+
+  it("renders AI original script settings with required disabled state and episode options", () => {
+    const html = renderProductionWorkbench({
+      state: {},
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "script",
+        storyboards: [],
+        selectedStoryboard: null,
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        validationMessage: "",
+        toast: "",
+        isScriptModalOpen: false,
+        isOriginalScriptModalOpen: true,
+        originalScriptDraft: {
+          fileName: "逆光试映",
+          inspiration: "一个底层剪辑师发现城市记忆被算法改写。",
+          episodeCount: "",
+        },
+        scriptTab: "script-upload",
+        uploadNotice: "",
+        defaultScript: "Episode 1",
+      },
+    });
+
+    assert.match(html, /aria-label="AI原创剧本设定"/);
+    assert.match(html, /文件名称/);
+    assert.match(html, /剧本受众/);
+    assert.match(html, /题材看点/);
+    assert.match(html, /拆分集数/);
+    assert.match(html, /分卡设置/);
+    assert.match(html, /每集长度/);
+    assert.match(html, /创作灵感/);
+    assert.match(html, /40集/);
+    assert.match(html, /50集/);
+    assert.match(html, /60集/);
+    assert.match(html, /自定义分集（1-100）/);
+    assert.match(html, /data-action="submit-original-script-settings" disabled>完成设定，生成规划方案/);
+  });
+
+  it("enables the original script plan action once name, inspiration, and episode count are present", () => {
+    const html = renderProductionWorkbench({
+      state: {},
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "script",
+        storyboards: [],
+        selectedStoryboard: null,
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        validationMessage: "",
+        toast: "",
+        isScriptModalOpen: false,
+        isOriginalScriptModalOpen: true,
+        originalScriptDraft: {
+          fileName: "逆光试映",
+          inspiration: "一个底层剪辑师发现城市记忆被算法改写。",
+          episodeCount: "40集",
+        },
+        scriptTab: "script-upload",
+        uploadNotice: "",
+        defaultScript: "Episode 1",
+      },
+    });
+
+    assert.match(html, /data-action="submit-original-script-settings" >完成设定，生成规划方案/);
   });
 });
 
@@ -488,12 +593,47 @@ describe("production workbench project tab", () => {
       }),
     });
 
+    const menuHtml = html.match(/<div class="project-card-menu"[\s\S]*?<\/div>/)?.[0] ?? "";
     assert.match(html, /toggle-project-card-menu/);
     assert.match(html, /upload-project-cover/);
-    assert.match(html, /data-action="rename-project-card"/);
-    assert.match(html, /data-action="delete-project-card"/);
-    assert.match(html, /In Progress/);
+    assert.match(menuHtml, />上传封面<\/button>/);
+    assert.doesNotMatch(menuHtml, /替换封面/);
+    assert.match(html, /上传封面/);
+    assert.match(html, /重命名/);
+    assert.match(html, /删除/);
     assert.match(html, /<img class="project-gallery-cover" src="data:image\/png;base64,abc123"/);
+  });
+
+  it("uses an explicit pending script seed until backend supports metadata-only project creation", () => {
+    assert.deepEqual(
+      buildProjectCreateRequest({
+        name: "try",
+        aspectRatio: "9:16",
+        projectType: "anime",
+      }),
+      {
+        name: "try",
+        scriptInput: "待上传剧本：try。请在项目详情中通过剧本上传、剧本库或分镜单上传补充正式素材。",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+        projectType: "anime",
+      },
+    );
+  });
+
+  it("shows the combined validation toast copy for missing project creation fields", () => {
+    const html = renderProjectCreateModal({
+      show: true,
+      defaultName: "",
+      selectedAspectRatio: "",
+      selectedProjectType: "anime",
+      notice: "请填写项目名称和画面比例",
+    });
+
+    assert.match(html, /class="create-modal-toast"[^>]*>请填写项目名称和画面比例/);
+    assert.doesNotMatch(html, /class="modal-inline-status">请填写项目名称和画面比例/);
+    assert.match(html, /请填写项目名称和画面比例/);
+    assert.doesNotMatch(html, /value="9:16" checked/);
   });
 
   it("renders new projects with an upload-cover placeholder", () => {
@@ -534,9 +674,9 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /data-action="close-rename-project-modal"/);
     assert.match(html, /id="project-rename-name-input"/);
-    assert.match(html, />2<\/span>/);
+    assert.match(html, /maxlength="50"/);
+    assert.match(html, />2\/50<\/span>/);
     assert.match(html, /data-action="confirm-rename-project-card"/);
-    assert.doesNotMatch(html, /maxlength=/);
   });
 
   it.skip("renders generation controls and export history in the episodes section", () => {
@@ -702,24 +842,23 @@ describe("production workbench project tab", () => {
           selectedEpisodeId: "episode-new",
           storyboards,
           selectedStoryboard: storyboards[0],
-           customEpisodes: [
-             {
-               id: "episode-new",
-               title: "Episode Draft",
-               status: "Draft",
-               createdAt: "2026/05/22",
-               createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
-               storyboardCount: 1,
-             },
-            ],
-           storyboardDeleteId: storyboards[0].id,
-          }),
+          customEpisodes: [
+            {
+              id: "episode-new",
+              title: "新建剧集",
+              status: "Draft",
+              createdAt: "2026/05/22",
+              createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
+              storyboardCount: 1,
+            },
+          ],
+        }),
       },
     });
 
     assert.match(html, /data-action="back-to-episode-hub"/);
     assert.match(html, /episode-workbench-screen/);
-    assert.match(html, /data-action="preview-export"/);
+    assert.match(html, /分镜工作台/);
     assert.match(html, /data-action="add-storyboard"/);
     assert.match(html, /data-action="select-storyboard"/);
     assert.match(html, /data-action="open-delete-sidebar-storyboard-modal"/);
@@ -1142,7 +1281,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="open-asset-import-modal"/);
     assert.match(html, /data-asset-kind="character"/);
   });
- 
+
   it("renders imported assets in the library after import", () => {
     const state = buildProjectState();
     const storyboards = createStoryboardList(state);

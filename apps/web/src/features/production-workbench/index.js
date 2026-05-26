@@ -1,4 +1,5 @@
-﻿import { renderProjectDetail } from "./project-detail.js";
+import { renderProjectDetail } from "./project-detail.js";
+import { buildProjectCreateRequest } from "./project-create-request.js";
 import {
   addStoryboard,
   createEmptyGenerationState,
@@ -302,6 +303,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       deleteProjectId: null,
       selectedProjectCardId: null,
       isScriptModalOpen: false,
+      isOriginalScriptModalOpen: false,
+      originalScriptDraft: {
+        fileName: "",
+        audience: "女频",
+        genre: "逆袭爽感",
+        episodeCount: "",
+        cardSetting: "自动分卡",
+        episodeLength: "约 1 分钟",
+        inspiration: "",
+      },
       scriptTab: "script-upload",
       scriptSubmitAction: "create-project",
       scriptSubmitLabel: "绾喛顓绘稉濠佺炊",
@@ -345,6 +356,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       episodeCardMenuId: null,
       activeNavTab: deriveInitialNavTab(window.location.hash),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
+      libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
+      libraryTeamAssetScope: "personal",
+      isLibraryPricingModalOpen: false,
+      isMemberRulesModalOpen: false,
     },
   };
   root.addEventListener("click", (event) => {
@@ -383,14 +398,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     });
   });
 
-  root.addEventListener("keydown", (event) => {
+  document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
       return;
     }
     if (
+      
       !workbench.ui.assetCardMenuId &&
+     
       !workbench.ui.episodeCardMenuId &&
+     
       !workbench.ui.projectCardMenuId &&
+      !workbench.ui.isLibraryPricingModalOpen &&
+      !workbench.ui.isMemberRulesModalOpen
+     &&
       !workbench.ui.isVideoModelMenuOpen &&
       !workbench.ui.openGenerationSelectMenu &&
       !workbench.ui.isFirstFrameMenuOpen &&
@@ -403,6 +424,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.assetCardMenuId = null;
     workbench.ui.episodeCardMenuId = null;
     workbench.ui.projectCardMenuId = null;
+    workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.isMemberRulesModalOpen = false;
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.openGenerationSelectMenu = null;
     workbench.ui.isFirstFrameMenuOpen = false;
@@ -438,6 +461,36 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (target?.matches?.('input[name="project-type"]')) {
       workbench.ui.createProjectType = target.value;
       render(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-audience")) {
+      workbench.ui.originalScriptDraft.audience = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-genre")) {
+      workbench.ui.originalScriptDraft.genre = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-episode-count")) {
+      workbench.ui.originalScriptDraft.episodeCount = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-card-setting")) {
+      workbench.ui.originalScriptDraft.cardSetting = target.value;
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-episode-length")) {
+      workbench.ui.originalScriptDraft.episodeLength = target.value;
+      updateOriginalScriptSubmitState(workbench);
       return;
     }
 
@@ -579,6 +632,26 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#original-script-file-name")) {
+      workbench.ui.originalScriptDraft.fileName = target.value;
+      const counter = target.closest(".control-field")?.querySelector("small");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/50`;
+      }
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#original-script-inspiration")) {
+      workbench.ui.originalScriptDraft.inspiration = target.value;
+      const counter = target.closest(".control-field")?.querySelector("small");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/460`;
+      }
+      updateOriginalScriptSubmitState(workbench);
+      return;
+    }
+
     if (target?.matches?.("#calibration-skip-reason-input")) {
       workbench.ui.calibrationSkipReason = target.value;
       return;
@@ -601,7 +674,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       }
       const counter = workbench.root.querySelector(".rename-project-count");
       if (counter) {
-        counter.textContent = `${[...target.value].length}`;
+        counter.textContent = `${[...target.value].length}/50`;
       }
       const notice = workbench.root.querySelector(".rename-project-actions .modal-inline-status");
       if (notice) {
@@ -843,10 +916,89 @@ async function handleAction(workbench, target) {
     return;
   }
 
+  if (action === "open-pricing") {
+    workbench.ui.isLibraryPricingModalOpen = true;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-pricing") {
+    workbench.ui.isLibraryPricingModalOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "show-commerce-placeholder") {
+    workbench.ui.toast = "支付与兑换码仅为原型占位，暂未接入真实交易。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "show-library-placeholder") {
+    workbench.ui.toast =
+      target.dataset.placeholderMessage ?? "该功能仍为原型占位，暂未接入真实数据。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-library-asset-scope") {
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "personal";
+    workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.toast = `已切换到 ${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}。`;
+    window.location.hash = "library";
+    render(workbench);
+    return;
+  }
+
+  if (action === "refresh-team") {
+    workbench.ui.toast = "团队数据仍为原型视图，真实刷新待团队接口接入。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-member-rules") {
+    workbench.ui.isMemberRulesModalOpen = true;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-member-rules") {
+    workbench.ui.isMemberRulesModalOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-team-dashboard") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.isMemberRulesModalOpen = false;
+    workbench.ui.toast = "已打开团队数据看板。";
+    window.location.hash = "team-dashboard";
+    render(workbench);
+    return;
+  }
+
+  if (action === "back-to-team-page") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team";
+    workbench.ui.toast = "已返回团队管理。";
+    window.location.hash = "team";
+    render(workbench);
+    return;
+  }
+
   if (action === "set-nav-tab") {
     workbench.ui.activeNavTab = target.dataset.tab ?? "home";
     workbench.ui.projectPanelMode =
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
+    if (workbench.ui.activeNavTab === "team") {
+      workbench.ui.libraryTeamRoute = "team";
+    }
+    if (workbench.ui.activeNavTab === "library") {
+      workbench.ui.libraryTeamRoute = "assets";
+    }
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.toast = `Switched to ${navTabLabel(workbench.ui.activeNavTab)}.`;
     window.location.hash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
@@ -880,6 +1032,33 @@ async function handleAction(workbench, target) {
     workbench.ui.scriptSubmitAction = "create-project";
     workbench.ui.scriptSubmitLabel = "绾喛顓绘稉濠佺炊";
     workbench.ui.uploadNotice = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-original-script-modal") {
+    workbench.ui.isOriginalScriptModalOpen = true;
+    workbench.ui.toast = "正在设置 AI 原创剧本规划。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-original-script-modal") {
+    workbench.ui.isOriginalScriptModalOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-original-script-settings") {
+    const draft = workbench.ui.originalScriptDraft;
+    if (!(draft.fileName?.trim() && draft.inspiration?.trim() && draft.episodeCount)) {
+      workbench.ui.toast = "请补全文件名称、创作灵感和拆分集数";
+      render(workbench);
+      return;
+    }
+
+    workbench.ui.isOriginalScriptModalOpen = false;
+    workbench.ui.toast = "已保存剧本规划设置。生成规划方案将在后端生成接入后启用。";
     render(workbench);
     return;
   }
@@ -2515,13 +2694,12 @@ async function handleAction(workbench, target) {
         return;
       }
 
-      const scriptInput = buildProjectSeedScript({ name, projectType });
-      await workbench.api.createProject({
+    await runAction(workbench, statusForAction(action), async () => {
+      await workbench.api.createProject(buildProjectCreateRequest({
         name,
-        scriptInput,
         aspectRatio,
-        resolution: "1080p",
-      });
+        projectType,
+      }));
       workbench.ui.projectLibraryPage = 1;
       workbench.ui.activeNavTab = "project";
       workbench.ui.projectPanelMode = "library";
@@ -2533,9 +2711,11 @@ async function handleAction(workbench, target) {
       workbench.ui.isScriptModalOpen = false;
       workbench.ui.uploadNotice = "";
       window.location.hash = "project";
-      return;
-    }
+    });
+    return;
+  }
 
+  await runAction(workbench, statusForAction(action), async () => {
     if (action === "parse-script") {
       await workbench.api.parseScript();
       return;
@@ -4596,6 +4776,20 @@ function getCheckedValue(root, selector, fallback) {
   return root.querySelector(`${selector}:checked`)?.value ?? fallback;
 }
 
+function updateOriginalScriptSubmitState(workbench) {
+  const draft = workbench.ui.originalScriptDraft;
+  const submit = workbench.root.querySelector('[data-action="submit-original-script-settings"]');
+  if (!submit) {
+    return;
+  }
+
+  submit.disabled = !(
+    draft.fileName?.trim() &&
+    draft.inspiration?.trim() &&
+    draft.episodeCount
+  );
+}
+
 function deriveInitialNavTab(hash) {
   const token = String(hash || "").replace(/^#/, "");
   if (!token) {
@@ -4622,10 +4816,21 @@ function deriveInitialNavTab(hash) {
   if (token === "tools") {
     return "tools";
   }
-  if (token === "team") {
+  if (token === "team" || token === "team-dashboard") {
     return "team";
   }
   return "project";
+}
+
+function deriveInitialLibraryTeamRoute(hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  if (token === "team-dashboard") {
+    return "team-dashboard";
+  }
+  if (token === "team") {
+    return "team";
+  }
+  return "assets";
 }
 
 function deriveInitialProjectPanelMode(hash) {

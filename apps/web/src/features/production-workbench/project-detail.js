@@ -2,8 +2,13 @@
 import { renderEpisodeWorkbench } from "./episode-workbench.js";
 import { renderExportPanel } from "./export-panel.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
+import {
+  renderOriginalScriptModal,
+  renderScriptManagementPage,
+} from "./script-page.js";
 import { getProjectDetailState } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
+import { renderLibraryTeam } from "../library-team/index.js";
 
 const PROJECT_STATUS_OPTIONS = ["未开始", "制作中", "一稿交付", "完结"];
 
@@ -194,6 +199,11 @@ export function renderProjectDetail(context = {}) {
       selectedAspectRatio: ui.createAspectRatio ?? "9:16",
       selectedProjectType: ui.createProjectType ?? "anime",
       notice: ui.createProjectNotice ?? "",
+    })}
+    ${renderOriginalScriptModal({
+      show: ui.isOriginalScriptModalOpen,
+      draft: ui.originalScriptDraft,
+      busy: ui.busy,
     })}
     ${renderProjectRenameModal({
       show: Boolean(ui.renameProjectId),
@@ -1950,30 +1960,18 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      <section class="script-tab-panel">
-        <div class="script-tab-copy">
-          <p class="section-kicker">剧本入口</p>
-          <h2>脚本与分镜单</h2>
-          <p>从剧本库、剧本上传或分镜单上传继续进入生产工作流。左侧菜单保持常驻，点击只切换这里的内容区域。</p>
-        </div>
-        <div class="script-tab-actions">
-          <button id="script-upload-button" class="primary-action" type="button" data-action="open-script-modal">打开上传面板</button>
-          <button id="parse-script-button" class="secondary-action" type="button" data-action="parse-script" ${disabled(!state.project || ui.busy)}>AI 拆分镜</button>
-        </div>
-      </section>
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      ${renderScriptManagementPage({ ui })}
     `;
   }
 
   if (activeNavTab === "library") {
     return `
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      <section class="placeholder-panel">
-        <p class="section-kicker">资产库</p>
-        <h2>统一资产空间</h2>
-        <p>这里预留给后续的角色、场景、道具和风格参考图管理。当前版本继续通过项目资产卡和脚本提取推进主流程。</p>
-      </section>
+      ${renderLibraryTeam({
+        route: "assets",
+        assetScope: ui.libraryTeamAssetScope,
+        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+      })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
     `;
   }
@@ -1993,11 +1991,11 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   if (activeNavTab === "team") {
     return `
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      <section class="placeholder-panel">
-        <p class="section-kicker">团队</p>
-        <h2>协作空间</h2>
-        <p>团队设置和成员权限会放在这里。当前页面先维持单人可用的创作工作台，不让左侧导航在切换时消失。</p>
-      </section>
+      ${renderLibraryTeam({
+        route: ui.libraryTeamRoute ?? "team",
+        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        rulesOpen: Boolean(ui.isMemberRulesModalOpen),
+      })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
     `;
   }
@@ -2363,7 +2361,7 @@ function renderProjectCardMenu(project) {
   return `
     <div class="project-card-menu" role="menu" aria-label="项目操作">
       <input class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
-      <button class="project-card-menu-item" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">替换封面</button>
+      <button class="project-card-menu-item" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">上传封面</button>
       <button class="project-card-menu-item" type="button" data-action="rename-project-card" data-project-id="${escapeHtml(project.id)}">重命名</button>
       <button class="project-card-menu-item danger" type="button" data-action="delete-project-card" data-project-id="${escapeHtml(project.id)}">删除</button>
     </div>
@@ -2386,10 +2384,11 @@ function renderProjectRenameModal({ show, value, notice }) {
           <input
             id="project-rename-name-input"
             type="text"
+            maxlength="50"
             value="${escapeHtml(value)}"
             placeholder="请输入项目名称"
           />
-          <span class="rename-project-count">${[...value].length}</span>
+          <span class="rename-project-count">${[...value].length}/50</span>
         </label>
         <div class="rename-project-actions">
           <p class="modal-inline-status">${escapeHtml(notice)}</p>
@@ -2446,8 +2445,9 @@ function renderProjectPagination({ currentPage, totalPages }) {
         data-page="${currentPage - 1}"
         ${disabled(currentPage <= 1)}
       >
-        涓婁竴椤?      </button>
-      <span class="pagination-status">绗?${currentPage} / ${totalPages} 椤?/span>
+        上一页
+      </button>
+      <span class="pagination-status">第 ${currentPage} / ${totalPages} 页</span>
       <button
         class="pagination-button"
         type="button"
@@ -2455,7 +2455,8 @@ function renderProjectPagination({ currentPage, totalPages }) {
         data-page="${currentPage + 1}"
         ${disabled(currentPage >= totalPages)}
       >
-        涓嬩竴椤?      </button>
+        下一页
+      </button>
     </nav>
   `;
 }

@@ -160,10 +160,14 @@ export function overrideCalibrationSession(
   }
 
   const reason = input.reason?.trim();
+  if (!reason) {
+    throw new CalibrationRuleError("reason_required");
+  }
+
   return applyCalibrationDecision(session, {
     decisionType: "override",
     decidedByUserId: input.decidedByUserId,
-    reason: reason && reason.length > 0 ? reason : null,
+    reason,
   });
 }
 

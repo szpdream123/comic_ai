@@ -2,6 +2,7 @@
 node_modules
 .idea/
 tmp-ui-screenshots/
+artifacts/worker-c-preview/
 .local/
 *.log
 .env
@@ -10,3 +11,4 @@ tmp-ui-screenshots/
 dist
 .next
 .turbo
+.worktrees/

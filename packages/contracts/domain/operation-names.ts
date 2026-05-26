@@ -7,6 +7,7 @@ export const operationNames = {
   calibrationGenerate: "calibration.generate",
   calibrationPass: "calibration.pass",
   calibrationSkip: "calibration.skip",
+  calibrationOverride: "calibration.override",
   exportCreate: "export.create",
   billingCreateOrder: "billing.create_order",
   billingCreatePaymentIntent: "billing.create_payment_intent",
