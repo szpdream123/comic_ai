@@ -12,10 +12,27 @@
  */
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(resolveApiUrl(url), {
-    credentials: "include",
-    ...options,
-  });
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 10000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+
+  let response;
+  try {
+    response = await fetch(resolveApiUrl(url), {
+      credentials: "include",
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("request_timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   const text = await response.text();
   const payload = text ? JSON.parse(text) : {};
 
@@ -26,7 +43,7 @@ async function fetchJson(url, options = {}) {
   return payload;
 }
 
-function resolveApiUrl(url) {
+export function resolveApiUrl(url) {
   if (typeof window === "undefined") {
     return url;
   }
@@ -45,6 +62,13 @@ function postJson(url, body) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+  });
+}
+
+async function postMultipart(url, formData) {
+  return fetchJson(url, {
+    method: "POST",
+    body: formData,
   });
 }
 
@@ -125,6 +149,24 @@ export const creatorApi = {
     return fetchJson("/api/creator/assets/library");
   },
 
+  updateProjectAsset(assetId, input) {
+    return patchJson(`/api/creator/assets/${encodeURIComponent(assetId)}`, input);
+  },
+
+  deleteProjectAsset(assetId) {
+    return deleteJson(`/api/creator/assets/${encodeURIComponent(assetId)}`);
+  },
+
+  uploadFile(file, options = {}) {
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("category", options.category ?? "misc");
+    if (options.projectId) {
+      formData.set("projectId", options.projectId);
+    }
+    return postMultipart("/api/creator/uploads", formData);
+  },
+
   importAsset(input) {
     return postJson("/api/creator/assets/import", input);
   },
@@ -139,6 +181,14 @@ export const creatorApi = {
 
   getProjectEpisodes(projectId) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/episodes`);
+  },
+
+  getProjectMembers(projectId) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/members`);
+  },
+
+  getProjectStats(projectId) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/stats`);
   },
 
   createEpisode(input) {
@@ -159,6 +209,35 @@ export const creatorApi = {
 
   updateShot(input) {
     return patchJson("/api/creator/shots", input);
+  },
+
+  importShotMedia(shotId, input) {
+    return postJson(`/api/creator/shots/${encodeURIComponent(shotId)}/media/import`, input);
+  },
+
+  deleteShotMedia(shotId, input) {
+    const assetVersionId = input?.assetVersionId;
+    const kind = input?.kind;
+    const ignoreMissingShotMedia = (error) => {
+      const message = String(error instanceof Error ? error.message : error);
+      if (message.includes("shot_media_not_found")) {
+        return { deleted: false, missing: true };
+      }
+      throw error;
+    };
+    if (assetVersionId && kind) {
+      return fetchJson(
+        `/api/creator/shots/${encodeURIComponent(shotId)}/media/${encodeURIComponent(assetVersionId)}?kind=${encodeURIComponent(kind)}`,
+        {
+          method: "DELETE",
+        },
+      ).catch(ignoreMissingShotMedia);
+    }
+    return deleteJson(`/api/creator/shots/${encodeURIComponent(shotId)}/media`, input).catch(ignoreMissingShotMedia);
+  },
+
+  replaceShotReferences(shotId, input) {
+    return postJson(`/api/creator/shots/${encodeURIComponent(shotId)}/references`, input);
   },
 
   deleteShot(input) {

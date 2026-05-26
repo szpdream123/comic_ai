@@ -67,6 +67,39 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("allows local file pages to call the development API with credentials", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const preflightResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "null",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type",
+        },
+      });
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { origin: "null" },
+      });
+
+      assert.equal(preflightResponse.status, 204);
+      assert.equal(preflightResponse.headers.get("access-control-allow-origin"), "null");
+      assert.equal(preflightResponse.headers.get("access-control-allow-credentials"), "true");
+      assert.match(
+        preflightResponse.headers.get("access-control-allow-headers") ?? "",
+        /content-type/,
+      );
+      assert.equal(sessionResponse.status, 401);
+      assert.equal(sessionResponse.headers.get("access-control-allow-origin"), "null");
+      assert.equal(sessionResponse.headers.get("access-control-allow-credentials"), "true");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes a creator workflow API that can create, parse, and export a mock project", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -420,6 +453,23 @@ describe("phone auth dev server", () => {
       });
       const importedAsset = await importedAssetResponse.json();
 
+      const deletableAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          kind: "prop",
+          name: "Disposable Prop",
+          storageObjectKey: "data:image/png;base64,disposable-prop",
+          mimeType: "image/png",
+          width: 512,
+          height: 512,
+        }),
+      });
+      const deletableAsset = await deletableAssetResponse.json();
+
       const libraryResponse = await fetch(`${server.origin}/api/creator/assets/library`, {
         headers: { cookie },
       });
@@ -445,6 +495,70 @@ describe("phone auth dev server", () => {
         },
       );
       const detail = await detailResponse.json();
+
+      const membersResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/members`,
+        {
+          headers: { cookie },
+        },
+      );
+      const members = await membersResponse.json();
+
+      const statsResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/stats`,
+        {
+          headers: { cookie },
+        },
+      );
+      const stats = await statsResponse.json();
+
+      const updateAssetResponse = await fetch(
+        `${server.origin}/api/creator/assets/${importedAsset.asset.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            name: "Imported Alley Revised",
+            description: "Updated imported alley description",
+            isMain: true,
+          }),
+        },
+      );
+      const updatedAsset = await updateAssetResponse.json();
+
+      const detailAfterAssetUpdateResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/detail`,
+        {
+          headers: { cookie },
+        },
+      );
+      const detailAfterAssetUpdate = await detailAfterAssetUpdateResponse.json();
+      const updatedSceneAsset = detailAfterAssetUpdate.assetsByType.scene.find(
+        (asset: { id: string }) => asset.id === importedAsset.asset.id,
+      );
+
+      const deleteAssetResponse = await fetch(
+        `${server.origin}/api/creator/assets/${deletableAsset.asset.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+        },
+      );
+      const deletedAsset = await deleteAssetResponse.json();
+
+      const statsAfterDeleteResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/stats`,
+        {
+          headers: { cookie },
+        },
+      );
+      const statsAfterDelete = await statsAfterDeleteResponse.json();
 
       const episodesResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/episodes`,
@@ -524,9 +638,164 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           shotId: createdShot.shot.id,
           title: "Updated manual shot",
+          description: "Updated manual shot description",
         }),
       });
       const updatedShot = await updateShotResponse.json();
+
+      const importedShotImageResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            kind: "image",
+            name: "Manual storyboard image",
+            storageObjectKey: "data:image/png;base64,manual-storyboard-image",
+            mimeType: "image/png",
+            width: 1024,
+            height: 1024,
+          }),
+        },
+      );
+      const importedShotImage = await importedShotImageResponse.json();
+
+      const importedSecondShotImageResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            kind: "image",
+            name: "Manual storyboard image duplicate source",
+            storageObjectKey: "data:image/png;base64,manual-storyboard-image",
+            mimeType: "image/png",
+            width: 1024,
+            height: 1024,
+          }),
+        },
+      );
+      const importedSecondShotImage = await importedSecondShotImageResponse.json();
+
+      const importedShotVideoResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            kind: "video",
+            name: "Manual storyboard video",
+            storageObjectKey: "data:video/mp4;base64,manual-storyboard-video",
+            mimeType: "video/mp4",
+            width: 1024,
+            height: 1024,
+            durationMs: 10_000,
+          }),
+        },
+      );
+      const importedShotVideo = await importedShotVideoResponse.json();
+
+      const referencesResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/references`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            items: [
+              {
+                role: "character",
+                assetId: generatedAsset.asset.id,
+                assetVersionId: generatedAsset.version.id,
+              },
+              {
+                role: "scene",
+                assetId: importedAsset.asset.id,
+                assetVersionId: importedAsset.version.id,
+              },
+            ],
+          }),
+        },
+      );
+      const references = await referencesResponse.json();
+
+      const detailAfterShotMediaResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/detail`,
+        {
+          headers: { cookie },
+        },
+      );
+      const detailAfterShotMedia = await detailAfterShotMediaResponse.json();
+      const hydratedManualShot = detailAfterShotMedia.shots.find(
+        (shot: { id: string }) => shot.id === createdShot.shot.id,
+      );
+
+      const deleteSingleShotImageResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/${importedShotImage.version.id}?kind=image`,
+        {
+          method: "DELETE",
+          headers: {
+            cookie,
+          },
+        },
+      );
+      const deletedSingleShotImage = await deleteSingleShotImageResponse.json();
+
+      const detailAfterSingleShotImageDeleteResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/detail`,
+        {
+          headers: { cookie },
+        },
+      );
+      const detailAfterSingleShotImageDelete = await detailAfterSingleShotImageDeleteResponse.json();
+      const hydratedManualShotAfterSingleImageDelete = detailAfterSingleShotImageDelete.shots.find(
+        (shot: { id: string }) => shot.id === createdShot.shot.id,
+      );
+
+      const deleteShotVideoMediaResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/${importedShotVideo.version.id}?kind=video`,
+        {
+          method: "DELETE",
+          headers: {
+            cookie,
+          },
+        },
+      );
+      const deletedShotVideoMedia = await deleteShotVideoMediaResponse.json();
+
+      const staleShotImageMediaId = "11111111-1111-4111-8111-111111111111";
+      const deleteShotImageMediaByStaleIdResponse = await fetch(
+        `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/${staleShotImageMediaId}?kind=image`,
+        {
+          method: "DELETE",
+          headers: {
+            cookie,
+          },
+        },
+      );
+      const deletedShotImageMediaByStaleId = await deleteShotImageMediaByStaleIdResponse.json();
+
+      const detailAfterShotVideoDeleteResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/detail`,
+        {
+          headers: { cookie },
+        },
+      );
+      const detailAfterShotVideoDelete = await detailAfterShotVideoDeleteResponse.json();
+      const hydratedManualShotAfterVideoDelete = detailAfterShotVideoDelete.shots.find(
+        (shot: { id: string }) => shot.id === createdShot.shot.id,
+      );
 
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
@@ -542,16 +811,6 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ shotIds: reorderedIds }),
       });
       const reordered = await reorderResponse.json();
-
-      const deleteShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
-        method: "DELETE",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({ shotId: createdShot.shot.id }),
-      });
-      const deletedShot = await deleteShotResponse.json();
 
       await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
         method: "POST",
@@ -581,6 +840,16 @@ describe("phone auth dev server", () => {
       });
       const imageResult = await imageResponse.json();
 
+      const deleteShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ shotId: createdShot.shot.id }),
+      });
+      const deletedShot = await deleteShotResponse.json();
+
       const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
         method: "DELETE",
         headers: {
@@ -601,8 +870,10 @@ describe("phone auth dev server", () => {
       assert.equal(generatedAsset.asset.assetType, "character_sheet");
       assert.equal(importedAssetResponse.status, 200);
       assert.equal(importedAsset.asset.assetType, "scene_reference");
+      assert.equal(deletableAssetResponse.status, 200);
+      assert.equal(deletableAsset.asset.assetType, "prop_reference");
       assert.equal(libraryResponse.status, 200);
-      assert.equal(library.assets.length, 2);
+      assert.equal(library.assets.length, 3);
       assert.equal(
         library.assets.find((asset: { assetType: string }) => asset.assetType === "scene_reference")
           ?.previewUrl,
@@ -614,9 +885,25 @@ describe("phone auth dev server", () => {
       assert.equal(detail.project.id, created.project.id);
       assert.equal(detail.assetSummary.character.count, 1);
       assert.equal(detail.assetSummary.scene.count, 1);
+      assert.equal(detail.assetSummary.prop.count, 1);
       assert.deepEqual(detail.assetSummary.scene.previews, [
         "data:image/png;base64,imported-alley",
       ]);
+      assert.equal(membersResponse.status, 200);
+      assert.ok(members.members.length >= 1);
+      assert.equal(statsResponse.status, 200);
+      assert.ok(stats.stats.memberCount >= 1);
+      assert.equal(stats.stats.assetCount, 3);
+      assert.equal(updateAssetResponse.status, 200);
+      assert.equal(typeof updatedAsset.asset, "string");
+      assert.equal(detailAfterAssetUpdateResponse.status, 200);
+      assert.equal(updatedSceneAsset.label, "Imported Alley Revised");
+      assert.equal(updatedSceneAsset.latestVersion.metadata.description, "Updated imported alley description");
+      assert.equal(updatedSceneAsset.latestVersion.metadata.isMain, true);
+      assert.equal(deleteAssetResponse.status, 200);
+      assert.equal(deletedAsset.deleted, true);
+      assert.equal(statsAfterDeleteResponse.status, 200);
+      assert.equal(statsAfterDelete.stats.assetCount, 2);
       assert.equal(detail.episodes.length, 1);
       assert.equal(detail.episodes[0].storyboardCount, 3);
       assert.equal(
@@ -640,6 +927,52 @@ describe("phone auth dev server", () => {
       assert.equal(createdShot.shot.title, "Inserted manual shot");
       assert.equal(updateShotResponse.status, 200);
       assert.equal(updatedShot.shot.title, "Updated manual shot");
+      assert.equal(updatedShot.shot.description, "Updated manual shot description");
+      assert.equal(importedShotImageResponse.status, 200);
+      assert.equal(importedShotImage.asset.assetType, "shot_image");
+      assert.equal(importedShotImage.shot.currentImageAssetVersionId, importedShotImage.version.id);
+      assert.equal(importedSecondShotImageResponse.status, 200);
+      assert.equal(importedSecondShotImage.asset.id, importedShotImage.asset.id);
+      assert.equal(importedSecondShotImage.asset.assetType, "shot_image");
+      assert.equal(importedSecondShotImage.shot.currentImageAssetVersionId, importedSecondShotImage.version.id);
+      assert.equal(importedShotVideoResponse.status, 200);
+      assert.equal(importedShotVideo.asset.assetType, "shot_video");
+      assert.equal(importedShotVideo.shot.currentVideoAssetVersionId, importedShotVideo.version.id);
+      assert.equal(referencesResponse.status, 200);
+      assert.deepEqual(
+        references.references.map((reference: { role: string }) => reference.role),
+        ["character", "scene"],
+      );
+      assert.equal(detailAfterShotMediaResponse.status, 200);
+      assert.equal(hydratedManualShot.description, "Updated manual shot description");
+      assert.equal(hydratedManualShot.previewImageUrl, "data:image/png;base64,manual-storyboard-image");
+      assert.equal(hydratedManualShot.previewVideoUrl, "data:video/mp4;base64,manual-storyboard-video");
+      assert.equal(hydratedManualShot.imageVersions.length, 2);
+      assert.equal(hydratedManualShot.videoVersions.length, 1);
+      assert.equal(hydratedManualShot.references.length, 2);
+      assert.equal(deleteSingleShotImageResponse.status, 200);
+      assert.equal(deletedSingleShotImage.deletedAssetVersionId, importedShotImage.version.id);
+      assert.equal(detailAfterSingleShotImageDeleteResponse.status, 200);
+      assert.equal(hydratedManualShotAfterSingleImageDelete.imageVersions.length, 1);
+      assert.deepEqual(
+        hydratedManualShotAfterSingleImageDelete.imageVersions.map((version: { id: string }) => version.id),
+        [importedSecondShotImage.version.id],
+      );
+      assert.equal(
+        hydratedManualShotAfterSingleImageDelete.currentImageAssetVersionId,
+        importedSecondShotImage.version.id,
+      );
+      assert.equal(deleteShotVideoMediaResponse.status, 200);
+      assert.equal(deletedShotVideoMedia.deletedAssetVersionId, importedShotVideo.version.id);
+      assert.equal(deleteShotImageMediaByStaleIdResponse.status, 200);
+      assert.equal(deletedShotImageMediaByStaleId.deletedAssetVersionId, staleShotImageMediaId);
+      assert.equal(detailAfterShotVideoDeleteResponse.status, 200);
+      assert.equal(hydratedManualShotAfterVideoDelete.currentImageAssetVersionId, null);
+      assert.equal(hydratedManualShotAfterVideoDelete.previewImageUrl, null);
+      assert.equal(hydratedManualShotAfterVideoDelete.imageVersions.length, 0);
+      assert.equal(hydratedManualShotAfterVideoDelete.currentVideoAssetVersionId, null);
+      assert.equal(hydratedManualShotAfterVideoDelete.previewVideoUrl, null);
+      assert.equal(hydratedManualShotAfterVideoDelete.videoVersions.length, 0);
       assert.equal(reorderResponse.status, 200, JSON.stringify(reordered));
       assert.deepEqual(
         reordered.shots.map((shot: { id: string }) => shot.id),

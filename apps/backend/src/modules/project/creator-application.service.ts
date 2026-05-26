@@ -9,7 +9,10 @@ import {
   claimQueuedTask,
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
-import { upsertAssetVersionSnapshot } from "./asset-version-record.service.ts";
+import {
+  createAssetVersionSnapshot,
+  upsertAssetVersionSnapshot,
+} from "./asset-version-record.service.ts";
 import type { AssetType } from "./asset.service.ts";
 import { computeAssetReviewSummary } from "./asset-review.service.ts";
 import {
@@ -23,6 +26,13 @@ import {
 import { replaceCalibrationSessionForProject, getLatestCalibrationSessionForProject } from "./calibration-record.service.ts";
 import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
 import { CalibrationRuleError } from "./calibration.service.ts";
+import {
+  createEpisodeForProject,
+  deleteEpisodeForProject,
+  listEpisodesForProject,
+  replaceEpisodesForProject,
+  updateEpisodeForProject,
+} from "./episode-record.service.ts";
 import {
   createCreatorExportArtifact,
   requestCreatorImageGenerationPlatformBatch,
@@ -41,6 +51,10 @@ import {
   replaceShotsForProject,
   upsertShotsForProject,
 } from "./shot-record.service.ts";
+import {
+  listShotReferencesForProject,
+  replaceShotReferencesForShot,
+} from "./shot-reference-record.service.ts";
 import {
   createSqlParseScriptCommandHandler,
   createSqlProjectCommandHandler,
@@ -132,6 +146,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       kind: "character" | "scene" | "prop" | "image" | "video";
       name?: string | null;
       storageObjectKey?: string | null;
+      sourceUrl?: string | null;
       mimeType?: string | null;
       width?: number | null;
       height?: number | null;
@@ -188,10 +203,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         prompt: input.body.prompt ?? null,
         model: input.body.model ?? null,
         label: name,
+        sourceUrl: input.body.sourceUrl?.trim() || null,
         previewUrl:
-          input.body.storageObjectKey?.trim().startsWith("data:")
+          input.body.sourceUrl?.trim() ||
+          (input.body.storageObjectKey?.trim().startsWith("data:")
             ? input.body.storageObjectKey.trim()
-            : null,
+            : null),
       },
       sourceTaskId: randomUUID(),
       sourceAttemptId: randomUUID(),
@@ -719,12 +736,68 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
     },
 
+    async updateProjectAsset(input: {
+      user: AuthenticatedCreatorUser;
+      assetId: string;
+      body: {
+        name?: string | null;
+        description?: string | null;
+        isMain?: boolean | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const asset = await findProjectAssetById(deps.db, { assetId: input.assetId });
+      if (!asset) {
+        return { status: 404, body: { error: "asset_not_found" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: asset.projectId,
+        now: input.now,
+      });
+      const updated = await updateProjectAssetRecord(deps.db, {
+        organizationId: actor.organizationId,
+        assetId: input.assetId,
+        name: input.body.name,
+        description: input.body.description,
+        isMain: input.body.isMain,
+        now: input.now,
+      });
+      return updated
+        ? { status: 200, body: { asset: updated } }
+        : { status: 404, body: { error: "asset_not_found" } };
+    },
+
+    async deleteProjectAsset(input: {
+      user: AuthenticatedCreatorUser;
+      assetId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const asset = await findProjectAssetById(deps.db, { assetId: input.assetId });
+      if (!asset) {
+        return { status: 404, body: { error: "asset_not_found" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: asset.projectId,
+        now: input.now,
+      });
+      const deleted = await deleteProjectAssetRecord(deps.db, {
+        organizationId: actor.organizationId,
+        assetId: input.assetId,
+      });
+      return deleted
+        ? { status: 200, body: { deleted: true } }
+        : { status: 404, body: { error: "asset_not_found" } };
+    },
+
     async importAsset(input: {
       user: AuthenticatedCreatorUser;
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
         name?: string | null;
         storageObjectKey?: string | null;
+        sourceUrl?: string | null;
         mimeType?: string | null;
         width?: number | null;
         height?: number | null;
@@ -796,6 +869,55 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         now: input.now,
       });
       return { status: 200, body: { episodes: detail.episodes } };
+    },
+
+    async listProjectMembers(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      return {
+        status: 200,
+        body: {
+          members: await listProjectMembersForWorkspace(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId,
+          }),
+        },
+      };
+    },
+
+    async getProjectStats(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const detail = await buildProjectDetail(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      return {
+        status: 200,
+        body: {
+          stats: await buildProjectStats(deps.db, {
+            organizationId: actor.organizationId,
+            projectId: input.projectId,
+            detail,
+            now: input.now,
+          }),
+        },
+      };
     },
 
     async createEpisode(input: {
@@ -889,7 +1011,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async createShot(input: {
       user: AuthenticatedCreatorUser;
-      body: { title?: string | null; episodeId?: string | null };
+      body: { title?: string | null; description?: string | null; episodeId?: string | null };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
@@ -917,7 +1039,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async updateShot(input: {
       user: AuthenticatedCreatorUser;
-      body: { shotId: string; title?: string | null };
+      body: {
+        shotId: string;
+        title?: string | null;
+        description?: string | null;
+        currentImageAssetVersionId?: string | null;
+        currentVideoAssetVersionId?: string | null;
+      };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
@@ -960,16 +1088,46 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
       const result = await creatorApp.deleteShot(input.body);
       await deps.db.query(
+        `
+          DELETE FROM calibration_items
+          WHERE organization_id = $1
+            AND shot_id = $2
+        `,
+        [actor.organizationId, input.body.shotId],
+      );
+      await deps.db.query(
+        `
+          DELETE FROM shot_reference_assets
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND shot_id = $3
+        `,
+        [actor.organizationId, projectId, input.body.shotId],
+      );
+      const deletedShotRows = await deps.db.query(
         `
           DELETE FROM shots
           WHERE organization_id = $1
             AND project_id = $2
             AND id = $3
+          RETURNING id
         `,
         [actor.organizationId, projectId, input.body.shotId],
       );
+      console.log("creator.deleteShot success", {
+        projectId,
+        shotId: input.body.shotId,
+        remainingShots: Array.isArray(result.shots) ? result.shots.length : null,
+        deletedRows: deletedShotRows.rows.length,
+      });
       return { status: 200, body: result };
     },
 
@@ -999,6 +1157,220 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         now: input.now,
       });
       return { status: 200, body: result };
+    },
+
+    async importShotMedia(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        kind: "image" | "video";
+        name?: string | null;
+        storageObjectKey?: string | null;
+        sourceUrl?: string | null;
+        mimeType?: string | null;
+        width?: number | null;
+        height?: number | null;
+        durationMs?: number | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      let resolvedShot = shot;
+      if (!resolvedShot) {
+        const memoryState = await creatorApp.getState();
+        const memoryShot = memoryState.shots.find((item) => item.id === input.body.shotId);
+        if (memoryShot) {
+          resolvedShot = memoryShot as ShotRecord;
+          await upsertShotsForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            createdByUserId: actor.actorId,
+            shots: [resolvedShot],
+            now: input.now,
+          });
+        }
+      }
+      if (!resolvedShot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+      const storageObjectKey = input.body.storageObjectKey?.trim();
+      if (!storageObjectKey) {
+        return { status: 400, body: { error: "storage_object_key_required" } };
+      }
+
+      const snapshot = await createAssetVersionSnapshot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        assetType: input.body.kind === "video" ? "shot_video" : "shot_image",
+        assetKey: input.body.shotId,
+        createdByUserId: actor.actorId,
+        storageObjectKey,
+        metadata: {
+          mimeType:
+            input.body.mimeType?.trim() ||
+            (input.body.kind === "video" ? "video/mp4" : "image/png"),
+          width: input.body.width ?? 1024,
+          height: input.body.height ?? 1024,
+          durationMs: input.body.durationMs ?? null,
+          source: "import",
+          label: input.body.name?.trim() || (input.body.kind === "video" ? "Uploaded video" : "Uploaded image"),
+          sourceUrl: input.body.sourceUrl?.trim() || null,
+          previewUrl:
+            input.body.sourceUrl?.trim() ||
+            (storageObjectKey.startsWith("data:") ? storageObjectKey : null),
+        },
+        sourceTaskId: randomUUID(),
+        sourceAttemptId: randomUUID(),
+        now: input.now,
+      });
+
+      const updated = await updateShotMediaPointer(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        kind: input.body.kind,
+        assetVersionId: snapshot.version.id,
+        now: input.now,
+      });
+      await updateProjectPhase(deps.db, projectId, "shot_generation");
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
+
+      return {
+        status: 200,
+        body: {
+          shot: updated,
+          asset: snapshot.asset,
+          version: snapshot.version,
+        },
+      };
+    },
+
+    async deleteShotMedia(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        kind: "image" | "video";
+        assetVersionId: string;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      if (!shot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+
+      const deleted = await deleteShotMediaVersionRecord(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        kind: input.body.kind,
+        assetVersionId: input.body.assetVersionId,
+        now: input.now,
+      });
+      if (!deleted) {
+        return { status: 404, body: { error: "shot_media_not_found" } };
+      }
+
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
+
+      const refreshedShot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+
+      return {
+        status: 200,
+        body: {
+          shot: refreshedShot,
+          deletedAssetVersionId: input.body.assetVersionId,
+        },
+      };
+    },
+
+    async replaceShotReferences(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        items: Array<{
+          role: string;
+          assetId: string;
+          assetVersionId?: string | null;
+          sortOrder?: number | null;
+        }>;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      if (!shot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+      const references = await replaceShotReferencesForShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        createdByUserId: actor.actorId,
+        items: input.body.items ?? [],
+        now: input.now,
+      });
+      return { status: 200, body: { references } };
     },
 
     async runCalibration(input: {
@@ -1924,6 +2296,46 @@ async function listProjectsForWorkspace(
   }));
 }
 
+async function listProjectMembersForWorkspace(
+  db: SqlDatabase,
+  input: { organizationId: string; workspaceId: string },
+) {
+  const result = await db.query<{
+    membership_id: string;
+    user_id: string;
+    phone_e164: string;
+    role: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `
+      SELECT
+        m.id AS membership_id,
+        m.user_id,
+        u.phone_e164,
+        m.role,
+        m.status,
+        m.created_at
+      FROM memberships m
+      JOIN users u
+        ON u.id = m.user_id
+      WHERE m.organization_id = $1
+        AND m.workspace_id = $2
+      ORDER BY m.created_at ASC, m.id ASC
+    `,
+    [input.organizationId, input.workspaceId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.membership_id,
+    userId: row.user_id,
+    phone: row.phone_e164,
+    role: row.role,
+    status: row.status,
+    joinedAt: new Date(row.created_at),
+  }));
+}
+
 async function updateProjectRecord(
   db: SqlDatabase,
   input: {
@@ -1998,6 +2410,401 @@ async function updateProjectRecord(
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
+}
+
+async function findProjectAssetById(
+  db: SqlDatabase,
+  input: { assetId: string },
+) {
+  const result = await db.query<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+    asset_type: string;
+    asset_key: string;
+  }>(
+    `
+      SELECT id, organization_id, project_id, asset_type, asset_key
+      FROM assets
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [input.assetId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    assetType: row.asset_type,
+    assetKey: row.asset_key,
+  };
+}
+
+async function updateProjectAssetRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    assetId: string;
+    name?: string | null;
+    description?: string | null;
+    isMain?: boolean | null;
+    now: Date;
+  },
+) {
+  const latestVersion = (
+    await db.query<{
+      id: string;
+      metadata_json: Record<string, unknown> | null;
+    }>(
+      `
+        SELECT id, metadata_json
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+        ORDER BY version_number DESC
+        LIMIT 1
+      `,
+      [input.organizationId, input.assetId],
+    )
+  ).rows[0];
+  if (!latestVersion) {
+    return null;
+  }
+
+  const metadata = { ...(latestVersion.metadata_json ?? {}) } as Record<string, unknown>;
+  if (input.name !== undefined) {
+    const nextName = input.name?.trim();
+    if (!nextName) {
+      throw new Error("asset_name_required");
+    }
+    metadata.label = nextName;
+  }
+  if (input.description !== undefined) {
+    metadata.description = input.description?.trim() || null;
+  }
+  if (input.isMain !== undefined && input.isMain !== null) {
+    metadata.isMain = Boolean(input.isMain);
+  }
+
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, latestVersion.id, metadata],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId, input.now],
+  );
+
+  return latestVersion.id;
+}
+
+async function deleteShotMediaVersionRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    shotId: string;
+    kind: "image" | "video";
+    assetVersionId: string;
+    now: Date;
+  },
+) {
+  const assetType = input.kind === "video" ? "shot_video" : "shot_image";
+  let versionRow = (
+    await db.query<{
+      asset_id: string;
+      version_id: string;
+    }>(
+      `
+        SELECT v.asset_id, v.id AS version_id
+        FROM asset_versions v
+        JOIN assets a
+          ON a.organization_id = v.organization_id
+         AND a.id = v.asset_id
+        WHERE v.organization_id = $1
+          AND a.project_id = $2
+          AND a.asset_key = $3
+          AND a.asset_type = $4
+          AND v.id = $5
+        LIMIT 1
+      `,
+      [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+    )
+  ).rows[0];
+  if (!versionRow) {
+    const assetVersionRows = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.organization_id = $1
+            AND a.project_id = $2
+            AND a.asset_key = $3
+            AND a.asset_type = $4
+            AND a.id = $5
+          ORDER BY v.version_number DESC, v.created_at DESC
+          LIMIT 2
+        `,
+        [
+          input.organizationId,
+          input.projectId,
+          input.shotId,
+          assetType,
+          input.assetVersionId,
+        ],
+      )
+    ).rows;
+    if (assetVersionRows.length === 1) {
+      versionRow = assetVersionRows[0];
+    }
+  }
+  if (!versionRow) {
+    const currentVersionColumn =
+      input.kind === "video" ? "current_video_asset_version_id" : "current_image_asset_version_id";
+    versionRow = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id
+          FROM shots s
+          JOIN asset_versions v
+            ON v.organization_id = s.organization_id
+           AND v.id = s.${currentVersionColumn}
+          JOIN assets a
+            ON a.organization_id = v.organization_id
+           AND a.id = v.asset_id
+          WHERE s.organization_id = $1
+            AND s.project_id = $2
+            AND s.id = $3
+            AND a.project_id = $2
+            AND a.asset_type = $4
+            AND (
+              v.id = $5
+              OR a.id = $5
+              OR s.${currentVersionColumn} = $5
+            )
+          LIMIT 1
+        `,
+        [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+      )
+    ).rows[0];
+  }
+  if (!versionRow) {
+    const candidateRows = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.organization_id = $1
+            AND a.project_id = $2
+            AND a.asset_key = $3
+            AND a.asset_type = $4
+          ORDER BY v.version_number DESC, v.created_at DESC
+          LIMIT 2
+        `,
+        [input.organizationId, input.projectId, input.shotId, assetType],
+      )
+    ).rows;
+    if (candidateRows.length === 1) {
+      versionRow = candidateRows[0];
+    }
+  }
+  if (!versionRow) {
+    return false;
+  }
+
+  const resolvedVersionId = versionRow.version_id;
+
+  const remainingVersions = (
+    await db.query<{ id: string }>(
+      `
+        SELECT id
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+          AND id <> $3
+        ORDER BY version_number DESC, created_at DESC
+      `,
+      [input.organizationId, versionRow.asset_id, resolvedVersionId],
+    )
+  ).rows;
+  const nextVersionId = remainingVersions[0]?.id ?? null;
+
+  if (input.kind === "video") {
+    await db.query(
+      `
+        UPDATE shots
+        SET current_video_asset_version_id =
+              CASE
+                WHEN current_video_asset_version_id = $4 THEN $5
+                ELSE current_video_asset_version_id
+              END,
+            video_status =
+              CASE
+                WHEN current_video_asset_version_id = $4 AND $5 IS NULL THEN 'not_ready'
+                ELSE video_status
+              END,
+            updated_at = $6
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+      `,
+      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+    );
+  } else {
+    await db.query(
+      `
+        UPDATE shots
+        SET current_image_asset_version_id =
+              CASE
+                WHEN current_image_asset_version_id = $4 THEN $5
+                ELSE current_image_asset_version_id
+              END,
+            image_status =
+              CASE
+                WHEN current_image_asset_version_id = $4 AND $5 IS NULL THEN 'ready'
+                ELSE image_status
+              END,
+            updated_at = $6
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+      `,
+      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+    );
+  }
+
+  await db.query(
+    `
+      DELETE FROM asset_versions
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, resolvedVersionId],
+  );
+
+  if (!remainingVersions.length) {
+    await db.query(
+      `
+        DELETE FROM assets
+        WHERE organization_id = $1
+          AND id = $2
+      `,
+      [input.organizationId, versionRow.asset_id],
+    );
+  }
+
+  return true;
+}
+
+async function deleteProjectAssetRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    assetId: string;
+  },
+) {
+  const existing = await findProjectAssetById(db, { assetId: input.assetId });
+  if (!existing || existing.organizationId !== input.organizationId) {
+    return false;
+  }
+  await db.query(
+    `
+      DELETE FROM shot_reference_assets
+      WHERE organization_id = $1
+        AND asset_id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  await db.query(
+    `
+      DELETE FROM asset_versions
+      WHERE organization_id = $1
+        AND asset_id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  await db.query(
+    `
+      DELETE FROM assets
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  return true;
+}
+
+async function buildProjectStats(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    detail: Awaited<ReturnType<typeof buildProjectDetail>>;
+    now: Date;
+  },
+) {
+  const membersResult = await db.query<{ count: number | string }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM memberships m
+      JOIN projects p
+        ON p.organization_id = m.organization_id
+       AND p.workspace_id = m.workspace_id
+      WHERE p.organization_id = $1
+        AND p.id = $2
+    `,
+    [input.organizationId, input.projectId],
+  );
+
+  const stats = {
+    memberCount: Number(membersResult.rows[0]?.count ?? 0),
+    episodeCount: input.detail.episodes.length,
+    shotCount: input.detail.shots.length,
+    assetCount:
+      input.detail.assetsByType.character.length +
+      input.detail.assetsByType.scene.length +
+      input.detail.assetsByType.prop.length +
+      input.detail.assetsByType.other.image.length +
+      input.detail.assetsByType.other.video.length,
+    exportCount: input.detail.exportHistory.length,
+    generatedImageCount: input.detail.shots.filter((shot) => shot.imageStatus === "ready").length,
+    generatedVideoCount: input.detail.shots.filter((shot) => shot.videoStatus === "ready").length,
+    lastActivityAt:
+      input.detail.project?.updatedAt ??
+      input.detail.exportHistory[0]?.createdAt ??
+      input.now,
+  };
+
+  return stats;
 }
 
 async function deleteProjectRecord(
@@ -2115,6 +2922,14 @@ async function buildProjectDetail(
     organizationId: input.organizationId,
     projectId: input.projectId,
   });
+  const assetVersions = await listAssetVersionsForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
+  const references = await listShotReferencesForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
   const shots = await listShotsForProject(db, {
     organizationId: input.organizationId,
     projectId: input.projectId,
@@ -2129,6 +2944,8 @@ async function buildProjectDetail(
   });
 
   const assetsByType = groupAssetsByUiType(assets);
+  const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
+  const referencesByShotId = groupReferencesByShotId(references);
   const projectEpisodes = episodes.length
     ? episodes
     : shots.length
@@ -2171,12 +2988,18 @@ async function buildProjectDetail(
       id: shot.id,
       episodeId: shot.episodeId,
       title: shot.title,
+      description: shot.description,
       sortOrder: shot.sortOrder,
       contentRevision: shot.contentRevision,
       imageStatus: shot.imageStatus,
       videoStatus: shot.videoStatus,
       currentImageAssetVersionId: shot.currentImageAssetVersionId,
       currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
+      previewImageUrl: findVersionPreviewUrl(assetVersions, shot.currentImageAssetVersionId),
+      previewVideoUrl: findVersionPreviewUrl(assetVersions, shot.currentVideoAssetVersionId),
+      imageVersions: versionsByShotId.get(shot.id)?.image ?? [],
+      videoVersions: versionsByShotId.get(shot.id)?.video ?? [],
+      references: referencesByShotId.get(shot.id) ?? [],
     })),
     exportHistory,
   };
@@ -2249,6 +3072,62 @@ async function listAssetsForProject(
 
 type ListedAsset = Awaited<ReturnType<typeof listAssetsForProject>>[number];
 
+async function listAssetVersionsForProject(
+  db: SqlDatabase,
+  input: { organizationId: string; projectId: string },
+) {
+  const result = await db.query<{
+    asset_id: string;
+    asset_type: string;
+    asset_key: string;
+    version_id: string;
+    version_number: number | string;
+    storage_object_key: string;
+    metadata_json: Record<string, unknown> | null;
+    source_task_id: string | null;
+    source_attempt_id: string | null;
+    created_at: Date | string;
+  }>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_type,
+        a.asset_key,
+        v.id AS version_id,
+        v.version_number,
+        v.storage_object_key,
+        v.metadata_json,
+        v.source_task_id,
+        v.source_attempt_id,
+        v.created_at
+      FROM assets a
+      JOIN asset_versions v
+        ON v.organization_id = a.organization_id
+       AND v.asset_id = a.id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+      ORDER BY a.asset_key ASC, v.version_number DESC
+    `,
+    [input.organizationId, input.projectId],
+  );
+
+  return result.rows.map((row) => ({
+    assetId: row.asset_id,
+    assetType: row.asset_type,
+    assetKey: row.asset_key,
+    id: row.version_id,
+    versionNumber: Number(row.version_number),
+    storageObjectKey: row.storage_object_key,
+    metadata: row.metadata_json ?? {},
+    sourceTaskId: row.source_task_id,
+    sourceAttemptId: row.source_attempt_id,
+    previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json ?? {}),
+    createdAt: new Date(row.created_at),
+  }));
+}
+
+type ListedAssetVersion = Awaited<ReturnType<typeof listAssetVersionsForProject>>[number];
+
 function createEmptyAssetsByType() {
   return {
     character: [] as ListedAsset[],
@@ -2302,6 +3181,48 @@ function summarizeAssets(assets: ListedAsset[]) {
     count: assets.length,
     previews: assets.map((asset) => asset.previewUrl).filter(Boolean).slice(0, 3),
   };
+}
+
+function groupShotAssetVersionsByShotId(versions: ListedAssetVersion[]) {
+  const grouped = new Map<
+    string,
+    { image: ListedAssetVersion[]; video: ListedAssetVersion[] }
+  >();
+  for (const version of versions) {
+    if (version.assetType !== "shot_image" && version.assetType !== "shot_video") {
+      continue;
+    }
+    const entry = grouped.get(version.assetKey) ?? { image: [], video: [] };
+    if (version.assetType === "shot_video") {
+      entry.video.push(version);
+    } else {
+      entry.image.push(version);
+    }
+    grouped.set(version.assetKey, entry);
+  }
+  return grouped;
+}
+
+function groupReferencesByShotId(
+  references: Awaited<ReturnType<typeof listShotReferencesForProject>>,
+) {
+  const grouped = new Map<string, typeof references>();
+  for (const reference of references) {
+    const items = grouped.get(reference.shotId) ?? [];
+    items.push(reference);
+    grouped.set(reference.shotId, items);
+  }
+  return grouped;
+}
+
+function findVersionPreviewUrl(
+  versions: ListedAssetVersion[],
+  assetVersionId: string | null,
+) {
+  if (!assetVersionId) {
+    return null;
+  }
+  return versions.find((version) => version.id === assetVersionId)?.previewUrl ?? null;
 }
 
 function findEpisodePreviewUrl(shots: ShotRecord[], assets: ListedAsset[]) {
@@ -2426,6 +3347,113 @@ async function updateProjectPhase(
   );
 }
 
+async function updateShotMediaPointer(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    shotId: string;
+    kind: "image" | "video";
+    assetVersionId: string;
+    now: Date;
+  },
+): Promise<ShotRecord | null> {
+  const row = (
+    await db.query<{
+      id: string;
+      organization_id: string;
+      project_id: string;
+      episode_id: string | null;
+      title: string;
+      description: string;
+      sort_order: number | string;
+      content_revision: number;
+      content_status: ShotRecord["contentStatus"];
+      image_status: ShotRecord["imageStatus"];
+      video_status: ShotRecord["videoStatus"];
+      current_image_asset_version_id: string | null;
+      active_image_task_id: string | null;
+      active_image_revision: number | null;
+      current_video_asset_version_id: string | null;
+      active_video_task_id: string | null;
+      active_video_image_asset_version_id: string | null;
+      created_by_user_id: string | null;
+      created_at: Date | string;
+      updated_at: Date | string;
+    }>(
+      input.kind === "image"
+        ? `
+          UPDATE shots
+          SET current_image_asset_version_id = $4,
+              image_status = 'completed',
+              video_status = 'ready',
+              current_video_asset_version_id = NULL,
+              active_image_task_id = NULL,
+              active_image_revision = NULL,
+              active_video_task_id = NULL,
+              active_video_image_asset_version_id = NULL,
+              updated_at = $5
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+          RETURNING *
+        `
+        : `
+          UPDATE shots
+          SET current_video_asset_version_id = $4,
+              video_status = 'completed',
+              active_video_task_id = NULL,
+              active_video_image_asset_version_id = NULL,
+              updated_at = $5
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+          RETURNING *
+        `,
+      [
+        input.organizationId,
+        input.projectId,
+        input.shotId,
+        input.assetVersionId,
+        input.now,
+      ],
+    )
+  ).rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    episodeId: row.episode_id,
+    title: row.title,
+    description: row.description ?? "",
+    sortOrder: Number(row.sort_order),
+    contentRevision: row.content_revision,
+    contentStatus: row.content_status,
+    imageStatus: row.image_status,
+    videoStatus: row.video_status,
+    currentImageAssetVersionId: row.current_image_asset_version_id,
+    currentVideoAssetVersionId: row.current_video_asset_version_id,
+    activeImageTaskId: row.active_image_task_id,
+    activeImageRevision: row.active_image_revision,
+    activeVideoTaskId: row.active_video_task_id,
+    activeVideoImageAssetVersionId: row.active_video_image_asset_version_id,
+    completedImageAssetVersionIds: row.current_image_asset_version_id
+      ? [row.current_image_asset_version_id]
+      : [],
+    completedVideoAssetVersionIds: row.current_video_asset_version_id
+      ? [row.current_video_asset_version_id]
+      : [],
+    createdByUserId: row.created_by_user_id ?? "",
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
 function calibrationDecisionEventType(decisionType: string): string {
   if (decisionType === "skipped") {
     return "calibration.skipped";
@@ -2507,6 +3535,7 @@ async function hydrateStateFromSql(
           id: shot.id,
           episodeId: shot.episodeId,
           title: shot.title,
+          description: shot.description,
           contentRevision: shot.contentRevision,
           imageStatus: shot.imageStatus,
           videoStatus: shot.videoStatus,

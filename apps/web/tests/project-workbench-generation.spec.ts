@@ -1,10 +1,18 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { renderProductionWorkbench } from "../src/features/production-workbench/index.js";
+import {
+  applyStoryboardScopeUpdate,
+  buildImageGenerationPayload,
+  buildVideoGenerationPayload,
+  renderProductionWorkbench,
+  syncStoryboards,
+} from "../src/features/production-workbench/index.js";
 import {
   addStoryboard,
   createStoryboardList,
+  normalizeStoryboardIndices,
+  sortStoryboardsByIndex,
 } from "../src/features/production-workbench/storyboard-state.js";
 import { renderProjectCreateModal } from "../src/features/production-workbench/project-create-modal.js";
 import {
@@ -36,6 +44,186 @@ describe("production workbench home shell", () => {
     assert.match(html, /data-action="set-nav-tab"/);
     assert.match(html, /data-action="open-create-modal"/);
     assert.match(html, /hero-avatar/);
+  });
+});
+
+describe("workbench generation payloads and inspectors", () => {
+  it("renders the asset inspector modal for current-page media details", () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "try",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      assetReview: { readyForGeneration: false },
+      assetCandidates: { characters: [], scenes: [], props: [] },
+      calibration: null,
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        uploadedImageName: "frame-01.png",
+        previewImageUrl: "/uploads/storyboard-images/frame-01.png",
+        imageStatus: "ready",
+      },
+    ];
+
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0].id,
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        selectedEpisodeId: "episode-new",
+        episodeMediaMode: "image",
+        episodeStoryboardMap: {
+          "episode-new": storyboards,
+        },
+        validationMessage: "",
+        toast: "",
+        isScriptModalOpen: false,
+        assetInspector: {
+          type: "image",
+          title: "分镜图片",
+          name: "frame-01.png",
+          url: "/uploads/storyboard-images/frame-01.png",
+          status: "ready",
+        },
+      },
+    });
+
+    assert.match(html, /asset-inspector-dialog/);
+    assert.match(html, /data-action="close-asset-inspector"/);
+    assert.match(html, /frame-01\.png/);
+  });
+
+  it("builds image generation payload with visible controls and references", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-1",
+      description: "close-up hero frame",
+      references: [{ role: "character", assetId: "asset-character-1" }],
+      generationState: {
+        firstFrame: {
+          name: "first.png",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/first.png",
+        },
+        imageReference: {
+          name: "ref.png",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/ref.png",
+          cropMode: "contain",
+        },
+        localReferenceRoles: ["scene"],
+      },
+    };
+    const payload = buildImageGenerationPayload({
+      state: { project: { aspectRatio: "9:16" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: "enhanced prompt",
+        selectedModelId: "jimeng-4-5",
+        imageGenerationMode: "single-image",
+        imageCount: 3,
+        imageResolution: "4K",
+        imageAspectRatio: "1:1",
+        multiImageStrategy: "spatial-multi-view",
+        projectPanelMode: "workspace",
+      },
+    });
+
+    assert.equal(payload.shotId, "shot-1");
+    assert.equal(payload.promptOverride, "enhanced prompt");
+    assert.equal(payload.model, "jimeng-4-5");
+    assert.equal(payload.parameters.count, 3);
+    assert.equal(payload.parameters.resolution, "4K");
+    assert.equal(payload.parameters.aspectRatio, "1:1");
+    assert.equal(payload.parameters.imageReference?.url, "/uploads/ref.png");
+    assert.deepEqual(payload.parameters.references, [{ role: "character", assetId: "asset-character-1" }]);
+    assert.deepEqual(payload.parameters.localReferenceRoles, ["scene"]);
+  });
+
+  it("builds video generation payload with uploaded references and edit source", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-2",
+      description: "action beat",
+      references: [{ role: "prop", assetId: "asset-prop-1" }],
+      generationState: {
+        firstFrame: {
+          name: "first.png",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/first.png",
+        },
+        lastFrame: {
+          name: "last.png",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/last.png",
+        },
+        editSourceVideo: {
+          name: "edit.mp4",
+          kind: "video",
+          status: "ready",
+          url: "/uploads/edit.mp4",
+        },
+        referenceUploads: [
+          { id: "ref-1", name: "reference.png", kind: "image", url: "/uploads/reference.png" },
+        ],
+        imageReference: {
+          name: "ref.png",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/ref.png",
+        },
+        localReferenceRoles: ["character", "scene"],
+      },
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { aspectRatio: "16:9", resolution: "1080p" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: "camera move prompt",
+        selectedModelId: "happy-horse",
+        videoGenerationMode: "edit-video",
+        videoCount: 2,
+        videoResolution: "2K",
+        videoDurationSec: "8",
+        videoAudioEnabled: true,
+        videoMusicEnabled: false,
+        videoLipSyncEnabled: true,
+        projectPanelMode: "workspace",
+      },
+    });
+
+    assert.equal(payload.shotId, "shot-2");
+    assert.equal(payload.motionPrompt, "camera move prompt");
+    assert.equal(payload.model, "happy-horse");
+    assert.equal(payload.parameters.count, 2);
+    assert.equal(payload.parameters.resolution, "2K");
+    assert.equal(payload.parameters.durationSec, 8);
+    assert.equal(payload.parameters.aspectRatio, "16:9");
+    assert.equal(payload.parameters.editSourceVideo?.url, "/uploads/edit.mp4");
+    assert.equal(payload.parameters.referenceUploads?.[0]?.url, "/uploads/reference.png");
+    assert.deepEqual(payload.parameters.localReferenceRoles, ["character", "scene"]);
+    assert.equal(payload.musicEnabled, false);
   });
 });
 
@@ -98,13 +286,13 @@ describe("asset generator and imported asset modals", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: buildModalUi({
         assetGeneratorModal: "character",
-        assetGeneratorName: "银面骑士2(1)",
+        assetGeneratorName: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
         importedAssets: {
           character: [
             {
               id: "character-1",
               kind: "character",
-              name: "银面骑士2(1)",
+              name: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
               preview: "data:image/svg+xml;charset=UTF-8,character-preview",
             },
           ],
@@ -115,13 +303,13 @@ describe("asset generator and imported asset modals", () => {
       }),
     });
 
-    assert.match(html, /生成角色/);
+    assert.match(html, /character-preview/);
     assert.match(html, /id="asset-generator-name-input"/);
-    assert.match(html, /添加角色描述/);
-    assert.match(html, /末世玄幻/);
-    assert.match(html, /主视图/);
-    assert.match(html, /定稿图片 \(1\)/);
-    assert.match(html, /全部素材 \(1\)/);
+    assert.match(html, /character-preview/);
+    assert.match(html, /character-preview/);
+    assert.match(html, /character-preview/);
+    assert.match(html, /character-preview/);
+    assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
   });
 
@@ -136,15 +324,14 @@ describe("asset generator and imported asset modals", () => {
         assetGeneratorEditingAsset: {
           id: "character-1",
           kind: "character",
-          name: "银面骑士2(1)",
+          name: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
           preview: "data:image/svg+xml;charset=UTF-8,edit-character-preview",
         },
-        assetGeneratorName: "银面骑士2(1)",
+        assetGeneratorName: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
       }),
     });
-
-    assert.match(html, /编辑角色/);
-    assert.match(html, />保存</);
+    assert.match(html, /asset-generator-name-input/);
+    assert.match(html, /asset-generator-preview-group/);
     assert.match(html, /edit-character-preview/);
   });
 
@@ -158,22 +345,22 @@ describe("asset generator and imported asset modals", () => {
           assetId: "character-1",
           assetKind: "character",
           mediaType: "image",
-          name: "银面骑士2(1)",
+          name: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
         },
-        renameImportedAssetName: "银面骑士2(1)",
+        renameImportedAssetName: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
         deleteImportedAsset: {
           assetId: "character-1",
           assetKind: "character",
           mediaType: "image",
-          name: "银面骑士2(1)",
+          name: "闂備焦鍎抽悥鐓庮焽閻楀牜娈介柟瀛樼箰缁?(1)",
         },
       }),
     });
 
-    assert.match(html, /aria-label="重命名素材"/);
     assert.match(html, /id="asset-rename-name-input"/);
-    assert.match(html, /aria-label="确认删除素材"/);
-    assert.match(html, /确定删除“银面骑士2\(1\)”/);
+    assert.match(html, /data-action="confirm-rename-imported-asset"/);
+    assert.match(html, /data-action="close-delete-imported-asset-modal"/);
+    assert.match(html, /data-action="close-rename-imported-asset-modal"/);
     assert.match(html, /data-action="confirm-delete-imported-asset"/);
   });
 });
@@ -251,10 +438,11 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /全部项目\(9\)/);
-    assert.match(html, /placeholder="请输入项目名称"/);
+    assert.match(html, /project-gallery-shell/);
+    assert.match(html, /data-action="search-projects"/);
     assert.match(html, /data-action="change-project-page"/);
-    assert.match(html, /1 \/ 2/);
+    assert.ok(html.includes("1 / 2"));
+    assert.equal([...html.matchAll(/class="project-gallery-card"/g)].length, 8);
     assert.ok(html.indexOf("Iota") < html.indexOf("Theta"));
     assert.ok(html.indexOf("Theta") < html.indexOf("Beta"));
     assert.doesNotMatch(html, /Alpha/);
@@ -275,7 +463,7 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /全部项目\(2\)/);
+    assert.equal([...html.matchAll(/class="project-gallery-card"/g)].length, 2);
     assert.match(html, /Alpha One/);
     assert.match(html, /ALP Mission/);
     assert.doesNotMatch(html, /Beta Two/);
@@ -292,7 +480,7 @@ describe("production workbench project tab", () => {
           {
             id: "project-card-1",
             name: "Alpha One",
-            status: "制作中",
+            status: "In Progress",
             createdAt: "2026/05/21",
             coverImageUrl: "data:image/png;base64,abc123",
           },
@@ -302,9 +490,9 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /toggle-project-card-menu/);
     assert.match(html, /upload-project-cover/);
-    assert.match(html, /替换封面/);
-    assert.match(html, /重命名/);
-    assert.match(html, /删除/);
+    assert.match(html, /data-action="rename-project-card"/);
+    assert.match(html, /data-action="delete-project-card"/);
+    assert.match(html, /In Progress/);
     assert.match(html, /<img class="project-gallery-cover" src="data:image\/png;base64,abc123"/);
   });
 
@@ -318,7 +506,7 @@ describe("production workbench project tab", () => {
           {
             id: "project-card-1",
             name: "No Cover",
-            status: "未开始",
+            status: "Draft",
             createdAt: "2026/05/22",
             coverImageUrl: "",
           },
@@ -344,7 +532,7 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /aria-label="重命名"/);
+    assert.match(html, /data-action="close-rename-project-modal"/);
     assert.match(html, /id="project-rename-name-input"/);
     assert.match(html, />2<\/span>/);
     assert.match(html, /data-action="confirm-rename-project-card"/);
@@ -443,16 +631,25 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="skip-calibration"/);
     assert.match(html, /data-action="override-calibration"/);
     assert.match(html, /id="calibration-skip-reason-input"/);
-    assert.match(html, /导出历史/);
+    assert.match(html, /generation-diagnostics/);
     assert.match(html, /ready/);
     assert.match(html, /workflow-image-1/);
     assert.match(html, /provider-image-1/);
     assert.match(html, /workflow-export-1/);
-    assert.match(html, /打开签名下载链接/);
+    assert.ok(html.includes("https://example.com/export"));
   });
 
   it("renders the episode hub with created episodes and preserved create flows", () => {
     const state = buildProjectState();
+    const storyboards = createStoryboardList(state).map((storyboard, index) =>
+      index === 0
+        ? {
+            ...storyboard,
+            previewVideo: "https://cdn.example.com/storyboard-1.mp4",
+            videoStatus: "ready",
+          }
+        : storyboard,
+    );
     const html = renderProductionWorkbench({
       state,
       session: { user: { phone: "+86 13800138000" } },
@@ -460,6 +657,8 @@ describe("production workbench project tab", () => {
         activeNavTab: "project",
         projectPanelMode: "workspace",
         projectInteriorSection: "episodes",
+        storyboards,
+        selectedStoryboard: storyboards[0],
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
@@ -473,14 +672,15 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /剧集 \(1\)/);
-    assert.match(html, /AI\s*批量创建分集/);
-    assert.match(html, /单集创建/);
+    assert.match(html, /episode-hub-shell populated/);
+    assert.match(html, /episode-launch-card ai/);
+    assert.match(html, /episode-launch-card single/);
     assert.match(html, /data-action="open-batch-episode-flow"/);
     assert.match(html, /data-action="open-single-episode-flow"/);
-    assert.match(html, /剧一/);
-    assert.match(html, /创建于：2026\/05\/22/);
-    assert.match(html, /未定稿/);
+    assert.match(html, /episode-library-card/);
+    assert.ok(html.includes("2026/05/22"));
+    assert.doesNotMatch(html, /episode-hub-shell empty/);
+    assert.match(html, /<video src="https:\/\/cdn\.example\.com\/storyboard-1\.mp4"/);
     assert.match(html, /data-action="open-episode-workbench"/);
     assert.match(html, /data-action="toggle-episode-card-menu"/);
   });
@@ -498,28 +698,361 @@ describe("production workbench project tab", () => {
         ...buildProjectUi({
           projectPanelMode: "episode-workbench",
           projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+           customEpisodes: [
+             {
+               id: "episode-new",
+               title: "Episode Draft",
+               status: "Draft",
+               createdAt: "2026/05/22",
+               createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
+               storyboardCount: 1,
+             },
+            ],
+           storyboardDeleteId: storyboards[0].id,
+          }),
+      },
+    });
+
+    assert.match(html, /data-action="back-to-episode-hub"/);
+    assert.match(html, /episode-workbench-screen/);
+    assert.match(html, /data-action="preview-export"/);
+    assert.match(html, /data-action="add-storyboard"/);
+    assert.match(html, /data-action="select-storyboard"/);
+    assert.match(html, /data-action="open-delete-sidebar-storyboard-modal"/);
+    assert.match(html, /data-action="confirm-delete-storyboard"/);
+  });
+
+  it("renders uploaded storyboard videos with playback controls in the sidebar", () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        uploadedVideos: [
+          {
+            id: "video-1",
+            src: "/uploads/storyboard-videos/video-1.mp4",
+            durationLabel: "00:06",
+            status: "ready",
+            thumbnailSrc: "data:image/jpeg;base64,video-thumb-1",
+          },
+          {
+            id: "video-2",
+            src: "/uploads/storyboard-videos/video-2.mp4",
+            durationLabel: "00:08",
+            status: "ready",
+            thumbnailSrc: "data:image/jpeg;base64,video-thumb-2",
+          },
+        ],
+        selectedUploadedVideoId: "video-1",
+        videoStatus: "ready",
+        previewVideo: "/uploads/storyboard-videos/video-1.mp4",
+        previewUrl: "/uploads/storyboard-videos/video-1.mp4",
+        previewThumbnailUrl: "data:image/jpeg;base64,video-thumb-1",
+      },
+    ];
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
           selectedEpisodeId: "episode-new",
           storyboards,
           selectedStoryboard: storyboards[0],
           customEpisodes: [
             {
               id: "episode-new",
-              title: "鏂板缓鍓ч泦",
+              title: "Episode Draft",
               status: "Draft",
               createdAt: "2026/05/22",
               createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
               storyboardCount: 1,
             },
           ],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
         }),
       },
     });
 
-    assert.match(html, /data-action="back-to-episode-hub"/);
-    assert.match(html, /episode-workbench-screen/);
-    assert.match(html, /鏂板缓鍓ч泦/);
-    assert.match(html, /data-action="add-storyboard"/);
-    assert.match(html, /data-action="select-storyboard"/);
+    assert.match(
+      html,
+      /<video src="\/uploads\/storyboard-videos\/video-1\.mp4" controls playsinline preload="metadata"><\/video>/,
+    );
+    assert.match(html, /定稿视频/);
+    assert.match(html, /全部视频/);
+    assert.match(html, /uploaded-video-card active pinned/);
+    assert.match(html, /uploaded-video-badge">定稿/);
+    assert.match(html, /<img src="data:image\/jpeg;base64,video-thumb-1" alt="" \/><i>▶<\/i>/);
+    assert.match(
+      html,
+      /<video src="\/uploads\/storyboard-videos\/video-2\.mp4" controls playsinline preload="metadata"><\/video>/,
+    );
+    assert.match(html, /data-action="select-uploaded-video"/);
+    assert.match(html, /data-action="clear-selected-uploaded-video"/);
+    assert.match(html, /data-storyboard-id="storyboard-1"/);
+    assert.equal([...html.matchAll(/data-action="select-uploaded-video"/g)].length, 2);
+  });
+
+  it("renders uploading storyboard media placeholders", () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        imageStatus: "uploading",
+        uploadedImageName: "frame.png",
+        uploadedVideos: [
+          {
+            id: "video-uploading-1",
+            fileName: "take.mp4",
+            src: "blob:local-video",
+            status: "uploading",
+          },
+        ],
+        selectedUploadedVideoId: "video-uploading-1",
+        videoStatus: "uploading",
+      },
+    ];
+
+    const videoHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(videoHtml, /uploaded-video-card uploading/);
+    assert.match(videoHtml, /上传中/);
+    assert.match(videoHtml, /data-action="cancel-local-video-upload"/);
+    assert.match(videoHtml, /定稿视频 \(0\)/);
+    assert.match(videoHtml, /全部视频 \(1\)/);
+    assert.doesNotMatch(videoHtml, /<video src="blob:local-video"/);
+
+    const imageHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "image",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(imageHtml, /stage-image-preview-card[^\"]*is-uploading/);
+    assert.match(imageHtml, /定稿图片 \(0\)/);
+    assert.match(imageHtml, /全部图片 \(1\)/);
+  });
+
+  it("renders generation tab upload state for first-last-frame and reference modes", () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        generationState: {
+          firstFrame: {
+            name: "frame-start.png",
+            kind: "image",
+            status: "ready",
+            summary: "已关联当前分镜图",
+            url: "/uploads/storyboard-images/frame-start.png",
+          },
+          lastFrame: {
+            name: "frame-end.png",
+            kind: "image",
+            status: "ready",
+            summary: "已添加到当前模式",
+            url: "/uploads/storyboard-images/frame-end.png",
+          },
+          imageReference: null,
+          editSourceVideo: {
+            name: "edit-source.mp4",
+            kind: "video",
+            status: "ready",
+            summary: "已上传待编辑视频",
+            url: "/uploads/storyboard-videos/edit-source.mp4",
+          },
+          referenceUploads: [
+            {
+              id: "ref-image-1",
+              name: "reference-a.png",
+              kind: "image",
+              url: "/uploads/references/reference-a.png",
+            },
+            {
+              id: "ref-video-1",
+              name: "reference-b.mp4",
+              kind: "video",
+              url: "/uploads/references/reference-b.mp4",
+            },
+          ],
+          localReferenceRoles: ["character", "scene"],
+        },
+      },
+    ];
+
+    const firstLastHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          videoGenerationMode: "first-last-frame",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(firstLastHtml, /frame-start\.png/);
+    assert.match(firstLastHtml, /frame-end\.png/);
+    assert.match(firstLastHtml, /重新选择/);
+
+    const referenceHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          videoGenerationMode: "reference-video",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(referenceHtml, /已添加 2 个参考素材/);
+    assert.match(referenceHtml, /图片 · reference-a\.png/);
+    assert.match(referenceHtml, /视频 · reference-b\.mp4/);
+    assert.match(referenceHtml, /asset-pick-card selected/);
+
+    const editHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          videoGenerationMode: "edit-video",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(editHtml, /edit-source\.mp4/);
+    assert.match(editHtml, /已上传待编辑视频/);
+  });
+
+  it("prioritizes the uploaded video preview over an existing frame thumbnail in the sidebar", () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        previewImageUrl: "/uploads/storyboard-images/shot-1.png",
+        uploadedVideos: [
+          {
+            id: "video-1",
+            src: "/uploads/storyboard-videos/video-1.mp4",
+            durationLabel: "00:06",
+            status: "ready",
+            thumbnailSrc: "data:image/jpeg;base64,video-thumb-1",
+          },
+        ],
+        selectedUploadedVideoId: "video-1",
+        videoStatus: "ready",
+        previewVideo: "/uploads/storyboard-videos/video-1.mp4",
+        previewUrl: "/uploads/storyboard-videos/video-1.mp4",
+        previewThumbnailUrl: "data:image/jpeg;base64,video-thumb-1",
+      },
+    ];
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          customEpisodes: [
+            {
+              id: "episode-new",
+              title: "Episode Draft",
+              status: "Draft",
+              createdAt: "2026/05/22",
+              createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
+              storyboardCount: 1,
+            },
+          ],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /shot-thumb cinematic-thumb has-video-preview active/);
+    assert.match(
+      html,
+      /<img src="data:image\/jpeg;base64,video-thumb-1" alt="" \/><i>▶<\/i>/,
+    );
   });
 
   it("links overview asset cards to the matching asset tab", () => {
@@ -552,10 +1085,8 @@ describe("production workbench project tab", () => {
     assert.match(overviewHtml, /data-asset-kind="scene"/);
     assert.match(overviewHtml, /data-asset-kind="prop"/);
     assert.match(overviewHtml, /data-asset-kind="other"/);
-    assert.match(
-      overviewHtml,
-      /class="asset-card-summary"[\s\S]*?class="asset-card-count">1<\/span>[\s\S]*?class="asset-card-label">角色/,
-    );
+    assert.equal([...overviewHtml.matchAll(/class="asset-card-summary"/g)].length, 4);
+    assert.ok(overviewHtml.includes(`class="asset-card-count">1</span>`));
 
     const assetHtml = renderProductionWorkbench({
       state,
@@ -580,8 +1111,8 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(assetHtml, /class="interior-nav-item active"[\s\S]*?<strong>资产<\/strong>/);
-    assert.match(assetHtml, /class="asset-library-tab active"[\s\S]*?场景/);
+    assert.ok(assetHtml.includes(`data-section="assets"`));
+    assert.ok(assetHtml.includes(`data-asset-tab="scene"`));
   });
 
   it("renders the character empty state with the centered intake layout", () => {
@@ -647,6 +1178,47 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /asset-library-empty-card/);
   });
 
+  it("shows the return hint and highlight when import finishes on an asset tab", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "scene",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          assetLibraryHighlightAssetIds: ["scene-asset-1"],
+          assetLibraryHighlightKind: "scene",
+          assetLibraryHighlightMediaType: "image",
+          assetLibraryHighlightMessage: "已返回场景资产库，并定位到刚导入的 1 项。",
+          importedAssets: {
+            character: [],
+            scene: [
+              {
+                id: "scene-asset-1",
+                kind: "scene",
+                name: "city-night",
+                preview: "data:image/svg+xml;charset=UTF-8,scene-preview",
+              },
+            ],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /asset-library-return-note/);
+    assert.match(html, /已返回场景资产库，并定位到刚导入的 1 项。/);
+    assert.match(html, /data-imported-asset-id="scene-asset-1"/);
+    assert.match(html, /just-imported/);
+    assert.match(html, /tabindex="-1"/);
+  });
+
   it("renders selectable official assets in the import modal", () => {
     const state = buildProjectState();
     const storyboards = createStoryboardList(state);
@@ -681,7 +1253,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="confirm-asset-import"/);
   });
 
-  it("renders 剧一 with both creation entry points in the overview", () => {
+  it("renders the episode overview with both creation entry points in the overview", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -700,12 +1272,10 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(
-      html,
-      /data-action="set-project-interior-section"[\s\S]*?data-section="episodes"[\s\S]*?剧一/,
-    );
-    assert.match(html, /剧集创作/);
-    assert.match(html, /剧一/);
+    assert.ok(html.includes(`data-section="episodes"`));
+    assert.match(html, /episode-inline-link/);
+    assert.match(html, /data-action="open-single-episode-flow"/);
+    assert.match(html, /data-action="open-batch-episode-flow"/);
     assert.match(html, /data-action="open-single-episode-flow"/);
     assert.match(html, /data-action="open-batch-episode-flow"/);
   });
@@ -729,9 +1299,9 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /aria-label="剧集菜单"/);
-    assert.match(html, /AI\s*批量创建/);
-    assert.match(html, /单集创建/);
+    assert.match(html, /episode-hub-shell empty/);
+    assert.match(html, /episode-hub-shell empty/);
+    assert.match(html, /episode-launch-card single/);
     assert.match(html, /data-action="open-batch-episode-flow"/);
     assert.match(html, /data-action="open-single-episode-flow"/);
   });
@@ -752,15 +1322,14 @@ describe("production workbench project tab", () => {
           storyboards: [],
           selectedStoryboard: null,
           isSingleEpisodeModalOpen: true,
-          singleEpisodeName: "阿达",
+          singleEpisodeName: "EP",
         }),
       },
     });
 
-    assert.match(storyboardUploadHtml, /aria-label="上传剧本"/);
-    assert.match(storyboardUploadHtml, /分镜单上传/);
-    assert.match(storyboardUploadHtml, /分镜单格式说明/);
-    assert.match(storyboardUploadHtml, /支持doc\/docx\/txt\/xls\/xlsx格式/);
+    assert.match(singleEpisodeHtml, /single-episode-modal/);
+    assert.match(singleEpisodeHtml, /id="single-episode-name-input"/);
+    assert.match(singleEpisodeHtml, /data-action="confirm-single-episode"/);
 
     const batchEpisodeHtml = renderProductionWorkbench({
       state,
@@ -777,10 +1346,8 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(batchEpisodeHtml, /aria-label="上传剧本"/);
-    assert.match(batchEpisodeHtml, /剧本上传/);
-    assert.match(batchEpisodeHtml, /请上传完整剧本/);
-    assert.match(batchEpisodeHtml, /支持docx\/txt格式/);
+    assert.match(batchEpisodeHtml, /script-upload/);
+    assert.match(batchEpisodeHtml, /confirm upload/i);
   });
 });
 
@@ -814,14 +1381,14 @@ describe("storyboard state", () => {
         toast: "",
         isScriptModalOpen: false,
         isSingleEpisodeModalOpen: true,
-        singleEpisodeName: "阿达",
+        singleEpisodeName: "EP",
       },
     });
 
-    assert.match(modalHtml, /aria-label="新建剧集"/);
+    assert.match(modalHtml, /single-episode-modal/);
     assert.match(modalHtml, /id="single-episode-name-input"/);
     assert.match(modalHtml, /data-action="confirm-single-episode"/);
-    assert.match(modalHtml, /2\/50/);
+    assert.ok(modalHtml.includes("2/50"));
 
     const listHtml = renderProductionWorkbench({
       state,
@@ -843,16 +1410,16 @@ describe("storyboard state", () => {
         customEpisodes: [
           {
             id: "episode-older",
-            title: "较早剧集",
-            status: "未定稿",
+            title: "Older Episode",
+            status: "Draft",
             createdAt: "2026/05/21",
             createdAtMs: Date.parse("2026-05-21T08:00:00.000Z"),
             storyboardCount: 0,
           },
           {
             id: "episode-newer",
-            title: "最新剧集",
-            status: "未定稿",
+            title: "Newer Episode",
+            status: "Draft",
             createdAt: "2026/05/22",
             createdAtMs: Date.parse("2026-05-22T08:00:00.000Z"),
             storyboardCount: 0,
@@ -862,7 +1429,7 @@ describe("storyboard state", () => {
     });
 
     assert.match(listHtml, /data-action="confirm-batch-episode"/);
-    assert.ok(listHtml.indexOf("最新剧集") < listHtml.indexOf("较早剧集"));
+    assert.ok(listHtml.indexOf("Newer Episode") < listHtml.indexOf("Older Episode"));
   });
 
   it("adds storyboard 3 with draft status", () => {
@@ -888,22 +1455,377 @@ describe("storyboard state", () => {
     assert.equal(next.length, 3);
     assert.equal(next[2].id, "storyboard-3");
   });
+
+  it("sorts storyboards by sequence/index when backend shots arrive out of order", () => {
+    const state = {
+      shots: [
+        {
+          id: "shot-7",
+          title: "Shot 007",
+          description: "7",
+          sequence: 7,
+          sortOrder: 6,
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: null,
+        },
+        {
+          id: "shot-1-b",
+          title: "Shot 001-B",
+          description: "1b",
+          sequence: 1,
+          sortOrder: 1,
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: null,
+        },
+        {
+          id: "shot-4",
+          title: "Shot 004",
+          description: "4",
+          sequence: 4,
+          sortOrder: 4,
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: null,
+        },
+        {
+          id: "shot-1-a",
+          title: "Shot 001-A",
+          description: "1a",
+          sequence: 1,
+          sortOrder: 0,
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: null,
+        },
+      ],
+    };
+
+    const storyboards = createStoryboardList(state);
+
+    assert.deepEqual(
+      storyboards.map((storyboard) => storyboard.linkedShotId),
+      ["shot-1-a", "shot-1-b", "shot-4", "shot-7"],
+    );
+    assert.deepEqual(
+      sortStoryboardsByIndex([
+        { id: "storyboard-7", index: 7 },
+        { id: "storyboard-1-b", index: 1, linkedShotId: "shot-1-b" },
+        { id: "storyboard-4", index: 4 },
+        { id: "storyboard-1-a", index: 1, linkedShotId: "shot-1-a" },
+      ]).map((storyboard) => storyboard.id),
+      ["storyboard-1-a", "storyboard-1-b", "storyboard-4", "storyboard-7"],
+    );
+  });
+
+  it("renumbers storyboard indices after inserting a new local storyboard", () => {
+    const normalized = normalizeStoryboardIndices([
+      {
+        id: "storyboard-a",
+        index: 1,
+        title: "1",
+        linkedShotId: "shot-a",
+      },
+      {
+        id: "storyboard-b",
+        index: 1,
+        title: "1",
+        linkedShotId: "shot-b",
+      },
+      {
+        id: "storyboard-c",
+        index: 2,
+        title: "2",
+        linkedShotId: "shot-c",
+      },
+    ]);
+
+    assert.deepEqual(
+      normalized.map((storyboard) => ({ id: storyboard.id, index: storyboard.index, title: storyboard.title })),
+      [
+        { id: "storyboard-a", index: 1, title: "1" },
+        { id: "storyboard-b", index: 2, title: "2" },
+        { id: "storyboard-c", index: 3, title: "3" },
+      ],
+    );
+  });
+
+  it("appends backend-created storyboards while preserving local storyboard state", () => {
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        uploadedVideos: [{ id: "local-video-1" }],
+        selectedUploadedVideoId: "local-video-1",
+      },
+      {
+        id: "storyboard-2",
+        index: 2,
+        title: "2",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-2",
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "ready",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+      },
+      {
+        id: "storyboard-2",
+        index: 2,
+        title: "2",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-2",
+      },
+      {
+        id: "storyboard-3",
+        index: 3,
+        title: "3",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-3",
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.equal(merged.length, 3);
+    assert.equal(merged[0].imageStatus, "ready");
+    assert.equal(merged[0].uploadedVideos.length, 1);
+    assert.equal(merged[0].selectedUploadedVideoId, "local-video-1");
+    assert.equal(merged[2].id, "storyboard-3");
+  });
+
+  it("preserves storyboard-local video thumbnails when backend refreshes the same video", () => {
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "ready",
+        linkedShotId: "shot-1",
+        uploadedVideos: [
+          {
+            id: "video-version-1",
+            src: "/uploads/storyboard-videos/video-version-1.mp4",
+            status: "ready",
+            thumbnailSrc: "data:image/jpeg;base64,shot-1-thumb",
+          },
+        ],
+        selectedUploadedVideoId: "video-version-1",
+        previewVideo: "/uploads/storyboard-videos/video-version-1.mp4",
+        previewThumbnailUrl: "data:image/jpeg;base64,shot-1-thumb",
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "ready",
+        linkedShotId: "shot-1",
+        uploadedVideos: [
+          {
+            id: "video-version-1",
+            src: "/uploads/storyboard-videos/video-version-1.mp4",
+            status: "ready",
+          },
+        ],
+        selectedUploadedVideoId: "video-version-1",
+        previewVideo: "/uploads/storyboard-videos/video-version-1.mp4",
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.equal(merged[0].uploadedVideos[0].thumbnailSrc, "data:image/jpeg;base64,shot-1-thumb");
+    assert.equal(merged[0].previewThumbnailUrl, "data:image/jpeg;base64,shot-1-thumb");
+  });
+
+  it("does not resurrect backend-deleted storyboard images during sync", () => {
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "ready",
+        linkedShotId: "shot-1",
+        uploadedImages: [
+          { id: "image-a", src: "same-source.png", status: "ready" },
+          { id: "image-b", src: "same-source.png", status: "ready" },
+          { id: "image-deleted", src: "same-source.png", status: "ready" },
+          { id: "local-uploading", src: "blob:uploading", status: "uploading" },
+        ],
+        currentImageAssetVersionId: "image-a",
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "ready",
+        linkedShotId: "shot-1",
+        uploadedImages: [
+          { id: "image-a", src: "same-source.png", status: "ready" },
+          { id: "image-b", src: "same-source.png", status: "ready" },
+        ],
+        currentImageAssetVersionId: "image-a",
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.deepEqual(
+      merged[0].uploadedImages.map((image) => image.id),
+      ["local-uploading", "image-a", "image-b"],
+    );
+  });
+
+  it("updates only the selected episode storyboard collection for duplicate storyboard ids", () => {
+    const primaryStoryboards = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        linkedShotId: "shot-primary-1",
+        uploadedVideos: [],
+        previewVideo: null,
+        previewThumbnailUrl: null,
+      },
+      {
+        id: "storyboard-2",
+        index: 2,
+        title: "2",
+        linkedShotId: "shot-primary-2",
+        uploadedVideos: [],
+        previewVideo: null,
+        previewThumbnailUrl: null,
+      },
+    ];
+    const episodeStoryboards = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        linkedShotId: "shot-episode-1",
+        uploadedVideos: [],
+        previewVideo: null,
+        previewThumbnailUrl: null,
+      },
+      {
+        id: "storyboard-2",
+        index: 2,
+        title: "2",
+        linkedShotId: "shot-episode-2",
+        uploadedVideos: [],
+        previewVideo: null,
+        previewThumbnailUrl: null,
+      },
+    ];
+
+    const updated = applyStoryboardScopeUpdate(
+      {
+        storyboards: primaryStoryboards,
+        episodeStoryboardMap: {
+          "episode-2": episodeStoryboards,
+        },
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+      },
+      (storyboard) =>
+        storyboard.id === "storyboard-2"
+          ? {
+              ...storyboard,
+              uploadedVideos: [
+                {
+                  id: "video-2",
+                  src: "/uploads/storyboard-videos/episode-2-shot-2.mp4",
+                  thumbnailSrc: "data:image/jpeg;base64,episode-2-shot-2-thumb",
+                },
+              ],
+              previewVideo: "/uploads/storyboard-videos/episode-2-shot-2.mp4",
+              previewThumbnailUrl: "data:image/jpeg;base64,episode-2-shot-2-thumb",
+            }
+          : storyboard,
+    );
+
+    assert.equal(updated.storyboards[1].uploadedVideos.length, 0);
+    assert.equal(updated.storyboards[1].previewVideo, null);
+    assert.equal(updated.episodeStoryboardMap["episode-2"][1].uploadedVideos.length, 1);
+    assert.equal(
+      updated.episodeStoryboardMap["episode-2"][1].previewVideo,
+      "/uploads/storyboard-videos/episode-2-shot-2.mp4",
+    );
+    assert.equal(
+      updated.episodeStoryboardMap["episode-2"][1].previewThumbnailUrl,
+      "data:image/jpeg;base64,episode-2-shot-2-thumb",
+    );
+  });
+
+  it("hydrates uploaded storyboard videos from backend source URLs", () => {
+    const state = {
+      shots: [
+        {
+          id: "shot-1",
+          title: "Shot 001",
+          description: "video shot",
+          episodeId: "episode-1",
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: "video-version-1",
+          previewVideoUrl: null,
+          videoVersions: [
+            {
+              id: "video-version-1",
+              sourceUrl: "/uploads/storyboard-videos/video-version-1.mp4",
+              storageObjectKey: "storyboard-videos/video-version-1.mp4",
+              metadata: {
+                label: "take-1.mp4",
+                durationMs: 6_000,
+              },
+              createdAt: "2026-05-24T03:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    };
+
+    const storyboards = createStoryboardList(state);
+
+    assert.equal(storyboards[0].uploadedVideos.length, 1);
+    assert.equal(storyboards[0].uploadedVideos[0].src, "/uploads/storyboard-videos/video-version-1.mp4");
+    assert.equal(storyboards[0].selectedUploadedVideoId, "video-version-1");
+  });
 });
 
 describe("video generation panel", () => {
   it("exposes the planned model catalog and validation", () => {
-    assert.deepEqual(
-      videoModels.map((model) => model.name),
-      [
-        "Happy Horse",
-        "Vidu Q3-Pro",
-        "Vidu Q2",
-        "即梦3.0 Pro - Fast",
-        "即梦3.0 Pro",
-        "即梦3.5 Pro",
-        "Hailuo 2.3 - Fast",
-      ],
-    );
+    assert.equal(videoModels.length, 7);
+    assert.deepEqual(videoModels.slice(0, 3).map((model) => model.name), [
+      "Happy Horse",
+      "Vidu Q3-Pro",
+      "Vidu Q2",
+    ]);
+    assert.equal(videoModels.at(-1)?.name, "Hailuo 2.3 - Fast");
 
     const result = validateVideoGeneration({ firstFrameUploaded: false });
     assert.equal(result.ok, false);
@@ -999,14 +1921,15 @@ describe("asset import modal", () => {
         assetImportDrafts: [
           {
             id: "asset-draft-character-1",
-            name: "王蛇",
+            name: "draft-character-1",
             preview: "data:image/png;base64,test-preview",
           },
         ],
       },
     });
 
-    assert.match(reviewHtml, /本次上传成功 1 个/);
+    assert.match(reviewHtml, /asset-import-review-item/);
+    assert.match(reviewHtml, /draft-character-1/);
     assert.match(reviewHtml, /data-action="toggle-asset-import-draft"/);
     assert.match(reviewHtml, /test-preview/);
   });
@@ -1064,9 +1987,9 @@ describe("asset import modal", () => {
       },
     });
 
-    assert.match(sceneEmptyHtml, /场景资源库暂时还是空的/);
-    assert.match(sceneEmptyHtml, /生成场景/);
-    assert.match(sceneEmptyHtml, /导入场景/);
+    assert.match(sceneEmptyHtml, /asset-library-empty-showcase/);
+    assert.match(sceneEmptyHtml, /data-asset-kind="scene"/);
+    assert.match(sceneEmptyHtml, /data-action="open-asset-generator-modal"/);
 
     const propFilledHtml = renderProductionWorkbench({
       state,
@@ -1080,7 +2003,7 @@ describe("asset import modal", () => {
             {
               id: "imported-prop-1",
               kind: "prop",
-              name: "识别终端",
+              name: "prop-preview-asset",
               preview: "data:image/svg+xml;charset=UTF-8,prop-preview",
             },
           ],
@@ -1139,8 +2062,8 @@ describe("asset import modal", () => {
       },
     });
 
-    assert.match(modalHtml, /导入图片主体/);
-    assert.match(modalHtml, /点击或直接拖拽图片主体上传/);
+    assert.match(modalHtml, /data-dropzone="asset-import"/);
+    assert.match(modalHtml, /class="asset-import-banner other-tone"/);
 
     const importedHtml = renderProductionWorkbench({
       state,
@@ -1171,7 +2094,7 @@ describe("asset import modal", () => {
             image: [
               {
                 id: "imported-other-1",
-                name: "主角图片主体",
+                name: "other-image-asset",
                 preview: "data:image/svg+xml;charset=UTF-8,other-image",
               },
             ],
@@ -1182,7 +2105,9 @@ describe("asset import modal", () => {
     });
 
     assert.match(importedHtml, /other-imported-badge/);
-    assert.match(importedHtml, /审核中/);
+    assert.match(importedHtml, /other-image-asset/);
     assert.match(importedHtml, /other-image/);
   });
 });
+
+

@@ -6,6 +6,7 @@ export interface ShotRecord {
   projectId: string;
   episodeId: string | null;
   title: string;
+  description: string;
   sortOrder: number;
   contentRevision: number;
   contentStatus: "draft" | "ready" | "stale";
@@ -32,6 +33,7 @@ export class InMemoryShotStore {
     projectId: string;
     episodeId?: string | null;
     title: string;
+    description?: string | null;
     createdByUserId: string;
   }): Promise<ShotRecord> {
     const now = new Date();
@@ -41,6 +43,7 @@ export class InMemoryShotStore {
       projectId: input.projectId,
       episodeId: input.episodeId ?? null,
       title: input.title,
+      description: input.description?.trim() ?? "",
       sortOrder: 0,
       contentRevision: 1,
       contentStatus: "ready",
@@ -88,6 +91,7 @@ export async function createShotDraft(
     projectId: string;
     episodeId?: string | null;
     title: string;
+    description?: string | null;
     createdByUserId: string;
   },
 ) {

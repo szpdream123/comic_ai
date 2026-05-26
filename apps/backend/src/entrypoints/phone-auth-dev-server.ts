@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, resolve } from "node:path";
 
 import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
 import { createAdminOpsService } from "../modules/admin-ops/admin-ops.service.ts";
@@ -20,10 +20,14 @@ import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
   createCreatorApplication,
 } from "../modules/project/creator-application.service.ts";
+import { resolveActorContext } from "../modules/organization/actor-context.service.ts";
 import { queryOne } from "../modules/shared/db/sql.ts";
-import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
+import { createDevDb } from "../modules/shared/db/dev-db.ts";
+import { createLocalUploadStore } from "../modules/shared/uploads/upload-store.ts";
+import { createScopedStorageObject } from "../modules/storage/storage.service.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
+const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
@@ -32,6 +36,17 @@ const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
 };
 
 interface AuthHttpResponse<T> {
@@ -74,6 +89,20 @@ async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<un
   return body ? JSON.parse(body) : {};
 }
 
+async function readMultipartFormData(
+  request: Parameters<typeof createServer>[0],
+  origin: string,
+) {
+  const url = new URL(request.url ?? "/", origin);
+  const webRequest = new Request(url, {
+    method: request.method,
+    headers: request.headers as HeadersInit,
+    body: request as unknown as BodyInit,
+    duplex: "half",
+  });
+  return webRequest.formData();
+}
+
 function sessionCookie(token: string): string {
   return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax`;
 }
@@ -109,6 +138,32 @@ function writeJson(response: ServerResponse, payload: AuthHttpResponse<unknown>)
   response.end(JSON.stringify(payload.body));
 }
 
+function applyDevCorsHeaders(
+  request: Parameters<typeof createServer>[0],
+  response: ServerResponse,
+) {
+  const origin = request.headers.origin;
+  if (typeof origin !== "string") {
+    return;
+  }
+
+  const isAllowedOrigin =
+    origin === "null" ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+  if (!isAllowedOrigin) {
+    return;
+  }
+
+  response.setHeader("access-control-allow-origin", origin);
+  response.setHeader("access-control-allow-credentials", "true");
+  response.setHeader("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  response.setHeader(
+    "access-control-allow-headers",
+    request.headers["access-control-request-headers"] ?? "content-type,idempotency-key",
+  );
+  response.setHeader("vary", "Origin");
+}
+
 async function serveStatic(pathname: string, response: ServerResponse) {
   if (pathname === "/favicon.ico") {
     response.statusCode = 204;
@@ -126,11 +181,65 @@ async function serveStatic(pathname: string, response: ServerResponse) {
     "content-type",
     contentTypes[extname(filePath)] ?? "text/plain; charset=utf-8",
   );
+  response.setHeader("cache-control", "no-store");
   response.end(file);
 }
 
+async function serveUploadedFile(
+  request: Parameters<typeof createServer>[0],
+  pathname: string,
+  response: ServerResponse,
+) {
+  const relativePath = pathname.replace(/^\/uploads\/+/, "");
+  const absolutePath = resolve(uploadRoot, relativePath);
+  if (!absolutePath.startsWith(uploadRoot)) {
+    response.statusCode = 403;
+    response.end("Forbidden");
+    return;
+  }
+
+  const file = await readFile(absolutePath);
+  const fileStats = await stat(absolutePath);
+  const contentType =
+    contentTypes[extname(absolutePath).toLowerCase()] ?? "application/octet-stream";
+  const rangeHeader = request.headers.range;
+
+  response.setHeader("content-type", contentType);
+  response.setHeader("accept-ranges", "bytes");
+
+  if (typeof rangeHeader === "string" && rangeHeader.startsWith("bytes=")) {
+    const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+    const start = match?.[1] ? Number(match[1]) : 0;
+    const requestedEnd = match?.[2] ? Number(match[2]) : fileStats.size - 1;
+    const end = Math.min(requestedEnd, fileStats.size - 1);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) {
+      response.statusCode = 416;
+      response.setHeader("content-range", `bytes */${fileStats.size}`);
+      response.end();
+      return;
+    }
+
+    const chunk = file.subarray(start, end + 1);
+    response.statusCode = 206;
+    response.setHeader("content-range", `bytes ${start}-${end}/${fileStats.size}`);
+    response.setHeader("content-length", String(chunk.byteLength));
+    response.end(chunk);
+    return;
+  }
+
+  response.statusCode = 200;
+  response.setHeader("content-length", String(file.byteLength));
+  response.end(file);
+}
+
+function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
+  const host = request.headers.host ?? "127.0.0.1:4310";
+  return `http://${host}`;
+}
+
 async function ensureDevWorkspaceAccess(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
   const user = await queryOne<{ phone_e164: string }>(
@@ -168,7 +277,7 @@ async function ensureDevWorkspaceAccess(
 }
 
 async function findAuthenticatedUser(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  db: Awaited<ReturnType<typeof createDevDb>>,
   cookieHeader: string | undefined,
   now: Date,
 ): Promise<{ sessionToken: string; user: AuthenticatedUser } | undefined> {
@@ -205,15 +314,23 @@ async function findAuthenticatedUser(
 }
 
 export function createPhoneAuthDevServer(): PhoneAuthDevServer {
-  const dbPromise = createMigratedTestDb();
+  const dbPromise = createDevDb();
   const debugChallengeCodes = new Map<string, string>();
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
     string,
     { projectId: string | null; scriptId: string | null }
   >();
+  const uploadStore = createLocalUploadStore({ rootDir: uploadRoot });
   const httpServer = createServer(async (request, response) => {
     try {
+      applyDevCorsHeaders(request, response);
+      if (request.method === "OPTIONS") {
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+
       const db = await dbPromise;
       const creatorApplication = createCreatorApplication({
         db,
@@ -223,6 +340,10 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
       });
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const pathname = url.pathname;
+
+      if (pathname.startsWith("/uploads/")) {
+        return await serveUploadedFile(request, pathname, response);
+      }
 
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
@@ -693,11 +814,56 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
           );
         }
 
+        if (
+          request.method === "PATCH" &&
+          pathname.startsWith("/api/creator/assets/") &&
+          !pathname.includes("/versions/")
+        ) {
+          const assetId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
+          const body = (await readJsonBody(request)) as {
+            name?: string | null;
+            description?: string | null;
+            isMain?: boolean | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.updateProjectAsset({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              assetId,
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/creator/assets/") &&
+          !pathname.includes("/versions/")
+        ) {
+          const assetId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
+          return writeJson(
+            response,
+            await creatorApplication.deleteProjectAsset({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              assetId,
+              now: new Date(),
+            }),
+          );
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/assets/import") {
           const body = (await readJsonBody(request)) as {
             kind: "character" | "scene" | "prop" | "image" | "video";
             name?: string | null;
             storageObjectKey?: string | null;
+            sourceUrl?: string | null;
             mimeType?: string | null;
             width?: number | null;
             height?: number | null;
@@ -710,6 +876,100 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/uploads") {
+          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          const category = String(formData.get("category") ?? "misc");
+          const projectId = String(formData.get("projectId") ?? "").trim() || null;
+          const file = formData.get("file");
+          if (!(file instanceof File)) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "upload_file_required" },
+            });
+          }
+
+          const upload = await uploadStore.save({
+            category,
+            fileName: file.name,
+            bytes: new Uint8Array(await file.arrayBuffer()),
+            mimeType: file.type,
+          });
+
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            ...(projectId ? { projectId } : { workspaceId: devWorkspaceId }),
+            now,
+          });
+          const storageObject = await createScopedStorageObject(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? devWorkspaceId,
+            projectId,
+            bucket: "creator-uploads",
+            objectName: upload.storageObjectKey,
+            contentType: upload.mimeType,
+            sizeBytes: upload.byteSize,
+            metadata: {
+              provider: upload.provider,
+              category,
+              localStorageObjectKey: upload.storageObjectKey,
+              publicUrl: upload.publicUrl,
+              originalFileName: upload.originalFileName,
+            },
+            createdByUserId: actor.actorId,
+            now,
+          });
+
+          return writeJson(response, {
+            status: 200,
+            body: {
+              upload: {
+                ...upload,
+                storageObjectId: storageObject.id,
+              },
+              storageObject,
+            },
+          });
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/creator/projects/") &&
+          pathname.endsWith("/members")
+        ) {
+          const projectId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          return writeJson(
+            response,
+            await creatorApplication.listProjectMembers({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              projectId,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/creator/projects/") &&
+          pathname.endsWith("/stats")
+        ) {
+          const projectId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          return writeJson(
+            response,
+            await creatorApplication.getProjectStats({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              projectId,
               now: new Date(),
             }),
           );
@@ -905,6 +1165,7 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
         if (request.method === "POST" && pathname === "/api/creator/shots") {
           const body = (await readJsonBody(request)) as {
             title?: string | null;
+            description?: string | null;
             episodeId?: string | null;
           };
           return writeJson(
@@ -924,6 +1185,9 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
           const body = (await readJsonBody(request)) as {
             shotId: string;
             title?: string | null;
+            description?: string | null;
+            currentImageAssetVersionId?: string | null;
+            currentVideoAssetVersionId?: string | null;
           };
           return writeJson(
             response,
@@ -967,6 +1231,108 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
                 sessionToken: authenticated.sessionToken,
               },
               body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/creator/shots/") &&
+          pathname.endsWith("/media/import")
+        ) {
+          const shotId = decodeURIComponent(pathname.split("/").at(-3) ?? "");
+          const body = (await readJsonBody(request)) as {
+            kind: "image" | "video";
+            name?: string | null;
+            storageObjectKey?: string | null;
+            sourceUrl?: string | null;
+            mimeType?: string | null;
+            width?: number | null;
+            height?: number | null;
+            durationMs?: number | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.importShotMedia({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: { ...body, shotId },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/creator/shots/") &&
+          pathname.includes("/media/") &&
+          !pathname.endsWith("/media/import")
+        ) {
+          const shotId = decodeURIComponent(pathname.split("/").at(-3) ?? "");
+          const assetVersionId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
+          const kindParam = url.searchParams.get("kind");
+          const kind = kindParam === "image" ? "image" : "video";
+          return writeJson(
+            response,
+            await creatorApplication.deleteShotMedia({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: { shotId, kind, assetVersionId },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/creator/shots/") &&
+          pathname.endsWith("/media")
+        ) {
+          const shotId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const body = (await readJsonBody(request)) as {
+            kind: "image" | "video";
+            assetVersionId: string;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.deleteShotMedia({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: { ...body, shotId },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/creator/shots/") &&
+          pathname.endsWith("/references")
+        ) {
+          const shotId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const body = (await readJsonBody(request)) as {
+            items?: Array<{
+              role: string;
+              assetId: string;
+              assetVersionId?: string | null;
+              sortOrder?: number | null;
+            }> | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.replaceShotReferences({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: { shotId, items: body.items ?? [] },
               now: new Date(),
             }),
           );

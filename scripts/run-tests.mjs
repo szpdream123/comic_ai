@@ -160,6 +160,10 @@ function resolveTsxRuntimeArgs(runtime) {
 function runCommand(command, testFile) {
   return new Promise((resolve) => {
     const child = spawn(command.runtime, command.args, {
+      env: {
+        ...process.env,
+        NODE_ENV: process.env.NODE_ENV ?? "test",
+      },
       stdio: "inherit",
     });
     let settled = false;

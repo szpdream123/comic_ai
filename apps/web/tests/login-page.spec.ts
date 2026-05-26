@@ -42,6 +42,7 @@ describe("login page client flow", () => {
     assert.match(js, /\/api\/auth\/dev\/challenges\//);
     assert.match(js, /debug-panel/);
     assert.match(js, /\/app\.html/);
+    assert.match(js, /window\.location\.protocol === "file:"/);
   });
 
   it("wires the creator workspace to the mock creator APIs", async () => {
