@@ -31,7 +31,10 @@ import {
   replaceAssetReviewCandidatesForProject,
   updateAssetReviewCandidateRecordLabel,
 } from "./asset-review-record.service.ts";
-import { replaceCalibrationSessionForProject } from "./calibration-record.service.ts";
+import {
+  getLatestCalibrationSessionForProject,
+  replaceCalibrationSessionForProject,
+} from "./calibration-record.service.ts";
 import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
 import {
   ensureCreatorSqlState,

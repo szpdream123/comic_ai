@@ -148,17 +148,11 @@ function mergeStoryboardUploadedImages(currentImages, nextImages, options = {}) 
 }
 
 function mergeStoryboardUploadedVideos(currentVideos, nextVideos, options = {}) {
-  const preserveUploadingOnly = Boolean(options.preserveUploadingOnly);
   if (!nextVideos.length) {
-    return preserveUploadingOnly
-      ? currentVideos.filter((video) => video.status === "uploading")
-      : currentVideos;
+    return currentVideos;
   }
 
-  const mergedVideos = (preserveUploadingOnly
-    ? currentVideos.filter((video) => video.status === "uploading")
-    : currentVideos
-  ).map((video) => ({ ...video }));
+  const mergedVideos = currentVideos.map((video) => ({ ...video }));
   const currentVideoIndexById = new Map(mergedVideos.map((video, index) => [video.id, index]));
 
   nextVideos.forEach((video) => {
@@ -2672,8 +2666,7 @@ async function handleAction(workbench, target) {
     return;
   }
 
-  await runAction(workbench, statusForAction(action), async () => {
-    if (action === "create-project") {
+  if (action === "create-project") {
       const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
       if (!name) {
         workbench.ui.createProjectNotice = "请输入项目名称。";
@@ -4847,13 +4840,13 @@ function deriveInitialProjectPanelMode(hash) {
 function navTabLabel(tab) {
   return (
     {
-      home: "Home",
-      script: "Script",
-      project: "Project",
-      library: "Library",
-      tools: "Tools",
-      team: "Team",
-    }[tab] ?? "Workspace"
+      home: "首页",
+      script: "剧本",
+      project: "项目",
+      library: "资产库",
+      tools: "工具箱",
+      team: "团队",
+    }[tab] ?? "工作台"
   );
 }
 
@@ -5373,4 +5366,3 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
   render(workbench);
 }
-

@@ -66,7 +66,7 @@ export function addStoryboard(storyboards) {
   return normalizeStoryboardIndices([
     ...normalizedStoryboards,
     {
-      id: createLocalStoryboardId(),
+      id: `storyboard-${nextIndex}`,
       index: nextIndex,
       title: `${nextIndex}`,
       status: "未定稿",
@@ -200,9 +200,10 @@ function createUniqueStoryboardId(storyboard, index, usedIds) {
   const rawId = String(storyboard?.id ?? "").trim();
   const linkedId = String(storyboard?.linkedShotId ?? "").trim();
   const baseId =
-    linkedId
+    rawId ||
+    (linkedId
       ? `storyboard-${linkedId}`
-      : rawId || `storyboard-local-${index + 1}`;
+      : `storyboard-local-${index + 1}`);
   let candidate = baseId;
   let suffix = 2;
   while (usedIds.has(candidate)) {

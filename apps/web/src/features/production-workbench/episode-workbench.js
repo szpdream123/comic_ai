@@ -177,7 +177,7 @@ function renderStoryboardList(storyboards, selectedStoryboardId) {
           const imageSource =
             !videoSource ? storyboard.previewImageUrl ?? fallbackPreviewUrl ?? "" : "";
           const previewSource = thumbnailSource || videoSource || imageSource;
-          const previewIsVideo = Boolean(videoSource && !thumbnailSource);
+          const previewIsVideo = Boolean(selectedVideoSource || storyboardVideoSource);
           const previewClass = previewSource
             ? previewIsVideo
               ? "has-video-preview"
@@ -198,7 +198,9 @@ function renderStoryboardList(storyboards, selectedStoryboardId) {
                   ${
                     previewSource
                       ? previewIsVideo
-                        ? `<video src="${escapeAttr(previewSource)}" muted playsinline preload="metadata"></video><i>▶</i>`
+                        ? thumbnailSource
+                          ? `<img src="${escapeAttr(thumbnailSource)}" alt="" /><i>▶</i>`
+                          : `<video src="${escapeAttr(previewSource)}" muted playsinline preload="metadata"></video><i>▶</i>`
                         : `<img src="${escapeAttr(previewSource)}" alt="" />`
                       : `<div class="shot-thumb-placeholder"><span aria-hidden="true"></span></div>`
                   }
@@ -236,7 +238,11 @@ function renderStoryboardList(storyboards, selectedStoryboardId) {
 
 function renderStoryboardDeleteModal({ show, storyboard }) {
   if (!show) {
-    return "";
+    return `
+      <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除分镜" hidden>
+        <button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard">确定</button>
+      </section>
+    `;
   }
 
   return `
@@ -677,7 +683,7 @@ function renderPinnedVideo(item, storyboardId) {
       <div class="uploaded-video-card-inner media">
         ${
           item.src
-            ? `<video src="${escapeAttr(item.src)}" ${item.thumbnailSrc ? `poster="${escapeAttr(item.thumbnailSrc)}"` : ""} muted playsinline preload="metadata"></video>`
+            ? `<video src="${escapeAttr(item.src)}" controls playsinline preload="metadata"></video>`
             : ""
         }
         <span class="uploaded-video-duration">${escapeHtml(item.durationLabel ?? "00:10")}</span>
@@ -723,7 +729,7 @@ function renderUploadedVideoCard(item, active, storyboardId) {
       <div class="uploaded-video-card-inner media">
         ${
           item.src
-            ? `<video src="${escapeAttr(item.src)}" ${item.thumbnailSrc ? `poster="${escapeAttr(item.thumbnailSrc)}"` : ""} muted playsinline preload="metadata"></video>`
+            ? `<video src="${escapeAttr(item.src)}" controls playsinline preload="metadata"></video>`
             : ""
         }
         <span class="uploaded-video-duration">${escapeHtml(item.durationLabel ?? "00:10")}</span>
