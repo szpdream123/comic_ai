@@ -61,10 +61,10 @@ export const projectDetailFixture = {
 };
 
 export function addStoryboard(storyboards) {
-  const normalizedStoryboards = normalizeStoryboardIndices(storyboards);
-  const nextIndex = normalizedStoryboards.length + 1;
+  const orderedStoryboards = sortStoryboardsByIndex(storyboards);
+  const nextIndex = resolveNextStoryboardIndex(orderedStoryboards);
   return normalizeStoryboardIndices([
-    ...normalizedStoryboards,
+    ...orderedStoryboards,
     {
       id: createLocalStoryboardId(),
       index: nextIndex,
@@ -180,6 +180,8 @@ export function createEmptyGenerationState() {
     referenceUploads: [],
     localReferenceRoles: [],
     referenceSelections: [],
+    quickReferenceItems: [],
+    lastSubmission: null,
   };
 }
 
@@ -200,9 +202,10 @@ function createUniqueStoryboardId(storyboard, index, usedIds) {
   const rawId = String(storyboard?.id ?? "").trim();
   const linkedId = String(storyboard?.linkedShotId ?? "").trim();
   const baseId =
-    linkedId
+    rawId ||
+    (linkedId
       ? `storyboard-${linkedId}`
-      : rawId || `storyboard-local-${index + 1}`;
+      : `storyboard-local-${index + 1}`);
   let candidate = baseId;
   let suffix = 2;
   while (usedIds.has(candidate)) {
@@ -223,6 +226,25 @@ function resolveStoryboardOrder(storyboard) {
   const candidates = [storyboard?.sortOrder, storyboard?.sequence, storyboard?.index];
   const resolved = candidates.find((value) => Number.isFinite(Number(value)) && Number(value) >= 0);
   return resolved == null ? Number.MAX_SAFE_INTEGER : Number(resolved);
+}
+
+function resolveNextStoryboardIndex(storyboards = []) {
+  const maxExistingIndex = storyboards.reduce((maxValue, storyboard) => {
+    const candidates = [
+      storyboard?.index,
+      storyboard?.sortOrder,
+      storyboard?.sequence,
+      isNumericStoryboardTitle(storyboard?.title) ? Number(storyboard.title) : null,
+    ];
+    const numericValues = candidates
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (!numericValues.length) {
+      return maxValue;
+    }
+    return Math.max(maxValue, ...numericValues);
+  }, 0);
+  return maxExistingIndex + 1;
 }
 
 function isNumericStoryboardTitle(value) {
@@ -268,9 +290,12 @@ export function getProjectDetailState(state) {
         }
       : projectDetailFixture.assets;
 
-  const storyboardCount = (detail?.shots ?? state?.shots ?? []).length;
+  const shots = detail?.shots ?? state?.shots ?? [];
+  const storyboardCount = shots.length;
+  const hasRealEpisodes = Array.isArray(detail?.episodes) && detail.episodes.length > 0;
+  const unassignedShots = shots.filter((shot) => !shot?.episodeId);
   const episodes =
-    Array.isArray(detail?.episodes) && detail.episodes.length
+    hasRealEpisodes
       ? detail.episodes.map((episode) => ({
           id: episode.id,
           title: episode.title,
@@ -279,15 +304,17 @@ export function getProjectDetailState(state) {
           storyboardCount: episode.storyboardCount ?? 0,
           previewUrl: episode.previewUrl ?? null,
         }))
-      : [
+      : storyboardCount > 0
+        ? [
           {
             id: "episode-primary",
             title: projectDetailFixture.episodes[0].title,
             status: storyboardCount > 0 ? "未定稿" : projectDetailFixture.episodes[0].status,
             createdAt: project.createdAt ?? "2026/05/22",
-            storyboardCount,
+            storyboardCount: unassignedShots.length || storyboardCount,
           },
-        ];
+          ]
+        : [];
 
   return { project, assets, episodes };
 }

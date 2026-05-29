@@ -134,6 +134,7 @@ export async function loadProjectBundleFromSql(
     workspace_id: string;
     name: string;
     cover_image_url: string | null;
+    cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
     phase: "script_input" | "asset_review" | "shot_generation" | "export";
@@ -183,6 +184,7 @@ export async function loadProjectBundleFromSql(
       workspaceId: project.workspace_id,
       name: project.name,
       coverImageUrl: project.cover_image_url,
+      coverStorageObjectId: project.cover_storage_object_id,
       aspectRatio: project.aspect_ratio,
       resolution: project.resolution,
       phase: project.phase,

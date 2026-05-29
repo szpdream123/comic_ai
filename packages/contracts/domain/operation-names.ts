@@ -4,6 +4,8 @@ export const operationNames = {
   shotsSplit: "shots.split",
   shotImageGenerate: "shot.image.generate",
   shotVideoGenerate: "shot.video.generate",
+  episodeImageGenerate: "episode.image.generate",
+  episodeVideoGenerate: "episode.video.generate",
   calibrationGenerate: "calibration.generate",
   calibrationPass: "calibration.pass",
   calibrationSkip: "calibration.skip",

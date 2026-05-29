@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 
-import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
+import { applySqlMigrations } from "./migrations.ts";
 import { createMigratedTestDb } from "./test-db.ts";
 
 export interface DevDatabase extends SqlDatabase {
@@ -48,8 +48,19 @@ export async function createDevDb(): Promise<DevDatabase> {
 }
 
 async function createLocalDevDb(): Promise<DevDatabase> {
-  const localDbPath = resolve(process.cwd(), process.env.LOCAL_DATABASE_DIR?.trim() || ".local/dev-db");
-  const db = new PGlite(localDbPath) as PGlite & DevDatabase;
+  const configuredLocalDir = process.env.LOCAL_DATABASE_DIR?.trim();
+  const callerFile = process.argv[1]?.replaceAll("\\", "/") ?? "";
+  const runningFromSpecFile = /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
+  const ephemeralLocalDir = !configuredLocalDir &&
+      (process.env.NODE_ENV === "test" || runningFromSpecFile)
+    ? `.local/dev-db/test-${randomUUID()}`
+    : null;
+  const localDbPath = resolve(
+    process.cwd(),
+    configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
+  );
+  const { PGlite } = await import("@electric-sql/pglite");
+  const db = new PGlite(localDbPath) as DevDatabase;
   await ensureFoundationSchema(db);
   console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
   return db;
@@ -67,23 +78,36 @@ async function ensureFoundationSchema(db: SqlDatabase) {
     `,
   );
 
-  if (tableCheck.rows[0]?.exists) {
+  if (!tableCheck.rows[0]?.exists) {
+    await applySqlMigrations(db);
     return;
   }
 
-  const migration = await readFile(
-    join(process.cwd(), "packages", "db", "migrations", "0001_foundation.sql"),
-    "utf8",
+  const sessionTableCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'storage_upload_sessions'
+      ) AS exists
+    `,
   );
-  await executeMigration(db, migration);
-}
-
-async function executeMigration(db: SqlDatabase, migration: string) {
-  const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
-  if (typeof exec === "function") {
-    await exec.call(db, migration);
-    return;
+  if (!sessionTableCheck.rows[0]?.exists) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
   }
 
-  await db.query(migration);
+  const hardeningTableCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'episode_generation_drafts'
+      ) AS exists
+    `,
+  );
+  if (!hardeningTableCheck.rows[0]?.exists) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+  }
 }

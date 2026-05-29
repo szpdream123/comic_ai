@@ -1,0 +1,143 @@
+{
+  "origin": "http://127.0.0.1:4310",
+  "projectUrl": "http://127.0.0.1:4310/app.html#/projects/1fbae732-29d5-44da-9677-776822bf5a98",
+  "deepLink": "http://127.0.0.1:4310/projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+  "routeAfterClick": "http://127.0.0.1:4310/app.html#projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+  "projectId": "1fbae732-29d5-44da-9677-776822bf5a98",
+  "episodeId": "227721cb-b6fb-4367-9571-161e516cbc9d",
+  "screenshots": {
+    "projectDesktop": "artifacts/episode-workbench-qa/project-episodes-desktop.png",
+    "workbenchDesktop": "artifacts/episode-workbench-qa/episode-workbench-desktop.png",
+    "workbenchMobile": "artifacts/episode-workbench-qa/episode-workbench-mobile.png"
+  },
+  "metrics": {
+    "timings": {
+      "projectLoadMs": 818,
+      "workbenchLoadMs": 457,
+      "mobileLoadMs": 618
+    },
+    "project": {
+      "title": "Comic AI Studio",
+      "url": "http://127.0.0.1:4310/app.html#/projects/1fbae732-29d5-44da-9677-776822bf5a98",
+      "bodyTextLength": 256,
+      "hasEpisodeHub": true,
+      "hasEpisodeWorkbench": false,
+      "hasStoryboardMode": false,
+      "hasUploadLimits": false,
+      "hasGenerateButton": false,
+      "hasStoryboardToggleActive": false,
+      "hasLeftRail": true,
+      "hasStage": false,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "mainRect": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "workbenchRect": null,
+      "episodeHubGridRect": {
+        "x": 201.1875,
+        "y": 214.4375,
+        "width": 792,
+        "height": 565.28125
+      },
+      "launchColumnRect": {
+        "x": 201.1875,
+        "y": 214.4375,
+        "width": 284.796875,
+        "height": 313.90625
+      },
+      "episodeListRect": {
+        "x": 201.1875,
+        "y": 214.4375,
+        "width": 792,
+        "height": 565.28125
+      },
+      "quickLaneRect": null,
+      "badGeometryCount": 0
+    },
+    "workbench": {
+      "title": "Comic AI Studio",
+      "url": "http://127.0.0.1:4310/app.html#projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+      "bodyTextLength": 684,
+      "hasEpisodeHub": false,
+      "hasEpisodeWorkbench": true,
+      "hasStoryboardMode": true,
+      "hasUploadLimits": true,
+      "hasGenerateButton": true,
+      "hasStoryboardToggleActive": true,
+      "hasLeftRail": true,
+      "hasStage": true,
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "mainRect": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "workbenchRect": {
+        "x": 100.796875,
+        "y": 0,
+        "width": 1339.203125,
+        "height": 900
+      },
+      "episodeHubGridRect": null,
+      "launchColumnRect": null,
+      "episodeListRect": null,
+      "quickLaneRect": {
+        "x": 1302.390625,
+        "y": 60.46875,
+        "width": 137.59375,
+        "height": 839.53125
+      },
+      "badGeometryCount": 0
+    },
+    "mobile": {
+      "title": "Comic AI Studio",
+      "url": "http://127.0.0.1:4310/projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+      "bodyTextLength": 665,
+      "hasEpisodeHub": false,
+      "hasEpisodeWorkbench": true,
+      "hasStoryboardMode": true,
+      "hasUploadLimits": true,
+      "hasGenerateButton": true,
+      "hasStoryboardToggleActive": true,
+      "hasLeftRail": true,
+      "hasStage": true,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "mainRect": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "workbenchRect": {
+        "x": 0,
+        "y": 264.359375,
+        "width": 390,
+        "height": 1824.28125
+      },
+      "episodeHubGridRect": null,
+      "launchColumnRect": null,
+      "episodeListRect": null,
+      "quickLaneRect": {
+        "x": 0,
+        "y": 1664.78125,
+        "width": 390,
+        "height": 423.859375
+      },
+      "badGeometryCount": 0
+    }
+  },
+  "consoleErrors": []
+}

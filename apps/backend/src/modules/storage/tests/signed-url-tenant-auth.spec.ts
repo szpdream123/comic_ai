@@ -33,7 +33,7 @@ describe("signed storage URLs", { concurrency: false }, () => {
 
       assert.match(
         object.objectKey,
-        /^organizations\/10000000-0000-4000-8000-000000000001\/workspaces\/20000000-0000-4000-8000-000000000001\/projects\/40000000-0000-4000-8000-000000000001\/[0-9a-f-]+\/shot-01\.png$/,
+        /^AIManhuaDrama\/20260509\/[0-9a-f-]+-shot-01\.png$/,
       );
 
       const signed = await createSignedReadUrl(db, {

@@ -18,6 +18,7 @@ export interface ProjectRecord {
   workspaceId: string;
   name: string;
   coverImageUrl?: string | null;
+  coverStorageObjectId?: string | null;
   aspectRatio: ProjectAspectRatio;
   resolution: ProjectResolution;
   phase: "script_input" | "asset_review" | "shot_generation" | "export";

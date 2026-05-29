@@ -5,7 +5,7 @@ const root = document.querySelector("#creator-app");
 const loginUrl =
   window.location.protocol === "file:"
     ? resolveApiUrl("/login.html")
-    : new URL("./login.html", window.location.href).toString();
+    : new URL("/login.html", window.location.origin).toString();
 const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production-workbench:"];
 
 if (!root) {
@@ -14,7 +14,12 @@ if (!root) {
 
 async function bootstrap() {
   try {
+    console.log("[creator-app] bootstrap:start");
     const session = await creatorApi.getSession();
+    console.log("[creator-app] bootstrap:session", {
+      userId: session?.user?.id ?? null,
+      phone: session?.user?.phone ?? null,
+    });
     await initProductionWorkbench({
       root,
       session,
@@ -25,8 +30,10 @@ async function bootstrap() {
         window.location.replace(loginUrl);
       },
     });
+    console.log("[creator-app] bootstrap:ready");
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
+    console.error("[creator-app] bootstrap:error", error);
     if (message === "unauthenticated") {
       clearCreatorBrowserStorage();
       window.location.href = loginUrl;

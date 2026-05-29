@@ -8,6 +8,7 @@ export interface ExportRecord {
   organizationId: string;
   workspaceId: string;
   projectId: string;
+  episodeId: string | null;
   workflowId: string;
   storageObjectId: string;
   manifestStatus: "ready" | "partial";
@@ -25,6 +26,7 @@ interface ExportRecordRow {
   organization_id: string;
   workspace_id: string;
   project_id: string;
+  episode_id: string | null;
   workflow_id: string;
   storage_object_id: string;
   manifest_status: "ready" | "partial";
@@ -43,6 +45,7 @@ export async function createExportRecord(
     organizationId: string;
     workspaceId: string;
     projectId: string;
+    episodeId?: string | null;
     workflowId: string;
     storageObjectId: string;
     manifestStatus: "ready" | "partial";
@@ -62,6 +65,7 @@ export async function createExportRecord(
         organization_id,
         workspace_id,
         project_id,
+        episode_id,
         workflow_id,
         storage_object_id,
         manifest_status,
@@ -73,7 +77,7 @@ export async function createExportRecord(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
       RETURNING *
     `,
     [
@@ -81,6 +85,7 @@ export async function createExportRecord(
       input.organizationId,
       input.workspaceId,
       input.projectId,
+      input.episodeId ?? null,
       input.workflowId,
       input.storageObjectId,
       input.manifestStatus,
@@ -148,6 +153,7 @@ function exportRecordFromRow(row: ExportRecordRow): ExportRecord {
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     projectId: row.project_id,
+    episodeId: row.episode_id,
     workflowId: row.workflow_id,
     storageObjectId: row.storage_object_id,
     manifestStatus: row.manifest_status,

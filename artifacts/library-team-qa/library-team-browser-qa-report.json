@@ -1,0 +1,40 @@
+{
+  "generatedAt": "2026-05-29T05:08:24.734Z",
+  "routes": [
+    {
+      "id": "assets-personal",
+      "length": 5330,
+      "hasLibraryShell": true,
+      "hasDialogSupport": false,
+      "hasPlaceholderGate": true
+    },
+    {
+      "id": "assets-official",
+      "length": 7088,
+      "hasLibraryShell": true,
+      "hasDialogSupport": true,
+      "hasPlaceholderGate": true
+    },
+    {
+      "id": "assets-team",
+      "length": 7088,
+      "hasLibraryShell": true,
+      "hasDialogSupport": true,
+      "hasPlaceholderGate": true
+    },
+    {
+      "id": "team",
+      "length": 5559,
+      "hasLibraryShell": true,
+      "hasDialogSupport": true,
+      "hasPlaceholderGate": true
+    },
+    {
+      "id": "team-dashboard",
+      "length": 5692,
+      "hasLibraryShell": true,
+      "hasDialogSupport": false,
+      "hasPlaceholderGate": true
+    }
+  ]
+}

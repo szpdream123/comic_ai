@@ -1,11 +1,12 @@
 import type { StorageAdapter } from "./storage.service.ts";
 import { CreatorDevStorageAdapter } from "./creator-dev.storage-adapter.ts";
 import { PublicBaseUrlStorageAdapter } from "./public-base-url.storage-adapter.ts";
+import { S3CompatibleStorageAdapter } from "./s3-compatible.storage-adapter.ts";
 
 export function createStorageAdapterFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): StorageAdapter {
-  const mode = env.STORAGE_ADAPTER_MODE ?? "dev";
+  const mode = (env.STORAGE_ADAPTER_MODE ?? "dev").trim();
 
   if (mode === "public_base_url") {
     const baseUrl = env.STORAGE_PUBLIC_BASE_URL?.trim();
@@ -14,6 +15,30 @@ export function createStorageAdapterFromEnv(
     }
 
     return new PublicBaseUrlStorageAdapter(baseUrl);
+  }
+
+  if (mode === "cos" || mode === "s3_compatible") {
+    const region = env.STORAGE_REGION?.trim();
+    const accessKeyId = (env.STORAGE_ACCESS_KEY_ID ?? env.STORAGE_COS_SECRET_ID)?.trim();
+    const secretAccessKey =
+      (env.STORAGE_SECRET_ACCESS_KEY ?? env.STORAGE_COS_SECRET_KEY)?.trim();
+    if (!region) {
+      throw new Error("storage_region_required");
+    }
+    if (!accessKeyId || !secretAccessKey) {
+      throw new Error("storage_credentials_required");
+    }
+
+    const endpoint = env.STORAGE_ENDPOINT?.trim() || (
+      mode === "cos" ? `https://cos.${region}.myqcloud.com` : ""
+    );
+    return new S3CompatibleStorageAdapter({
+      endpoint,
+      region,
+      accessKeyId,
+      secretAccessKey,
+      forcePathStyle: String(env.STORAGE_FORCE_PATH_STYLE ?? "").trim() === "true",
+    });
   }
 
   return new CreatorDevStorageAdapter();

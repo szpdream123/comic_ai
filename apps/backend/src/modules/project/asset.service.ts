@@ -23,6 +23,7 @@ export interface AssetVersionRecord {
   organizationId: string;
   assetId: string;
   versionNumber: number;
+  storageObjectId?: string | null;
   storageObjectKey: string;
   metadata: {
     mimeType: string;
@@ -30,8 +31,8 @@ export interface AssetVersionRecord {
     height: number;
     [key: string]: unknown;
   };
-  sourceTaskId: string;
-  sourceAttemptId: string;
+  sourceTaskId: string | null;
+  sourceAttemptId: string | null;
   createdByUserId: string;
   createdAt: Date;
 }
@@ -108,6 +109,7 @@ export async function createAssetVersion(
     assetType: AssetType;
     assetKey: string;
     createdByUserId: string;
+    storageObjectId?: string | null;
     storageObjectKey: string;
     metadata: {
       mimeType: string;
@@ -137,6 +139,7 @@ export async function createAssetVersion(
     organizationId: input.organizationId,
     assetId: asset.id,
     versionNumber: existingVersions.length + 1,
+    storageObjectId: input.storageObjectId ?? null,
     storageObjectKey: input.storageObjectKey.trim(),
     metadata: {
       mimeType: input.metadata.mimeType.trim(),

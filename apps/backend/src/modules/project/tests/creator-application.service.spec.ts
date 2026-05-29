@@ -3,6 +3,12 @@ import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import type { StorageAdapter } from "../../storage/storage.service.ts";
+import {
+  completeUploadSession,
+  createUploadSession,
+  type UploadSessionRuntime,
+} from "../../storage/upload-session.service.ts";
 import { createCreatorApplication } from "../creator-application.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
@@ -194,6 +200,275 @@ describe("creator application service", { concurrency: false }, () => {
       assert.equal(selected.status, 200);
       assert.equal((selected.body as any).project.id, projectId);
       assert.equal((selected.body as any).episodes.length, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stores project covers by storage object id and returns signed cover urls", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-cover-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Creator cover storage",
+          scriptInput: "Episode 3: upload a cover.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-cover-create",
+        now: new Date("2026-05-18T12:00:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const actor = {
+        actorId: userId,
+        organizationId,
+        workspaceId,
+        role: "creator" as const,
+        capabilities: [],
+      };
+
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        projectId,
+        purpose: "project-covers",
+        fileName: "cover.png",
+        contentType: "image/png",
+        sizeBytes: 128,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "creator-application-cover-upload",
+        now: new Date("2026-05-18T12:01:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 128,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-18T12:02:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      const updated = await creator.updateProject({
+        user,
+        body: {
+          projectId,
+          uploadSessionId: prepared.uploadSessionId,
+          storageObjectId: prepared.storageObjectId,
+        },
+        now: new Date("2026-05-18T12:03:00.000Z"),
+      });
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T12:04:00.000Z"),
+      });
+
+      assert.equal(updated.status, 200);
+      assert.equal((updated.body as any).project.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((updated.body as any).project.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+      assert.equal((detail.body as any).project.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((detail.body as any).project.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects legacy import payloads when storage runtime is enabled", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-runtime-import-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(new LocalObjectStoreStub()),
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      await creator.createProject({
+        user,
+        body: {
+          name: "Runtime Import Guard",
+          scriptInput: "Episode 4: runtime imports must use upload sessions.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-runtime-import-create",
+        now: new Date("2026-05-18T12:10:00.000Z"),
+      });
+
+      const importedAsset = await creator.importAsset({
+        user,
+        body: {
+          kind: "scene",
+          name: "Legacy Scene",
+          storageObjectKey: "data:image/png;base64,legacy-scene",
+          mimeType: "image/png",
+        },
+        now: new Date("2026-05-18T12:11:00.000Z"),
+      });
+      const createdShot = await creator.createShot({
+        user,
+        body: {
+          title: "Shot import guard",
+        },
+        now: new Date("2026-05-18T12:12:00.000Z"),
+      });
+      const importedShotMedia = await creator.importShotMedia({
+        user,
+        body: {
+          shotId: (createdShot.body as any).shot.id,
+          kind: "image",
+          name: "Legacy Shot",
+          storageObjectKey: "data:image/png;base64,legacy-shot",
+          mimeType: "image/png",
+        },
+        now: new Date("2026-05-18T12:13:00.000Z"),
+      });
+
+      assert.equal(importedAsset.status, 400);
+      assert.equal((importedAsset.body as any).error, "upload_reference_required");
+      assert.equal(importedShotMedia.status, 400);
+      assert.equal((importedShotMedia.body as any).error, "upload_reference_required");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("deletes storyboard media objects even when the stored version only retains object key metadata", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-shot-delete-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Storyboard delete storage cleanup",
+          scriptInput: "Episode 5: deleting shot media should also delete storage objects.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-shot-delete-create",
+        now: new Date("2026-05-18T12:20:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const createShot = await creator.createShot({
+        user,
+        body: {
+          title: "Delete me",
+        },
+        now: new Date("2026-05-18T12:21:00.000Z"),
+      });
+      const shotId = (createShot.body as any).shot.id;
+      const actor = {
+        actorId: userId,
+        organizationId,
+        workspaceId,
+        role: "creator" as const,
+        capabilities: [],
+      };
+
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        projectId,
+        purpose: "storyboard-videos",
+        fileName: "delete-video.mp4",
+        contentType: "video/mp4",
+        sizeBytes: 256,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "creator-application-shot-delete-upload",
+        now: new Date("2026-05-18T12:22:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "video/mp4",
+        contentLength: 256,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-18T12:23:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      const imported = await creator.importShotMedia({
+        user,
+        body: {
+          shotId,
+          kind: "video",
+          name: "Delete video",
+          uploadSessionId: prepared.uploadSessionId,
+          storageObjectId: prepared.storageObjectId,
+          mimeType: "video/mp4",
+        },
+        now: new Date("2026-05-18T12:24:00.000Z"),
+      });
+      const versionId = (imported.body as any).version.id;
+
+      await db.query(
+        `
+          UPDATE asset_versions
+          SET storage_object_id = NULL
+          WHERE id = $1
+        `,
+        [versionId],
+      );
+
+      const deleted = await creator.deleteShotMedia({
+        user,
+        body: {
+          shotId,
+          kind: "video",
+          assetVersionId: versionId,
+        },
+        now: new Date("2026-05-18T12:25:00.000Z"),
+      });
+
+      assert.equal(deleted.status, 200);
+      assert.equal(localObjectStore.has(prepared.objectKey), false);
     } finally {
       await db.close();
     }
@@ -1203,7 +1478,11 @@ describe("creator application service", { concurrency: false }, () => {
           SELECT
             (SELECT count(*)::int FROM tasks WHERE task_type = 'generate_shot_image') AS image_tasks,
             (SELECT count(*)::int FROM provider_requests WHERE provider_operation = 'shot.image.generate') AS image_provider_requests,
-            (SELECT count(*)::int FROM storage_objects WHERE object_key LIKE '%/image-%') AS image_storage_objects
+            (
+              SELECT count(*)::int
+              FROM storage_objects
+              WHERE object_key ~ 'AIManhuaDrama/[0-9]{8}/[0-9a-f-]{36}-image-[0-9a-f-]{36}\\.png$'
+            ) AS image_storage_objects
         `,
       );
 
@@ -1304,7 +1583,11 @@ describe("creator application service", { concurrency: false }, () => {
           SELECT
             (SELECT count(*)::int FROM tasks WHERE task_type = 'generate_shot_video') AS video_tasks,
             (SELECT count(*)::int FROM provider_requests WHERE provider_operation = 'shot.video.generate') AS video_provider_requests,
-            (SELECT count(*)::int FROM storage_objects WHERE object_key LIKE '%/video-%') AS video_storage_objects
+            (
+              SELECT count(*)::int
+              FROM storage_objects
+              WHERE object_key ~ 'AIManhuaDrama/[0-9]{8}/[0-9a-f-]{36}-video-[0-9a-f-]{36}\\.mp4$'
+            ) AS video_storage_objects
         `,
       );
 
@@ -1496,10 +1779,11 @@ async function seedSession(
   seededUserId: string,
   token: string,
 ) {
+  const seededSessionTime = new Date("2099-01-01T00:00:00.000Z");
   const session = await createAuthSession({
     userId: seededUserId,
     token,
-    now: new Date("2026-05-18T09:59:00.000Z"),
+    now: seededSessionTime,
   });
   await db.query(
     `
@@ -1525,8 +1809,83 @@ async function seedSession(
       session.session.expiresAt,
       session.session.lastSeenAt,
       session.session.revokedAt,
-      new Date("2026-05-18T09:59:00.000Z"),
+      seededSessionTime,
     ],
   );
   return session;
+}
+
+class SignedUrlOnlyAdapter implements StorageAdapter {
+  async createSignedReadUrl(input: {
+    bucket: string;
+    objectKey: string;
+    expiresAt: Date;
+  }) {
+    return {
+      url: `signed://${input.bucket}/${input.objectKey}`,
+      expiresAt: input.expiresAt,
+    };
+  }
+}
+
+class LocalObjectStoreStub {
+  #objects = new Map<
+    string,
+    {
+      contentType?: string | null;
+      contentLength?: number | null;
+      checksum?: string | null;
+      eTag?: string | null;
+      versionId?: string | null;
+    }
+  >();
+
+  put(
+    objectKey: string,
+    value: {
+      contentType?: string | null;
+      contentLength?: number | null;
+      checksum?: string | null;
+      eTag?: string | null;
+      versionId?: string | null;
+    },
+  ) {
+    this.#objects.set(objectKey, value);
+  }
+
+  has(objectKey: string) {
+    return this.#objects.has(objectKey);
+  }
+
+  async headObject(input: { bucket: string; objectKey: string }) {
+    const object = this.#objects.get(input.objectKey);
+    if (!object) {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      contentType: object.contentType ?? null,
+      contentLength: object.contentLength ?? null,
+      checksum: object.checksum ?? null,
+      eTag: object.eTag ?? null,
+      versionId: object.versionId ?? null,
+    };
+  }
+
+  async deleteObject(input: { bucket: string; objectKey: string }) {
+    this.#objects.delete(input.objectKey);
+  }
+}
+
+function createStorageRuntime(localObjectStore: LocalObjectStoreStub): UploadSessionRuntime {
+  return {
+    mode: "dev",
+    provider: "dev",
+    bucket: "creator-dev",
+    region: "ap-shanghai",
+    adapter: new SignedUrlOnlyAdapter(),
+    stsDurationSeconds: 900,
+    localUploadUrlPath: "/api/storage/upload-sessions",
+    localObjectStore,
+  };
 }

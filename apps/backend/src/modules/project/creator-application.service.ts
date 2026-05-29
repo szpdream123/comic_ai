@@ -18,6 +18,15 @@ import {
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
 import {
+  buildSignedObjectUrls,
+  deleteStorageObjectRecord,
+  findStorageObject,
+} from "../storage/storage.service.ts";
+import {
+  findUploadSession,
+  type UploadSessionRuntime,
+} from "../storage/upload-session.service.ts";
+import {
   createAssetVersionSnapshot,
   upsertAssetVersionSnapshot,
 } from "./asset-version-record.service.ts";
@@ -31,7 +40,10 @@ import {
   replaceAssetReviewCandidatesForProject,
   updateAssetReviewCandidateRecordLabel,
 } from "./asset-review-record.service.ts";
-import { replaceCalibrationSessionForProject } from "./calibration-record.service.ts";
+import {
+  getLatestCalibrationSessionForProject,
+  replaceCalibrationSessionForProject,
+} from "./calibration-record.service.ts";
 import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
 import {
   ensureCreatorSqlState,
@@ -56,13 +68,6 @@ import {
   requestCreatorImageGenerationPlatformBatch,
   requestCreatorVideoGenerationPlatformBatch,
 } from "./creator-platform.service.ts";
-import {
-  createEpisodeForProject,
-  deleteEpisodeForProject,
-  listEpisodesForProject,
-  replaceEpisodesForProject,
-  updateEpisodeForProject,
-} from "./episode-record.service.ts";
 import {
   createExportRecord,
   listExportRecordsForProject,
@@ -102,14 +107,101 @@ interface CreatorApplicationDeps {
   workspaceId: string;
   creatorApps?: Map<string, CreatorDevApp>;
   creatorSqlStates?: Map<string, CreatorSqlState>;
+  storageRuntime?: UploadSessionRuntime;
+  signedUrlExpiresInSeconds?: number;
 }
 
 export function createCreatorApplication(deps: CreatorApplicationDeps) {
   const creatorApps = deps.creatorApps ?? new Map<string, CreatorDevApp>();
   const creatorSqlStates = deps.creatorSqlStates ?? new Map<string, CreatorSqlState>();
+  const signedUrlExpiresInSeconds =
+    deps.signedUrlExpiresInSeconds ??
+    Number(
+      process.env.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
+      process.env.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
+      900,
+    );
 
   function getCreatorState(userId: string) {
     return getCreatorDevState({ userId, creatorApps, creatorSqlStates });
+  }
+
+  function requireStorageRuntime() {
+    if (!deps.storageRuntime) {
+      throw new Error("storage_runtime_missing");
+    }
+    return deps.storageRuntime;
+  }
+
+  function isLegacyInlineDataUrl(value: string | null | undefined) {
+    return typeof value === "string" && value.trim().startsWith("data:");
+  }
+
+  async function resolveImportedStorageObject(
+    user: AuthenticatedCreatorUser,
+    input: {
+      projectId: string;
+      uploadSessionId?: string | null;
+      storageObjectId?: string | null;
+    },
+    now: Date,
+  ) {
+    const runtime = deps.storageRuntime;
+    if (!runtime) {
+      return null;
+    }
+
+    if (input.uploadSessionId) {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: user.sessionToken,
+        projectId: input.projectId,
+        now,
+      });
+      const uploadSession = await findUploadSession(deps.db, input.uploadSessionId);
+      if (!uploadSession || uploadSession.organizationId !== actor.organizationId) {
+        throw new Error("upload_session_not_found");
+      }
+      if (uploadSession.status !== "uploaded") {
+        throw new Error("upload_session_not_ready");
+      }
+      const object = await findStorageObject(deps.db, uploadSession.storageObjectId);
+      if (!object || object.status !== "available") {
+        throw new Error("storage_upload_not_ready");
+      }
+      const urls = await buildSignedObjectUrls(deps.db, {
+        sessionToken: user.sessionToken,
+        storageObjectId: object.id,
+        adapter: runtime.adapter,
+        now,
+        expiresInSeconds: signedUrlExpiresInSeconds,
+      });
+      return {
+        id: object.id,
+        objectKey: object.objectKey,
+        sourceUrl: urls.sourceUrl,
+      };
+    }
+
+    if (input.storageObjectId) {
+      const object = await findStorageObject(deps.db, input.storageObjectId);
+      if (!object || object.status !== "available") {
+        throw new Error("storage_upload_not_ready");
+      }
+      const urls = await buildSignedObjectUrls(deps.db, {
+        sessionToken: user.sessionToken,
+        storageObjectId: object.id,
+        adapter: runtime.adapter,
+        now,
+        expiresInSeconds: signedUrlExpiresInSeconds,
+      });
+      return {
+        id: object.id,
+        objectKey: object.objectKey,
+        sourceUrl: urls.sourceUrl,
+      };
+    }
+
+    return null;
   }
 
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
@@ -145,6 +237,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     body: {
       kind: "character" | "scene" | "prop" | "image" | "video";
       name?: string | null;
+      uploadSessionId?: string | null;
+      storageObjectId?: string | null;
       storageObjectKey?: string | null;
       sourceUrl?: string | null;
       mimeType?: string | null;
@@ -175,6 +269,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId,
       now: input.now,
     });
+      if (
+        deps.storageRuntime &&
+        input.source === "import" &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId
+      ) {
+        return {
+          status: 400,
+          body: { error: "upload_reference_required" },
+        };
+      }
+    const resolvedUpload = await resolveImportedStorageObject(input.user, {
+      projectId,
+      uploadSessionId: input.body.uploadSessionId ?? null,
+      storageObjectId: input.body.storageObjectId ?? null,
+    }, input.now);
     const assetType = assetTypeForKind(input.body.kind);
     const assetKey = `${input.body.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")}-${randomUUID().slice(0, 8)}`;
     const asset = {
@@ -192,7 +302,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       organizationId: actor.organizationId,
       assetId: asset.id,
       versionNumber: 1,
+      storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
       storageObjectKey:
+        resolvedUpload?.objectKey ||
         input.body.storageObjectKey?.trim() ||
         `library/${projectId}/${assetType}/${assetKey}`,
       metadata: {
@@ -203,8 +315,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         prompt: input.body.prompt ?? null,
         model: input.body.model ?? null,
         label: name,
-        sourceUrl: input.body.sourceUrl?.trim() || null,
+        sourceUrl: resolvedUpload?.sourceUrl ?? (input.body.sourceUrl?.trim() || null),
         previewUrl:
+          resolvedUpload?.sourceUrl ||
           input.body.sourceUrl?.trim() ||
           (input.body.storageObjectKey?.trim().startsWith("data:")
             ? input.body.storageObjectKey.trim()
@@ -322,9 +435,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
       });
+      const signedProjects = deps.storageRuntime
+        ? await Promise.all(
+            projects.map((project) =>
+              hydrateProjectCoverUrl(deps.db, {
+                project,
+                sessionToken: input.user.sessionToken,
+                runtime: deps.storageRuntime!,
+                now: input.now,
+                signedUrlExpiresInSeconds,
+              }),
+            ),
+          )
+        : projects;
       return {
         status: 200,
-        body: { projects },
+        body: { projects: signedProjects },
       };
     },
 
@@ -368,6 +494,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: await buildProjectDetail(deps.db, {
           organizationId: actor.organizationId,
           projectId: input.projectId,
+          sessionToken: input.user.sessionToken,
+          runtime: deps.storageRuntime,
+          signedUrlExpiresInSeconds,
           now: input.now,
         }),
       };
@@ -386,6 +515,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const detail = await buildProjectDetail(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
         now: input.now,
       });
       if (!detail.project) {
@@ -404,6 +536,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         name?: string | null;
         phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
         coverImageUrl?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -420,20 +554,60 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (
+        deps.storageRuntime &&
+        input.body.coverImageUrl !== undefined &&
+        input.body.coverImageUrl !== null &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId &&
+        !isLegacyInlineDataUrl(input.body.coverImageUrl)
+      ) {
+        return {
+          status: 400,
+          body: { error: "cover_upload_reference_required" },
+        };
+      }
+      const resolvedCoverUpload =
+        input.body.uploadSessionId || input.body.storageObjectId
+          ? await resolveImportedStorageObject(
+              input.user,
+              {
+                projectId,
+                uploadSessionId: input.body.uploadSessionId ?? null,
+                storageObjectId: input.body.storageObjectId ?? null,
+              },
+              input.now,
+            )
+          : null;
       const updated = await updateProjectRecord(deps.db, {
         organizationId: actor.organizationId,
         projectId,
         name: input.body.name,
         phase: input.body.phase,
-        coverImageUrl: input.body.coverImageUrl,
+        coverImageUrl:
+          resolvedCoverUpload || input.body.coverImageUrl === null
+            ? null
+            : input.body.coverImageUrl,
+        coverStorageObjectId:
+          resolvedCoverUpload?.id ??
+          (input.body.coverImageUrl !== undefined ? null : undefined),
         now: input.now,
       });
       if (!updated) {
         return { status: 404, body: { error: "project_not_found" } };
       }
+      const hydratedProject = deps.storageRuntime
+        ? await hydrateProjectCoverUrl(deps.db, {
+            project: updated,
+            sessionToken: input.user.sessionToken,
+            runtime: deps.storageRuntime!,
+            now: input.now,
+            signedUrlExpiresInSeconds,
+          })
+        : updated;
       return {
         status: 200,
-        body: { project: updated },
+        body: { project: hydratedProject },
       };
     },
 
@@ -824,6 +998,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         assetId: input.assetId,
       });
+      if (deleted?.orphanStorageObjectIds?.length) {
+        const runtime = requireStorageRuntime();
+        for (const storageObjectId of deleted.orphanStorageObjectIds) {
+          await deleteStorageObjectRecord(deps.db, {
+            storageObjectId,
+            adapter: runtime.adapter,
+            localObjectStore: runtime.localObjectStore,
+            now: input.now,
+          });
+        }
+      }
       return deleted
         ? { status: 200, body: { deleted: true } }
         : { status: 404, body: { error: "asset_not_found" } };
@@ -834,6 +1019,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
         name?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
         storageObjectKey?: string | null;
         sourceUrl?: string | null;
         mimeType?: string | null;
@@ -888,7 +1075,25 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         assetId: input.assetId,
       });
-      return { status: 200, body: { versions } };
+      const runtime = deps.storageRuntime;
+      if (!runtime) {
+        return { status: 200, body: { versions } };
+      }
+      const signedVersions = await Promise.all(
+        versions.map(async (version) => ({
+          ...version,
+          previewUrl: await resolveStorageBackedPreviewUrl(deps.db, {
+            sessionToken: input.user.sessionToken,
+            storageObjectId: version.storageObjectId ?? null,
+            storageObjectKey: version.storageObjectKey,
+            metadata: version.metadata ?? null,
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds,
+          }),
+        })),
+      );
+      return { status: 200, body: { versions: signedVersions } };
     },
 
     async listProjectEpisodes(input: {
@@ -904,6 +1109,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const detail = await buildProjectDetail(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
         now: input.now,
       });
       return { status: 200, body: { episodes: detail.episodes } };
@@ -943,6 +1151,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const detail = await buildProjectDetail(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
         now: input.now,
       });
       return {
@@ -1223,6 +1434,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         shotId: string;
         kind: "image" | "video";
         name?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
         storageObjectKey?: string | null;
         sourceUrl?: string | null;
         mimeType?: string | null;
@@ -1267,7 +1480,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!resolvedShot) {
         return { status: 404, body: { error: "shot_not_found" } };
       }
-      const storageObjectKey = input.body.storageObjectKey?.trim();
+      if (
+        deps.storageRuntime &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId
+      ) {
+        return {
+          status: 400,
+          body: { error: "upload_reference_required" },
+        };
+      }
+      const resolvedUpload = await resolveImportedStorageObject(input.user, {
+        projectId,
+        uploadSessionId: input.body.uploadSessionId ?? null,
+        storageObjectId: input.body.storageObjectId ?? null,
+      }, input.now);
+      const storageObjectKey = resolvedUpload?.objectKey ?? input.body.storageObjectKey?.trim();
       if (!storageObjectKey) {
         return { status: 400, body: { error: "storage_object_key_required" } };
       }
@@ -1278,6 +1506,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         assetType: input.body.kind === "video" ? "shot_video" : "shot_image",
         assetKey: input.body.shotId,
         createdByUserId: actor.actorId,
+        storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
         storageObjectKey,
         metadata: {
           mimeType:
@@ -1288,8 +1517,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           durationMs: input.body.durationMs ?? null,
           source: "import",
           label: input.body.name?.trim() || (input.body.kind === "video" ? "Uploaded video" : "Uploaded image"),
-          sourceUrl: input.body.sourceUrl?.trim() || null,
+          sourceUrl: resolvedUpload?.sourceUrl ?? (input.body.sourceUrl?.trim() || null),
           previewUrl:
+            resolvedUpload?.sourceUrl ||
             input.body.sourceUrl?.trim() ||
             (storageObjectKey.startsWith("data:") ? storageObjectKey : null),
         },
@@ -1364,6 +1594,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       });
       if (!deleted) {
         return { status: 404, body: { error: "shot_media_not_found" } };
+      }
+      if (deleted.orphanStorageObjectId) {
+        const runtime = requireStorageRuntime();
+        await deleteStorageObjectRecord(deps.db, {
+          storageObjectId: deleted.orphanStorageObjectId,
+          adapter: runtime.adapter,
+          localObjectStore: runtime.localObjectStore,
+          now: input.now,
+        });
       }
 
       await creatorApp.seedShotRecords(
@@ -1774,7 +2013,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               if (success) {
                 await upsertAssetVersionSnapshot(deps.db, {
                   asset: success.asset,
-                  version: success.version,
+                  version: {
+                    ...success.version,
+                    storageObjectId: task.storageObjectId,
+                  },
                   now: input.now,
                 });
               }
@@ -1797,6 +2039,18 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             ...generated,
             platform,
             request: input.body ?? {},
+            selectionContext:
+              input.body?.parameters?.selectionContext &&
+              typeof input.body.parameters.selectionContext === "object"
+                ? input.body.parameters.selectionContext
+                : null,
+            fixedImages: createFixedImageGenerationResults(
+              input.body?.promptOverride ?? null,
+              input.body?.parameters?.selectionContext &&
+                typeof input.body.parameters.selectionContext === "object"
+                ? input.body.parameters.selectionContext
+                : null,
+            ),
           },
         };
       }
@@ -1931,7 +2185,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           if (success) {
             await upsertAssetVersionSnapshot(deps.db, {
               asset: success.asset,
-              version: success.version,
+              version: {
+                ...success.version,
+                storageObjectId: task.storageObjectId,
+              },
               now: input.now,
             });
           }
@@ -2079,7 +2336,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               if (result.asset && result.version) {
                 await upsertAssetVersionSnapshot(deps.db, {
                   asset: result.asset,
-                  version: result.version,
+                  version: {
+                    ...result.version,
+                    storageObjectId: task.storageObjectId,
+                  },
                   now: input.now,
                 });
               }
@@ -2247,7 +2507,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           if (result.asset && result.version) {
             await upsertAssetVersionSnapshot(deps.db, {
               asset: result.asset,
-              version: result.version,
+              version: {
+                ...result.version,
+                storageObjectId: task.storageObjectId,
+              },
               now: input.now,
             });
           }
@@ -2268,7 +2531,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: {
           shot: retriedShot,
           asset: result.asset,
-          version: result.version,
+          version: result.version
+            ? {
+                ...result.version,
+                storageObjectId: task.storageObjectId,
+              }
+            : result.version,
           platform,
         },
       };
@@ -2396,11 +2664,24 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         projectId,
       });
+      const signedRecords = deps.storageRuntime
+        ? await Promise.all(
+            records.map((record) =>
+              buildSignedExportRecord(deps.db, {
+                record,
+                sessionToken: input.user.sessionToken,
+                runtime: deps.storageRuntime!,
+                now: input.now,
+                signedUrlExpiresInSeconds,
+              }),
+            ),
+          )
+        : records;
 
       return {
         status: 200,
         body: {
-          records,
+          records: signedRecords,
         },
       };
     },
@@ -2747,6 +3028,7 @@ async function listProjectsForWorkspace(
     id: string;
     name: string;
     cover_image_url: string | null;
+    cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
     phase: string;
@@ -2759,6 +3041,7 @@ async function listProjectsForWorkspace(
         id,
         name,
         cover_image_url,
+        cover_storage_object_id,
         aspect_ratio,
         resolution,
         phase,
@@ -2777,6 +3060,7 @@ async function listProjectsForWorkspace(
     id: project.id,
     name: project.name,
     coverImageUrl: project.cover_image_url,
+    coverStorageObjectId: project.cover_storage_object_id,
     aspectRatio: project.aspect_ratio,
     resolution: project.resolution,
     phase: project.phase,
@@ -2834,6 +3118,7 @@ async function updateProjectRecord(
     name?: string | null;
     phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
     coverImageUrl?: string | null;
+    coverStorageObjectId?: string | null;
     now: Date;
   },
 ) {
@@ -2842,6 +3127,7 @@ async function updateProjectRecord(
       id: string;
       name: string;
       cover_image_url: string | null;
+      cover_storage_object_id: string | null;
       aspect_ratio: string;
       resolution: string;
       phase: "script_input" | "asset_review" | "shot_generation" | "export";
@@ -2873,7 +3159,8 @@ async function updateProjectRecord(
         SET name = $3,
             phase = $4,
             cover_image_url = $5,
-            updated_at = $6
+            cover_storage_object_id = $6,
+            updated_at = $7
         WHERE organization_id = $1
           AND id = $2
         RETURNING *
@@ -2884,6 +3171,9 @@ async function updateProjectRecord(
         name,
         input.phase ?? current.phase,
         input.coverImageUrl === undefined ? current.cover_image_url : input.coverImageUrl,
+        input.coverStorageObjectId === undefined
+          ? current.cover_storage_object_id
+          : input.coverStorageObjectId,
         input.now,
       ],
     )
@@ -2893,6 +3183,7 @@ async function updateProjectRecord(
     id: row.id,
     name: row.name,
     coverImageUrl: row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
     aspectRatio: row.aspect_ratio,
     resolution: row.resolution,
     phase: row.phase,
@@ -3018,9 +3309,11 @@ async function deleteShotMediaVersionRecord(
     await db.query<{
       asset_id: string;
       version_id: string;
+      storage_object_id: string | null;
+      storage_object_key: string | null;
     }>(
       `
-        SELECT v.asset_id, v.id AS version_id
+        SELECT v.asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
         FROM asset_versions v
         JOIN assets a
           ON a.organization_id = v.organization_id
@@ -3040,9 +3333,11 @@ async function deleteShotMediaVersionRecord(
       await db.query<{
         asset_id: string;
         version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
       }>(
         `
-          SELECT a.id AS asset_id, v.id AS version_id
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM assets a
           JOIN asset_versions v
             ON v.organization_id = a.organization_id
@@ -3075,9 +3370,11 @@ async function deleteShotMediaVersionRecord(
       await db.query<{
         asset_id: string;
         version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
       }>(
         `
-          SELECT a.id AS asset_id, v.id AS version_id
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM shots s
           JOIN asset_versions v
             ON v.organization_id = s.organization_id
@@ -3106,9 +3403,11 @@ async function deleteShotMediaVersionRecord(
       await db.query<{
         asset_id: string;
         version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
       }>(
         `
-          SELECT a.id AS asset_id, v.id AS version_id
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM assets a
           JOIN asset_versions v
             ON v.organization_id = a.organization_id
@@ -3212,7 +3511,45 @@ async function deleteShotMediaVersionRecord(
     );
   }
 
-  return true;
+  let orphanStorageObjectId = versionRow.storage_object_id;
+  if (!orphanStorageObjectId && versionRow.storage_object_key) {
+    orphanStorageObjectId = (
+      await db.query<{ id: string }>(
+        `
+          SELECT id
+          FROM storage_objects
+          WHERE organization_id = $1
+            AND object_key = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [input.organizationId, versionRow.storage_object_key],
+      )
+    ).rows[0]?.id ?? null;
+  }
+
+  const referencedStorageObject = orphanStorageObjectId
+    ? (
+        await db.query<{ count: number | string }>(
+          `
+            SELECT COUNT(*) AS count
+            FROM asset_versions
+            WHERE organization_id = $1
+              AND storage_object_id = $2
+          `,
+          [input.organizationId, orphanStorageObjectId],
+        )
+      ).rows[0]
+    : null;
+
+  return {
+    deleted: true,
+    orphanStorageObjectId:
+      orphanStorageObjectId &&
+      Number(referencedStorageObject?.count ?? 0) === 0
+        ? orphanStorageObjectId
+        : null,
+  };
 }
 
 async function deleteProjectAssetRecord(
@@ -3226,6 +3563,17 @@ async function deleteProjectAssetRecord(
   if (!existing || existing.organizationId !== input.organizationId) {
     return false;
   }
+  const versionRows = (
+    await db.query<{ storage_object_id: string | null }>(
+      `
+        SELECT storage_object_id
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+      `,
+      [input.organizationId, input.assetId],
+    )
+  ).rows;
   await db.query(
     `
       DELETE FROM shot_reference_assets
@@ -3250,7 +3598,25 @@ async function deleteProjectAssetRecord(
     `,
     [input.organizationId, input.assetId],
   );
-  return true;
+  const orphanStorageObjectIds = [];
+  for (const row of versionRows) {
+    if (!row.storage_object_id) {
+      continue;
+    }
+    const remaining = await db.query<{ count: number | string }>(
+      `
+        SELECT COUNT(*) AS count
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND storage_object_id = $2
+      `,
+      [input.organizationId, row.storage_object_id],
+    );
+    if (Number(remaining.rows[0]?.count ?? 0) === 0) {
+      orphanStorageObjectIds.push(row.storage_object_id);
+    }
+  }
+  return { deleted: true, orphanStorageObjectIds };
 }
 
 async function buildProjectStats(
@@ -3301,6 +3667,15 @@ async function deleteProjectRecord(
   db: SqlDatabase,
   input: { organizationId: string; projectId: string },
 ) {
+  await db.query(
+    `
+      UPDATE projects
+      SET cover_storage_object_id = NULL
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.projectId],
+  );
   await db.query("DELETE FROM provider_requests WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -3326,10 +3701,10 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
-  await db.query("DELETE FROM storage_objects WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query(
+    "DELETE FROM storage_upload_sessions WHERE organization_id = $1 AND project_id = $2",
+    [input.organizationId, input.projectId],
+  );
   await db.query(
     `
       DELETE FROM asset_versions
@@ -3341,6 +3716,10 @@ async function deleteProjectRecord(
     [input.organizationId, input.projectId],
   );
   await db.query("DELETE FROM assets WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
+  await db.query("DELETE FROM storage_objects WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
   ]);
@@ -3389,6 +3768,9 @@ async function buildProjectDetail(
   input: {
     organizationId: string;
     projectId: string;
+    sessionToken: string;
+    runtime?: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
     now: Date;
   },
 ) {
@@ -3436,6 +3818,84 @@ async function buildProjectDetail(
   const assetsByType = groupAssetsByUiType(assets);
   const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
   const referencesByShotId = groupReferencesByShotId(references);
+  const runtime = input.runtime;
+  const signedAssets = runtime
+    ? await Promise.all(
+        assets.map(async (asset) => ({
+          ...asset,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+                  storageObjectId: asset.latestVersion?.storageObjectId ?? null,
+                  storageObjectKey: asset.latestVersion?.storageObjectKey ?? null,
+                  metadata: asset.latestVersion?.metadata ?? null,
+                  now: input.now,
+                  runtime,
+                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+                }),
+          latestVersion: asset.latestVersion
+            ? {
+                ...asset.latestVersion,
+                previewUrl: await resolveStorageBackedPreviewUrl(db, {
+                  sessionToken: input.sessionToken,
+                  storageObjectId: asset.latestVersion.storageObjectId ?? null,
+                  storageObjectKey: asset.latestVersion.storageObjectKey ?? null,
+                  metadata: asset.latestVersion.metadata ?? null,
+                  now: input.now,
+                  runtime,
+                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+                }),
+              }
+            : null,
+        })),
+      )
+    : assets;
+  const signedAssetVersions = runtime
+    ? await Promise.all(
+        assetVersions.map(async (version) => ({
+          ...version,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+            storageObjectId: version.storageObjectId ?? null,
+            storageObjectKey: version.storageObjectKey,
+            metadata: version.metadata ?? null,
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        })),
+      )
+    : assetVersions;
+  const signedReferences = runtime
+    ? await Promise.all(
+        references.map(async (reference) => ({
+          ...reference,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+            storageObjectId: reference.storageObjectId ?? null,
+            storageObjectKey: null,
+            metadata: { previewUrl: reference.previewUrl ?? null },
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        })),
+      )
+    : references;
+  const signedReferencesByShotId = groupReferencesByShotId(signedReferences);
+  const signedVersionsByShotId = groupShotAssetVersionsByShotId(signedAssetVersions);
+  const signedExportHistory = runtime
+    ? await Promise.all(
+        exportHistory.map((record) =>
+          buildSignedExportRecord(db, {
+            record,
+            sessionToken: input.sessionToken,
+            runtime,
+            now: input.now,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        ),
+      )
+    : exportHistory;
   const projectEpisodes = episodes.length
     ? episodes
     : shots.length
@@ -3453,12 +3913,21 @@ async function buildProjectDetail(
           },
         ]
       : [];
+  const signedProject = runtime
+    ? await hydrateProjectCoverUrl(db, {
+        project: projectBundle.project,
+        sessionToken: input.sessionToken,
+        runtime,
+        now: input.now,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      })
+    : projectBundle.project;
 
   return {
-    project: projectBundle.project,
+    project: signedProject,
     script: projectBundle.script,
-    assetSummary: buildAssetSummary(assetsByType),
-    assetsByType,
+    assetSummary: buildAssetSummary(groupAssetsByUiType(signedAssets)),
+    assetsByType: groupAssetsByUiType(signedAssets),
     episodes: projectEpisodes.map((episode) => {
       const episodeShots = shots.filter((shot) =>
         episode.id === "episode-primary" ? true : shot.episodeId === episode.id,
@@ -3471,7 +3940,7 @@ async function buildProjectDetail(
         createdAt: episode.createdAt,
         updatedAt: episode.updatedAt,
         storyboardCount: episodeShots.length,
-        previewUrl: findEpisodePreviewUrl(episodeShots, assets),
+        previewUrl: findEpisodePreviewUrl(episodeShots, signedAssets),
       };
     }),
     shots: shots.map((shot) => ({
@@ -3485,13 +3954,13 @@ async function buildProjectDetail(
       videoStatus: shot.videoStatus,
       currentImageAssetVersionId: shot.currentImageAssetVersionId,
       currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
-      previewImageUrl: findVersionPreviewUrl(assetVersions, shot.currentImageAssetVersionId),
-      previewVideoUrl: findVersionPreviewUrl(assetVersions, shot.currentVideoAssetVersionId),
-      imageVersions: versionsByShotId.get(shot.id)?.image ?? [],
-      videoVersions: versionsByShotId.get(shot.id)?.video ?? [],
-      references: referencesByShotId.get(shot.id) ?? [],
+      previewImageUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentImageAssetVersionId),
+      previewVideoUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentVideoAssetVersionId),
+      imageVersions: signedVersionsByShotId.get(shot.id)?.image ?? [],
+      videoVersions: signedVersionsByShotId.get(shot.id)?.video ?? [],
+      references: signedReferencesByShotId.get(shot.id) ?? [],
     })),
-    exportHistory,
+    exportHistory: signedExportHistory,
   };
 }
 
@@ -3507,6 +3976,7 @@ async function listAssetsForProject(
     updated_at: Date | string;
     version_id: string | null;
     version_number: number | string | null;
+    storage_object_id: string | null;
     storage_object_key: string | null;
     metadata_json: Record<string, unknown> | null;
     version_created_at: Date | string | null;
@@ -3520,6 +3990,7 @@ async function listAssetsForProject(
         a.updated_at,
         v.id AS version_id,
         v.version_number,
+        v.storage_object_id,
         v.storage_object_key,
         v.metadata_json,
         v.created_at AS version_created_at
@@ -3551,6 +4022,7 @@ async function listAssetsForProject(
       ? {
           id: row.version_id,
           versionNumber: Number(row.version_number),
+          storageObjectId: row.storage_object_id,
           storageObjectKey: row.storage_object_key,
           metadata: row.metadata_json,
           previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
@@ -3572,6 +4044,7 @@ async function listAssetVersionsForProject(
     asset_key: string;
     version_id: string;
     version_number: number | string;
+    storage_object_id: string | null;
     storage_object_key: string;
     metadata_json: Record<string, unknown> | null;
     source_task_id: string | null;
@@ -3585,6 +4058,7 @@ async function listAssetVersionsForProject(
         a.asset_key,
         v.id AS version_id,
         v.version_number,
+        v.storage_object_id,
         v.storage_object_key,
         v.metadata_json,
         v.source_task_id,
@@ -3607,6 +4081,7 @@ async function listAssetVersionsForProject(
     assetKey: row.asset_key,
     id: row.version_id,
     versionNumber: Number(row.version_number),
+    storageObjectId: row.storage_object_id,
     storageObjectKey: row.storage_object_key,
     metadata: row.metadata_json ?? {},
     sourceTaskId: row.source_task_id,
@@ -3743,6 +4218,95 @@ function getAssetPreviewUrl(
   return null;
 }
 
+async function resolveStorageBackedPreviewUrl(
+  db: SqlDatabase,
+  input: {
+    sessionToken: string;
+    storageObjectId: string | null;
+    storageObjectKey: string | null;
+    metadata: Record<string, unknown> | null;
+    now: Date;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  if (input.storageObjectId) {
+    try {
+      const urls = await buildSignedObjectUrls(db, {
+        sessionToken: input.sessionToken,
+        storageObjectId: input.storageObjectId,
+        adapter: input.runtime.adapter,
+        now: input.now,
+        expiresInSeconds: input.signedUrlExpiresInSeconds,
+      });
+      return urls.previewUrl;
+    } catch {
+      return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+    }
+  }
+  return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+}
+
+async function hydrateProjectCoverUrl(
+  db: SqlDatabase,
+  input: {
+    project: CreatorDevStateSnapshot["project"];
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    now: Date;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  if (!input.project?.coverStorageObjectId) {
+    return input.project;
+  }
+  try {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.project.coverStorageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    return {
+      ...input.project,
+      coverImageUrl: urls.previewUrl,
+    };
+  } catch {
+    return input.project;
+  }
+}
+
+async function buildSignedExportRecord(
+  db: SqlDatabase,
+  input: {
+    record: Awaited<ReturnType<typeof listExportRecordsForProject>>[number];
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    now: Date;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  try {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.record.storageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    return {
+      ...input.record,
+      signedUrl: urls.downloadUrl,
+      sourceUrl: urls.sourceUrl,
+      downloadUrl: urls.downloadUrl,
+      expiresAt: urls.expiresAt,
+    };
+  } catch {
+    return input.record;
+  }
+}
+
 async function listAssetVersions(
   db: SqlDatabase,
   input: { organizationId: string; assetId: string },
@@ -3750,6 +4314,7 @@ async function listAssetVersions(
   const result = await db.query<{
     id: string;
     version_number: number | string;
+    storage_object_id: string | null;
     storage_object_key: string;
     metadata_json: Record<string, unknown>;
     source_task_id: string | null;
@@ -3760,6 +4325,7 @@ async function listAssetVersions(
       SELECT
         id,
         version_number,
+        storage_object_id,
         storage_object_key,
         metadata_json,
         source_task_id,
@@ -3776,6 +4342,7 @@ async function listAssetVersions(
   return result.rows.map((row) => ({
     id: row.id,
     versionNumber: Number(row.version_number),
+    storageObjectId: row.storage_object_id,
     storageObjectKey: row.storage_object_key,
     metadata: row.metadata_json,
     sourceTaskId: row.source_task_id,
@@ -3819,6 +4386,42 @@ function filterRequestedShots(
     return shots;
   }
   return shots.filter((shot) => shot.id === shotId);
+}
+
+function createFixedImageGenerationResults(
+  promptOverride?: string | null,
+  selectionContext?: Record<string, unknown> | null,
+) {
+  const prompt = promptOverride?.trim() || "Fixed local image generation result.";
+  return [
+    {
+      id: "fixed-character-sheet-1",
+      kind: "image",
+      label: "图片",
+      prompt,
+      selectionContext,
+      url:
+        "data:image/svg+xml;charset=UTF-8," +
+        encodeURIComponent(`
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 320">
+            <rect width="360" height="320" fill="#f6f5f0"/>
+            <path d="M22 42c20-24 57-24 80 4 18 22 19 52 3 81-17 31-42 53-72 71-18-49-27-102-11-156Z" fill="#17191e"/>
+            <path d="M88 42c44-18 84 12 78 58-5 38-39 68-75 78-15-48-17-92-3-136Z" fill="#22262d"/>
+            <circle cx="72" cy="94" r="33" fill="#e9c2ab"/>
+            <path d="M39 88c14-36 56-51 89-31-3 30-24 52-58 66-9-8-19-18-31-35Z" fill="#15171c"/>
+            <path d="M143 65c28-33 78-31 104 2 20 26 22 61 4 96-19 38-50 62-89 74-18-60-28-123-19-172Z" fill="#191b20"/>
+            <circle cx="195" cy="125" r="34" fill="#e3b69e"/>
+            <path d="M166 112c12-42 63-61 97-32-2 32-24 57-62 75-10-9-22-23-35-43Z" fill="#111317"/>
+            <path d="M170 160h58l14 108H154l16-108Z" fill="#20242b"/>
+            <path d="M163 184h74" stroke="#868a94" stroke-width="8" stroke-linecap="round"/>
+            <path d="M264 68c25-30 71-28 95 3v249h-95V68Z" fill="#17191f"/>
+            <circle cx="311" cy="126" r="32" fill="#e4b69e"/>
+            <path d="M283 112c11-39 57-56 89-29-5 31-27 54-61 70-9-9-18-22-28-41Z" fill="#111318"/>
+            <path d="M286 160h54l13 112h-78l11-112Z" fill="#252a31"/>
+          </svg>
+        `),
+    },
+  ];
 }
 
 async function updateProjectPhase(
@@ -4055,6 +4658,7 @@ async function loadProjectBundleFromSql(
     workspace_id: string;
     name: string;
     cover_image_url: string | null;
+    cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
     phase: "script_input" | "asset_review" | "shot_generation" | "export";
@@ -4104,6 +4708,7 @@ async function loadProjectBundleFromSql(
       workspaceId: project.workspace_id,
       name: project.name,
       coverImageUrl: project.cover_image_url,
+      coverStorageObjectId: project.cover_storage_object_id,
       aspectRatio: project.aspect_ratio,
       resolution: project.resolution,
       phase: project.phase,

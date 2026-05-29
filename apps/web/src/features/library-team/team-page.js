@@ -2,19 +2,16 @@ import { commercePrototypeNotice } from "../../shared/commerce-fixtures.js";
 import { escapeAttr, escapeHtml } from "./markup.js";
 import { renderMemberRulesModal } from "./member-rules-modal.js";
 import { renderPricingModal } from "./pricing-modal.js";
-import {
-  dashboardDateShortcuts,
-  memberFilters,
-  memberTableColumns,
-  teamFixture,
-} from "./team-fixtures.js";
+import { dashboardDateShortcuts, memberFilters, memberTableColumns, teamFixture } from "./team-fixtures.js";
 
 const MEMBER_FILTER_MESSAGE = "成员筛选仍为原型视图，真实成员接口接入后可查询。";
 const DASHBOARD_PLACEHOLDER_MESSAGE = "团队数据看板仍为原型视图，真实统计接口接入后可切换。";
 const DASHBOARD_EXPORT_MESSAGE = "导出仍为原型占位，真实团队数据接入后可下载报表。";
 
 export function renderTeamPage(context = {}) {
-  const metrics = context.team?.metrics ?? teamFixture.metrics;
+  const metrics = resolveTeamMetrics(context.stats, context.members);
+  const members = Array.isArray(context.members) ? context.members : context.team?.members ?? teamFixture.members;
+  const projectName = context.projectName ?? "项目";
 
   return `
     <section class="library-team-page team-page" aria-labelledby="team-page-title">
@@ -23,12 +20,12 @@ export function renderTeamPage(context = {}) {
           <div>
             <p class="library-team-kicker">团队</p>
             <h1 id="team-page-title">团队协作台</h1>
-            <p class="library-team-subcopy">用成员、项目范围和积分额度管理多人漫剧生产，保证资产沉淀在团队空间。</p>
+            <p class="library-team-subcopy">围绕项目 ${escapeHtml(projectName)} 的成员、额度与协作规则管理。</p>
           </div>
           <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">创建成员账号</button>
         </header>
         <div class="library-team-top-grid">
-          <section class="library-team-upgrade-gate" aria-label="团队资产库专业版关卡">
+          <section class="library-team-upgrade-gate" aria-label="团队资产库专业版门卡">
             <div>
               <p class="library-team-kicker">团队额度</p>
               <h2>团队资产库为专业版会员权益</h2>
@@ -51,9 +48,9 @@ export function renderTeamPage(context = {}) {
               ${renderMetric("团队项目", metrics.projects)}
               ${renderMetric("团队席位", metrics.seats, "扩容")}
               ${renderMetric("单账号任务并发", metrics.concurrency, "扩容")}
-              ${renderMetric("团队消耗积分", metrics.consumedCredits)}
+              ${renderMetric("团队总消耗积分", metrics.consumedCredits)}
               ${renderMetric("团队剩余积分", metrics.remainingCredits)}
-              ${renderMetric("团队剩余可分配积分", metrics.distributableCredits, "加量")}
+              ${renderMetric("团队可分配积分", metrics.distributableCredits, "加量")}
             </dl>
           </section>
         </div>
@@ -70,12 +67,7 @@ export function renderTeamPage(context = {}) {
           </header>
           <form class="library-team-filterbar" aria-label="成员筛选器">
             ${memberFilters.map(renderMemberFilter).join("")}
-            <button
-              class="library-team-button library-team-button-primary"
-              type="button"
-              data-action="show-library-placeholder"
-              data-placeholder-message="${escapeAttr(MEMBER_FILTER_MESSAGE)}"
-            >搜索</button>
+            <button class="library-team-button library-team-button-primary" type="button" data-action="show-library-placeholder" data-placeholder-message="${escapeAttr(MEMBER_FILTER_MESSAGE)}">搜索</button>
             <button class="library-team-button" type="reset">重置</button>
           </form>
           <div class="library-team-table-wrap">
@@ -84,18 +76,11 @@ export function renderTeamPage(context = {}) {
                 <tr>${memberTableColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
               </thead>
               <tbody>
-                <tr>
-                  <td colspan="${memberTableColumns.length}">
-                    <div class="library-team-empty-state">
-                      <div class="library-team-empty-icon" aria-hidden="true">+</div>
-                      <div>
-                        <h3>创建成员开始团队协作</h3>
-                        <p>邀请成员后，这里会显示账号、角色、项目范围与积分额度。</p>
-                      </div>
-                      <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">创建成员账号</button>
-                    </div>
-                  </td>
-                </tr>
+                ${
+                  members.length
+                    ? members.map(renderMemberRow).join("")
+                    : `<tr><td colspan="${memberTableColumns.length}"><div class="library-team-empty-state"><div class="library-team-empty-icon" aria-hidden="true">+</div><div><h3>创建成员开始团队协作</h3><p>邀请成员后，这里会显示账号、角色、项目范围与积分额度。</p></div><button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">创建成员账号</button></div></td></tr>`
+                }
               </tbody>
             </table>
           </div>
@@ -108,7 +93,10 @@ export function renderTeamPage(context = {}) {
   `;
 }
 
-export function renderTeamDashboardPage() {
+export function renderTeamDashboardPage(context = {}) {
+  const stats = context.stats ?? {};
+  const members = Array.isArray(context.members) ? context.members : [];
+
   return `
     <section class="library-team-page team-dashboard-page" aria-labelledby="team-dashboard-title">
       <div class="library-team-shell">
@@ -122,24 +110,17 @@ export function renderTeamDashboardPage() {
         </header>
         <nav class="library-team-tabs" role="tablist" aria-label="团队数据看板">
           ${["成员创作与消耗", "项目资产与成本", "排行榜"].map((tab, index) => `
-            <button
-              class="library-team-tab${index === 0 ? " is-active" : ""}"
-              type="button"
-              role="tab"
-              aria-selected="${index === 0 ? "true" : "false"}"
-              data-action="show-library-placeholder"
-              data-placeholder-message="${escapeAttr(DASHBOARD_PLACEHOLDER_MESSAGE)}"
-            >${escapeHtml(tab)}</button>
+            <button class="library-team-tab${index === 0 ? " is-active" : ""}" type="button" role="tab" aria-selected="${index === 0 ? "true" : "false"}" data-action="show-library-placeholder" data-placeholder-message="${escapeAttr(DASHBOARD_PLACEHOLDER_MESSAGE)}">${escapeHtml(tab)}</button>
           `).join("")}
         </nav>
         <section class="library-team-card" aria-labelledby="dashboard-summary-title">
           <p class="library-team-kicker">总览</p>
           <h2 id="dashboard-summary-title">成员创作与消耗</h2>
           <dl class="library-team-metric-grid compact">
-            ${renderMetric("成员数", 0)}
-            ${renderMetric("启用成员数", 0)}
-            ${renderMetric("成员总消耗积分", 0)}
-            ${renderMetric("成员均消耗积分", 0)}
+            ${renderMetric("成员数", members.length)}
+            ${renderMetric("启用成员数", members.filter((member) => member?.status !== "disabled").length)}
+            ${renderMetric("成员总消耗积分", stats?.consumedCredits ?? 0)}
+            ${renderMetric("成员均消耗积分", stats?.memberAverageCredits ?? 0)}
           </dl>
         </section>
         <section class="library-team-card" aria-labelledby="dashboard-detail-title">
@@ -148,44 +129,28 @@ export function renderTeamDashboardPage() {
               <p class="library-team-kicker">明细</p>
               <h2 id="dashboard-detail-title">成员创作与消耗详情</h2>
             </div>
-            <button
-              class="library-team-button library-team-button-primary"
-              type="button"
-              data-action="show-library-placeholder"
-              data-placeholder-message="${escapeAttr(DASHBOARD_EXPORT_MESSAGE)}"
-            >导出</button>
+            <button class="library-team-button library-team-button-primary" type="button" data-action="show-library-placeholder" data-placeholder-message="${escapeAttr(DASHBOARD_EXPORT_MESSAGE)}">导出</button>
           </header>
           <div class="library-team-filterbar">
             <label class="library-team-field"><span>角色</span><select><option>全部</option></select></label>
             <label class="library-team-field"><span>状态</span><select><option>全部</option></select></label>
             <div class="library-team-date-shortcuts">
               ${dashboardDateShortcuts.map((shortcut, index) => `
-                <button
-                  class="library-team-tab${index === 0 ? " is-active" : ""}"
-                  type="button"
-                  data-action="show-library-placeholder"
-                  data-placeholder-message="${escapeAttr(DASHBOARD_PLACEHOLDER_MESSAGE)}"
-                >${escapeHtml(shortcut)}</button>
+                <button class="library-team-tab${index === 0 ? " is-active" : ""}" type="button" data-action="show-library-placeholder" data-placeholder-message="${escapeAttr(DASHBOARD_PLACEHOLDER_MESSAGE)}">${escapeHtml(shortcut)}</button>
               `).join("")}
             </div>
           </div>
           <div class="library-team-table-wrap">
             <table>
               <thead>
-                <tr>${["账号", "成员名", "角色", "总消耗积分", "创作剧本数", "项目均消耗积分", "创作项目数", "项目均消耗积分", "操作"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+                <tr>${["账号", "成员名称", "角色", "总消耗积分", "创作剧本数", "项目均消耗积分", "创作项目数", "项目均消耗积分", "操作"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
               </thead>
               <tbody>
-                <tr>
-                  <td colspan="9">
-                    <div class="library-team-empty-state">
-                      <div class="library-team-empty-icon" aria-hidden="true">0</div>
-                      <div>
-                        <h3>暂无数据</h3>
-                        <p>开始团队协作后，这里会显示成员消耗和项目成本。</p>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
+                ${
+                  members.length
+                    ? members.map(renderDashboardRow).join("")
+                    : `<tr><td colspan="9"><div class="library-team-empty-state"><div class="library-team-empty-icon" aria-hidden="true">0</div><div><h3>暂无数据</h3><p>开始团队协作后，这里会显示成员消耗和项目成本。</p></div></div></td></tr>`
+                }
               </tbody>
             </table>
           </div>
@@ -199,9 +164,24 @@ function renderMetric(label, value, actionLabel) {
   return `
     <div class="library-team-metric">
       <dt>${escapeHtml(label)}${actionLabel ? ` <button class="library-team-inline-action" type="button" data-action="open-pricing">${escapeHtml(actionLabel)}</button>` : ""}</dt>
-      <dd>${escapeHtml(value)}</dd>
+      <dd>${escapeHtml(value ?? 0)}</dd>
     </div>
   `;
+}
+
+function resolveTeamMetrics(stats, members) {
+  if (!stats || typeof stats !== "object") {
+    return teamFixture.metrics;
+  }
+  const memberCount = Array.isArray(members) ? members.length : Number(stats.memberCount ?? 0);
+  return {
+    projects: Number(stats.episodeCount ?? stats.projects ?? 0),
+    seats: `${memberCount}/${Math.max(memberCount, Number(stats.memberCount ?? memberCount ?? 0))}`,
+    concurrency: Number(stats.generatedVideoCount ?? stats.concurrency ?? 0),
+    consumedCredits: Number(stats.generatedImageCount ?? stats.consumedCredits ?? 0),
+    remainingCredits: Number(stats.assetCount ?? stats.remainingCredits ?? 0),
+    distributableCredits: Number(stats.exportCount ?? stats.distributableCredits ?? 0),
+  };
 }
 
 function renderMemberFilter(label) {
@@ -218,3 +198,36 @@ function renderMemberFilter(label) {
   `;
 }
 
+function renderMemberRow(member, index) {
+  const name = member.phone ?? member.userId ?? `成员 ${index + 1}`;
+  return `
+    <tr>
+      <td>${escapeHtml(member.phone ?? member.userId ?? "-")}</td>
+      <td>${escapeHtml(name)}</td>
+      <td>${escapeHtml(member.role ?? "unknown")}</td>
+      <td>${escapeHtml(member.consumedCredits ?? 0)}</td>
+      <td>${escapeHtml(member.scriptCount ?? 0)}</td>
+      <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
+      <td>${escapeHtml(member.projectCount ?? 0)}</td>
+      <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
+      <td>${escapeHtml(member.status ?? "unknown")}</td>
+    </tr>
+  `;
+}
+
+function renderDashboardRow(member, index) {
+  const name = member.phone ?? member.userId ?? `成员 ${index + 1}`;
+  return `
+    <tr>
+      <td>${escapeHtml(member.phone ?? member.userId ?? "-")}</td>
+      <td>${escapeHtml(name)}</td>
+      <td>${escapeHtml(member.role ?? "unknown")}</td>
+      <td>${escapeHtml(member.consumedCredits ?? 0)}</td>
+      <td>${escapeHtml(member.scriptCount ?? 0)}</td>
+      <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
+      <td>${escapeHtml(member.projectCount ?? 0)}</td>
+      <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
+      <td><button class="library-team-link-button" type="button" data-action="show-library-placeholder" data-placeholder-message="${escapeAttr(DASHBOARD_PLACEHOLDER_MESSAGE)}">查看</button></td>
+    </tr>
+  `;
+}

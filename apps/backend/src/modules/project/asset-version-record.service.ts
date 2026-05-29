@@ -20,6 +20,7 @@ interface AssetVersionRow {
   organization_id: string;
   asset_id: string;
   version_number: number;
+  storage_object_id: string | null;
   storage_object_key: string;
   metadata_json: Record<string, unknown> | string;
   source_task_id: string | null;
@@ -42,10 +43,11 @@ export async function createAssetVersionSnapshot(
     assetType: AssetType;
     assetKey: string;
     createdByUserId: string;
+    storageObjectId?: string | null;
     storageObjectKey: string;
     metadata: AssetVersionRecord["metadata"];
-    sourceTaskId: string;
-    sourceAttemptId: string;
+    sourceTaskId: string | null;
+    sourceAttemptId: string | null;
     now: Date;
   },
 ): Promise<{
@@ -79,6 +81,7 @@ export async function createAssetVersionSnapshot(
       organizationId: input.organizationId,
       assetId: asset.id,
       versionNumber: nextVersion?.version_number ?? 1,
+      storageObjectId: input.storageObjectId ?? null,
       storageObjectKey: input.storageObjectKey,
       metadata: input.metadata,
       sourceTaskId: input.sourceTaskId,
@@ -185,6 +188,7 @@ async function insertAssetVersionRow(
         organization_id,
         asset_id,
         version_number,
+        storage_object_id,
         storage_object_key,
         metadata_json,
         source_task_id,
@@ -192,7 +196,7 @@ async function insertAssetVersionRow(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
       ON CONFLICT (asset_id, version_number) DO NOTHING
       RETURNING *
     `,
@@ -201,6 +205,7 @@ async function insertAssetVersionRow(
       input.version.organizationId,
       input.version.assetId,
       input.version.versionNumber,
+      input.version.storageObjectId ?? null,
       input.version.storageObjectKey,
       JSON.stringify(input.version.metadata),
       input.version.sourceTaskId,
@@ -222,6 +227,7 @@ function versionFactsMatch(
       ? (JSON.parse(row.metadata_json) as AssetVersionRecord["metadata"])
       : (row.metadata_json as AssetVersionRecord["metadata"]);
   return (
+    (row.storage_object_id ?? null) === (version.storageObjectId ?? null) &&
     row.storage_object_key === version.storageObjectKey &&
     metadata.mimeType === version.metadata.mimeType &&
     metadata.width === version.metadata.width &&
@@ -251,6 +257,7 @@ function versionFromRow(row: AssetVersionRow): AssetVersionRecord {
     organizationId: row.organization_id,
     assetId: row.asset_id,
     versionNumber: row.version_number,
+    storageObjectId: row.storage_object_id,
     storageObjectKey: row.storage_object_key,
     metadata,
     sourceTaskId: row.source_task_id ?? "",

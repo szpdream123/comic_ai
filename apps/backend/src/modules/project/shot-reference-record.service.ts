@@ -32,6 +32,7 @@ export interface ShotReferenceRecord {
   assetType?: string;
   assetKey?: string;
   label?: unknown;
+  storageObjectId?: string | null;
   previewUrl?: string | null;
 }
 
@@ -50,6 +51,7 @@ interface ShotReferenceRow {
   asset_type?: string;
   asset_key?: string;
   metadata_json?: Record<string, unknown> | null;
+  storage_object_id?: string | null;
   storage_object_key?: string | null;
 }
 
@@ -144,6 +146,7 @@ export async function listShotReferencesForProject(
         a.asset_type,
         a.asset_key,
         COALESCE(selected_version.metadata_json, latest_version.metadata_json) AS metadata_json,
+        COALESCE(selected_version.storage_object_id, latest_version.storage_object_id) AS storage_object_id,
         COALESCE(selected_version.storage_object_key, latest_version.storage_object_key) AS storage_object_key
       FROM shot_reference_assets r
       JOIN assets a
@@ -207,6 +210,7 @@ function referenceFromRow(row: ShotReferenceRow): ShotReferenceRecord {
     assetType: row.asset_type,
     assetKey: row.asset_key,
     label: metadata?.label ?? row.asset_key,
+    storageObjectId: row.storage_object_id ?? null,
     previewUrl: getPreviewUrl(row.storage_object_key ?? null, metadata),
   };
 }

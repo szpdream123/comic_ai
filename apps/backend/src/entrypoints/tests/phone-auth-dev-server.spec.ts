@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
+// This suite spins up many dev servers and local DB instances; keep subtests serial to
+// avoid cross-test interference from runtime-level resources in the Node test runner.
+describe.configure?.({ concurrency: 1 });
+
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
+import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 
 describe("phone auth dev server", () => {
   it("serves the login page and static assets", async () => {
@@ -16,6 +21,23 @@ describe("phone auth dev server", () => {
 
       assert.equal(response.status, 200);
       assert.match(html, /id="login-form"/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves app shell for episode deep links", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(`${server.origin}/projects/project-1/episodes/episode-1`);
+      const html = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(html, /id="creator-app"/);
+      assert.match(html, /src="\/app\.js"/);
     } finally {
       await server.close();
     }
@@ -842,6 +864,12 @@ describe("phone auth dev server", () => {
       );
       const generatedAsset = await generatedAssetResponse.json();
 
+      const importedAlleyUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
+        purpose: "asset-import/scene",
+        fileName: "imported-alley.png",
+        contentType: "image/png",
+        body: Buffer.from([1, 2, 3, 4]),
+      });
       const importedAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
         method: "POST",
         headers: {
@@ -851,7 +879,8 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           kind: "scene",
           name: "Imported Alley",
-          storageObjectKey: "data:image/png;base64,imported-alley",
+          uploadSessionId: importedAlleyUpload.uploadSessionId,
+          storageObjectId: importedAlleyUpload.storageObjectId,
           mimeType: "image/png",
           width: 1280,
           height: 720,
@@ -859,6 +888,12 @@ describe("phone auth dev server", () => {
       });
       const importedAsset = await importedAssetResponse.json();
 
+      const deletablePropUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
+        purpose: "asset-import/prop",
+        fileName: "disposable-prop.png",
+        contentType: "image/png",
+        body: Buffer.from([5, 6, 7, 8]),
+      });
       const deletableAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
         method: "POST",
         headers: {
@@ -868,7 +903,8 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           kind: "prop",
           name: "Disposable Prop",
-          storageObjectKey: "data:image/png;base64,disposable-prop",
+          uploadSessionId: deletablePropUpload.uploadSessionId,
+          storageObjectId: deletablePropUpload.storageObjectId,
           mimeType: "image/png",
           width: 512,
           height: 512,
@@ -1052,6 +1088,12 @@ describe("phone auth dev server", () => {
       });
       const updatedShot = await updateShotResponse.json();
 
+      const importedShotImageUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
+        purpose: "storyboard-image",
+        fileName: "manual-storyboard-image.png",
+        contentType: "image/png",
+        body: Buffer.from([9, 10, 11, 12]),
+      });
       const importedShotImageResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
         {
@@ -1063,7 +1105,8 @@ describe("phone auth dev server", () => {
           body: JSON.stringify({
             kind: "image",
             name: "Manual storyboard image",
-            storageObjectKey: "data:image/png;base64,manual-storyboard-image",
+            uploadSessionId: importedShotImageUpload.uploadSessionId,
+            storageObjectId: importedShotImageUpload.storageObjectId,
             mimeType: "image/png",
             width: 1024,
             height: 1024,
@@ -1072,6 +1115,12 @@ describe("phone auth dev server", () => {
       );
       const importedShotImage = await importedShotImageResponse.json();
 
+      const importedSecondShotImageUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
+        purpose: "storyboard-image",
+        fileName: "manual-storyboard-image-dup.png",
+        contentType: "image/png",
+        body: Buffer.from([13, 14, 15, 16]),
+      });
       const importedSecondShotImageResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
         {
@@ -1083,7 +1132,8 @@ describe("phone auth dev server", () => {
           body: JSON.stringify({
             kind: "image",
             name: "Manual storyboard image duplicate source",
-            storageObjectKey: "data:image/png;base64,manual-storyboard-image",
+            uploadSessionId: importedSecondShotImageUpload.uploadSessionId,
+            storageObjectId: importedSecondShotImageUpload.storageObjectId,
             mimeType: "image/png",
             width: 1024,
             height: 1024,
@@ -1092,6 +1142,12 @@ describe("phone auth dev server", () => {
       );
       const importedSecondShotImage = await importedSecondShotImageResponse.json();
 
+      const importedShotVideoUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
+        purpose: "storyboard-video",
+        fileName: "manual-storyboard-video.mp4",
+        contentType: "video/mp4",
+        body: Buffer.from([17, 18, 19, 20]),
+      });
       const importedShotVideoResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
         {
@@ -1103,7 +1159,8 @@ describe("phone auth dev server", () => {
           body: JSON.stringify({
             kind: "video",
             name: "Manual storyboard video",
-            storageObjectKey: "data:video/mp4;base64,manual-storyboard-video",
+            uploadSessionId: importedShotVideoUpload.uploadSessionId,
+            storageObjectId: importedShotVideoUpload.storageObjectId,
             mimeType: "video/mp4",
             width: 1024,
             height: 1024,
@@ -1287,10 +1344,10 @@ describe("phone auth dev server", () => {
       assert.equal(deletableAsset.asset.assetType, "prop_reference");
       assert.equal(libraryResponse.status, 200);
       assert.equal(library.assets.length, 3);
-      assert.equal(
+      assert.match(
         library.assets.find((asset: { assetType: string }) => asset.assetType === "scene_reference")
-          ?.previewUrl,
-        "data:image/png;base64,imported-alley",
+          ?.previewUrl ?? "",
+        /^\/uploads\/storage\//,
       );
       assert.equal(versionsResponse.status, 200);
       assert.equal(versions.versions.length, 1);
@@ -1299,9 +1356,8 @@ describe("phone auth dev server", () => {
       assert.equal(detail.assetSummary.character.count, 1);
       assert.equal(detail.assetSummary.scene.count, 1);
       assert.equal(detail.assetSummary.prop.count, 1);
-      assert.deepEqual(detail.assetSummary.scene.previews, [
-        "data:image/png;base64,imported-alley",
-      ]);
+      assert.equal(detail.assetSummary.scene.previews.length, 1);
+      assert.match(detail.assetSummary.scene.previews[0], /^\/uploads\/storage\//);
       assert.equal(membersResponse.status, 200);
       assert.ok(members.members.length >= 1);
       assert.equal(statsResponse.status, 200);
@@ -1358,8 +1414,8 @@ describe("phone auth dev server", () => {
       );
       assert.equal(detailAfterShotMediaResponse.status, 200);
       assert.equal(hydratedManualShot.description, "Updated manual shot description");
-      assert.equal(hydratedManualShot.previewImageUrl, "data:image/png;base64,manual-storyboard-image");
-      assert.equal(hydratedManualShot.previewVideoUrl, "data:video/mp4;base64,manual-storyboard-video");
+      assert.match(hydratedManualShot.previewImageUrl, /^\/uploads\/storage\//);
+      assert.match(hydratedManualShot.previewVideoUrl, /^\/uploads\/storage\//);
       assert.equal(hydratedManualShot.imageVersions.length, 2);
       assert.equal(hydratedManualShot.videoVersions.length, 1);
       assert.equal(hydratedManualShot.references.length, 2);
@@ -1479,6 +1535,1181 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("exposes enveloped project-to-episode workbench routes for the new page contract", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-workbench-contract-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode workbench contract",
+          scriptInput: "Episode 1: The project opens an episode workbench.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-workbench-contract-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "第一集" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const detailResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/detail`,
+        { headers: { cookie } },
+      );
+      const detailEnvelope = await detailResponse.json();
+
+      const workbenchResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/workbench`,
+        { headers: { cookie } },
+      );
+      const workbenchEnvelope = await workbenchResponse.json();
+
+      const assetsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const assetsEnvelope = await assetsResponse.json();
+
+      const storyboardsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const storyboardsEnvelope = await storyboardsResponse.json();
+
+      const tasksResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-tasks?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const tasksEnvelope = await tasksResponse.json();
+        const generationConfigResponse = await fetch(
+          `${server.origin}/api/episodes/${episodeId}/generation-config`,
+          { headers: { cookie } },
+        );
+        const generationConfigEnvelope = await generationConfigResponse.json();
+        const createStoryboardResponse = await fetch(`${server.origin}/api/creator/shots`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            title: "第一镜",
+            description: "草稿存储测试分镜",
+            episodeId,
+          }),
+        });
+        const createStoryboardEnvelope = await createStoryboardResponse.json();
+        const storyboardId = createStoryboardEnvelope.shot.id;
+        const saveDraftResponse = await fetch(
+          `${server.origin}/api/episodes/${episodeId}/generation-drafts/storyboard/${storyboardId}`,
+          {
+            method: "PATCH",
+            headers: {
+              "content-type": "application/json",
+              cookie,
+            },
+            body: JSON.stringify({
+              prompt: "一个更贴近废土气质的分镜草稿",
+              mode: "image",
+              payload: {
+                modelCode: "nano_banana_2",
+                aspectRatio: "16:9",
+              },
+            }),
+          },
+        );
+        const saveDraftEnvelope = await saveDraftResponse.json();
+
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.match(createdEpisodeEnvelope.requestId, /.+/);
+      assert.equal(detailResponse.status, 200);
+      assert.equal(detailEnvelope.data.project.projectId, created.project.id);
+      assert.ok(
+        detailEnvelope.data.episodes.some(
+          (episode: { episodeId: string; title: string }) =>
+            episode.episodeId === episodeId && episode.title === "第一集",
+        ),
+      );
+      assert.equal(workbenchResponse.status, 200);
+      assert.equal(workbenchEnvelope.data.episode.episodeId, episodeId);
+      assert.equal(workbenchEnvelope.data.episode.projectId, created.project.id);
+      assert.equal(workbenchEnvelope.data.project.projectId, created.project.id);
+      assert.equal(workbenchEnvelope.data.navigation.backTarget, "project_episodes");
+      assert.equal(typeof workbenchEnvelope.data.permissions.canEdit, "boolean");
+      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "storyboards"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "assets"), false);
+      assert.equal(assetsResponse.status, 200);
+      assert.deepEqual(Object.keys(assetsEnvelope.data).sort(), [
+        "hasNext",
+        "items",
+        "page",
+        "pageSize",
+        "total",
+      ]);
+      assert.equal(storyboardsResponse.status, 200);
+      assert.equal(storyboardsEnvelope.data.items.every(
+        (storyboard: { episodeId?: string }) => !storyboard.episodeId || storyboard.episodeId === episodeId,
+      ), true);
+        assert.equal(tasksResponse.status, 200);
+        assert.deepEqual(tasksEnvelope.data.items, []);
+        assert.equal(generationConfigResponse.status, 200);
+        assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "nano_banana_2");
+        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "video_mock_1");
+        assert.equal(generationConfigEnvelope.data.creditBalance, 10000);
+        assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
+        assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
+        assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxReferencesPerTask, 30);
+        assert.ok(generationConfigEnvelope.data.uploadLimits.blockedExtensions.includes(".exe"));
+        assert.equal(createStoryboardResponse.status, 200);
+        assert.equal(saveDraftResponse.status, 200);
+        assert.equal(saveDraftEnvelope.data.draft.episodeId, episodeId);
+        assert.equal(saveDraftEnvelope.data.draft.targetType, "storyboard");
+        assert.equal(saveDraftEnvelope.data.draft.targetId, storyboardId);
+        assert.equal(saveDraftEnvelope.data.draft.prompt, "一个更贴近废土气质的分镜草稿");
+        assert.equal(saveDraftEnvelope.data.draft.payload.modelCode, "nano_banana_2");
+      } finally {
+        await server.close();
+      }
+  });
+
+  it("persists episode generation tasks with fixed mock media results", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-generation-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode generation persistence",
+          scriptInput: "Episode 1: A fixed mock result is returned through task APIs.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Task" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          episodeId,
+          title: "Episode Task Shot",
+          description: "Shot used by episode generation task APIs.",
+        }),
+      });
+      const createdShot = await createShotResponse.json();
+      const storyboardId = createdShot.shot.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-image-task-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "storyboard",
+            targetId: storyboardId,
+            prompt: "fixed wasteland image",
+            model: "nano_banana_2",
+            parameters: { aspectRatio: "16:9" },
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const imageTask = imageTaskEnvelope.data;
+
+      const imageTaskLookupResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${imageTask.taskId}`,
+        { headers: { cookie } },
+      );
+      const imageTaskLookupEnvelope = await imageTaskLookupResponse.json();
+
+      const listTasksResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-tasks?page=1&pageSize=10`,
+        { headers: { cookie } },
+      );
+      const listTasksEnvelope = await listTasksResponse.json();
+
+      const imageReplayResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-image-task-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "storyboard",
+            targetId: storyboardId,
+            prompt: "fixed wasteland image",
+            model: "nano_banana_2",
+            parameters: { aspectRatio: "16:9" },
+          }),
+        },
+      );
+      const imageReplayEnvelope = await imageReplayResponse.json();
+
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-video-task-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "fixed episode video",
+            model: "video_mock_1",
+            parameters: { durationSec: 5 },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      const videoTask = videoTaskEnvelope.data;
+
+      const setImageResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards/${storyboardId}/set-current-image`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-set-image-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: imageTask.result.assetVersionId,
+            storageObjectId: imageTask.result.storageObjectId,
+          }),
+        },
+      );
+      const setImageEnvelope = await setImageResponse.json();
+
+      const setVideoResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards/${storyboardId}/set-current-video`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-set-video-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: videoTask.result.assetVersionId,
+            storageObjectId: videoTask.result.storageObjectId,
+          }),
+        },
+      );
+      const setVideoEnvelope = await setVideoResponse.json();
+
+      const storyboardsAfterSetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=10`,
+        { headers: { cookie } },
+      );
+      const storyboardsAfterSetEnvelope = await storyboardsAfterSetResponse.json();
+
+      const exportOriginalResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/export-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-export-original-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: videoTask.result.assetVersionId,
+            storageObjectId: videoTask.result.storageObjectId,
+          }),
+        },
+      );
+      const exportOriginalEnvelope = await exportOriginalResponse.json();
+
+      assert.equal(createShotResponse.status, 200);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(imageTask.kind, "image");
+      assert.equal(imageTask.status, "succeeded");
+      assert.equal(imageTask.episodeId, episodeId);
+      assert.equal(imageTask.result.mediaKind, "image");
+      assert.match(imageTask.result.imageUrl, /\/uploads\/storage\//);
+      assert.doesNotMatch(imageTask.result.imageUrl, /C:\\Users\\/);
+      assert.match(imageTask.result.storageObjectId, /.+/);
+      assert.equal(imageTaskLookupResponse.status, 200);
+      assert.equal(imageTaskLookupEnvelope.data.taskId, imageTask.taskId);
+      assert.equal(listTasksResponse.status, 200);
+      assert.equal(
+        listTasksEnvelope.data.items.some((task: { taskId: string }) => task.taskId === imageTask.taskId),
+        true,
+      );
+      assert.equal(imageReplayResponse.status, 200);
+      assert.equal(imageReplayEnvelope.data.taskId, imageTask.taskId);
+      assert.equal(videoTaskResponse.status, 200);
+      assert.equal(videoTask.kind, "video");
+      assert.equal(videoTask.status, "succeeded");
+      assert.equal(videoTask.result.mediaKind, "video");
+      assert.match(videoTask.result.videoUrl, /\/uploads\/storage\//);
+      assert.doesNotMatch(videoTask.result.videoUrl, /C:\\Users\\/);
+      assert.ok(videoTask.creditBalance < 10000);
+      assert.equal(setImageResponse.status, 200);
+      assert.equal(setImageEnvelope.data.storyboard.currentImageFileId, imageTask.result.assetVersionId);
+      assert.equal(setImageEnvelope.data.file.storageObjectId, imageTask.result.storageObjectId);
+      assert.equal(setVideoResponse.status, 200);
+      assert.equal(setVideoEnvelope.data.storyboard.currentVideoFileId, videoTask.result.assetVersionId);
+      assert.equal(setVideoEnvelope.data.file.storageObjectId, videoTask.result.storageObjectId);
+      assert.equal(storyboardsAfterSetResponse.status, 200);
+      const updatedStoryboard = storyboardsAfterSetEnvelope.data.items.find(
+        (storyboard: { storyboardId: string }) => storyboard.storyboardId === storyboardId,
+      );
+      assert.equal(updatedStoryboard.currentImageFileId, imageTask.result.assetVersionId);
+      assert.equal(updatedStoryboard.currentVideoFileId, videoTask.result.assetVersionId);
+      assert.equal(exportOriginalResponse.status, 200);
+      assert.equal(exportOriginalEnvelope.data.exportTask.status, "succeeded");
+      assert.equal(exportOriginalEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
+      assert.match(exportOriginalEnvelope.data.exportTask.downloadUrl, /\/uploads\/storage\//);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects media from another episode when setting storyboard media, deleting files, or exporting original video", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-cross-media-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode media isolation",
+          scriptInput: "Episode 1: Media cannot cross episode boundaries.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      async function createEpisode(title: string) {
+        const response = await fetch(`${server.origin}/api/projects/${created.project.id}/episodes`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title }),
+        });
+        const envelope = await response.json();
+        assert.equal(response.status, 200);
+        return envelope.data.episode.id as string;
+      }
+
+      async function createShot(episodeId: string, title: string) {
+        const response = await fetch(`${server.origin}/api/creator/shots`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            projectId: created.project.id,
+            episodeId,
+            title,
+            description: `${title} description.`,
+          }),
+        });
+        const payload = await response.json();
+        assert.equal(response.status, 200);
+        return payload.shot.id as string;
+      }
+
+      const firstEpisodeId = await createEpisode("Episode One");
+      const secondEpisodeId = await createEpisode("Episode Two");
+      const secondStoryboardId = await createShot(secondEpisodeId, "Episode Two Shot");
+
+      const firstVideoResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-cross-media-video",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: firstEpisodeId,
+            motionPrompt: "video belongs to episode one",
+            model: "video_mock_1",
+          }),
+        },
+      );
+      const firstVideo = (await firstVideoResponse.json()).data;
+      const firstImageResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-cross-media-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: firstEpisodeId,
+            prompt: "image belongs to episode one",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const firstImage = (await firstImageResponse.json()).data;
+
+      const crossSetImageResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/storyboards/${secondStoryboardId}/set-current-image`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: firstImage.result.assetVersionId,
+            storageObjectId: firstImage.result.storageObjectId,
+          }),
+        },
+      );
+      const crossSetImage = await crossSetImageResponse.json();
+
+      const crossSetResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/storyboards/${secondStoryboardId}/set-current-video`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: firstVideo.result.assetVersionId,
+            storageObjectId: firstVideo.result.storageObjectId,
+          }),
+        },
+      );
+      const crossSet = await crossSetResponse.json();
+
+      const crossDeleteResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/file-resources/${firstImage.result.storageObjectId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: firstImage.result.assetVersionId,
+            storageObjectId: firstImage.result.storageObjectId,
+          }),
+        },
+      );
+      const crossDelete = await crossDeleteResponse.json();
+
+      const crossExportResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/export-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: firstVideo.result.assetVersionId,
+            storageObjectId: firstVideo.result.storageObjectId,
+          }),
+        },
+      );
+      const crossExport = await crossExportResponse.json();
+
+      assert.equal(firstVideoResponse.status, 200);
+      assert.equal(firstImageResponse.status, 200);
+      assert.equal(firstVideo.episodeId, firstEpisodeId);
+      assert.equal(firstImage.episodeId, firstEpisodeId);
+      assert.equal(crossSetImageResponse.status, 404);
+      assert.equal(crossSetImage.errorCode, "resource_not_found");
+      assert.equal(crossSetResponse.status, 404);
+      assert.equal(crossSet.errorCode, "resource_not_found");
+      assert.equal(crossDeleteResponse.status, 404);
+      assert.equal(crossDelete.errorCode, "resource_not_found");
+      assert.equal(crossExportResponse.status, 404);
+      assert.equal(crossExport.errorCode, "resource_not_found");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("marks stale episode generation tasks as task_timeout and releases reserved credits", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-timeout-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode generation timeout",
+          scriptInput: "Episode 1: timeout stale generation.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Timeout" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-timeout-image-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "stale image task",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskId = imageTaskEnvelope.data.taskId;
+
+      const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+      await db.query(
+        `
+          UPDATE credit_reservations
+          SET amount_reserved = amount_total,
+              amount_consumed = 0,
+              amount_released = 0,
+              status = 'active',
+              updated_at = $2
+          WHERE task_id = $1
+        `,
+        [taskId, past],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'running',
+              failure_code = NULL,
+              input_snapshot_json = jsonb_set(
+                jsonb_set(input_snapshot_json, '{requestedAt}', to_jsonb($2::text), true),
+                '{timeoutAt}',
+                to_jsonb($2::text),
+                true
+              ),
+              updated_at = $2::timestamptz
+          WHERE id = $1
+        `,
+        [taskId, past],
+      );
+
+      const timeoutLookupResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const timeoutLookupEnvelope = await timeoutLookupResponse.json();
+
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_consumed: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        `
+          SELECT amount_reserved, amount_consumed, amount_released, status
+          FROM credit_reservations
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(timeoutLookupResponse.status, 200);
+      assert.equal(timeoutLookupEnvelope.data.status, "failed");
+      assert.equal(timeoutLookupEnvelope.data.failureCode, "task_timeout");
+      assert.equal(timeoutLookupEnvelope.data.credit.released, 90);
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 90);
+      assert.equal(reservation.rows[0]?.status, "released");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("repairs stale episode generation tasks from the storage repair endpoint", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-timeout-repair-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode generation timeout repair",
+          scriptInput: "Episode 1: repair stale generation.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Timeout Repair" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-timeout-repair-image-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "repair stale image task",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const taskId = (await imageTaskResponse.json()).data.taskId;
+
+      const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+      await db.query(
+        `
+          UPDATE credit_reservations
+          SET amount_reserved = amount_total,
+              amount_consumed = 0,
+              amount_released = 0,
+              status = 'active',
+              updated_at = $2::timestamptz
+          WHERE task_id = $1
+        `,
+        [taskId, past],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'queued',
+              failure_code = NULL,
+              input_snapshot_json = jsonb_set(
+                jsonb_set(input_snapshot_json, '{requestedAt}', to_jsonb($2::text), true),
+                '{timeoutAt}',
+                to_jsonb($2::text),
+                true
+              ),
+              updated_at = $2::timestamptz
+          WHERE id = $1
+        `,
+        [taskId, past],
+      );
+
+      const repairResponse = await fetch(`${server.origin}/api/storage/repair`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      const repair = await repairResponse.json();
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [taskId],
+      );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(repairResponse.status, 200);
+      assert.deepEqual(repair.episodeGeneration.timedOutTaskIds, [taskId]);
+      assert.equal(task.rows[0]?.status, "failed");
+      assert.equal(task.rows[0]?.failure_code, "task_timeout");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 90);
+      assert.equal(reservation.rows[0]?.status, "released");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("repairs stale episode generation tasks from the background scheduler", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      repairScheduler: {
+        enabled: true,
+        intervalMs: 250,
+        limit: 10,
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-scheduler-repair-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode scheduler timeout repair",
+          scriptInput: "Episode 1: scheduler repairs stale generation.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Scheduler Repair" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-scheduler-repair-image-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "scheduler stale image task",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const taskId = (await imageTaskResponse.json()).data.taskId;
+
+      const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+      await db.query(
+        `
+          UPDATE credit_reservations
+          SET amount_reserved = amount_total,
+              amount_consumed = 0,
+              amount_released = 0,
+              status = 'active',
+              updated_at = $2::timestamptz
+          WHERE task_id = $1
+        `,
+        [taskId, past],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'queued',
+              failure_code = NULL,
+              input_snapshot_json = jsonb_set(
+                jsonb_set(input_snapshot_json, '{requestedAt}', to_jsonb($2::text), true),
+                '{timeoutAt}',
+                to_jsonb($2::text),
+                true
+              ),
+              updated_at = $2::timestamptz
+          WHERE id = $1
+        `,
+        [taskId, past],
+      );
+
+      const repaired = await waitFor(async () => {
+        const row = await db.query<{
+          task_status: string;
+          failure_code: string | null;
+          amount_reserved: number | string;
+          amount_released: number | string;
+          reservation_status: string;
+        }>(
+          `
+            SELECT
+              t.status AS task_status,
+              t.failure_code,
+              r.amount_reserved,
+              r.amount_released,
+              r.status AS reservation_status
+            FROM tasks t
+            JOIN credit_reservations r ON r.task_id = t.id
+            WHERE t.id = $1
+          `,
+          [taskId],
+        );
+        const current = row.rows[0];
+        if (
+          current?.task_status === "failed" &&
+          current.failure_code === "task_timeout" &&
+          Number(current.amount_reserved) === 0 &&
+          Number(current.amount_released) === 90 &&
+          current.reservation_status === "released"
+        ) {
+          return current;
+        }
+        return null;
+      }, 5_000);
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(repaired.task_status, "failed");
+      assert.equal(repaired.failure_code, "task_timeout");
+      assert.equal(Number(repaired.amount_reserved), 0);
+      assert.equal(Number(repaired.amount_released), 90);
+      assert.equal(repaired.reservation_status, "released");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects non-whitelisted CORS origins with an enveloped 403", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(`${server.origin}/api/auth/session`, {
+        headers: {
+          origin: "https://evil.example",
+        },
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 403);
+      assert.equal(payload.errorCode, "origin_forbidden");
+      assert.match(payload.requestId, /.+/);
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects viewer episode write operations with an enveloped 403", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "viewer-episode-permission-project",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          name: "Viewer episode permission",
+          scriptInput: "Episode 1: A viewer may inspect but cannot mutate episode workbench data.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "viewer-episode-permission-episode",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({ title: "Viewer Locked Episode" }),
+        },
+      );
+      const createdEpisode = await createEpisodeResponse.json();
+      const episodeId = createdEpisode.data.episode.id;
+
+      const viewerCookie = await login(server.origin, "13800138002");
+      const viewerSession = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie: viewerCookie },
+      });
+      const viewer = await viewerSession.json();
+      await db.query(
+        `
+          UPDATE memberships
+          SET role = 'viewer'
+          WHERE organization_id = $1
+            AND workspace_id = $2
+            AND user_id = $3
+        `,
+        [
+          "10000000-0000-4000-8000-000000000001",
+          "20000000-0000-4000-8000-000000000001",
+          viewer.user.id,
+        ],
+      );
+
+      const readResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/workbench`,
+        { headers: { cookie: viewerCookie } },
+      );
+      const writeResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "viewer-episode-permission-image",
+            cookie: viewerCookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "viewer should be rejected",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const write = await writeResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(viewerSession.status, 200);
+      assert.equal(readResponse.status, 200);
+      assert.equal(writeResponse.status, 403);
+      assert.equal(write.errorCode, "permission_denied");
+      assert.equal(write.details.reason, "capability_missing");
+      assert.match(write.requestId, /.+/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("hides episode routes from users outside the owning organization", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "cross-org-episode-project",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          name: "Cross org episode isolation",
+          scriptInput: "Episode 1: Another tenant must not see this episode.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "cross-org-episode-create",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({ title: "Tenant A Episode" }),
+        },
+      );
+      const createdEpisode = await createEpisodeResponse.json();
+      const episodeId = createdEpisode.data.episode.id;
+
+      const outsiderCookie = await login(server.origin, "13800138003");
+      const outsiderSession = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie: outsiderCookie },
+      });
+      const outsider = await outsiderSession.json();
+      await db.query(
+        "DELETE FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        ["10000000-0000-4000-8000-000000000001", outsider.user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status, credit_balance_cached)
+          VALUES ($1, 'Other Org', 'active', 10000)
+        `,
+        ["10000000-0000-4000-8000-000000000099"],
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES ($1, $2, 'Other Workspace', 'active')
+        `,
+        [
+          "20000000-0000-4000-8000-000000000099",
+          "10000000-0000-4000-8000-000000000099",
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES ($1, $2, $3, $4, 'creator', 'active')
+        `,
+        [
+          "30000000-0000-4000-8000-000000000099",
+          "10000000-0000-4000-8000-000000000099",
+          "20000000-0000-4000-8000-000000000099",
+          outsider.user.id,
+        ],
+      );
+
+      const readResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/workbench`,
+        { headers: { cookie: outsiderCookie } },
+      );
+      const read = await readResponse.json();
+      const writeResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "cross-org-episode-write",
+            cookie: outsiderCookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "outsider should not see this",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const write = await writeResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(outsiderSession.status, 200);
+      assert.equal(readResponse.status, 404);
+      assert.equal(read.errorCode, "resource_not_found");
+      assert.equal(read.details.reason, "membership_missing");
+      assert.equal(writeResponse.status, 404);
+      assert.equal(write.errorCode, "resource_not_found");
+      assert.equal(write.details.reason, "membership_missing");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes a package script for starting the dev server", async () => {
     const packageJson = await readFile(
       new URL("../../../../../package.json", import.meta.url),
@@ -1542,4 +2773,81 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
+}
+
+async function prepareDirectUpload(
+  origin: string,
+  cookie: string,
+  projectId: string,
+  input: {
+    purpose: string;
+    fileName: string;
+    contentType: string;
+    body: Buffer;
+  },
+) {
+  const prepareResponse = await fetch(`${origin}/api/storage/upload-sessions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": `phone-auth-dev-server-${input.purpose}-${input.fileName}`,
+      cookie,
+    },
+    body: JSON.stringify({
+      projectId,
+      purpose: input.purpose,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      sizeBytes: input.body.byteLength,
+    }),
+  });
+  const prepared = await prepareResponse.json();
+
+  const blobResponse = await fetch(
+    `${origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/blob`,
+    {
+      method: "PUT",
+      headers: {
+        "content-type": input.contentType,
+        cookie,
+      },
+      body: input.body,
+    },
+  );
+  const completeResponse = await fetch(
+    `${origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({}),
+    },
+  );
+
+  assert.equal(prepareResponse.status, 200);
+  assert.equal(blobResponse.status, 200);
+  assert.equal(completeResponse.status, 200);
+
+  return prepared as {
+    uploadSessionId: string;
+    storageObjectId: string;
+  };
+}
+
+async function waitFor<T>(
+  probe: () => Promise<T | null | undefined>,
+  timeoutMs: number,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue: T | null | undefined;
+  while (Date.now() < deadline) {
+    lastValue = await probe();
+    if (lastValue) {
+      return lastValue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`wait_for_timeout:${JSON.stringify(lastValue ?? null)}`);
 }
