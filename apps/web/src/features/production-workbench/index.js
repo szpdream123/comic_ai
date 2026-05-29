@@ -149,6 +149,7 @@ function mergeStoryboardUploadedImages(currentImages, nextImages, options = {}) 
 }
 
 function mergeStoryboardUploadedVideos(currentVideos, nextVideos, options = {}) {
+  const preserveUploadingOnly = Boolean(options.preserveUploadingOnly);
   if (!nextVideos.length) {
     return preserveUploadingOnly
       ? dedupeStoryboardUploadedVideos(currentVideos.filter(shouldPreserveLinkedStoryboardVideo))
@@ -3529,13 +3530,10 @@ async function handleAction(workbench, target) {
         }
       },
     );
-    return;
-  }
-
-  if (action === "create-project") {
+    return;`r`n  }`r`n`r`n  if (action === "create-project") {
     const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
     if (!name) {
-      workbench.ui.createProjectNotice = "閻犲洨鏌夌欢顓㈠礂閵夆斂鈧秹鎯勯鍏煎€崇紒澶庡焽";
+      workbench.ui.createProjectNotice = "请输入项目名称。";
       render(workbench);
       return;
     }
@@ -7931,5 +7929,7 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
   render(workbench);
 }
+
+
 
 
