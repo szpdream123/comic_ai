@@ -3530,7 +3530,10 @@ async function handleAction(workbench, target) {
         }
       },
     );
-    return;`r`n  }`r`n`r`n  if (action === "create-project") {
+    return;
+  }
+
+  if (action === "create-project") {
     const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
     if (!name) {
       workbench.ui.createProjectNotice = "请输入项目名称。";
@@ -7929,6 +7932,7 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
   render(workbench);
 }
+
 
 
 

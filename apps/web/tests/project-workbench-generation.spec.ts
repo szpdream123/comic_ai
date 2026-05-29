@@ -2245,7 +2245,7 @@ describe("storyboard state", () => {
     ]);
 
     assert.equal(next.length, 3);
-    assert.match(next[2].id, /^storyboard-local-/);
+    assert.equal(next[2].id, "storyboard-3");
     assert.equal(next[2].title, "3");
   });
 
@@ -2280,7 +2280,7 @@ describe("storyboard state", () => {
     assert.equal(next.length, 4);
     assert.equal(next[2].id, "storyboard-4");
     assert.equal(next[2].title, "3");
-    assert.match(next[3].id, /^storyboard-local-/);
+    assert.equal(next[3].id, "storyboard-5");
     assert.equal(next[3].title, "4");
   });
 

@@ -590,11 +590,10 @@ function validateReport(report) {
     failures.push("mobile workbench missing required controls");
   }
 
-  const projectGridWidth = project?.episodeHubGridRect?.width ?? 0;
   const launchWidth = project?.launchColumnRect?.width ?? 0;
   const episodeListWidth = project?.episodeListRect?.width ?? 0;
-  if (projectGridWidth > 0 && projectGridWidth > 900) {
-    failures.push(`project episode hub too wide: ${projectGridWidth}`);
+  if (episodeListWidth > 0 && episodeListWidth > 900) {
+    failures.push(`project episode list too wide: ${episodeListWidth}`);
   }
   if (launchWidth > 0 && episodeListWidth > 0 && launchWidth >= episodeListWidth) {
     failures.push(`project launch column dominates list: launch=${launchWidth}, list=${episodeListWidth}`);

@@ -1,10 +1,10 @@
 {
   "origin": "http://127.0.0.1:4310",
-  "projectUrl": "http://127.0.0.1:4310/app.html#/projects/1fbae732-29d5-44da-9677-776822bf5a98",
-  "deepLink": "http://127.0.0.1:4310/projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
-  "routeAfterClick": "http://127.0.0.1:4310/app.html#projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
-  "projectId": "1fbae732-29d5-44da-9677-776822bf5a98",
-  "episodeId": "227721cb-b6fb-4367-9571-161e516cbc9d",
+  "projectUrl": "http://127.0.0.1:4310/app.html#/projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b",
+  "deepLink": "http://127.0.0.1:4310/projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b/episodes/3fe00678-d86d-40b5-bcad-07eab98c85bd",
+  "routeAfterClick": "http://127.0.0.1:4310/app.html#projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b/episodes/3fe00678-d86d-40b5-bcad-07eab98c85bd",
+  "projectId": "2edfe07e-68ce-44aa-806d-a3cea5fed22b",
+  "episodeId": "3fe00678-d86d-40b5-bcad-07eab98c85bd",
   "screenshots": {
     "projectDesktop": "artifacts/episode-workbench-qa/project-episodes-desktop.png",
     "workbenchDesktop": "artifacts/episode-workbench-qa/episode-workbench-desktop.png",
@@ -12,13 +12,13 @@
   },
   "metrics": {
     "timings": {
-      "projectLoadMs": 818,
-      "workbenchLoadMs": 457,
-      "mobileLoadMs": 618
+      "projectLoadMs": 952,
+      "workbenchLoadMs": 467,
+      "mobileLoadMs": 599
     },
     "project": {
       "title": "Comic AI Studio",
-      "url": "http://127.0.0.1:4310/app.html#/projects/1fbae732-29d5-44da-9677-776822bf5a98",
+      "url": "http://127.0.0.1:4310/app.html#/projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b",
       "bodyTextLength": 256,
       "hasEpisodeHub": true,
       "hasEpisodeWorkbench": false,
@@ -42,27 +42,27 @@
       "episodeHubGridRect": {
         "x": 201.1875,
         "y": 214.4375,
-        "width": 792,
-        "height": 565.28125
+        "width": 1208.421875,
+        "height": 250.734375
       },
       "launchColumnRect": {
         "x": 201.1875,
         "y": 214.4375,
-        "width": 284.796875,
-        "height": 313.90625
+        "width": 288,
+        "height": 241.578125
       },
       "episodeListRect": {
-        "x": 201.1875,
+        "x": 505.1875,
         "y": 214.4375,
-        "width": 792,
-        "height": 565.28125
+        "width": 896,
+        "height": 250.734375
       },
       "quickLaneRect": null,
       "badGeometryCount": 0
     },
     "workbench": {
       "title": "Comic AI Studio",
-      "url": "http://127.0.0.1:4310/app.html#projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+      "url": "http://127.0.0.1:4310/app.html#projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b/episodes/3fe00678-d86d-40b5-bcad-07eab98c85bd",
       "bodyTextLength": 684,
       "hasEpisodeHub": false,
       "hasEpisodeWorkbench": true,
@@ -101,7 +101,7 @@
     },
     "mobile": {
       "title": "Comic AI Studio",
-      "url": "http://127.0.0.1:4310/projects/1fbae732-29d5-44da-9677-776822bf5a98/episodes/227721cb-b6fb-4367-9571-161e516cbc9d",
+      "url": "http://127.0.0.1:4310/projects/2edfe07e-68ce-44aa-806d-a3cea5fed22b/episodes/3fe00678-d86d-40b5-bcad-07eab98c85bd",
       "bodyTextLength": 665,
       "hasEpisodeHub": false,
       "hasEpisodeWorkbench": true,

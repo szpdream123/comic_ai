@@ -1019,7 +1019,7 @@ async function runCreatorRepairMaintenance(
   },
 ) {
   const storage = await runStorageRepairJob(db, {
-    adapter: input.runtime.adapter,
+    runtime: input.runtime,
     now: input.now,
   });
   const episodeGeneration = await repairTimedOutEpisodeGenerationTasks(db, {
