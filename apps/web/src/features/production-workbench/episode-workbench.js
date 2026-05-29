@@ -132,80 +132,72 @@ export function renderEpisodeWorkbench({
     (videoDeleteTargetStoryboard?.uploadedVideos ?? []).find((item) => item.id === storyboardVideoDeleteTarget?.videoId) ?? null;
 
   return `
-    <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台">
-      <header class="episode-replica-topbar">
-        <div class="episode-replica-topbar-left">
-          <button class="episode-replica-return" type="button" data-action="back-to-episode-hub">
-            <span>‹</span><strong>返回</strong>
-          </button>
-          <span class="episode-replica-timestamp">2026-05-27 15:48:37</span>
-        </div>
-        <div class="episode-replica-topbar-center">
-          <button class="episode-replica-pill ${isAllSelected ? "active" : ""}" type="button" data-action="toggle-episode-asset-select-all">全选</button>
-          <button class="episode-replica-pill wide" type="button">批量生图/视频 | 高清处理</button>
-        </div>
-        <div class="episode-replica-topbar-right">
-          <div class="episode-replica-main-switch">
-            <button class="${scopeMode === "assets" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="assets">角色/场景</button>
-            <button class="${scopeMode === "storyboard" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="storyboard">分镜</button>
+    <section id="storyboard-workbench" class="storyboard-workbench cinematic-layout" aria-label="分镜工作台">
+      <button
+        class="episode-workbench-back-button"
+        type="button"
+        data-action="back-to-episode-hub"
+        aria-label="返回上一页"
+      >
+        <span>返回</span>
+      </button>
+
+      <button
+        class="shot-sidebar-hero"
+        type="button"
+        data-action="parse-script"
+        ${disabled(!canParse || busy)}
+      >
+        <span class="shot-sidebar-hero-icon" aria-hidden="true">↳</span>
+        <strong>AI拆分镜</strong>
+        <em>首次免费</em>
+      </button>
+
+      <header class="episode-media-header">
+        <div class="episode-media-chrome">
+          <div class="episode-media-tabs" role="tablist" aria-label="媒体类型">
+            ${MEDIA_TABS.map((tab) => renderMediaTab(tab, mediaMode)).join("")}
           </div>
-          <button class="episode-replica-export" type="button">✈ 导出</button>
         </div>
       </header>
 
-      <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"}">
-        <section class="episode-replica-left">
-          ${
-            scopeMode === "assets"
-              ? renderAssetWorkspace(activeAssetTab, activeAssets, selectedAsset, selectedEpisodeAssetIds)
-              : renderStoryboardWorkspace(normalizedStoryboards, currentStoryboard, boardMode)
-          }
-        </section>
+      <aside class="shot-sidebar cinematic-sidebar">
+        <div class="shot-sidebar-head">
+          <span>分镜(${storyboards.length})</span>
+        </div>
+        <div class="shot-stack">
+          ${renderStoryboardList(storyboards, selectedStoryboard?.id)}
+        </div>
+      </aside>
 
-        <section class="episode-replica-center">
-          <div class="episode-replica-stage-head">
-            <div class="episode-replica-stage-tabs">
-              ${MEDIA_TABS.map((tab) => renderMediaTab(tab, mediaMode)).join("")}
-            </div>
-            <p class="episode-replica-stage-title">${
-              scopeMode === "storyboard"
-                ? `分镜: ${escapeHtml(currentStoryboard?.title ?? "")}`
-                : `${escapeHtml(resolveAssetLabel(activeAssetTab))}: ${escapeHtml(selectedAsset?.name ?? "")}`
-            }</p>
-          </div>
-          <div class="episode-replica-stage-body">
-            ${
-              scopeMode === "storyboard"
-                ? renderStoryboardStage(currentStoryboard, mediaMode === "lip-sync" ? "video" : mediaMode)
-                : renderAssetPreview(selectedAsset, activeAssetTab)
-            }
-          </div>
-          ${renderPromptDock({
-            selectedStoryboard: currentStoryboard,
-            selectedAsset,
-            selectedModelId,
-            prompt,
-            busy,
-            canGenerateCurrentMode,
-            validationMessage,
-            generationControls,
-            generationUiState,
-            mediaMode,
-            attachments: episodeWorkbenchAttachments,
-          })}
-        </section>
+      <section class="shot-stage cinematic-stage">
+        <div class="shot-stage-head cinematic-stage-head">
+          <strong>分镜描述：${escapeHtml(selectedStoryboard?.description ?? "请填写分镜描述，记录分镜对应的画面内容。")}</strong>
+          <button class="icon-button" type="button" data-action="open-storyboard-description-modal" aria-label="编辑描述">✎</button>
+        </div>
+        ${renderStoryboardStage(selectedStoryboard, mediaMode)}
+      </section>
 
-        <aside class="episode-replica-right">
-          <div class="episode-replica-right-head">
-            <strong>资产快捷栏</strong>
-            <span>⌕</span>
-          </div>
-          <div class="episode-replica-right-list">
-            ${quickAssets.map((asset, index) => renderQuickAsset(asset, index === 0)).join("")}
-          </div>
-        </aside>
-      </div>
-
+      ${renderVideoGenerationPanel({
+        selectedModelId,
+        prompt,
+        busy,
+        selectedShot: selectedStoryboard,
+        canCalibrate,
+        canGenerateImages,
+        canGenerateVideos,
+        validationMessage,
+        calibrationSkipReason,
+        calibrationOverrideReason,
+        imageGenerationResult,
+        videoGenerationResult,
+        mediaMode,
+        videoMode,
+        imageMode,
+        generationControls,
+        generationUiState,
+      })}
+      ${renderGenerationDiagnostics({ imageGenerationResult, videoGenerationResult })}
       ${renderStoryboardDescriptionModal({
         show: isStoryboardDescriptionModalOpen,
         value: storyboardDescriptionDraft,
@@ -236,23 +228,105 @@ function resolveAssetLabel(tab) {
   return ASSET_TABS.find((item) => item.id === tab)?.label ?? "素材";
 }
 
-function renderAssetWorkspaceLegacy(activeAssetTab, activeAssets, selectedAsset, selectedEpisodeAssetIds) {
-  const groups = ASSET_TABS.map((tab) => ({
-    ...tab,
-    assets: (FALLBACK_ASSETS[tab.id] ?? []).map((asset) => asset),
-  }));
-  const liveGroups = {
-    character: activeAssetTab === "character" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "character")?.assets ?? [],
-    scene: activeAssetTab === "scene" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "scene")?.assets ?? [],
-    prop: activeAssetTab === "prop" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "prop")?.assets ?? [],
-  };
+function renderStoryboardList(storyboards, selectedStoryboardId) {
+  const orderedStoryboards = normalizeStoryboardIndices(storyboards);
+  const storyboardCards = orderedStoryboards.length
+    ? orderedStoryboards
+        .map((storyboard) => {
+          const active = storyboard.id === selectedStoryboardId;
+          const selectedUploadedVideo = resolveSelectedUploadedVideo(storyboard);
+          const selectedVideoSource = selectedUploadedVideo?.src ?? "";
+          const storyboardVideoSource = isVideoSource(storyboard.previewUrl) ? (storyboard.previewUrl ?? "") : "";
+          const videoSource =
+            storyboard.previewThumbnailUrl
+              ? ""
+              : selectedVideoSource || storyboardVideoSource;
+          const thumbnailSource =
+            storyboard.previewThumbnailUrl ??
+            selectedUploadedVideo?.thumbnailSrc ??
+            "";
+          const fallbackPreviewUrl = isVideoSource(storyboard.previewUrl) ? "" : storyboard.previewUrl;
+          const imageSource =
+            !videoSource ? storyboard.previewImageUrl ?? fallbackPreviewUrl ?? "" : "";
+          const previewSource = thumbnailSource || videoSource || imageSource;
+          const previewIsVideo = Boolean(selectedVideoSource || storyboardVideoSource);
+          const previewClass = previewSource
+            ? previewIsVideo
+              ? "has-video-preview"
+              : "has-image-preview"
+            : "empty-preview";
+          return `
+            <div class="shot-thumb-shell">
+              <button
+                class="shot-thumb cinematic-thumb ${previewClass} ${active ? "active" : ""}"
+                type="button"
+                data-action="select-storyboard"
+                data-storyboard-id="${escapeAttr(storyboard.id)}"
+              >
+                <span>${escapeHtml(String(storyboard.index ?? ""))}</span>
+                <strong>${escapeHtml(storyboard.status ?? "未定稿")}</strong>
+                <em aria-hidden="true">${escapeHtml(storyboard.title ?? `分镜 ${storyboard.index ?? ""}`)}</em>
+                <div class="shot-thumb-preview" aria-hidden="true">
+                  ${
+                    previewSource
+                      ? previewIsVideo
+                        ? thumbnailSource
+                          ? `<img src="${escapeAttr(thumbnailSource)}" alt="" /><i>▶</i>`
+                          : `<video src="${escapeAttr(previewSource)}" muted playsinline preload="metadata"></video><i>▶</i>`
+                        : `<img src="${escapeAttr(previewSource)}" alt="" />`
+                      : `<div class="shot-thumb-placeholder"><span aria-hidden="true"></span></div>`
+                  }
+                </div>
+              </button>
+              <button
+                class="shot-thumb-menu-button delete-storyboard-button"
+                type="button"
+                data-storyboard-id="${escapeAttr(storyboard.id)}"
+                data-action="open-delete-sidebar-storyboard-modal"
+                aria-label="删除分镜"
+              >
+                <span aria-hidden="true">🗑</span>
+              </button>
+            </div>
+          `;
+        })
+        .join("")
+    : `
+      <div class="shot-thumb empty">
+        <span>1</span>
+        <strong>未定稿</strong>
+        <em>空分镜</em>
+      </div>
+    `;
+
   return `
-    <div class="episode-replica-asset-toolbar unified">
-      <div class="episode-replica-asset-toolbar-main">
-        <div class="episode-replica-asset-tabs">
-          ${ASSET_TABS.map((tab) => `
-            <button class="${tab.id === activeAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>
-          `).join("")}
+    ${storyboardCards}
+    <button class="shot-thumb shot-add-card" type="button" data-action="add-storyboard">
+      <span aria-hidden="true">+</span>
+      <strong>添加分镜</strong>
+    </button>
+  `;
+}
+
+function renderStoryboardDeleteModal({ show, storyboard }) {
+  if (!show) {
+    return `
+      <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除分镜" hidden>
+        <button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard">确定</button>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除分镜">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>删除后会清空这个分镜下的图片和视频，确定删除${storyboard?.title ? `“分镜 ${escapeHtml(String(storyboard.title))}”` : "当前分镜"}吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-storyboard-modal" aria-label="关闭">×</button>
         </div>
         <div class="episode-replica-asset-actions">
           <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
@@ -307,27 +381,97 @@ function renderAssetCardLegacy(asset, assetKind, active, checked) {
 
 function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode) {
   return `
-    <div class="episode-replica-storyboard-toolbar">
-      <div class="episode-replica-storyboard-board-tabs">
-        <button class="${boardMode === "operation" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="operation">操作栏</button>
-        <button class="${boardMode === "story" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="story">故事栏</button>
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除图片">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>将从${storyboardName}中删除图片“${escapeHtml(String(imageName))}”，删除后不可恢复，确定继续吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-storyboard-image-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-storyboard-image-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard-image">确定</button>
+        </div>
       </div>
-      <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">+</button>
-    </div>
-    <div class="episode-replica-storyboard-grid">
-      ${boardMode === "story" ? renderStoryBoardPreview(selectedStoryboard) : storyboards.map((storyboard, index) => renderStoryboardCard(storyboard, storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && index === 0))).join("")}
-    </div>
+    </section>
   `;
 }
 
-function renderStoryBoardPreview(selectedStoryboard) {
+function resolveSelectedUploadedVideo(storyboard) {
+  const uploadedVideos = Array.isArray(storyboard?.uploadedVideos) ? storyboard.uploadedVideos : [];
+  if (!uploadedVideos.length) {
+    return null;
+  }
+
+  const readyVideos = uploadedVideos.filter((item) => item.status === "ready");
+  return (
+    readyVideos.find((item) => item.id === storyboard.selectedUploadedVideoId) ??
+    readyVideos[0] ??
+    null
+  );
+}
+
+function resolvePinnedUploadedVideo(storyboard) {
+  const uploadedVideos = Array.isArray(storyboard?.uploadedVideos) ? storyboard.uploadedVideos : [];
+  if (!uploadedVideos.length || !storyboard?.selectedUploadedVideoId) {
+    return null;
+  }
+
+  return (
+    uploadedVideos.find(
+      (item) => item.id === storyboard.selectedUploadedVideoId && item.status === "ready",
+    ) ?? null
+  );
+}
+
+function isProtectedStoryboardVideo(storyboardId, selectedVideoId, videoId) {
+  return Boolean(storyboardId && videoId && selectedVideoId && selectedVideoId === videoId);
+}
+
+function isVideoSource(value) {
+  return /\.(mp4|mov|webm|m4v)(\?|$)/i.test(String(value ?? ""));
+}
+
+function renderStoryboardStage(selectedStoryboard, mediaMode) {
+  if (!selectedStoryboard) {
+    return `
+      <div class="stage-empty cinematic-stage-empty">
+        <div class="empty-folder" aria-hidden="true"></div>
+        <p>请先创建或选择分镜。</p>
+      </div>
+    `;
+  }
+
+  if (mediaMode === "video") {
+    return renderVideoUploadWorkspace(selectedStoryboard);
+  }
+
+  if (selectedStoryboard.imageStatus === "uploading") {
+    return renderStoryboardImageWorkspace(selectedStoryboard, false, "uploading");
+  }
+
+  if (selectedStoryboard.previewImageUrl) {
+    return renderStoryboardImageWorkspace(selectedStoryboard, true);
+  }
+
+  if (selectedStoryboard.imageStatus === "ready") {
+    return renderStageResult("分镜图片已生成", "image", selectedStoryboard.status);
+  }
+
   return `
-    <div class="episode-replica-story-preview">
-      <div class="episode-replica-story-canvas"></div>
-      <div class="episode-replica-story-track"></div>
-      <button class="episode-replica-story-frame" type="button" data-action="select-storyboard" data-storyboard-id="${escapeAttr(selectedStoryboard?.id ?? "")}">
-        <span>▶</span>
-        <strong>${escapeHtml(selectedStoryboard?.title ?? "分镜 1")}</strong>
+    <div class="stage-empty cinematic-stage-empty" data-dropzone="storyboard-image">
+      <div class="empty-folder cinematic-folder" aria-hidden="true"></div>
+      <p>请在右侧填写分镜信息生成分镜图。</p>
+      <button
+        class="stage-inline-link stage-inline-link-button"
+        type="button"
+        data-action="pick-local-storyboard-image"
+        data-storyboard-id="${escapeAttr(selectedStoryboard.id)}"
+      >
+        本地上传分镜图
       </button>
     </div>
   `;
@@ -361,122 +505,200 @@ function renderAssetPreview(asset, activeAssetTab) {
           <p>${escapeHtml(asset?.description ?? "保留废土感和机械感，适合作为快速引用资产。")}</p>
         </div>
       </div>
-    </div>
-  `;
-}
-
-function renderQuickAsset(asset, active) {
-  const kind = asset.kind || inferKind(asset.name);
-  return `
-    <button class="episode-replica-quick-asset ${active ? "active" : ""}" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset.id ?? "")}">
-      <span class="thumb">${renderQuickPlaceholder(kind, asset.name ?? "素材")}</span>
-      <strong>${escapeHtml(asset.name ?? "素材")}</strong>
-    </button>
-  `;
-}
-
-function renderPromptDock({
-  selectedStoryboard,
-  selectedAsset,
-  selectedModelId,
-  prompt,
-  busy,
-  canGenerateCurrentMode = true,
-  validationMessage,
-  generationControls,
-  generationUiState,
-  mediaMode,
-  attachments = [],
-}) {
-  const promptValue = prompt || selectedStoryboard?.description || selectedAsset?.description || "请填写分镜描述，记录分镜对应的画面内容。";
-  const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
-  const resolution = generationControls.imageResolution ?? "2K";
-  const duration = generationControls.videoDurationSec ?? "5";
-  const activePromptMenu = generationUiState.musePromptMenu ?? null;
-  const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
-  const models = [
-    { id: "jimeng-4-5", label: "全能参考2.0 Fast（9图完整版/不可真人）" },
-    { id: "seedance-2-0-vip", label: "nano banana 2（链路G）" },
-    { id: "vidu-q3-pro", label: "SeeDance2.0 Fast 按秒计费（链路E）" },
-  ];
-  const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
-  return `
-    <section class="episode-replica-prompt">
-      <div class="episode-replica-ref-strip">
-        <button class="episode-replica-ref-card voice uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="audio">
-          <span>↑</span><strong>音频 1</strong>
-        </button>
-        <button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image">
-          <span>↑</span><strong>图片</strong>
-        </button>
-        ${(attachments ?? []).map((item, index) => renderAttachment(item, index)).join("")}
-        <input class="episode-workbench-attachment-input" data-attachment-type="image" type="file" accept="image/*" hidden />
-        <input class="episode-workbench-attachment-input" data-attachment-type="audio" type="file" accept="audio/*" hidden />
-      </div>
-      <div class="episode-replica-prompt-tools">
-        ${renderMiniMenu("references", "全能参考", activePromptMenu, [
-          ["multi", "多参考图"],
-          ["single", "单图参考"],
-          ["rewrite", "文生图"],
-        ])}
-        ${renderMiniMenu("preset", "预设: 无预设", activePromptMenu, [["none", "无预设"]], "select-muse-preset")}
-        <button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>
-      </div>
-      <label class="episode-replica-textarea">
-        <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
-        <span class="magic">✎</span>
-        <em>${[...promptValue].length} / 5000</em>
-      </label>
-      <div class="episode-replica-prompt-footer">
-        <div class="episode-replica-prompt-selects">
-          ${renderControlMenu("model", selectedModel.label, openGenerationSelectMenu, models.map((item) => [item.id, item.label]), "select-video-model")}
-          ${renderControlMenu("imageResolution", resolution, openGenerationSelectMenu, [["720p", "720p"], ["1K", "1K"], ["2K", "2K"]])}
-          ${renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"]])}
-          ${renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, [["5", "5秒"], ["10", "10秒"], ["15", "15秒"]])}
-        </div>
-        <button class="episode-replica-generate" type="button" data-action="${mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images"}" ${disabled(busy || !canGenerateCurrentMode)}>
-          <span>⚡ 4500</span>
-          <strong>生成</strong>
-        </button>
-      </div>
-      <p class="episode-replica-validation">${escapeHtml(validationMessage)}</p>
-    </section>
-  `;
-}
-
-function renderAttachment(item, index) {
-  return `
-    <article class="episode-replica-ref-card attachment ${escapeAttr(item.type ?? "image")}">
-      <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(item.type ?? "image")}">${item.type === "audio" ? "<i>♪</i>" : renderQuickPlaceholder("image", item.name ?? "图片")}</span>
-      <strong>${escapeHtml(item.type === "audio" ? `音频 ${index + 1}` : item.name ?? `图片 ${index + 1}`)}</strong>
     </article>
   `;
 }
 
-function renderMiniMenu(menu, label, activeMenu, options, action = "select-generation-field-option") {
-  const active = activeMenu === menu;
+function renderStoryboardImageToolbar(storyboardId, imageId) {
+  const tools = [
+    { action: "download-storyboard-image", icon: "↓", label: "下载" },
+    { action: "delete-storyboard-image", icon: "⌫", label: "删除", danger: true },
+  ];
+
   return `
-    <span class="episode-replica-mini-wrap">
-      <button class="episode-replica-mini ${active ? "active" : ""}" type="button" data-action="toggle-muse-prompt-menu" data-menu="${escapeAttr(menu)}">${escapeHtml(label)}</button>
-      ${active ? `<span class="episode-replica-float-menu">${options.map(([value, text]) => `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(menu)}" data-value="${escapeAttr(value)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
-    </span>
+    <div class="stage-image-toolbar" role="toolbar" aria-label="分镜图片操作">
+      ${tools
+        .map(
+          (tool) => `
+            <button
+              class="stage-image-tool ${tool.danger ? "danger" : ""}"
+              type="button"
+              data-action="${escapeAttr(tool.action)}"
+              data-storyboard-id="${escapeAttr(storyboardId)}"
+              data-image-id="${escapeAttr(imageId)}"
+              aria-label="${escapeAttr(tool.label)}"
+              title="${escapeAttr(tool.label)}"
+            >
+              <span class="stage-image-tool-icon" aria-hidden="true">${tool.icon}</span>
+              <span class="stage-image-tool-label">${escapeHtml(tool.label)}</span>
+            </button>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderVideoUploadWorkspace(selectedStoryboard) {
+  const uploadedVideos = Array.isArray(selectedStoryboard.uploadedVideos) ? selectedStoryboard.uploadedVideos : [];
+  if (!uploadedVideos.length) {
+    return `
+      <div class="stage-empty cinematic-stage-empty cinematic-video-empty">
+        <div class="empty-folder cinematic-folder" aria-hidden="true"></div>
+        <p>请在右侧输入视频提示词生成分镜视频。</p>
+        <div class="stage-empty-actions">
+          <span>或</span>
+          <button
+            class="stage-inline-link stage-inline-link-button"
+            type="button"
+            data-action="pick-local-video-upload"
+            data-storyboard-id="${escapeAttr(selectedStoryboard.id)}"
+          >
+            本地上传视频
+          </button>
+        </div>
+        <input
+          class="local-video-upload-input"
+          type="file"
+          accept="video/*"
+          multiple
+          data-storyboard-id="${escapeAttr(selectedStoryboard.id)}"
+          hidden
+        />
+      </div>
+    `;
+  }
+
+  const readyVideos = uploadedVideos.filter((item) => item.status === "ready");
+  const featuredVideo = resolvePinnedUploadedVideo({
+    ...selectedStoryboard,
+    uploadedVideos: readyVideos,
+  });
+  return `
+    <section class="stage-video-library" aria-label="本地视频库">
+      <section class="stage-video-group">
+        <header class="stage-video-group-head">
+          <strong><span aria-hidden="true">▾</span> 定稿视频 (${featuredVideo ? 1 : 0})</strong>
+          <button
+            class="stage-upload-trigger"
+            type="button"
+            data-action="pick-local-video-upload"
+            data-storyboard-id="${escapeAttr(selectedStoryboard.id)}"
+          >
+            本地上传
+          </button>
+        </header>
+        ${
+          featuredVideo
+            ? renderPinnedVideo(
+                featuredVideo,
+                selectedStoryboard.id,
+              )
+            : `<div class="stage-video-empty compact"><p>定稿素材支持单独导出、加入至时间线</p></div>`
+        }
+      </section>
+      <section class="stage-video-group">
+        <header class="stage-video-group-head">
+          <strong><span aria-hidden="true">▾</span> 全部视频 (${uploadedVideos.length})</strong>
+        </header>
+        ${renderVideoGrid(uploadedVideos, selectedStoryboard.selectedUploadedVideoId, selectedStoryboard.id)}
+      </section>
+      <input
+        class="local-video-upload-input"
+        type="file"
+        accept="video/*"
+        multiple
+        data-storyboard-id="${escapeAttr(selectedStoryboard.id)}"
+        hidden
+      />
+    </section>
+  `;
+}
+
+function renderFeaturedVideoPlayer(item, storyboardId, count) {
+  if (!item?.src) {
+    return `
+      <section class="stage-video-feature empty">
+        ${renderVideoSectionHeader("分镜视频", count)}
+        <div class="stage-video-feature-placeholder">
+          <p>视频已上传，正在准备预览。</p>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="stage-video-feature" aria-label="当前分镜视频">
+      ${renderVideoSectionHeader("分镜视频", count)}
+      <div class="stage-video-feature-player">
+        <video
+          src="${escapeAttr(item.src)}"
+          ${item.thumbnailSrc ? `poster="${escapeAttr(item.thumbnailSrc)}"` : ""}
+          controls
+          playsinline
+          preload="metadata"
+        ></video>
+        <span class="uploaded-video-duration">${escapeHtml(item.durationLabel ?? "00:10")}</span>
+        <span class="uploaded-video-badge">当前视频</span>
+      </div>
+      <footer class="stage-video-feature-footer">
+        <strong>${escapeHtml(item.fileName ?? "本地上传视频")}</strong>
+        <button
+          class="stage-upload-trigger"
+          type="button"
+          data-action="pick-local-video-upload"
+          data-storyboard-id="${escapeAttr(storyboardId)}"
+        >
+          替换/继续上传
+        </button>
+      </footer>
+    </section>
+  `;
+}
+
+function renderVideoSectionHeader(label, count) {
+  return `
+    <header class="stage-video-group-head stage-video-upload-head">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${count}</span>
+    </header>
+  `;
+}
+
+function renderVideoGrid(items, selectedVideoId, storyboardId) {
+  return `
+    <div class="stage-video-grid">
+      ${items.map((item) => renderUploadedVideoCard(item, item.id === selectedVideoId, storyboardId)).join("")}
+    </div>
   `;
 }
 
 function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option") {
   const open = openMenu === field;
   return `
-    <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control" type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}">${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact">${options.map(([value, text]) => `<button type="button" data-action="${escapeAttr(action)}" ${action === "select-video-model" ? `data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"` : `data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}"`}>${escapeHtml(text)}</button>`).join("")}</span>` : ""}
-    </span>
+    <article class="uploaded-video-card active pinned">
+      <div class="uploaded-video-card-inner media">
+        ${
+          item.src
+            ? `<video src="${escapeAttr(item.src)}" controls playsinline preload="metadata"></video>`
+            : ""
+        }
+        <span class="uploaded-video-duration">${escapeHtml(item.durationLabel ?? "00:10")}</span>
+        <span class="uploaded-video-badge">定稿</span>
+        ${item.src ? renderStoryboardVideoToolbar(storyboardId, item.id, { canDelete: false }) : ""}
+      </div>
+      <div class="uploaded-video-card-actions">
+        <button
+          class="uploaded-video-primary-action"
+          type="button"
+          data-action="clear-selected-uploaded-video"
+          data-storyboard-id="${escapeAttr(storyboardId)}"
+        >
+          取消定稿
+        </button>
+      </div>
+    </article>
   `;
-}
-
-function renderMediaTab(tab, activeMode) {
-  const isActive = tab.id === activeMode || (tab.id === "video" && activeMode === "lip-sync");
-  return `<button class="episode-replica-stage-tab ${isActive ? "active" : ""}" type="button" data-action="set-episode-media-mode" data-mode="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`;
 }
 
 function renderStoryboardStage(selectedStoryboard, mediaMode) {
@@ -488,119 +710,187 @@ function renderStoryboardStage(selectedStoryboard, mediaMode) {
 
 function renderImageStage(selectedStoryboard) {
   return `
-    <div class="episode-replica-generated-stage">
-      <div class="episode-replica-stage-actions">
-        <button type="button">✳ 重新编辑</button>
-        <button type="button">🖼 设为分镜视频</button>
-        <button type="button">↓ 下载</button>
-        <button type="button">🗑 删除</button>
+    <article class="uploaded-video-card ${active ? "active" : ""}">
+      <div class="uploaded-video-card-inner media">
+        ${
+          item.src
+            ? `<video src="${escapeAttr(item.src)}" controls playsinline preload="metadata"></video>`
+            : ""
+        }
+        <span class="uploaded-video-duration">${escapeHtml(item.durationLabel ?? "00:10")}</span>
+        ${active ? `<span class="uploaded-video-badge">定稿</span>` : ""}
+        ${
+          item.src
+            ? renderStoryboardVideoToolbar(storyboardId, item.id, {
+                canDelete: !isProtectedStoryboardVideo(storyboardId, active ? item.id : null, item.id),
+              })
+            : ""
+        }
       </div>
-      ${renderResultPanel(selectedStoryboard)}
-      <div class="episode-replica-generated-preview">${renderStageCanvas()}</div>
-    </div>
-  `;
-}
-
-function renderVideoStage(selectedStoryboard) {
-  return `
-    <div class="episode-replica-generated-stage">
-      <div class="episode-replica-stage-actions">
-        <button type="button">✳ 重新编辑</button>
-        <button type="button">↓ 下载</button>
-        <button type="button">🗑 删除</button>
+      <div class="uploaded-video-card-actions">
+        <button
+          class="uploaded-video-select"
+          type="button"
+          data-action="select-uploaded-video"
+          data-video-id="${escapeAttr(item.id)}"
+          data-storyboard-id="${escapeAttr(storyboardId ?? "")}"
+          aria-label="选择视频"
+        >${active ? "当前定稿" : "设为定稿"}</button>
       </div>
-      ${renderResultPanel(selectedStoryboard)}
-      <div class="episode-replica-generated-preview video">${renderStageCanvas(true)}</div>
-    </div>
-  `;
-}
-
-function renderResultPanel(selectedStoryboard) {
-  const references = (selectedStoryboard?.references ?? FALLBACK_QUICK_ASSETS).slice(0, 5);
-  return `
-    <article class="episode-replica-result-panel">
-      <div class="copy">${escapeHtml(selectedStoryboard?.description ?? "")}</div>
-      <div class="assets">
-        <span class="voice">🎙</span>
-        ${references.map((item) => `<span class="episode-replica-mini-thumb">${renderQuickPlaceholder(item.kind || inferKind(item.name), item.name)}</span>`).join("")}
-        <strong>任务id:423699438108736/全能参考2.0 Fast</strong>
-      </div>
-      <time>2026-05-27 17:00:36</time>
     </article>
   `;
 }
 
-function renderStageCanvas(video = false) {
+function renderStoryboardVideoToolbar(storyboardId, videoId, options = {}) {
+  const canDelete = options.canDelete ?? true;
+  const tools = [{ action: "download-storyboard-video", icon: "↓", label: "下载" }];
+  if (canDelete) {
+    tools.push({ action: "delete-storyboard-video", icon: "⌫", label: "删除", danger: true });
+  }
+
   return `
-    <div class="episode-replica-stage-canvas ${video ? "video" : ""}">
-      <div class="episode-replica-canvas-tile large"></div>
-      <div class="episode-replica-canvas-tile small"></div>
+    <div class="stage-video-toolbar" role="toolbar" aria-label="分镜视频操作">
+      ${tools
+        .map(
+          (tool) => `
+            <button
+              class="stage-video-tool ${tool.danger ? "danger" : ""}"
+              type="button"
+              data-action="${escapeAttr(tool.action)}"
+              data-storyboard-id="${escapeAttr(storyboardId)}"
+              data-video-id="${escapeAttr(videoId)}"
+              aria-label="${escapeAttr(tool.label)}"
+              title="${escapeAttr(tool.label)}"
+            >
+              <span class="stage-video-tool-icon" aria-hidden="true">${tool.icon}</span>
+              <span class="stage-video-tool-label">${escapeHtml(tool.label)}</span>
+            </button>
+          `,
+        )
+        .join("")}
     </div>
   `;
 }
 
-function renderStoryboardDeleteModal({ show, storyboard }) {
-  if (!show) return "";
-  return `<section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true"><div class="delete-project-modal asset-delete-modal"><div class="delete-project-head"><div class="delete-project-icon">×</div><div><h2>确认删除</h2><p>删除后会清空${storyboard?.title ? `“分镜 ${escapeHtml(String(storyboard.title))}”` : "当前分镜"}的内容，确定继续吗？</p></div><button class="modal-close" type="button" data-action="close-delete-storyboard-modal">×</button></div><div class="delete-project-actions"><button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-storyboard-modal">取消</button><button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard">确定</button></div></div></section>`;
-}
-
-function renderStoryboardVideoDeleteModal({ show, storyboard, video }) {
-  if (!show) return "";
-  return `<section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true"><div class="delete-project-modal asset-delete-modal"><div class="delete-project-head"><div class="delete-project-icon">×</div><div><h2>确认删除</h2><p>将从${escapeHtml(storyboard?.title ?? "当前分镜")}中删除视频“${escapeHtml(video?.fileName ?? "当前视频")}”。</p></div><button class="modal-close" type="button" data-action="close-delete-storyboard-video-modal">×</button></div><div class="delete-project-actions"><button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-storyboard-video-modal">取消</button><button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard-video">确定</button></div></div></section>`;
-}
-
-function renderStoryboardImageDeleteModal({ show, storyboard, image }) {
-  if (!show) return "";
-  return `<section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true"><div class="delete-project-modal asset-delete-modal"><div class="delete-project-head"><div class="delete-project-icon">×</div><div><h2>确认删除</h2><p>将从${escapeHtml(storyboard?.title ?? "当前分镜")}中删除图片“${escapeHtml(image?.fileName ?? "当前图片")}”。</p></div><button class="modal-close" type="button" data-action="close-delete-storyboard-image-modal">×</button></div><div class="delete-project-actions"><button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-storyboard-image-modal">取消</button><button class="delete-confirm-button" type="button" data-action="confirm-delete-storyboard-image">确定</button></div></div></section>`;
-}
-
-function renderStoryboardDescriptionModal({ show, value, selectedStoryboard }) {
-  if (!show || !selectedStoryboard) return "";
-  return `<section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true"><button class="modal-backdrop-hit" type="button" data-action="close-storyboard-description-modal"></button><div class="single-episode-modal storyboard-description-modal"><div class="single-episode-modal-head storyboard-description-head"><h2>分镜描述</h2><button class="modal-close" type="button" data-action="close-storyboard-description-modal">×</button></div><label class="single-episode-field storyboard-description-field"><textarea id="storyboard-description-input" placeholder="请填写分镜描述">${escapeHtml(value ?? "")}</textarea></label><div class="single-episode-actions storyboard-description-actions"><button class="secondary-action compact" type="button" data-action="close-storyboard-description-modal">取消</button><button class="primary-action compact" type="button" data-action="save-storyboard-description">确认修改</button></div></div></section>`;
-}
-
-function renderEpisodeAssetCreateModal(modal) {
-  if (!modal?.show) return "";
+function renderUploadingMediaShell() {
   return `
-    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
-      <button class="modal-backdrop-hit" type="button" data-action="close-episode-asset-create-modal"></button>
-      <div class="episode-asset-create-modal">
-        <button class="episode-asset-create-close" type="button" data-action="close-episode-asset-create-modal">×</button>
-        <label class="episode-asset-create-group">
-          <span>类型 <em>*</em></span>
-          <div class="episode-asset-create-tabs">
-            ${ASSET_TABS.map((item) => `<button class="${modal.type === item.id ? "active" : ""}" type="button" data-action="set-episode-asset-create-type" data-type="${escapeAttr(item.id)}">${escapeHtml(item.label)}</button>`).join("")}
-          </div>
-        </label>
-        <label class="episode-asset-create-group">
-          <span>名称 <em>*</em></span>
-          <div class="episode-asset-create-input-wrap">
-            <input id="episode-asset-create-name" type="text" maxlength="20" value="${escapeAttr(modal.name ?? "")}" placeholder="请填写名称" />
-            <em>${[...(modal.name ?? "")].length} / 20</em>
-          </div>
-        </label>
-        <button class="episode-asset-create-save" type="button" data-action="save-episode-asset-create" ${disabled(!(modal.name ?? "").trim())}>保存</button>
+    <div class="uploading-media-shell" aria-live="polite">
+      <span class="uploaded-video-spinner" aria-hidden="true"></span>
+      <strong>上传中...</strong>
+    </div>
+  `;
+}
+
+function renderStageResult(title, kind, status) {
+  return `
+    <article class="stage-result ${kind}">
+      <div class="result-frame">
+        <span>${kind === "video" ? "▶" : "◀"}</span>
       </div>
+      <h3>${escapeHtml(title)}</h3>
+      <p>状态：${escapeHtml(status)}</p>
+    </article>
+  `;
+}
+
+function renderGenerationDiagnostics({ imageGenerationResult, videoGenerationResult }) {
+  const panels = [
+    renderGenerationPanel("图片工作流", imageGenerationResult),
+    renderGenerationPanel("视频工作流", videoGenerationResult),
+  ].filter(Boolean);
+
+  if (!panels.length) {
+    return "";
+  }
+
+  return `
+    <section class="generation-diagnostics" aria-label="Generation diagnostics">
+      <header class="generation-diagnostics-head">
+        <strong>工作流详情</strong>
+        <span>任务、供应商和存储追踪</span>
+      </header>
+      <div class="generation-diagnostics-grid">${panels.join("")}</div>
     </section>
   `;
 }
 
-function renderEpisodeVoiceModalLegacy(modal) {
-  if (!modal) return "";
+function renderGenerationPanel(label, result) {
+  const platform = result?.platform;
+  if (!platform) return "";
+  const tasks = Array.isArray(platform.tasks) ? platform.tasks : [];
   return `
-    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
-      <button class="modal-backdrop-hit" type="button" data-action="close-episode-voice-modal"></button>
-      <div class="episode-voice-modal">
-        <button class="episode-asset-create-close" type="button" data-action="close-episode-voice-modal">×</button>
-        <h3>角色配音</h3>
-        <p>为 ${escapeHtml(modal.assetName ?? "角色")} 绑定配音员。</p>
-        <label class="episode-asset-create-group">
-          <span>配音员名称</span>
-          <div class="episode-asset-create-input-wrap">
-            <input type="text" value="${escapeAttr(modal.voiceName ?? "")}" placeholder="请输入配音员名称" />
-          </div>
+    <article class="generation-diagnostics-card">
+      <header><strong>${escapeHtml(label)}</strong><span>workflow ${escapeHtml(platform.workflowId ?? "")}</span></header>
+      <div class="generation-diagnostics-meta">
+        <span>状态：${escapeHtml(platform.workflowStatus ?? "unknown")}</span>
+        <span>任务数：${tasks.length}</span>
+      </div>
+      <ul class="generation-diagnostics-list">
+        ${tasks
+          .map(
+            (task) => `
+              <li>
+                <strong>${escapeHtml(task.shotId ?? "")}</strong>
+                <span>${escapeHtml(task.taskId ?? "")}</span>
+                <small>${escapeHtml(task.providerRequestId ?? "")} / ${escapeHtml(task.storageObjectKey ?? "")}</small>
+              </li>
+            `,
+          )
+          .join("")}
+      </ul>
+    </article>
+  `;
+}
+
+function renderStoryboardDescriptionModal({ show, value, selectedStoryboard }) {
+  if (!show || !selectedStoryboard) return "";
+  return `
+    <section
+      class="modal-backdrop storyboard-description-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="storyboard-description-dialog"
+    >
+      <button
+        class="modal-backdrop-hit"
+        type="button"
+        data-action="close-storyboard-description-modal"
+        aria-label="关闭分镜描述弹窗"
+      ></button>
+      <div class="single-episode-modal storyboard-description-modal">
+        <div class="single-episode-modal-head storyboard-description-head">
+          <h2>分镜描述</h2>
+          <button
+            class="modal-close"
+            type="button"
+            data-action="close-storyboard-description-modal"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <label class="single-episode-field storyboard-description-field">
+          <textarea
+            id="storyboard-description-input"
+            placeholder="请填写分镜描述，记录分镜对应的画面内容"
+          >${escapeHtml(value ?? "")}</textarea>
         </label>
-        <button class="episode-asset-create-save" type="button" data-action="close-episode-voice-modal">确认</button>
+        <div class="single-episode-actions storyboard-description-actions">
+          <button
+            class="secondary-action compact"
+            type="button"
+            data-action="close-storyboard-description-modal"
+          >
+            取消
+          </button>
+          <button
+            class="primary-action compact"
+            type="button"
+            data-action="save-storyboard-description"
+          >
+            确认修改
+          </button>
+        </div>
       </div>
     </section>
   `;
@@ -609,62 +899,38 @@ function renderEpisodeVoiceModalLegacy(modal) {
 function renderAssetInspectorModal(inspector) {
   if (!inspector) return "";
   const isVideo = inspector.type === "video";
-  return `<section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true"><button class="modal-backdrop-hit" type="button" data-action="close-asset-inspector"></button><div class="single-episode-modal storyboard-description-modal asset-inspector-modal"><div class="single-episode-modal-head storyboard-description-head"><h2>${escapeHtml(inspector.title ?? (isVideo ? "视频详情" : "图片详情"))}</h2><button class="modal-close" type="button" data-action="close-asset-inspector">×</button></div><div class="asset-inspector-preview">${isVideo ? `<video src="${escapeAttr(inspector.url ?? "")}" controls playsinline preload="metadata"></video>` : `<img src="${escapeAttr(inspector.url ?? "")}" alt="${escapeAttr(inspector.name ?? "素材")}" />`}</div><div class="asset-inspector-meta"><strong>${escapeHtml(inspector.name ?? "未命名素材")}</strong><span>状态：${escapeHtml(inspector.status ?? "ready")}</span></div><div class="single-episode-actions storyboard-description-actions"><button class="primary-action compact" type="button" data-action="close-asset-inspector">关闭</button></div></div></section>`;
-}
-
-function renderPlaceholderArt(kind, label) {
   return `
-    <span class="episode-replica-placeholder episode-replica-placeholder-${escapeAttr(kind)}">
-      <i></i><b>${escapeHtml(label.slice(0, 4) || "素材")}</b>
-    </span>
-  `;
-}
-
-function renderQuickPlaceholder(kind, label) {
-  return `
-    <span class="episode-replica-quick-art episode-replica-quick-art-${escapeAttr(kind)}">
-      <i></i><b>${escapeHtml((label || "素材").slice(0, 4))}</b>
-    </span>
-  `;
-}
-
-function renderStoryboardPreviewThumb(refs) {
-  return `
-    <span class="episode-replica-shot-preview-art">
-      ${refs.slice(0, 4).map((item) => `<span>${renderQuickPlaceholder(item.kind || inferKind(item.name), item.name)}</span>`).join("")}
-    </span>
-  `;
-}
-
-function inferKind(name = "") {
-  if (name.includes("枪") || name.includes("弹") || name.includes("机械") || name.includes("包")) return "prop";
-  if (name.includes("林") || name.includes("影") || name.includes("暗") || name.includes("区")) return "scene";
-  return "character";
-}
-
-function renderAssetWorkspace(activeAssetTab, activeAssets, selectedAsset, selectedEpisodeAssetIds) {
-  const groups = ASSET_TABS.map((tab) => ({
-    ...tab,
-    assets: (FALLBACK_ASSETS[tab.id] ?? []).map((asset) => asset),
-  }));
-  const liveGroups = {
-    character: activeAssetTab === "character" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "character")?.assets ?? [],
-    scene: activeAssetTab === "scene" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "scene")?.assets ?? [],
-    prop: activeAssetTab === "prop" && activeAssets.length ? activeAssets : groups.find((item) => item.id === "prop")?.assets ?? [],
-  };
-  return `
-    <div class="episode-replica-asset-toolbar unified">
-      <div class="episode-replica-asset-toolbar-head">
-        <div class="episode-replica-asset-toolbar-main">
-          <div class="episode-replica-asset-tabs">
-            ${ASSET_TABS.map((tab) => `
-              <button class="${tab.id === activeAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>
-            `).join("")}
-          </div>
-          <div class="episode-replica-asset-actions">
-            <button type="button" data-action="open-episode-asset-create-modal">鎵嬪姩娣诲姞</button>
-            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(activeAssetTab)}">璧勪骇搴撻€夊彇</button>
-          </div>
+    <section
+      class="modal-backdrop storyboard-description-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="asset-inspector-dialog"
+    >
+      <button
+        class="modal-backdrop-hit"
+        type="button"
+        data-action="close-asset-inspector"
+        aria-label="关闭素材详情"
+      ></button>
+      <div class="single-episode-modal storyboard-description-modal asset-inspector-modal">
+        <div class="single-episode-modal-head storyboard-description-head">
+          <h2>${escapeHtml(inspector.title ?? (isVideo ? "视频详情" : "图片详情"))}</h2>
+          <button class="modal-close" type="button" data-action="close-asset-inspector" aria-label="关闭">×</button>
+        </div>
+        <div class="asset-inspector-preview">
+          ${
+            isVideo
+              ? `<video src="${escapeAttr(inspector.url ?? "")}" controls playsinline preload="metadata"></video>`
+              : `<img src="${escapeAttr(inspector.url ?? "")}" alt="${escapeAttr(inspector.name ?? "素材")}" />`
+          }
+        </div>
+        <div class="asset-inspector-meta">
+          <strong>${escapeHtml(inspector.name ?? "未命名素材")}</strong>
+          <span>状态：${escapeHtml(inspector.status ?? "ready")}</span>
+          ${isVideo ? `<span>时长：${escapeHtml(inspector.durationLabel ?? "00:10")}</span>` : ""}
+        </div>
+        <div class="single-episode-actions storyboard-description-actions">
+          <button class="primary-action compact" type="button" data-action="close-asset-inspector">关闭</button>
         </div>
       </div>
       <div class="episode-replica-asset-sections">

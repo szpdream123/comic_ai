@@ -66,7 +66,7 @@ export function addStoryboard(storyboards) {
   return normalizeStoryboardIndices([
     ...orderedStoryboards,
     {
-      id: createLocalStoryboardId(),
+      id: `storyboard-${nextIndex}`,
       index: nextIndex,
       title: `${nextIndex}`,
       status: "未定稿",

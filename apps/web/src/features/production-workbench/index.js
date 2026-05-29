@@ -149,7 +149,6 @@ function mergeStoryboardUploadedImages(currentImages, nextImages, options = {}) 
 }
 
 function mergeStoryboardUploadedVideos(currentVideos, nextVideos, options = {}) {
-  const preserveUploadingOnly = Boolean(options.preserveUploadingOnly);
   if (!nextVideos.length) {
     return preserveUploadingOnly
       ? dedupeStoryboardUploadedVideos(currentVideos.filter(shouldPreserveLinkedStoryboardVideo))
@@ -7263,13 +7262,13 @@ function deriveInitialProjectPanelMode(hash) {
 function navTabLabel(tab) {
   return (
     {
-      home: "Home",
-      script: "Script",
-      project: "Project",
-      library: "Library",
-      tools: "Tools",
-      team: "Team",
-    }[tab] ?? "Workspace"
+      home: "首页",
+      script: "剧本",
+      project: "项目",
+      library: "资产库",
+      tools: "工具箱",
+      team: "团队",
+    }[tab] ?? "工作台"
   );
 }
 

@@ -1783,7 +1783,8 @@ async function seedSession(
   const session = await createAuthSession({
     userId: seededUserId,
     token,
-    now: seededSessionTime,
+    now: new Date("2026-05-18T09:59:00.000Z"),
+    ttlMs: 365 * 24 * 60 * 60 * 1000,
   });
   await db.query(
     `
