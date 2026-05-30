@@ -10,3 +10,7 @@ artifacts/worker-c-preview/
 dist
 .next
 .turbo
+.gstack/
+tmp/
+tmp-dev-server/
+tmp-ui-screenshots/

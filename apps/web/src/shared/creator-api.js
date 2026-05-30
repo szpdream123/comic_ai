@@ -125,6 +125,25 @@ export const creatorApi = {
     return fetchJson("/api/creator/assets/library");
   },
 
+  getLibraryAssets(input = {}) {
+    const params = new URLSearchParams();
+    if (input.scope) {
+      params.set("scope", input.scope);
+    }
+    const hasSearchQuery = String(input.query ?? "").trim().length > 0;
+    if (input.category && !hasSearchQuery) {
+      params.set("category", input.category);
+    }
+    if (input.folder && !hasSearchQuery) {
+      params.set("folder", input.folder);
+    }
+    if (input.query) {
+      params.set("q", input.query);
+    }
+    const query = params.toString();
+    return fetchJson(`/api/creator/library/assets${query ? `?${query}` : ""}`);
+  },
+
   importAsset(input) {
     return postJson("/api/creator/assets/import", input);
   },

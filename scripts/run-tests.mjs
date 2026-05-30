@@ -3,8 +3,12 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ignoredDirectories = new Set([
+  ".gstack",
   "dist",
   "node_modules",
+  "tmp",
+  "tmp-dev-server",
+  "tmp-ui-screenshots",
 ]);
 
 const args = process.argv.slice(2);

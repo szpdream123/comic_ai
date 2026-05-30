@@ -1,4 +1,5 @@
 import { renderProjectDetail } from "./project-detail.js";
+import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
 import {
   addStoryboard,
   createStoryboardList,
@@ -14,6 +15,23 @@ export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
 }
 
+export function removeTeamAssetLocalUpload(ui, category, uploadId) {
+  const uploadsByCategory = ui?.teamAssetLocalUploads ?? {};
+  const uploads = uploadsByCategory[category];
+  if (!Array.isArray(uploads)) {
+    return false;
+  }
+  const nextUploads = uploads.filter((asset) => asset.id !== uploadId);
+  if (nextUploads.length === uploads.length) {
+    return false;
+  }
+  ui.teamAssetLocalUploads = {
+    ...uploadsByCategory,
+    [category]: nextUploads,
+  };
+  return true;
+}
+
 export async function initProductionWorkbench({ root, session, api, onLogout }) {
   const workbench = {
     root,
@@ -21,6 +39,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     api,
     onLogout,
     uploadTasks: new Map(),
+    librarySearchTimer: null,
+    librarySearchRequestId: 0,
+    librarySearchComposing: false,
     state: null,
     ui: {
       busy: false,
@@ -113,7 +134,24 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       activeNavTab: deriveInitialNavTab(window.location.hash),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
       libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
-      libraryTeamAssetScope: "personal",
+      libraryTeamAssetScope: "official",
+      libraryCategory: "character",
+      libraryFolder: "国内仿真人-现代都市",
+      libraryQuery: "",
+      libraryCategories: [],
+      libraryFolders: [],
+      libraryAssets: [],
+      libraryEntitlement: null,
+      teamAssetLocalUploads: {
+        character: [],
+        scene: [],
+        prop: [],
+        voice: [],
+      },
+      libraryLoading: false,
+      libraryError: "",
+      libraryDetailAssetId: "",
+      libraryDetailView: "turnaround",
       isLibraryPricingModalOpen: false,
       isMemberRulesModalOpen: false,
     },
@@ -132,7 +170,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
-      actionTarget.matches?.(".asset-import-file-input")
+      actionTarget.matches?.(".asset-import-file-input") ||
+      actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
       return;
     }
@@ -148,7 +187,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       !workbench.ui.episodeCardMenuId &&
       !workbench.ui.projectCardMenuId &&
       !workbench.ui.isLibraryPricingModalOpen &&
-      !workbench.ui.isMemberRulesModalOpen
+      !workbench.ui.isMemberRulesModalOpen &&
+      !workbench.ui.libraryDetailAssetId
     ) {
       return;
     }
@@ -157,7 +197,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.projectCardMenuId = null;
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
-    render(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
   });
 
   root.addEventListener("change", async (event) => {
@@ -231,6 +273,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.(".team-asset-local-upload-input")) {
+      const files = [...(target.files ?? [])];
+      const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
+      target.value = "";
+      if (!files.length) {
+        return;
+      }
+      await handleTeamAssetLocalUploadFiles(workbench, category, files);
+      return;
+    }
+
     if (target?.matches?.(".local-video-upload-input")) {
       const files = [...(target.files ?? [])];
       const storyboardId = target.dataset.storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
@@ -275,6 +328,25 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
     await handleAssetImportFiles(workbench, files);
+  });
+
+  root.addEventListener("compositionstart", (event) => {
+    const target = event.target;
+    if (target?.matches?.("[data-library-search-input]")) {
+      workbench.librarySearchComposing = true;
+    }
+  });
+
+  root.addEventListener("compositionend", (event) => {
+    const target = event.target;
+    if (!target?.matches?.("[data-library-search-input]")) {
+      return;
+    }
+    workbench.librarySearchComposing = false;
+    workbench.ui.libraryQuery = target.value;
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    scheduleAssetLibrarySearch(workbench);
   });
 
   root.addEventListener("input", (event) => {
@@ -387,6 +459,18 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.ui.projectSearchQuery = target.value;
       workbench.ui.projectLibraryPage = 1;
       render(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-library-search-input]")) {
+      workbench.ui.libraryQuery = target.value;
+      workbench.ui.libraryDetailAssetId = "";
+      workbench.ui.libraryDetailView = "turnaround";
+      if (event.isComposing || workbench.librarySearchComposing) {
+        return;
+      }
+      scheduleAssetLibrarySearch(workbench);
+      return;
     }
   });
 
@@ -406,6 +490,7 @@ async function refresh(workbench) {
     }
   }
   await syncProjectLibraryFromApi(workbench);
+  await syncAssetLibraryFromApi(workbench);
   workbench.ui.exportHistory = workbench.state.project
     ? await loadExportHistory(workbench)
     : [];
@@ -434,7 +519,10 @@ async function loadExportHistory(workbench) {
   }
 }
 
-function render(workbench) {
+function render(workbench, options = {}) {
+  const libraryScrollState = options.preserveLibraryScroll
+    ? captureLibraryScrollState(workbench.root)
+    : null;
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -450,6 +538,77 @@ function render(workbench) {
       selectedStoryboard,
     },
   });
+  restoreLibraryScrollState(workbench.root, libraryScrollState);
+  if (options.focusLibrarySearch) {
+    restoreLibrarySearchFocus(workbench.root);
+  }
+}
+
+function captureLibraryScrollState(root) {
+  const libraryScroll = root.querySelector(".library-workspace-scroll");
+  const pageScroll = document.scrollingElement ?? document.documentElement;
+  return {
+    libraryLeft: libraryScroll?.scrollLeft ?? 0,
+    libraryTop: libraryScroll?.scrollTop ?? 0,
+    pageLeft: pageScroll?.scrollLeft ?? window.scrollX ?? 0,
+    pageTop: pageScroll?.scrollTop ?? window.scrollY ?? 0,
+  };
+}
+
+function restoreLibraryScrollState(root, scrollState) {
+  if (!scrollState) {
+    return;
+  }
+
+  const applyScroll = () => {
+    const libraryScroll = root.querySelector(".library-workspace-scroll");
+    if (libraryScroll) {
+      libraryScroll.scrollLeft = scrollState.libraryLeft;
+      libraryScroll.scrollTop = scrollState.libraryTop;
+    }
+    const pageScroll = document.scrollingElement ?? document.documentElement;
+    if (pageScroll) {
+      pageScroll.scrollLeft = scrollState.pageLeft;
+      pageScroll.scrollTop = scrollState.pageTop;
+    }
+  };
+
+  applyScroll();
+  window.requestAnimationFrame?.(applyScroll);
+}
+
+function scheduleAssetLibrarySearch(workbench) {
+  if (workbench.librarySearchTimer) {
+    clearTimeout(workbench.librarySearchTimer);
+  }
+
+  const requestId = (workbench.librarySearchRequestId ?? 0) + 1;
+  workbench.librarySearchRequestId = requestId;
+  workbench.librarySearchTimer = setTimeout(async () => {
+    workbench.librarySearchTimer = null;
+    await syncAssetLibraryFromApi(workbench, { requestId });
+    if (workbench.librarySearchRequestId === requestId) {
+      render(workbench, { focusLibrarySearch: true });
+    }
+  }, 250);
+}
+
+function cancelAssetLibrarySearch(workbench) {
+  if (workbench.librarySearchTimer) {
+    clearTimeout(workbench.librarySearchTimer);
+    workbench.librarySearchTimer = null;
+  }
+  workbench.librarySearchRequestId = (workbench.librarySearchRequestId ?? 0) + 1;
+}
+
+function restoreLibrarySearchFocus(root) {
+  const input = root.querySelector("[data-library-search-input]");
+  if (!input) {
+    return;
+  }
+  input.focus({ preventScroll: true });
+  const position = input.value.length;
+  input.setSelectionRange?.(position, position);
 }
 
 async function handleAction(workbench, target) {
@@ -498,12 +657,88 @@ async function handleAction(workbench, target) {
   }
 
   if (action === "set-library-asset-scope") {
+    cancelAssetLibrarySearch(workbench);
     workbench.ui.activeNavTab = "library";
-    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "personal";
+    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "official";
+    if (
+      workbench.ui.libraryTeamAssetScope === "official" &&
+      !isApiBackedLibraryCategory(workbench.ui.libraryCategory)
+    ) {
+      workbench.ui.libraryCategory = "character";
+    }
+    workbench.ui.libraryFolder = workbench.ui.libraryFolder || "国内仿真人-现代都市";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = true;
     workbench.ui.isLibraryPricingModalOpen = false;
-    workbench.ui.toast = `已切换到 ${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}。`;
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
     window.location.hash = "library";
     render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-library-category") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryCategory = target.dataset.libraryCategory ?? "character";
+    workbench.ui.libraryFolder = "";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-library-folder") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryFolder = target.dataset.libraryFolder ?? "";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = true;
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "clear-library-search") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-library-asset-detail") {
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryDetailAssetId = target.dataset.libraryAssetId ?? "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "select-library-asset-detail-view") {
+    workbench.ui.libraryDetailView = target.dataset.detailView ?? "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "close-library-asset-detail") {
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
@@ -560,6 +795,9 @@ async function handleAction(workbench, target) {
     window.location.hash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
     if (workbench.ui.activeNavTab === "project") {
       await syncProjectLibraryFromApi(workbench);
+    }
+    if (workbench.ui.activeNavTab === "library") {
+      await syncAssetLibraryFromApi(workbench);
     }
     render(workbench);
     return;
@@ -1189,6 +1427,23 @@ async function handleAction(workbench, target) {
     return;
   }
 
+  if (action === "pick-team-asset-local-upload") {
+    target
+      .closest(".library-team-local-upload-toolbar")
+      ?.querySelector(".team-asset-local-upload-input")
+      ?.click();
+    return;
+  }
+
+  if (action === "delete-team-asset-local-upload") {
+    const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
+    const uploadId = target.dataset.localUploadId ?? "";
+    const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
+    workbench.ui.toast = removed ? "已删除本地上传预览。" : "未找到要删除的本地上传。";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
   if (action === "pick-local-video-upload") {
     const storyboardId = target.dataset.storyboardId ?? workbench.ui.selectedStoryboardId ?? "";
     workbench.root
@@ -1632,6 +1887,70 @@ function syncSelectedStoryboardId(workbench, storyboards) {
   ) {
     workbench.ui.selectedStoryboardId = storyboards[0]?.id ?? null;
   }
+}
+
+async function handleTeamAssetLocalUploadFiles(workbench, category, files) {
+  const acceptedFiles = [];
+  let rejectedCount = 0;
+  let rejectMessage = "";
+
+  for (const file of files) {
+    const validation = validateTeamAssetLocalUploadFile(category, file);
+    if (!validation.ok) {
+      rejectedCount += 1;
+      rejectMessage = rejectMessage || validation.message;
+      continue;
+    }
+    acceptedFiles.push({ file, validation });
+  }
+
+  if (!acceptedFiles.length) {
+    workbench.ui.toast = rejectMessage || "请选择支持格式的文件。";
+    render(workbench);
+    return;
+  }
+
+  const nextUploads = await Promise.all(
+    acceptedFiles.map(({ file, validation }) =>
+      buildTeamAssetLocalUploadRecord(category, file, validation),
+    ),
+  );
+  const currentUploads = workbench.ui.teamAssetLocalUploads ?? {};
+
+  workbench.ui.teamAssetLocalUploads = {
+    character: [],
+    scene: [],
+    prop: [],
+    voice: [],
+    ...currentUploads,
+    [category]: [...(currentUploads[category] ?? []), ...nextUploads],
+  };
+
+  const label = category === "voice" ? "音频" : "图片";
+  workbench.ui.toast =
+    rejectedCount > 0
+      ? `已添加 ${nextUploads.length} 个本地${label}预览，${rejectedCount} 个文件格式不支持。`
+      : `已添加 ${nextUploads.length} 个本地${label}预览。`;
+  render(workbench, { preserveLibraryScroll: true });
+}
+
+async function buildTeamAssetLocalUploadRecord(category, file, validation) {
+  const mediaType = validation.mediaType;
+  const previewUrl =
+    mediaType === "audio" && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+      ? URL.createObjectURL(file)
+      : await readFileAsDataUrl(file);
+
+  return {
+    id: `team-local-${category}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: file.name,
+    fileName: file.name,
+    previewUrl,
+    mimeType: file.type || validation.mimeType || validation.extension?.toUpperCase() || "",
+    extension: validation.extension,
+    sizeLabel: formatFileSizeLabel(file.size),
+    createdAt: Date.now(),
+  };
 }
 
 async function handleAssetImportFiles(workbench, files) {
@@ -2182,16 +2501,6 @@ function navTabLabel(tab) {
   );
 }
 
-function libraryAssetScopeLabel(scope) {
-  return (
-    {
-      personal: "个人资产库",
-      official: "官方资产库",
-      team: "团队资产库",
-    }[scope] ?? "资产库"
-  );
-}
-
 function buildProjectSeedScript({ name, projectType }) {
   const typeLabel =
     {
@@ -2272,6 +2581,61 @@ async function syncProjectLibraryFromApi(workbench) {
   syncSelectedProjectCard(workbench, projects);
 }
 
+async function syncAssetLibraryFromApi(workbench, options = {}) {
+  const scope = workbench.ui.libraryTeamAssetScope ?? "official";
+  if (
+    scope === "personal" ||
+    typeof workbench.api.getLibraryAssets !== "function" ||
+    !shouldFetchAssetLibrary(workbench)
+  ) {
+    workbench.ui.libraryLoading = false;
+    workbench.ui.libraryError = "";
+    workbench.ui.libraryAssets = [];
+    return;
+  }
+
+  workbench.ui.libraryLoading = true;
+  workbench.ui.libraryError = "";
+  try {
+    const payload = await workbench.api.getLibraryAssets({
+      scope,
+      category: workbench.ui.libraryCategory,
+      folder: workbench.ui.libraryFolder,
+      query: workbench.ui.libraryQuery,
+    });
+    if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
+      return;
+    }
+    const folders = Array.isArray(payload.folders) ? payload.folders : [];
+    workbench.ui.libraryCategories = Array.isArray(payload.categories) ? payload.categories : [];
+    workbench.ui.libraryFolders = folders;
+    workbench.ui.libraryAssets = Array.isArray(payload.assets) ? payload.assets : [];
+    workbench.ui.libraryEntitlement = payload.entitlement ?? null;
+    if (!workbench.ui.libraryFolder && folders[0]) {
+      workbench.ui.libraryFolder = folders[0];
+    }
+  } catch (error) {
+    if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
+      return;
+    }
+    workbench.ui.libraryAssets = [];
+    workbench.ui.libraryError = friendlyError(error);
+  } finally {
+    if (!options.requestId || workbench.librarySearchRequestId === options.requestId) {
+      workbench.ui.libraryLoading = false;
+    }
+  }
+}
+
+function shouldFetchAssetLibrary(workbench) {
+  const scope = workbench.ui.libraryTeamAssetScope ?? "official";
+  return scope !== "personal" && isApiBackedLibraryCategory(workbench.ui.libraryCategory);
+}
+
+function isApiBackedLibraryCategory(category) {
+  return ["character", "scene", "prop", "image", "video"].includes(category);
+}
+
 function syncSelectedProjectCard(workbench, projects) {
   const selectedProjectId = workbench.ui.selectedProjectCardId;
   if (selectedProjectId && projects.some((project) => project.id === selectedProjectId)) {
@@ -2331,6 +2695,20 @@ function inferProjectType(project) {
     return "domestic-live";
   }
   return "anime";
+}
+
+function formatFileSizeLabel(size) {
+  const bytes = Number(size ?? 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 102.4) / 10} KB`;
+  }
+  return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
 }
 
 function formatProjectDate(date) {

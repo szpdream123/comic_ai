@@ -35,9 +35,69 @@ describe("foundation schema", () => {
         "payment_reconciliation_runs",
         "payment_reconciliation_items",
         "storage_objects",
+        "organization_entitlements",
+        "library_assets",
+        "library_asset_versions",
       ]) {
         assert.ok(tables.includes(table), `expected ${table} table`);
       }
+      assert.equal(tables.includes("library_asset_project_imports"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("models reusable asset libraries separately from project assets", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      assert.deepEqual(await listColumnNames(db, "library_assets"), [
+        "id",
+        "scope",
+        "organization_id",
+        "workspace_id",
+        "created_by_user_id",
+        "asset_type",
+        "category",
+        "folder",
+        "name",
+        "description",
+        "tags_json",
+        "status",
+        "requires_pro_entitlement",
+        "created_at",
+        "updated_at",
+      ]);
+
+      assert.deepEqual(await listColumnNames(db, "library_asset_versions"), [
+        "id",
+        "library_asset_id",
+        "version_number",
+        "storage_object_key",
+        "preview_url",
+        "mime_type",
+        "width",
+        "height",
+        "metadata_json",
+        "created_at",
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("models organization entitlements for server-side team asset gates", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      assert.deepEqual(await listColumnNames(db, "organization_entitlements"), [
+        "id",
+        "organization_id",
+        "entitlement_key",
+        "status",
+        "source",
+        "expires_at",
+        "created_at",
+        "updated_at",
+      ]);
     } finally {
       await db.close();
     }

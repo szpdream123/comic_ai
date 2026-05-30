@@ -232,6 +232,13 @@ function renderEpisodeWorkbenchScreen({ state, ui }) {
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
+      <header class="episode-workbench-titlebar">
+        <div>
+          <span>当前剧集</span>
+          <strong>${escapeHtml(episodeTitle)}</strong>
+        </div>
+        <em>${escapeHtml(episodeStatus)} · ${storyboardCount} 个分镜</em>
+      </header>
       ${renderEpisodeWorkbench({
         storyboards: ui.storyboards ?? [],
         selectedStoryboard: ui.selectedStoryboard,
@@ -1552,13 +1559,26 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "library") {
     return `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      ${renderLibraryTeam({
-        route: "assets",
-        assetScope: ui.libraryTeamAssetScope,
-        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
-      })}
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      <div class="library-workspace-scroll">
+        ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
+        ${renderLibraryTeam({
+          route: "assets",
+          assetScope: ui.libraryTeamAssetScope,
+          libraryCategory: ui.libraryCategory,
+          libraryFolder: ui.libraryFolder,
+          libraryQuery: ui.libraryQuery,
+          libraryCategories: ui.libraryCategories,
+          libraryFolders: ui.libraryFolders,
+          libraryAssets: ui.libraryAssets,
+          libraryEntitlement: ui.libraryEntitlement,
+          teamAssetLocalUploads: ui.teamAssetLocalUploads,
+          libraryLoading: ui.libraryLoading,
+          libraryError: ui.libraryError,
+          libraryDetailAssetId: ui.libraryDetailAssetId,
+          libraryDetailView: ui.libraryDetailView,
+          pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        })}
+      </div>
     `;
   }
 
@@ -1657,19 +1677,15 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   `;
 }
 
-function renderWorkbenchHeader({ state, session, detailState, progress, ui }) {
+function renderWorkbenchHeader({ state, session, detailState, progress, ui, compact = false }) {
   return `
-    <header class="workbench-topbar">
+    <header class="workbench-topbar${compact ? " is-library-compact" : ""}">
       <div>
         <div class="project-title-row">
           <h1>${escapeHtml(detailState.project.name)}</h1>
           <span class="phase-pill">${escapeHtml(detailState.project.statusLabel)}</span>
         </div>
         <p class="session-line">当前账号 ${escapeHtml(session.user.phone)} · ${progress.readySteps}/${progress.totalSteps} 步完成</p>
-      </div>
-      <div class="topbar-actions">
-        <button id="script-upload-button" class="secondary-action" type="button" data-action="open-script-modal">AI 智能提取资产</button>
-        <button id="parse-script-button" class="primary-action" type="button" data-action="parse-script" ${disabled(!state.project || ui.busy)}>AI 拆分镜</button>
       </div>
     </header>
   `;

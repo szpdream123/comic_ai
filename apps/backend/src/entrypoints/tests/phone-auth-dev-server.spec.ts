@@ -21,6 +21,25 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("serves official library PNG previews as binary static assets", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(
+        `${server.origin}/assets/library/official/characters/nanny.png`,
+      );
+      const bytes = new Uint8Array(await response.arrayBuffer());
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "image/png");
+      assert.deepEqual(Array.from(bytes.slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("supports the full request -> debug -> verify -> session flow", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -655,6 +674,48 @@ describe("phone auth dev server", () => {
       assert.equal(imageResult.request.promptOverride, "single shot prompt");
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes reusable official asset library routes without project import", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const cookie = await login(server.origin, "13800138000");
+
+      const officialResponse = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=official&category=character&q=${encodeURIComponent("医生")}`,
+        { headers: { cookie } },
+      );
+      const official = await officialResponse.json();
+      const libraryAsset = official.assets[0];
+
+      const removedImportResponse = await fetch(
+        `${server.origin}/api/creator/library/assets/import-to-project`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            projectId: "40000000-0000-4000-8000-000000000001",
+            libraryAssetId: libraryAsset.id,
+          }),
+        },
+      );
+
+      assert.equal(officialResponse.status, 200);
+      assert.equal(libraryAsset.name, "医生");
+      assert.match(
+        libraryAsset.previewUrl,
+        /^\/assets\/library\/official\/characters\/doctor\.png$/,
+      );
+      assert.equal(removedImportResponse.status, 404);
     } finally {
       await server.close();
     }

@@ -10,6 +10,12 @@ import {
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
 import { upsertAssetVersionSnapshot } from "./asset-version-record.service.ts";
+import {
+  ensureDefaultOfficialLibraryAssets,
+  listLibraryAssetsForActor,
+  type LibraryAssetCategory,
+  type LibraryAssetScope,
+} from "./asset-library.service.ts";
 import type { AssetType } from "./asset.service.ts";
 import { computeAssetReviewSummary } from "./asset-review.service.ts";
 import {
@@ -723,6 +729,57 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             projectId,
           }),
         },
+      };
+    },
+
+    async listReusableAssetLibrary(input: {
+      user: AuthenticatedCreatorUser;
+      query?: {
+        scope?: string | null;
+        category?: string | null;
+        folder?: string | null;
+        query?: string | null;
+        q?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const scope = parseLibraryAssetScope(input.query?.scope);
+      const category = parseLibraryAssetCategory(input.query?.category);
+      if (!scope || category === "invalid") {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_library_filter",
+            fieldErrors: {
+              ...(scope ? {} : { scope: "invalid_scope" }),
+              ...(category === "invalid" ? { category: "invalid_category" } : {}),
+            },
+          },
+        };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+
+      if (scope === "official") {
+        await ensureDefaultOfficialLibraryAssets(deps.db, { now: input.now });
+      }
+
+      const listed = await listLibraryAssetsForActor(deps.db, {
+        actor,
+        scope,
+        category,
+        folder: cleanOptionalText(input.query?.folder),
+        query: cleanOptionalText(input.query?.query ?? input.query?.q),
+        now: input.now,
+      });
+
+      return {
+        status: 200,
+        body: listed,
       };
     },
 
@@ -2391,6 +2448,38 @@ function assetTypeForKind(kind: "character" | "scene" | "prop" | "image" | "vide
     return "prop_reference";
   }
   return kind === "video" ? "shot_video" : "shot_image";
+}
+
+function cleanOptionalText(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function parseLibraryAssetScope(value?: string | null): LibraryAssetScope | null {
+  const normalized = value?.trim() || "official";
+  if (normalized === "official" || normalized === "team" || normalized === "personal") {
+    return normalized;
+  }
+  return null;
+}
+
+function parseLibraryAssetCategory(
+  value?: string | null,
+): LibraryAssetCategory | "invalid" | null {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized === "character" ||
+    normalized === "scene" ||
+    normalized === "prop" ||
+    normalized === "image" ||
+    normalized === "video"
+  ) {
+    return normalized;
+  }
+  return "invalid";
 }
 
 function stableEpisodeUuid(projectId: string, sourceEpisodeId: string) {

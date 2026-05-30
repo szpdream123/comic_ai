@@ -32,6 +32,10 @@ const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
 };
 
 interface AuthHttpResponse<T> {
@@ -119,7 +123,7 @@ async function serveStatic(pathname: string, response: ServerResponse) {
   const normalizedPath =
     pathname === "/" ? "/login.html" : pathname === "/login" ? "/login.html" : pathname;
   const filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
-  const file = await readFile(filePath, "utf8");
+  const file = await readFile(filePath);
 
   response.statusCode = 200;
   response.setHeader(
@@ -687,6 +691,26 @@ export function createPhoneAuthDevServer(): PhoneAuthDevServer {
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/library/assets") {
+          return writeJson(
+            response,
+            await creatorApplication.listReusableAssetLibrary({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              query: {
+                scope: url.searchParams.get("scope"),
+                category: url.searchParams.get("category"),
+                folder: url.searchParams.get("folder"),
+                q: url.searchParams.get("q"),
+                query: url.searchParams.get("query"),
               },
               now: new Date(),
             }),

@@ -546,6 +546,35 @@
   border-bottom: 1px solid oklch(100% 0 0 / 0.08);
 }
 
+.workbench-topbar.is-library-compact {
+  min-height: 3rem;
+  padding: 0 0.35rem 0.35rem;
+}
+
+.workbench-topbar.is-library-compact .session-line {
+  margin-top: 0.12rem;
+}
+
+.workbench-topbar.is-library-compact .primary-action,
+.workbench-topbar.is-library-compact .secondary-action {
+  min-height: 2.45rem;
+  padding: 0.58rem 0.95rem;
+}
+
+.workbench-topbar.is-library-compact .project-title-row h1 {
+  font-size: 1.05rem;
+}
+
+.library-workspace-scroll {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+}
+
 .project-title-row {
   display: flex;
   align-items: center;
@@ -587,7 +616,6 @@
   margin: 0.35rem 0 0;
 }
 
-.topbar-actions,
 .console-actions,
 .export-summary {
   display: flex;
@@ -3559,6 +3587,34 @@
 .episode-workbench-screen {
   display: grid;
   gap: 1rem;
+}
+
+.episode-workbench-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3rem;
+  padding: 0 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.8rem;
+  background: rgba(13, 15, 22, 0.88);
+}
+
+.episode-workbench-titlebar div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.episode-workbench-titlebar span,
+.episode-workbench-titlebar em {
+  color: rgba(238, 239, 244, 0.62);
+  font-size: 0.78rem;
+  font-style: normal;
+}
+
+.episode-workbench-titlebar strong {
+  color: #fff;
 }
 
 .episode-media-chrome {
@@ -6652,12 +6708,42 @@
     flex-direction: column;
   }
 
-  .topbar-actions {
+  .global-statusbar {
+    display: grid;
+    grid-template-columns: 1fr;
     align-items: stretch;
+    gap: 0.7rem;
+    min-height: auto;
   }
 
-  .topbar-actions button {
-    flex: 1;
+  .statusbar-brand {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    width: 100%;
+  }
+
+  .statusbar-brand strong {
+    font-size: 1.25rem;
+  }
+
+  .statusbar-actions {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+  }
+
+  .statusbar-seedance,
+  .statusbar-pill,
+  .statusbar-credit,
+  .statusbar-icon,
+  .statusbar-avatar {
+    flex: 0 0 auto;
+  }
+
+  .statusbar-seedance {
+    min-width: min(14rem, calc(100vw - 2rem));
   }
 
   .hero-topbar,

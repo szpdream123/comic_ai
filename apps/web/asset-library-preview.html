@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>官方资产库预览</title>
+    <link rel="stylesheet" href="./src/features/production-workbench/production-workbench.css" />
+    <link rel="stylesheet" href="./src/features/library-team/library-team.css" />
+    <style>
+      html,
+      body,
+      #asset-library-preview {
+        min-height: 100%;
+        margin: 0;
+        background: #090a0f;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="asset-library-preview"></main>
+    <script type="module">
+      import { renderLibraryTeam } from "./src/features/library-team/index.js";
+      import { renderProductionWorkbench } from "./src/features/production-workbench/index.js";
+
+      const params = new URLSearchParams(window.location.search);
+      const state = {
+        folder: params.get("folder") || "国内仿真人-现代都市",
+        category: params.get("category") || "character",
+        query: params.get("q") || "",
+        detailAssetId: params.get("asset") || "",
+        detailView: params.get("view") || "turnaround",
+      };
+
+      function render(options = {}) {
+        const root = document.querySelector("#asset-library-preview");
+        const scrollState = options.preserveScroll ? captureScrollState(root) : null;
+        if (params.get("shell") === "1") {
+          root.innerHTML = renderProductionWorkbench({
+            session: { user: { phone: "+8613800138000" } },
+            state: {
+              project: {
+                id: "try",
+                name: "try",
+                phase: "not_started",
+                aspectRatio: "9:16",
+                resolution: "1080p",
+              },
+            },
+            ui: {
+              activeNavTab: "library",
+              libraryTeamAssetScope: "official",
+              libraryCategory: state.category,
+              libraryFolder: state.folder,
+              libraryQuery: state.query,
+              libraryDetailAssetId: state.detailAssetId,
+              libraryDetailView: state.detailView,
+              libraryEntitlement: { hasTeamAssetLibrary: true },
+            },
+          });
+          restoreScrollState(root, scrollState);
+          return;
+        }
+        root.innerHTML = renderLibraryTeam({
+          route: "assets",
+          assetScope: "official",
+          libraryCategory: state.category,
+          libraryFolder: state.folder,
+          libraryQuery: state.query,
+          libraryDetailAssetId: state.detailAssetId,
+          libraryDetailView: state.detailView,
+          libraryEntitlement: { hasTeamAssetLibrary: true },
+        });
+        restoreScrollState(root, scrollState);
+      }
+
+      function captureScrollState(root) {
+        const libraryScroll = root.querySelector(".library-workspace-scroll");
+        const pageScroll = document.scrollingElement || document.documentElement;
+        return {
+          libraryLeft: libraryScroll?.scrollLeft || 0,
+          libraryTop: libraryScroll?.scrollTop || 0,
+          pageLeft: pageScroll?.scrollLeft || window.scrollX || 0,
+          pageTop: pageScroll?.scrollTop || window.scrollY || 0,
+        };
+      }
+
+      function restoreScrollState(root, scrollState) {
+        if (!scrollState) return;
+        const applyScroll = () => {
+          const libraryScroll = root.querySelector(".library-workspace-scroll");
+          if (libraryScroll) {
+            libraryScroll.scrollLeft = scrollState.libraryLeft;
+            libraryScroll.scrollTop = scrollState.libraryTop;
+          }
+          const pageScroll = document.scrollingElement || document.documentElement;
+          if (pageScroll) {
+            pageScroll.scrollLeft = scrollState.pageLeft;
+            pageScroll.scrollTop = scrollState.pageTop;
+          }
+        };
+        applyScroll();
+        window.requestAnimationFrame?.(applyScroll);
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-action]");
+        if (!target) return;
+
+        if (target.dataset.action === "set-library-folder") {
+          state.folder = target.dataset.libraryFolder || state.folder;
+          state.query = "";
+          state.detailAssetId = "";
+          state.detailView = "turnaround";
+          render();
+        }
+
+        if (target.dataset.action === "set-library-category") {
+          state.category = target.dataset.libraryCategory || state.category;
+          state.query = "";
+          state.detailAssetId = "";
+          state.detailView = "turnaround";
+          render();
+        }
+
+        if (target.dataset.action === "open-library-asset-detail") {
+          state.detailAssetId = target.dataset.libraryAssetId || "";
+          state.detailView = "turnaround";
+          render({ preserveScroll: true });
+        }
+
+        if (target.dataset.action === "select-library-asset-detail-view") {
+          state.detailView = target.dataset.detailView || "turnaround";
+          render({ preserveScroll: true });
+        }
+
+        if (target.dataset.action === "close-library-asset-detail") {
+          state.detailAssetId = "";
+          state.detailView = "turnaround";
+          render({ preserveScroll: true });
+        }
+
+        if (target.dataset.action === "clear-library-search") {
+          state.query = "";
+          state.detailAssetId = "";
+          state.detailView = "turnaround";
+          render();
+        }
+      });
+
+      document.addEventListener("input", (event) => {
+        if (!event.target?.matches?.("[data-library-search-input]")) return;
+        state.query = event.target.value;
+        state.detailAssetId = "";
+        state.detailView = "turnaround";
+        render();
+      });
+
+      render();
+    </script>
+  </body>
+</html>

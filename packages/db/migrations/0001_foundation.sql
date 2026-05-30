@@ -223,6 +223,73 @@ CREATE TABLE storage_objects (
 CREATE INDEX storage_objects_tenant_idx
   ON storage_objects (organization_id, project_id, created_at DESC);
 
+CREATE TABLE organization_entitlements (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  entitlement_key text NOT NULL CHECK (
+    entitlement_key IN (
+      'team_asset_library',
+      'team_member_management',
+      'team_dashboard',
+      'priority_generation'
+    )
+  ),
+  status text NOT NULL CHECK (status IN ('active', 'expired', 'revoked')),
+  source text NOT NULL CHECK (source IN ('manual', 'payment', 'trial', 'dev_seed')),
+  expires_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, entitlement_key)
+);
+
+CREATE INDEX organization_entitlements_active_idx
+  ON organization_entitlements (organization_id, entitlement_key, status, expires_at);
+
+CREATE TABLE library_assets (
+  id uuid PRIMARY KEY,
+  scope text NOT NULL CHECK (scope IN ('official', 'team', 'personal')),
+  organization_id uuid NULL REFERENCES organizations(id),
+  workspace_id uuid NULL REFERENCES workspaces(id),
+  created_by_user_id uuid NULL REFERENCES users(id),
+  asset_type text NOT NULL CHECK (asset_type IN ('character', 'scene', 'prop', 'image', 'video')),
+  category text NOT NULL CHECK (category IN ('character', 'scene', 'prop', 'image', 'video')),
+  folder text NOT NULL,
+  name text NOT NULL,
+  description text NULL,
+  tags_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL CHECK (status IN ('active', 'archived')),
+  requires_pro_entitlement boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (scope = 'official' AND organization_id IS NULL AND workspace_id IS NULL AND created_by_user_id IS NULL)
+    OR (scope = 'team' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL)
+    OR (scope = 'personal' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL AND created_by_user_id IS NOT NULL)
+  ),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id)
+);
+
+CREATE INDEX library_assets_scope_idx
+  ON library_assets (scope, organization_id, workspace_id, category, folder, status, updated_at DESC);
+
+CREATE TABLE library_asset_versions (
+  id uuid PRIMARY KEY,
+  library_asset_id uuid NOT NULL REFERENCES library_assets(id),
+  version_number integer NOT NULL CHECK (version_number >= 1),
+  storage_object_key text NOT NULL,
+  preview_url text NULL,
+  mime_type text NOT NULL,
+  width integer NOT NULL CHECK (width >= 1),
+  height integer NOT NULL CHECK (height >= 1),
+  metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (library_asset_id, version_number)
+);
+
+CREATE INDEX library_asset_versions_asset_idx
+  ON library_asset_versions (library_asset_id, version_number DESC);
+
 CREATE TABLE shots (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organizations(id),
