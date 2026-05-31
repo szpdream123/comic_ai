@@ -556,6 +556,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       activeNavTab: deriveInitialNavTab(window.location.hash),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
       libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
+      teamDashboardTab: deriveInitialTeamDashboardTab(window.location.hash),
+      teamDashboardDateRange: "today",
       libraryTeamAssetScope: "official",
       libraryCategory: "character",
       libraryFolder: "国内仿真人-现代都市",
@@ -1727,18 +1729,43 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-team-dashboard") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardTab = "member-consumption";
+    workbench.ui.teamDashboardDateRange = "today";
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
     await loadTeamSurface(workbench);
     workbench.ui.toast = "已打开团队数据看板。";
-    window.location.hash = "team-dashboard";
+    window.location.hash = teamDashboardHash(workbench.ui.teamDashboardTab);
     render(workbench);
+    return;
+  }
+
+  if (action === "set-team-dashboard-tab") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardTab = normalizeTeamDashboardTab(target.dataset.dashboardTab);
+    workbench.ui.toast = "已切换团队数据看板。";
+    window.location.hash = teamDashboardHash(workbench.ui.teamDashboardTab);
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "set-team-dashboard-date-range") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardDateRange = normalizeTeamDashboardDateRange(
+      target.dataset.dashboardDateRange,
+    );
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
   if (action === "back-to-team-page") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team";
+    workbench.ui.teamDashboardTab = "member-consumption";
+    workbench.ui.teamDashboardDateRange = "today";
     await loadTeamSurface(workbench);
     workbench.ui.toast = "已返回团队管理。";
     window.location.hash = "team";
@@ -1752,6 +1779,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
       workbench.ui.libraryTeamRoute = "team";
+      workbench.ui.teamDashboardTab = "member-consumption";
+      workbench.ui.teamDashboardDateRange = "today";
     }
     if (workbench.ui.activeNavTab === "library") {
       workbench.ui.libraryTeamRoute = "assets";
@@ -7633,6 +7662,16 @@ function createTeamMemberDraft() {
   };
 }
 
+const TEAM_DASHBOARD_TABS = new Set(["member-consumption", "project-cost", "ranking"]);
+const TEAM_DASHBOARD_DATE_RANGES = new Set([
+  "today",
+  "yesterday",
+  "week",
+  "month",
+  "last-month",
+  "year",
+]);
+
 function statusForAction(action) {
   return (
     {
@@ -7661,6 +7700,15 @@ export function friendlyError(error) {
   if (errorCode === "origin_forbidden") {
     return `跨域来源被拒绝，请从允许的地址打开页面或检查 CORS 配置${requestId}`;
   }
+  const message =
+    error instanceof Error ? error.message : (typeof error?.message === "string" ? error.message : String(error));
+  if (
+    errorCode === "unexpected_response" ||
+    error instanceof SyntaxError ||
+    message.includes("Unexpected token")
+  ) {
+    return `服务返回异常，请刷新页面或重新登录。${requestId}`;
+  }
   if (errorCode === "permission_denied" || status === 403) {
     return `没有权限执行该操作，请确认账号、项目成员角色或联系管理员${requestId}`;
   }
@@ -7670,7 +7718,6 @@ export function friendlyError(error) {
   if (status === 404 && errorCode === "resource_not_found") {
     return `资源不存在或无权访问，请刷新项目后重试${requestId}`;
   }
-  const message = error instanceof Error ? error.message : String(error);
   const teamMessageFromBody = teamErrorMessage(message);
   if (teamMessageFromBody) {
     return teamMessageFromBody;
@@ -7795,7 +7842,7 @@ function deriveInitialNavTab(hash) {
   if (token === "tools") {
     return "tools";
   }
-  if (token === "team" || token === "team-dashboard") {
+  if (token === "team" || token.startsWith("team-dashboard")) {
     return "team";
   }
   return "project";
@@ -7803,13 +7850,39 @@ function deriveInitialNavTab(hash) {
 
 function deriveInitialLibraryTeamRoute(hash) {
   const token = String(hash || "").replace(/^#/, "");
-  if (token === "team-dashboard") {
+  if (token.startsWith("team-dashboard")) {
     return "team-dashboard";
   }
   if (token === "team") {
     return "team";
   }
   return "assets";
+}
+
+function normalizeTeamDashboardTab(tab) {
+  const normalizedTab = String(tab ?? "");
+  return TEAM_DASHBOARD_TABS.has(normalizedTab) ? normalizedTab : "member-consumption";
+}
+
+function normalizeTeamDashboardDateRange(range) {
+  const normalizedRange = String(range ?? "");
+  return TEAM_DASHBOARD_DATE_RANGES.has(normalizedRange) ? normalizedRange : "today";
+}
+
+function deriveInitialTeamDashboardTab(hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  if (token === "team-dashboard-project-cost") {
+    return "project-cost";
+  }
+  if (token === "team-dashboard-ranking") {
+    return "ranking";
+  }
+  return "member-consumption";
+}
+
+function teamDashboardHash(tab) {
+  const normalizedTab = normalizeTeamDashboardTab(tab);
+  return normalizedTab === "member-consumption" ? "team-dashboard" : `team-dashboard-${normalizedTab}`;
 }
 
 function deriveInitialProjectPanelMode(hash) {

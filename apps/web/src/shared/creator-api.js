@@ -35,7 +35,22 @@ async function fetchJson(url, options = {}) {
   }
 
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      const error = new Error("unexpected_response");
+      error.status = response.status ?? 0;
+      error.errorCode = "unexpected_response";
+      error.details = {
+        contentType: response.headers?.get?.("content-type") ?? "",
+        preview: text.slice(0, 120),
+        url: response.url ?? "",
+      };
+      throw error;
+    }
+  }
 
   if (!response.ok) {
     const error = new Error(

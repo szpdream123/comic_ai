@@ -1976,12 +1976,27 @@ describe("Worker C production workbench integration", () => {
 
     assert.match(teamHtml, /library-team-page/);
     assert.match(teamHtml, /data-action="open-team-dashboard"/);
+    assert.match(teamHtml, /id="workspace-status" class="workbench-toast sr-only"/);
     assertIncludesAll(teamHtml, ["团队协作台", "团队额度", "数据管理", "成员管理", "创建成员账号"]);
 
     const dashboardHtml = renderWorkbenchTab("team", { libraryTeamRoute: "team-dashboard" });
 
     assertIncludesAll(dashboardHtml, ["成员创作与消耗", "项目资产与成本", "排行榜", "暂无数据"]);
     assert.match(dashboardHtml, /data-action="back-to-team-page"/);
+    const dashboardTabs = dashboardHtml.match(
+      /<nav class="library-team-tabs"[\s\S]*?<\/nav>/,
+    )?.[0] ?? "";
+    assert.match(dashboardTabs, /data-action="set-team-dashboard-tab"/);
+    assert.match(dashboardTabs, /data-dashboard-tab="project-cost"/);
+    assert.match(dashboardTabs, /data-dashboard-tab="ranking"/);
+    assert.doesNotMatch(dashboardTabs, /show-library-placeholder/);
+    const dateShortcuts = dashboardHtml.match(
+      /<div class="library-team-date-shortcuts"[\s\S]*?<\/div>/,
+    )?.[0] ?? "";
+    assert.match(dateShortcuts, /data-action="set-team-dashboard-date-range"/);
+    assert.match(dateShortcuts, /data-dashboard-date-range="yesterday"/);
+    assert.match(dateShortcuts, /data-dashboard-date-range="month"/);
+    assert.doesNotMatch(dateShortcuts, /show-library-placeholder/);
   });
 
   it("mounts non-editor library pages inside an internal scroll surface", () => {
@@ -2218,6 +2233,8 @@ describe("Worker C team management surfaces", () => {
       "创建成员开始团队协作",
       "邀请成员后，这里会显示账号、角色、项目范围与积分额度。",
     ]);
+    assert.match(html, /library-team-member-filterbar/);
+    assert.match(html, /library-team-filter-actions/);
     assert.match(html, /data-action="show-library-placeholder"/);
     assert.match(html, /data-placeholder-message="[^"]*成员筛选[^"]*"/);
   });
@@ -2225,10 +2242,24 @@ describe("Worker C team management surfaces", () => {
   it("renders a refined creator-workbench command surface for team operations", () => {
     const html = renderLibraryTeam({ route: "team" });
 
-    assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录"]);
+    assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录", "数据看板"]);
     assert.match(html, /library-team-command-strip/);
+    assert.match(html, /library-team-command-chip/);
     assert.match(html, /library-team-workspace-grid/);
     assert.match(html, /library-team-policy-panel/);
+  });
+
+  it("does not render backend team errors as visible bottom-page copy", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      team: {
+        error: "服务返回异常，请刷新页面或重新登录。",
+        members: [],
+      },
+    });
+
+    assert.doesNotMatch(html, /library-team-commerce-notice is-error/);
+    assert.doesNotMatch(html, /服务返回异常，请刷新页面或重新登录。/);
   });
 
   it("renders paid team data and the create-member account dialog without password hashes", () => {
@@ -2348,6 +2379,44 @@ describe("Worker C team management surfaces", () => {
     ]);
     assert.match(html, /data-placeholder-message="[^"]*导出[^"]*"/);
   });
+
+  it("renders switchable team dashboard panels for project costs and rankings", () => {
+    const projectCostHtml = renderLibraryTeam({
+      route: "team-dashboard",
+      team: { dashboardTab: "project-cost", members: [] },
+    });
+    const rankingHtml = renderLibraryTeam({
+      route: "team-dashboard",
+      team: { dashboardTab: "ranking", members: [] },
+    });
+
+    assert.match(projectCostHtml, /data-dashboard-panel="project-cost"/);
+    assert.match(projectCostHtml, /id="dashboard-project-cost-title"/);
+    assert.match(projectCostHtml, /data-dashboard-tab="project-cost"[\s\S]*aria-selected="true"/);
+    assert.doesNotMatch(projectCostHtml, /id="dashboard-member-consumption-title"/);
+
+    assert.match(rankingHtml, /data-dashboard-panel="ranking"/);
+    assert.match(rankingHtml, /id="dashboard-ranking-title"/);
+    assert.match(rankingHtml, /library-team-ranking-grid/);
+    assert.match(rankingHtml, /data-dashboard-tab="ranking"[\s\S]*aria-selected="true"/);
+    assert.doesNotMatch(rankingHtml, /id="dashboard-member-consumption-title"/);
+  });
+
+  it("renders the selected team dashboard date range as active", () => {
+    const html = renderLibraryTeam({
+      route: "team-dashboard",
+      team: { dashboardDateRange: "week", members: [] },
+    });
+    const weekButton = html.match(
+      /<button[\s\S]*?data-dashboard-date-range="week"[\s\S]*?<\/button>/,
+    )?.[0] ?? "";
+    const yesterdayButton = html.match(
+      /<button[\s\S]*?data-dashboard-date-range="yesterday"[\s\S]*?<\/button>/,
+    )?.[0] ?? "";
+
+    assert.match(weekButton, /aria-pressed="true"/);
+    assert.match(yesterdayButton, /aria-pressed="false"/);
+  });
 });
 
 describe("Worker C team API wiring", () => {
@@ -2363,6 +2432,10 @@ describe("Worker C team API wiring", () => {
     assert.match(apiJs, /createTeamMember/);
     assert.match(workbenchJs, /loadTeamSurface/);
     assert.match(workbenchJs, /submit-team-member-create/);
+    assert.match(workbenchJs, /action === "set-team-dashboard-tab"/);
+    assert.match(workbenchJs, /teamDashboardTab/);
+    assert.match(workbenchJs, /action === "set-team-dashboard-date-range"/);
+    assert.match(workbenchJs, /teamDashboardDateRange/);
   });
 
   it("keeps team-specific 403 errors actionable for members", () => {
@@ -2379,6 +2452,20 @@ describe("Worker C team API wiring", () => {
         errorCode: "team_group_scope_violation",
       }),
       "只能管理当前成员组内的成员。",
+    );
+  });
+
+  it("hides raw JSON parser errors behind user-safe copy", () => {
+    assert.equal(
+      friendlyError({
+        errorCode: "unexpected_response",
+        message: "Unexpected token '<', \"<!doctype \"... is not valid JSON",
+      }),
+      "服务返回异常，请刷新页面或重新登录。",
+    );
+    assert.equal(
+      friendlyError(new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON")),
+      "服务返回异常，请刷新页面或重新登录。",
     );
   });
 });

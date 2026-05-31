@@ -2125,6 +2125,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         team: {
           overview: ui.teamOverview,
           members: ui.teamMembers,
+          dashboardTab: ui.teamDashboardTab,
+          dashboardDateRange: ui.teamDashboardDateRange,
           error: ui.teamError,
           createOpen: Boolean(ui.isTeamMemberCreateOpen),
           draft: ui.teamMemberDraft,
@@ -2132,7 +2134,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
           temporaryPassword: ui.teamTemporaryPassword,
         },
       })}
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      <p id="workspace-status" class="workbench-toast sr-only" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
     `);
   }
 

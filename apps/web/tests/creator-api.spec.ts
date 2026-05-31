@@ -93,6 +93,34 @@ test("deleteShotMedia treats missing shot media as a recoverable result", async 
   assert.deepEqual(result, { deleted: false, missing: true });
 });
 
+test("team overview hides non-JSON API responses behind a controlled error", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    url: "/api/creator/team/overview",
+    headers: {
+      get: () => "text/html; charset=utf-8",
+    },
+    text: async () => "<!doctype html><html><body>login</body></html>",
+  });
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await assert.rejects(
+      () => creatorApi.getTeamOverview(),
+      (error) => {
+        assert.equal(error.message, "unexpected_response");
+        assert.equal(error.errorCode, "unexpected_response");
+        assert.equal(error.status, 200);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("uploadFile aborts the prepared session when complete fails", async () => {
   globalThis.XMLHttpRequest = class FakeXmlHttpRequest {
     headers = {};
