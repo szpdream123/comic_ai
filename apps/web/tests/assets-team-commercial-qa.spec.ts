@@ -526,6 +526,38 @@ describe("Worker C asset library surfaces", () => {
     assert.equal(removeTeamAssetLocalUpload(ui, "character", "missing-upload"), false);
   });
 
+  it("revokes local voice blob URLs when removing uploads", () => {
+    const revokeCalls: string[] = [];
+    const urlApi = globalThis.URL as typeof URL & { revokeObjectURL?: (url: string) => void };
+    const originalRevoke = urlApi.revokeObjectURL;
+    urlApi.revokeObjectURL = (url: string) => {
+      revokeCalls.push(url);
+    };
+
+    try {
+      const ui = {
+        teamAssetLocalUploads: {
+          voice: [
+            {
+              id: "local-voice-1",
+              name: "旁白音色.m4a",
+              previewUrl: "blob:http://localhost/local-voice-1",
+            },
+          ],
+        },
+      };
+
+      assert.equal(removeTeamAssetLocalUpload(ui, "voice", "local-voice-1"), true);
+      assert.deepEqual(revokeCalls, ["blob:http://localhost/local-voice-1"]);
+    } finally {
+      if (originalRevoke) {
+        urlApi.revokeObjectURL = originalRevoke;
+      } else {
+        delete urlApi.revokeObjectURL;
+      }
+    }
+  });
+
   it("validates local upload formats by category", () => {
     assert.equal(
       validateTeamAssetLocalUploadFile("character", { name: "hero.PNG", type: "image/png" }).ok,

@@ -27,15 +27,27 @@ export function removeTeamAssetLocalUpload(ui, category, uploadId) {
   if (!Array.isArray(uploads)) {
     return false;
   }
+  const removedUpload = uploads.find((asset) => asset.id === uploadId);
   const nextUploads = uploads.filter((asset) => asset.id !== uploadId);
   if (nextUploads.length === uploads.length) {
     return false;
   }
+  revokeTeamAssetLocalUploadUrl(removedUpload);
   ui.teamAssetLocalUploads = {
     ...uploadsByCategory,
     [category]: nextUploads,
   };
   return true;
+}
+
+function revokeTeamAssetLocalUploadUrl(asset) {
+  const previewUrl = asset?.previewUrl ?? asset?.sourceUrl ?? asset?.url ?? "";
+  if (!String(previewUrl).startsWith("blob:")) {
+    return;
+  }
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(previewUrl);
+  }
 }
 
 export function syncStoryboards(current, next) {
