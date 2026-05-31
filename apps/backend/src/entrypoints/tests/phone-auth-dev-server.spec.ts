@@ -2809,6 +2809,93 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
   });
+
+  it("gates team member creation behind the paid team entitlement", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const overviewResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
+        headers: { cookie },
+      });
+      const overview = await overviewResponse.json();
+
+      const createResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          teamAccount: "api_director_001",
+          displayName: "API Director",
+          businessRole: "director",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const created = await createResponse.json();
+
+      assert.equal(overviewResponse.status, 200);
+      assert.equal(overview.entitlements.teamMemberManagement, false);
+      assert.equal(createResponse.status, 402);
+      assert.deepEqual(created, { error: "team_member_management_required" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates a team subaccount through the API when paid team entitlement is active", async () => {
+    const server = createPhoneAuthDevServer({ seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          teamAccount: "api_director_001",
+          displayName: "API Director",
+          businessRole: "director",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const created = await createResponse.json();
+
+      const overviewResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
+        headers: { cookie },
+      });
+      const overview = await overviewResponse.json();
+      const membersResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        headers: { cookie },
+      });
+      const members = await membersResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(created.member.teamAccount, "api_director_001");
+      assert.match(created.temporaryPassword, /^[A-Za-z0-9_-]{18,}$/);
+      assert.equal("passwordHash" in created, false);
+      assert.equal("password_hash" in created, false);
+      assert.equal(overviewResponse.status, 200);
+      assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.seats.used, 1);
+      assert.equal(membersResponse.status, 200);
+      assert.equal(members.members.length, 1);
+      assert.equal(members.members[0].teamAccount, "api_director_001");
+      assert.equal("passwordHash" in members.members[0], false);
+      assert.equal("temporaryPassword" in members.members[0], false);
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function login(origin: string, phone: string) {

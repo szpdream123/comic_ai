@@ -447,16 +447,25 @@ Frontend tests:
 
 ## Phasing
 
-Phase 1: management and credit loop
+Phase 1A: member-management vertical slice
 
-- entitlements and seat gates
-- team roles and capabilities
-- create, update, disable, reset password
+- paid entitlement and seat gates for member creation
+- team role capability templates
+- backend-enforced create-member permission checks
+- salted temporary-password creation with one-time response display
+- subaccount list and overview metrics
+- member group and project scope validation for creation
+- initial credit allocation with organization balance protection
+- creator workbench team page, paid gate, seat-full gate, permission gate, and basic dashboard shell
+
+Phase 1B: complete management and credit loop
+
+- update, disable, and reset password
 - member groups
 - project assignment
 - credit allocation and recovery
-- overview metrics
 - basic dashboard metrics
+- audit-event coverage for every management mutation
 
 Phase 2: analytics depth
 

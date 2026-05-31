@@ -87,6 +87,113 @@ describe("actor context", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("resolves group-scoped team capabilities from a subaccount profile", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTenant(db, { role: "owner_admin" });
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+          VALUES (
+            '00000000-0000-4000-8000-000000000002',
+            NULL,
+            'Line Producer',
+            'scrypt:v1:salt:hash',
+            'active'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES (
+            '30000000-0000-4000-8000-000000000002',
+            $1,
+            $2,
+            '00000000-0000-4000-8000-000000000002',
+            'sub_account',
+            'active'
+          )
+        `,
+        [organizationId, workspaceId],
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_groups (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            status,
+            created_by_user_id
+          )
+          VALUES (
+            '31000000-0000-4000-8000-000000000001',
+            $1,
+            $2,
+            'Animation Unit',
+            'active',
+            $3
+          )
+        `,
+        [organizationId, workspaceId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_profiles (
+            id,
+            organization_id,
+            workspace_id,
+            membership_id,
+            team_account,
+            display_name,
+            business_role,
+            member_group_id,
+            created_by_user_id
+          )
+          VALUES (
+            '32000000-0000-4000-8000-000000000001',
+            $1,
+            $2,
+            '30000000-0000-4000-8000-000000000002',
+            'producer001',
+            'Line Producer',
+            'group_admin',
+            '31000000-0000-4000-8000-000000000001',
+            $3
+          )
+        `,
+        [organizationId, workspaceId, userId],
+      );
+
+      const session = await seedSession(
+        db,
+        "00000000-0000-4000-8000-000000000002",
+        "subaccount-session-token",
+      );
+
+      const actor = await resolveActorContext(db, {
+        sessionToken: session.token,
+        workspaceId,
+        capability: capabilities.teamMemberManageGroup,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+      });
+
+      assert.equal(actor.role, "sub_account");
+      assert.equal(actor.teamProfile?.businessRole, "group_admin");
+      assert.equal(
+        actor.teamProfile?.memberGroupId,
+        "31000000-0000-4000-8000-000000000001",
+      );
+      assert.equal(
+        actor.capabilities.includes(capabilities.teamMemberManageAll),
+        false,
+      );
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedTenant(

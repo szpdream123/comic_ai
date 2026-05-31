@@ -450,6 +450,20 @@ export const creatorApi = {
     return fetchJson("/api/creator/state");
   },
 
+  getTeamOverview() {
+    return fetchJson("/api/creator/team/overview");
+  },
+
+  getTeamMembers() {
+    return fetchJson("/api/creator/team/members");
+  },
+
+  createTeamMember(input) {
+    return postJsonWithIdempotency("/api/creator/team/members", input, {
+      action: "team.member.create",
+    });
+  },
+
   createProject(input) {
     return postJsonWithIdempotency("/api/creator/project/create", input, {
       action: "project.create",

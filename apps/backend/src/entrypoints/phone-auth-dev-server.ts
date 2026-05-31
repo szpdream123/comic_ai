@@ -145,6 +145,12 @@ export interface PhoneAuthDevServerRepairSchedulerOptions {
   limit?: number;
 }
 
+export interface PhoneAuthDevServerOptions {
+  db?: Awaited<ReturnType<typeof createDevDb>>;
+  repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
+  seedTeamEntitlements?: boolean;
+}
+
 function parseCookies(header: string | undefined): Record<string, string> {
   if (!header) {
     return {};
@@ -2236,6 +2242,7 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
 async function ensureDevWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
+  options: PhoneAuthDevServerOptions = {},
 ) {
   const user = await queryOne<{ phone_e164: string }>(
     db,
@@ -2275,6 +2282,43 @@ async function ensureDevWorkspaceAccess(
     `,
     [randomUUID(), devOrganizationId, devWorkspaceId, userId, role],
   );
+
+  if (role === "owner_admin" && options.seedTeamEntitlements) {
+    await db.query(
+      `
+        INSERT INTO organization_entitlements (
+          id,
+          organization_id,
+          entitlement_key,
+          status,
+          source
+        )
+        VALUES
+          ($1, $2, 'team_member_management', 'active', 'dev_seed'),
+          ($3, $2, 'team_asset_library', 'active', 'dev_seed'),
+          ($4, $2, 'team_dashboard', 'active', 'dev_seed')
+        ON CONFLICT (organization_id, entitlement_key)
+        DO UPDATE SET status = 'active', source = EXCLUDED.source
+      `,
+      [randomUUID(), devOrganizationId, randomUUID(), randomUUID()],
+    );
+    await db.query(
+      `
+        INSERT INTO team_plan_limits (
+          id,
+          organization_id,
+          seat_limit,
+          single_account_concurrency_limit
+        )
+        VALUES ($1, $2, 5, 1)
+        ON CONFLICT (organization_id)
+        DO UPDATE SET
+          seat_limit = EXCLUDED.seat_limit,
+          single_account_concurrency_limit = EXCLUDED.single_account_concurrency_limit
+      `,
+      [randomUUID(), devOrganizationId],
+    );
+  }
 }
 
 async function findAuthenticatedUser(
@@ -2356,10 +2400,9 @@ function parseRepairSchedulerOptions(
   return { enabled, intervalMs, limit };
 }
 
-export function createPhoneAuthDevServer(options: {
-  db?: Awaited<ReturnType<typeof createDevDb>>;
-  repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
-} = {}): PhoneAuthDevServer {
+export function createPhoneAuthDevServer(
+  options: PhoneAuthDevServerOptions = {},
+): PhoneAuthDevServer {
   const dbPromise = options.db
     ? Promise.resolve(options.db)
     : process.env.NODE_ENV === "test"
@@ -2520,7 +2563,7 @@ export function createPhoneAuthDevServer(options: {
           });
         }
 
-        await ensureDevWorkspaceAccess(db, verified.user.id);
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
 
         return writeJson(response, {
           status: 200,
@@ -3638,6 +3681,55 @@ export function createPhoneAuthDevServer(options: {
             status: 401,
             body: { error: "unauthenticated" },
           });
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/team/overview") {
+          return writeJson(
+            response,
+            await creatorApplication.getTeamOverview({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/team/members") {
+          return writeJson(
+            response,
+            await creatorApplication.listTeamMembers({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/team/members") {
+          const body = (await readJsonBody(request)) as {
+            teamAccount?: string | null;
+            displayName?: string | null;
+            businessRole?: string | null;
+            memberGroupId?: string | null;
+            projectIds?: string[] | null;
+            initialCredits?: number | null;
+            remark?: string | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.createTeamMember({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body,
+              now: new Date(),
+            }),
+          );
         }
 
         if (request.method === "GET" && pathname === "/api/creator/state") {

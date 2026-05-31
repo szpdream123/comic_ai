@@ -38,11 +38,12 @@ CREATE TABLE memberships (
   organization_id uuid NOT NULL REFERENCES organizations(id),
   workspace_id uuid NULL REFERENCES workspaces(id),
   user_id uuid NOT NULL REFERENCES users(id),
-  role text NOT NULL CHECK (role IN ('owner_admin', 'producer', 'creator', 'viewer')),
+  role text NOT NULL CHECK (role IN ('owner_admin', 'producer', 'creator', 'viewer', 'sub_account')),
   status text NOT NULL CHECK (status IN ('active', 'invited', 'disabled')),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id, workspace_id, user_id),
+  UNIQUE (organization_id, id),
   FOREIGN KEY (organization_id, workspace_id)
     REFERENCES workspaces (organization_id, id)
 );
@@ -289,6 +290,138 @@ CREATE TABLE library_asset_versions (
 
 CREATE INDEX library_asset_versions_asset_idx
   ON library_asset_versions (library_asset_id, version_number DESC);
+
+CREATE TABLE team_member_groups (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  name text NOT NULL,
+  status text NOT NULL CHECK (status IN ('active', 'archived')),
+  created_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, name),
+  UNIQUE (organization_id, id),
+  UNIQUE (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id)
+);
+
+CREATE INDEX team_member_groups_scope_idx
+  ON team_member_groups (organization_id, workspace_id, status, created_at DESC);
+
+CREATE TABLE team_member_profiles (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  membership_id uuid NOT NULL REFERENCES memberships(id),
+  team_account text NOT NULL,
+  display_name text NOT NULL,
+  business_role text NOT NULL CHECK (
+    business_role IN (
+      'admin',
+      'group_admin',
+      'director_plus',
+      'animator_plus',
+      'director',
+      'animator',
+      'screenwriter',
+      'editor'
+    )
+  ),
+  member_group_id uuid NULL REFERENCES team_member_groups(id),
+  credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
+  credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
+  last_credit_consumed_at timestamptz NULL,
+  remark text NULL,
+  created_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, membership_id),
+  UNIQUE (organization_id, workspace_id, team_account),
+  UNIQUE (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id, member_group_id)
+    REFERENCES team_member_groups (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, membership_id)
+    REFERENCES memberships (organization_id, id)
+);
+
+CREATE INDEX team_member_profiles_scope_idx
+  ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+
+CREATE TABLE team_project_assignments (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  membership_id uuid NOT NULL REFERENCES memberships(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  assigned_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, membership_id, project_id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, membership_id)
+    REFERENCES memberships (organization_id, id),
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id)
+);
+
+CREATE INDEX team_project_assignments_member_idx
+  ON team_project_assignments (organization_id, workspace_id, membership_id, created_at DESC);
+
+CREATE TABLE team_project_ownerships (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  member_group_id uuid NULL REFERENCES team_member_groups(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, project_id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id, member_group_id)
+    REFERENCES team_member_groups (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id)
+);
+
+CREATE INDEX team_project_ownerships_group_idx
+  ON team_project_ownerships (organization_id, workspace_id, member_group_id);
+
+CREATE TABLE team_credit_adjustments (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  operator_user_id uuid NOT NULL REFERENCES users(id),
+  target_membership_id uuid NOT NULL REFERENCES memberships(id),
+  adjustment_type text NOT NULL CHECK (
+    adjustment_type IN ('allocate', 'recover', 'reset', 'expire')
+  ),
+  amount integer NOT NULL CHECK (amount > 0),
+  reason text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, target_membership_id)
+    REFERENCES memberships (organization_id, id)
+);
+
+CREATE INDEX team_credit_adjustments_scope_idx
+  ON team_credit_adjustments (organization_id, workspace_id, created_at DESC);
+
+CREATE TABLE team_plan_limits (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  seat_limit integer NOT NULL DEFAULT 5 CHECK (seat_limit >= 0),
+  single_account_concurrency_limit integer NOT NULL DEFAULT 1 CHECK (single_account_concurrency_limit >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id)
+);
 
 CREATE TABLE shots (
   id uuid PRIMARY KEY,

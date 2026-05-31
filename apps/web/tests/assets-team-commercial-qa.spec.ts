@@ -9,6 +9,7 @@ import { validateTeamAssetLocalUploadFile } from "../src/features/library-team/a
 import {
   handleTeamAssetLocalUploadFiles,
   handleProductionWorkbenchAction,
+  friendlyError,
   removeTeamAssetLocalUpload,
   renderProductionWorkbench,
   resolveTeamAssetLocalUploadInput,
@@ -1983,6 +1984,23 @@ describe("Worker C production workbench integration", () => {
     assert.match(dashboardHtml, /data-action="back-to-team-page"/);
   });
 
+  it("mounts non-editor library pages inside an internal scroll surface", () => {
+    const libraryHtml = renderWorkbenchTab("library");
+    const teamHtml = renderWorkbenchTab("team");
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(libraryHtml, /class="[^"]*\bworkbench-scroll-surface\b[^"]*"/);
+    assert.match(libraryHtml, /data-scroll-surface="library"/);
+    assert.match(teamHtml, /class="[^"]*\bworkbench-scroll-surface\b[^"]*"/);
+    assert.match(teamHtml, /data-scroll-surface="team"/);
+    assert.match(css, /\.workbench-main[^{]*\{[^}]*min-height:\s*0/s);
+    assert.match(css, /\.workbench-scroll-surface[^{]*\{[^}]*overflow-y:\s*auto/s);
+    assert.match(css, /\.workbench-scroll-surface[^{]*\{[^}]*overscroll-behavior:\s*contain/s);
+  });
+
   it("loads the C library-team stylesheet from the app shell", () => {
     const html = readFileSync(new URL("../app.html", import.meta.url), "utf8");
 
@@ -2204,33 +2222,110 @@ describe("Worker C team management surfaces", () => {
     assert.match(html, /data-placeholder-message="[^"]*成员筛选[^"]*"/);
   });
 
-  it("renders real members and stats when supplied by the workbench context", () => {
+  it("renders a refined creator-workbench command surface for team operations", () => {
+    const html = renderLibraryTeam({ route: "team" });
+
+    assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录"]);
+    assert.match(html, /library-team-command-strip/);
+    assert.match(html, /library-team-workspace-grid/);
+    assert.match(html, /library-team-policy-panel/);
+  });
+
+  it("renders paid team data and the create-member account dialog without password hashes", () => {
     const html = renderLibraryTeam({
       route: "team",
-      projectName: "废土人",
-      stats: {
-        episodeCount: 3,
-        memberCount: 1,
-        generatedVideoCount: 4,
-        generatedImageCount: 1280,
-        assetCount: 720,
-        exportCount: 300,
-      },
-      members: [
-        {
-          phone: "13800138000",
-          userId: "user-1",
-          role: "管理员",
-          status: "enabled",
-          consumedCredits: 512,
-          scriptCount: 8,
-          projectCount: 3,
-          projectAverageCredits: 171,
+      team: {
+        overview: {
+          entitlements: {
+            teamMemberManagement: true,
+            teamAssetLibrary: true,
+            teamDashboard: true,
+          },
+          seats: { used: 1, limit: 5, remaining: 4 },
+          concurrency: { singleAccountLimit: 1 },
+          credits: { allocatable: 900 },
         },
-      ],
+        members: [
+          {
+            teamAccount: "director001",
+            displayName: "导演一号",
+            businessRole: "director",
+            memberGroupId: null,
+            status: "active",
+            creditBalance: 100,
+            creditUsed: 0,
+            remark: "主线项目",
+          },
+        ],
+        createOpen: true,
+        draft: {
+          teamAccount: "director002",
+          displayName: "导演二号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+        },
+        temporaryPassword: "Tmp_safe_once_123",
+      },
     });
 
-    assertIncludesAll(html, ["废土人", "1/1", "13800138000", "管理员", "512", "8", "enabled"]);
+    assertIncludesAll(html, [
+      "专业版已开通",
+      "1/5",
+      "900",
+      "director001",
+      "导演一号",
+      "导演",
+      "创建成员账号",
+      "临时密码只显示一次",
+      "Tmp_safe_once_123",
+    ]);
+    assert.match(html, /data-action="submit-team-member-create"/);
+    assert.doesNotMatch(html, /passwordHash|password_hash/);
+  });
+
+  it("branches create-member entry by seat availability and actor permission", () => {
+    const fullSeatHtml = renderLibraryTeam({
+      route: "team",
+      team: {
+        overview: {
+          entitlements: {
+            teamMemberManagement: true,
+            teamAssetLibrary: true,
+            teamDashboard: true,
+          },
+          seats: { used: 5, limit: 5, remaining: 0 },
+          concurrency: { singleAccountLimit: 1 },
+          credits: { allocatable: 900 },
+          permissions: { canCreateMember: true },
+        },
+        members: [],
+      },
+    });
+    assert.match(fullSeatHtml, /席位已满|扩容席位/);
+    assert.match(fullSeatHtml, /data-action="open-pricing"/);
+    assert.doesNotMatch(fullSeatHtml, /data-action="open-team-member-create"/);
+
+    const readOnlyHtml = renderLibraryTeam({
+      route: "team",
+      team: {
+        overview: {
+          entitlements: {
+            teamMemberManagement: true,
+            teamAssetLibrary: true,
+            teamDashboard: true,
+          },
+          seats: { used: 1, limit: 5, remaining: 4 },
+          concurrency: { singleAccountLimit: 1 },
+          credits: { allocatable: 900 },
+          permissions: { canCreateMember: false },
+        },
+        members: [],
+      },
+    });
+    assert.match(readOnlyHtml, /无创建权限/);
+    assert.match(readOnlyHtml, /data-action="show-library-placeholder"/);
+    assert.doesNotMatch(readOnlyHtml, /data-action="open-team-member-create"/);
   });
 
   it("renders the team dashboard route without requiring shell DOM", () => {
@@ -2252,6 +2347,39 @@ describe("Worker C team management surfaces", () => {
       "开始团队协作后，这里会显示成员消耗和项目成本。",
     ]);
     assert.match(html, /data-placeholder-message="[^"]*导出[^"]*"/);
+  });
+});
+
+describe("Worker C team API wiring", () => {
+  it("exposes team API methods and loads team data from the workbench", () => {
+    const apiJs = readFileSync(new URL("../src/shared/creator-api.js", import.meta.url), "utf8");
+    const workbenchJs = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(apiJs, /\/api\/creator\/team\/overview/);
+    assert.match(apiJs, /\/api\/creator\/team\/members/);
+    assert.match(apiJs, /createTeamMember/);
+    assert.match(workbenchJs, /loadTeamSurface/);
+    assert.match(workbenchJs, /submit-team-member-create/);
+  });
+
+  it("keeps team-specific 403 errors actionable for members", () => {
+    assert.equal(
+      friendlyError({
+        status: 403,
+        errorCode: "team_project_scope_violation",
+      }),
+      "只能分配当前账号可管理范围内的项目。",
+    );
+    assert.equal(
+      friendlyError({
+        status: 403,
+        errorCode: "team_group_scope_violation",
+      }),
+      "只能管理当前成员组内的成员。",
+    );
   });
 });
 

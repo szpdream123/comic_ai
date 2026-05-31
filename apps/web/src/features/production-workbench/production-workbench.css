@@ -239,9 +239,34 @@
   margin-left: 0;
   padding: 5.8rem 0.65rem 0.85rem calc(var(--workbench-rail-width) + 0.45rem);
   min-width: 0;
+  min-height: 0;
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
+}
+
+.workbench-scroll-surface {
+  position: relative;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.25rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.workbench-scroll-surface::-webkit-scrollbar {
+  width: 0.55rem;
+}
+
+.workbench-scroll-surface::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: oklch(100% 0 0 / 0.16);
 }
 
 .workbench-main.home-mode {

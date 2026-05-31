@@ -576,6 +576,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       libraryDetailView: "turnaround",
       isLibraryPricingModalOpen: false,
       isMemberRulesModalOpen: false,
+      isTeamMemberCreateOpen: false,
+      teamOverview: null,
+      teamMembers: [],
+      teamError: "",
+      teamMemberDraft: createTeamMemberDraft(),
+      teamMemberCreateNotice: "",
+      teamTemporaryPassword: "",
     },
   };
   root.addEventListener("mousedown", (event) => {
@@ -663,6 +670,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       !workbench.ui.projectCardMenuId &&
       !workbench.ui.isLibraryPricingModalOpen &&
       !workbench.ui.isMemberRulesModalOpen &&
+      !workbench.ui.isTeamMemberCreateOpen &&
       !workbench.ui.isVideoModelMenuOpen &&
       !workbench.ui.openGenerationSelectMenu &&
       !workbench.ui.musePromptMenu &&
@@ -679,6 +687,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.projectCardMenuId = null;
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
+    workbench.ui.isTeamMemberCreateOpen = false;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
     workbench.ui.isVideoModelMenuOpen = false;
@@ -765,6 +776,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       }
       workbench.ui.projectStatusFilters = [...next];
       workbench.ui.projectLibraryPage = 1;
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#team-member-business-role")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        businessRole: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
       render(workbench);
       return;
     }
@@ -1006,6 +1027,42 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#team-member-team-account")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        teamAccount: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-display-name")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        displayName: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-initial-credits")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        initialCredits: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-remark")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        remark: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
     if (target?.matches?.("#project-rename-name-input")) {
       workbench.ui.renameProjectName = target.value;
       if (workbench.ui.renameProjectNotice) {
@@ -1214,6 +1271,9 @@ async function refresh(workbench) {
     await restoreProjectRouteState(workbench, window.location);
   }
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
+  if (workbench.ui.activeNavTab === "team") {
+    await loadTeamSurface(workbench);
+  }
 }
 
 async function loadProjectDetailForWorkbench(workbench, projectId) {
@@ -1271,6 +1331,65 @@ async function syncProjectInteriorSupplementary(workbench) {
   } catch (error) {
     workbench.ui.projectMembers = [];
     workbench.ui.projectStats = null;
+  }
+}
+
+async function loadTeamSurface(workbench) {
+  try {
+    const [overview, membersPayload] = await Promise.all([
+      workbench.api.getTeamOverview(),
+      workbench.api.getTeamMembers(),
+    ]);
+    workbench.ui.teamOverview = overview;
+    workbench.ui.teamMembers = Array.isArray(membersPayload.members)
+      ? membersPayload.members
+      : [];
+    workbench.ui.teamError = "";
+  } catch (error) {
+    workbench.ui.teamOverview = null;
+    workbench.ui.teamMembers = [];
+    workbench.ui.teamError = friendlyError(error);
+  }
+}
+
+async function submitTeamMemberCreate(workbench) {
+  const draft = workbench.ui.teamMemberDraft ?? createTeamMemberDraft();
+  const teamAccount = String(draft.teamAccount ?? "").trim();
+  const displayName = String(draft.displayName ?? "").trim();
+
+  if (!teamAccount || !displayName) {
+    workbench.ui.teamMemberCreateNotice = "请填写账号和成员名称。";
+    render(workbench);
+    return;
+  }
+
+  workbench.ui.busy = true;
+  workbench.ui.teamMemberCreateNotice = "";
+  workbench.ui.teamTemporaryPassword = "";
+  workbench.ui.toast = "正在创建成员账号...";
+  render(workbench);
+
+  try {
+    const created = await workbench.api.createTeamMember({
+      teamAccount,
+      displayName,
+      businessRole: draft.businessRole ?? "director",
+      projectIds: [],
+      initialCredits: Math.max(0, Math.trunc(Number(draft.initialCredits ?? 0) || 0)),
+      remark: draft.remark ?? "",
+    });
+    workbench.ui.teamTemporaryPassword = created.temporaryPassword ?? "";
+    workbench.ui.teamMemberCreateNotice = `${created.member?.displayName ?? displayName} 已创建，请立即保存临时密码。`;
+    workbench.ui.teamMemberDraft = createTeamMemberDraft();
+    await loadTeamSurface(workbench);
+    workbench.ui.toast = "成员账号已创建。";
+  } catch (error) {
+    const message = friendlyError(error);
+    workbench.ui.teamMemberCreateNotice = message;
+    workbench.ui.toast = `创建成员失败：${message}`;
+  } finally {
+    workbench.ui.busy = false;
+    render(workbench);
   }
 }
 
@@ -1545,8 +1664,51 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "refresh-team") {
-    workbench.ui.toast = "团队数据刷新能力暂未开放。";
+    workbench.ui.busy = true;
+    workbench.ui.toast = "正在刷新团队数据...";
     render(workbench);
+    await loadTeamSurface(workbench);
+    workbench.ui.busy = false;
+    workbench.ui.toast = workbench.ui.teamError ? `团队数据加载失败：${workbench.ui.teamError}` : "团队数据已刷新。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-team-member-create") {
+    const overview = workbench.ui.teamOverview;
+    if (overview?.entitlements?.teamMemberManagement !== true) {
+      workbench.ui.isLibraryPricingModalOpen = true;
+      render(workbench);
+      return;
+    }
+    if (Number(overview?.seats?.remaining ?? 0) <= 0) {
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "团队席位已满，扩容后才能继续创建成员账号。";
+      render(workbench);
+      return;
+    }
+    if (overview?.permissions?.canCreateMember === false) {
+      workbench.ui.toast = "当前账号没有创建成员权限，请联系主账号或团队管理员。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.isTeamMemberCreateOpen = true;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-team-member-create") {
+    workbench.ui.isTeamMemberCreateOpen = false;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-team-member-create") {
+    await submitTeamMemberCreate(workbench);
     return;
   }
 
@@ -1567,7 +1729,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryTeamRoute = "team-dashboard";
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
-    workbench.ui.toast = "已进入团队概览。";
+    await loadTeamSurface(workbench);
+    workbench.ui.toast = "已打开团队数据看板。";
     window.location.hash = "team-dashboard";
     render(workbench);
     return;
@@ -1576,7 +1739,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "back-to-team-page") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team";
-    workbench.ui.toast = "已返回团队页面。";
+    await loadTeamSurface(workbench);
+    workbench.ui.toast = "已返回团队管理。";
     window.location.hash = "team";
     render(workbench);
     return;
@@ -1601,6 +1765,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (workbench.ui.activeNavTab === "library") {
       await syncAssetLibraryFromApi(workbench);
+    }
+    if (workbench.ui.activeNavTab === "team") {
+      await loadTeamSurface(workbench);
     }
     render(workbench);
     return;
@@ -7456,6 +7623,16 @@ function formatEpisodeDate(value) {
   return `${year}/${month}/${day}`;
 }
 
+function createTeamMemberDraft() {
+  return {
+    teamAccount: "",
+    displayName: "",
+    businessRole: "director",
+    initialCredits: 0,
+    remark: "",
+  };
+}
+
 function statusForAction(action) {
   return (
     {
@@ -7477,6 +7654,10 @@ export function friendlyError(error) {
   const status = Number(error?.status ?? 0);
   const errorCode = String(error?.errorCode ?? "");
   const requestId = error?.requestId ? ` (request ${error.requestId})` : "";
+  const teamMessage = teamErrorMessage(errorCode);
+  if (teamMessage) {
+    return teamMessage;
+  }
   if (errorCode === "origin_forbidden") {
     return `跨域来源被拒绝，请从允许的地址打开页面或检查 CORS 配置${requestId}`;
   }
@@ -7490,18 +7671,36 @@ export function friendlyError(error) {
     return `资源不存在或无权访问，请刷新项目后重试${requestId}`;
   }
   const message = error instanceof Error ? error.message : String(error);
+  const teamMessageFromBody = teamErrorMessage(message);
+  if (teamMessageFromBody) {
+    return teamMessageFromBody;
+  }
   return (
     {
-      creator_project_missing: "Please upload a script and create a project first.",
-      creator_shots_missing: "Please split the storyboard into shots first.",
-      asset_review_not_ready: "Please confirm the required assets first.",
-      image_assets_missing: "Some storyboard shots are still missing image assets.",
-      script_not_ready: "The script is not ready yet. Upload or save it first.",
-      script_not_parsed: "The script has not finished parsing yet.",
-      project_not_editable: "The current project status does not allow generation yet.",
-      project_not_found: "The current project no longer exists. Refresh and try again.",
+      creator_project_missing: "请先上传剧本并创建项目。",
+      creator_shots_missing: "请先拆分分镜。",
+      asset_review_not_ready: "请先确认必需资产。",
+      image_assets_missing: "仍有分镜缺少图片资产。",
+      script_not_ready: "剧本还没准备好，先上传或保存剧本，再执行解析或生成。",
+      script_not_parsed: "剧本还没解析完成，请先完成分镜拆分。",
+      project_not_editable: "当前项目状态还不能继续生成，请先完成前置步骤。",
+      project_not_found: "当前项目不存在或已被删除，请刷新页面后重试。",
     }[message] ?? `${message}${requestId}`
   );
+}
+
+function teamErrorMessage(code) {
+  return {
+    team_member_management_required: "需要开通专业版后才能创建成员账号。",
+    team_permission_missing: "当前账号没有团队管理权限。",
+    team_seat_limit_reached: "团队席位已用完，请扩容后再创建成员。",
+    team_account_duplicate: "该成员账号已存在，请换一个账号。",
+    team_member_input_invalid: "账号需为 3-32 位小写字母、数字、下划线或短横线，并填写成员名称。",
+    team_credit_insufficient: "主账号可分配积分不足。",
+    team_group_scope_violation: "只能管理当前成员组内的成员。",
+    team_project_scope_violation: "只能分配当前账号可管理范围内的项目。",
+    team_member_disabled: "该成员已禁用，不能继续操作。",
+  }[code] ?? "";
 }
 
 function resolveEventElement(target) {

@@ -2079,32 +2079,28 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "library") {
-    return `
-      <div class="library-workspace-scroll">
-        ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
-        ${renderLibraryTeam({
-          route: "assets",
-          assetScope: ui.libraryTeamAssetScope,
-          libraryCategory: ui.libraryCategory,
-          libraryFolder: ui.libraryFolder,
-          libraryQuery: ui.libraryQuery,
-          libraryCategories: ui.libraryCategories,
-          libraryFolders: ui.libraryFolders,
-          libraryAssets: ui.libraryAssets,
-          libraryEntitlement: ui.libraryEntitlement,
-          teamAssetLocalUploads: ui.teamAssetLocalUploads,
-          libraryLoading: ui.libraryLoading,
-          libraryError: ui.libraryError,
-          libraryDetailAssetId: ui.libraryDetailAssetId,
-          libraryDetailView: ui.libraryDetailView,
-          pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
-          projectName: detailState.project.name,
-          members: ui.projectMembers ?? [],
-          stats: ui.projectStats ?? null,
-        })}
-      </div>
+    return renderScrollableWorkbenchSurface("library", `
+      ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
+      ${renderLibraryTeam({
+        route: "assets",
+        assetScope: ui.libraryTeamAssetScope,
+        libraryCategory: ui.libraryCategory,
+        libraryFolder: ui.libraryFolder,
+        libraryQuery: ui.libraryQuery,
+        libraryCategories: ui.libraryCategories,
+        libraryFolders: ui.libraryFolders,
+        libraryAssets: ui.libraryAssets,
+        libraryEntitlement: ui.libraryEntitlement,
+        teamAssetLocalUploads: ui.teamAssetLocalUploads,
+        libraryLoading: ui.libraryLoading,
+        libraryError: ui.libraryError,
+        libraryDetailAssetId: ui.libraryDetailAssetId,
+        libraryDetailView: ui.libraryDetailView,
+        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        projectName: detailState.project.name,
+      })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已进入资产库。")}</p>
-    `;
+    `);
   }
 
   if (activeNavTab === "tools") {
@@ -2120,18 +2116,24 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "team") {
-    return `
+    return renderScrollableWorkbenchSurface("team", `
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
-        projectName: detailState.project.name,
-        members: ui.projectMembers ?? [],
-        stats: ui.projectStats ?? null,
+        team: {
+          overview: ui.teamOverview,
+          members: ui.teamMembers,
+          error: ui.teamError,
+          createOpen: Boolean(ui.isTeamMemberCreateOpen),
+          draft: ui.teamMemberDraft,
+          createNotice: ui.teamMemberCreateNotice,
+          temporaryPassword: ui.teamTemporaryPassword,
+        },
       })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
-    `;
+    `);
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {
@@ -2329,6 +2331,15 @@ function renderHomeHero({ detailState }) {
         </div>
       </div>
     </section>
+  `;
+}
+
+function renderScrollableWorkbenchSurface(surface, content) {
+  const legacyClass = surface === "library" ? " library-workspace-scroll" : "";
+  return `
+    <div class="workbench-scroll-surface${legacyClass}" data-scroll-surface="${escapeAttr(surface)}">
+      ${content}
+    </div>
   `;
 }
 

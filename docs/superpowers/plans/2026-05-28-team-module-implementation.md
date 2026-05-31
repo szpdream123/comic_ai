@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript, Node test runner, PGlite migrations, plain ESM frontend modules, current workbench CSS.
 
+**Current checkpoint:** This branch implements the Phase 1A vertical slice: paid create-member gating, role capability templates, subaccount credential safety, member listing, overview metrics, member-group/project boundary validation during creation, initial credit allocation, and the creator-workbench team UI. The broader management loop in the original task list (disable/reset password, member-group CRUD, project reassignment, credit recovery/adjustment screens, and deeper dashboard attribution) remains Phase 1B work unless explicitly pulled into this branch.
+
 ---
 
 ## File Structure
