@@ -1501,7 +1501,8 @@ async function handleAction(workbench, target) {
   if (action === "open-library-asset-detail") {
     workbench.ui.activeNavTab = "library";
     workbench.ui.libraryDetailAssetId = target.dataset.libraryAssetId ?? "";
-    workbench.ui.libraryDetailView = target.dataset.libraryDetailView ?? "turnaround";
+    workbench.ui.libraryDetailView =
+      target.dataset.detailView ?? target.dataset.libraryDetailView ?? "turnaround";
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
@@ -1514,7 +1515,8 @@ async function handleAction(workbench, target) {
   }
 
   if (action === "select-library-asset-detail-view") {
-    workbench.ui.libraryDetailView = target.dataset.libraryDetailView ?? "turnaround";
+    workbench.ui.libraryDetailView =
+      target.dataset.detailView ?? target.dataset.libraryDetailView ?? "turnaround";
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
