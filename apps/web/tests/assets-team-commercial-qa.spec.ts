@@ -1768,6 +1768,22 @@ describe("Worker C production workbench integration", () => {
     assert.doesNotMatch(js, /import-library-asset-to-project/);
   });
 
+  it("uses the rendered detail-view dataset when switching asset detail thumbnails", () => {
+    const js = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const selectStart = js.indexOf('action === "select-library-asset-detail-view"');
+    const selectEnd = js.indexOf('action === "delete-team-asset-local-upload"');
+    const selectHandler = js.slice(selectStart, selectEnd);
+
+    assert.notEqual(selectStart, -1);
+    assert.notEqual(selectEnd, -1);
+    assert.match(selectHandler, /target\.dataset\.detailView/);
+    assert.match(selectHandler, /target\.dataset\.libraryDetailView/);
+    assert.match(selectHandler, /preserveLibraryScroll: true/);
+  });
+
   it("keeps the reusable asset search field outside the click action router", () => {
     const html = renderWorkbenchTab("library");
     const js = readFileSync(
