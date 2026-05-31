@@ -1,0 +1,219 @@
+﻿  1747:   if (action === "episode-fixed-result-action") {
+  1748:     const resultAction = target.dataset.resultAction ?? "";
+  1749:     if (resultAction === "download") {
+  1750:       const imageResult = workbench.ui.imageGenerationResult;
+  1751:       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
+  1752:       const downloadUrl = firstImage?.url ?? null;
+  1753:       if (downloadUrl) {
+  1754:         triggerBrowserDownload(downloadUrl, normalizeDownloadName(firstImage?.label ?? "generated-image", downloadUrl));
+  1755:         workbench.ui.toast = "已开始下载当前结果。";
+  1756:       } else {
+  1757:         workbench.ui.toast = "当前没有可下载的结果。";
+  1758:       }
+  1759:       render(workbench);
+  1760:       return;
+  1761:     }
+  1762:     if (resultAction === "delete") {
+  1763:       const imageResult = workbench.ui.imageGenerationResult;
+  1764:       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
+  1765:       if (
+  1766:         isRealEpisodeWorkbench(workbench) &&
+  1767:         typeof workbench.api.deleteFileResource === "function" &&
+  1768:         isUuidLike(firstImage?.storageObjectId ?? null)
+  1769:       ) {
+  1770:         try {
+  1771:           workbench.ui.busy = true;
+  1772:           render(workbench);
+  1773:           await workbench.api.deleteFileResource(workbench.ui.selectedEpisodeId, firstImage.storageObjectId, {
+  1774:             assetVersionId: firstImage.id ?? null,
+  1775:             storageObjectId: firstImage.storageObjectId,
+  1776:           });
+  1777:           workbench.ui.toast = "已删除当前结果。";
+  1778:           workbench.ui.toast = "宸插垹闄ゅ綋鍓嶇粨鏋溿€?;
+  1779:           await refresh(workbench);
+  1780:         } catch (error) {
+  1781:           workbench.ui.toast = `鍒犻櫎澶辫触锛?{friendlyError(error)}`;
+  1782:         } finally {
+  1783:           workbench.ui.busy = false;
+  1784:           render(workbench);
+  1785:         }
+  1786:         return;
+  1787:       }
+  1788:       workbench.ui.toast = "已移除当前结果。";
+  1789:       workbench.ui.toast = "宸茬Щ闄ゅ綋鍓嶇粨鏋溿€?;
+  1790:       render(workbench);
+  1791:       return;
+  1792:     }
+  1793:     if (resultAction === "edit") {
+  1794:       workbench.ui.isStoryboardDescriptionModalOpen = true;
+  1795:       workbench.ui.toast = "已回填当前提示词，可继续编辑。";
+  1796:       workbench.ui.toast = "宸插洖濉綋鍓嶆彁绀鸿瘝锛屽彲缁х画缂栬緫銆?;
+  1797:       render(workbench);
+  1798:       return;
+  1799:     }
+  1800:     if (resultAction === "text-to-image") {
+  1801:       workbench.ui.toast = "已切换到文字改图模式。";
+  1802:       workbench.ui.toast = "宸插垏鎹㈠埌鏂囧瓧鏀瑰浘妯″紡銆?;
+  1803:       render(workbench);
+  1804:       return;
+  1805:     }
+  1806:     if (resultAction === "set-character") {
+  1807:       const imageResult = workbench.ui.imageGenerationResult;
+  1808:       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
+  1809:       const selectedAssetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+  1810:         workbench.ui.toast = "当前结果还不能设为角色图。";
+  1811:         workbench.ui.toast = "褰撳墠缁撴灉杩樹笉鑳借涓鸿鑹插浘銆?;
+  1812:         render(workbench);
+  1813:         return;
+  1814:       }
+  1815:       if (
+  1816:         isRealEpisodeWorkbench(workbench) &&
+  1817:         typeof workbench.api.setFixedImage === "function" &&
+  1818:         isUuidLike(selectedAssetId) &&
+  1819:         isUuidLike(firstImage.id ?? null)
+  1820:       ) {
+  1821:         await runAction(workbench, "濠殿喗绻愮徊钘夛耿椤忓棙濯奸柛娆嶅劥缁€瀣偡濞嗘劕绗╁鐟帮躬瀹?..", async () => {
+  1822:           const result = await workbench.api.setFixedImage(
+  1823:             workbench.ui.selectedEpisodeId,
+  1824:             selectedAssetId,
+  1825:             {
+  1826:               assetVersionId: firstImage.id,
+  1827:               storageObjectId: firstImage.storageObjectId ?? null,
+  1828:             },
+  1829:           );
+  1830:           const file = result?.file ?? {};
+  1831:           const nextPreviewUrl = file.previewUrl ?? firstImage.url;
+  1832:           const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  1833:           for (const assetKind of ["character", "scene", "prop"]) {
+  1834:             nextAssets[assetKind] = (nextAssets[assetKind] ?? []).map((item) =>
+  1835:               item.id === selectedAssetId
+  1836:                 ? {
+  1837:                     ...item,
+  1838:                     preview: nextPreviewUrl,
+  1839:                     previewUrl: nextPreviewUrl,
+  1840:                     sourceUrl: nextPreviewUrl,
+  1841:                     latestVersion: item.latestVersion
+  1842:                       ? {
+  1843:                           ...item.latestVersion,
+  1844:                           storageObjectId: file.storageObjectId ?? item.latestVersion.storageObjectId ?? null,
+  1845:                           previewUrl: nextPreviewUrl,
+  1846:                         }
+  1847:                       : item.latestVersion,
+  1848:                   }
+  1849:                 : item,
+  1850:             );
+  1851:           }
+  1852:           workbench.ui.importedAssets = nextAssets;
+  1853:           workbench.ui.toast = "已设为角色固定图。";
+  1854:           workbench.ui.toast = "宸茶涓鸿鑹插浐瀹氬浘銆?;
+  1855:         });
+  1856:         return;
+  1857:       }
+  1858:       const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  1859:       nextAssets.character = (nextAssets.character ?? []).map((item) =>
+  1860:         item.id === selectedAssetId
+  1861:           ? {
+  1862:               ...item,
+  1863:               preview: firstImage.url,
+  1864:               previewUrl: firstImage.url,
+  1865:               sourceUrl: firstImage.url,
+  1866:             }
+  1867:           : item,
+  1868:       );
+  1869:       workbench.ui.importedAssets = nextAssets;
+  1870:       workbench.ui.toast = "已设为角色固定图。";
+  1871:       workbench.ui.toast = "宸茶涓鸿鑹插浐瀹氬浘銆?;
+  1872:       render(workbench);
+  1873:       return;
+  1874:     }
+  1875:       workbench.ui.toast = "该工具暂未接入，后续会直接复用当前结果。";
+  1876:       workbench.ui.toast = "璇ュ伐鍏锋殏鏈帴鍏ワ紝鍚庣画浼氱洿鎺ュ鐢ㄥ綋鍓嶇粨鏋溿€?;
+  1877:       render(workbench);
+  1878:       return;
+  1879:     workbench.ui.toast = "该结果操作暂未支持。";
+  1880:     workbench.ui.toast = "璇ョ粨鏋滄搷浣滄殏鏈敮鎸併€?;
+  1881:     render(workbench);
+  1882:     return;
+  1883:   }
+  1884: 
+  1885:   if (action === "episode-result-action") {
+  1886:     const resultAction = target.dataset.resultAction ?? "";
+  1887:     const mediaKind = target.dataset.mediaKind ?? workbench.ui.episodeMediaMode ?? "image";
+  1888:     const selectedStoryboard = getSelectedStoryboard(
+  1889:       getActiveStoryboards(workbench),
+  1890:       workbench.ui.selectedStoryboardId,
+  1891:     );
+  1892:     collectEpisodeWorkbenchEvent(workbench, "result.action", {
+  1893:       resultAction,
+  1894:       mediaKind,
+  1895:       storyboard: selectedStoryboard,
+  1896:     });
+  1897: 
+  1898:     if (resultAction === "edit") {
+  1899:       workbench.ui.isStoryboardDescriptionModalOpen = true;
+  1900:       workbench.ui.storyboardDescriptionDraft =
+  1901:       workbench.ui.toast = "已回填当前提示词，可继续编辑。";
+  1902:       workbench.ui.toast = "宸插洖濉綋鍓嶆彁绀鸿瘝锛屽彲缁х画缂栬緫銆?;
+  1903:       render(workbench);
+  1904:       return;
+  1905:     }
+  1906: 
+  1907:     if (resultAction === "set-storyboard-video") {
+  1908:       const video =
+  1909:         (selectedStoryboard?.uploadedVideos ?? []).find((item) => item.status === "ready" && item.src) ??
+  1910:         null;
+  1911:       if (selectedStoryboard?.id && video?.id) {
+  1912:         await setStoryboardVideoResult(workbench, selectedStoryboard.id, video.id);
+  1913:         return;
+  1914:       workbench.ui.toast = "当前没有可设为分镜视频的结果。";
+  1915:       workbench.ui.toast = "褰撳墠娌℃湁鍙涓哄垎闀滆棰戠殑缁撴灉銆?;
+  1916:       render(workbench);
+  1917:       return;
+  1918:     }
+  1919: 
+  1920:     if (resultAction === "download") {
+  1921:       if (mediaKind === "video") {
+  1922:         downloadStoryboardVideo(
+  1923:           workbench,
+  1924:           selectedStoryboard?.id ?? "",
+  1925:           selectedStoryboard?.selectedUploadedVideoId ?? selectedStoryboard?.uploadedVideos?.[0]?.id ?? "",
+  1926:         );
+  1927:       } else {
+  1928:         downloadStoryboardImage(
+  1929:           workbench,
+  1930:           selectedStoryboard?.id ?? "",
+  1931:           selectedStoryboard?.currentImageAssetVersionId ?? selectedStoryboard?.uploadedImages?.[0]?.id ?? "",
+  1932:         );
+  1933:       }
+  1934:       render(workbench);
+  1935:       return;
+  1936:     }
+  1937: 
+  1938:     if (resultAction === "set-storyboard-image") {
+  1939:       const imageId = selectedStoryboard?.currentImageAssetVersionId ?? selectedStoryboard?.uploadedImages?.[0]?.id ?? "";
+  1940:       await setStoryboardImageResult(workbench, selectedStoryboard?.id ?? "", imageId);
+  1941:       return;
+  1942:     }
+  1943: 
+  1944:     if (resultAction === "delete") {
+  1945:       if (mediaKind === "video") {
+  1946:         const videoId = selectedStoryboard?.selectedUploadedVideoId ?? selectedStoryboard?.uploadedVideos?.[0]?.id ?? "";
+  1947:         workbench.ui.storyboardVideoDeleteTarget = {
+  1948:           storyboardId: selectedStoryboard?.id ?? "",
+  1949:           videoId,
+  1950:         };
+  1951:       } else {
+  1952:         const imageId = selectedStoryboard?.currentImageAssetVersionId ?? selectedStoryboard?.uploadedImages?.[0]?.id ?? "";
+  1953:         workbench.ui.storyboardImageDeleteTarget = {
+  1954:           storyboardId: selectedStoryboard?.id ?? "",
+  1955:           imageId,
+  1956:         };
+  1957:       }
+  1958:       render(workbench);
+  1959:       return;
+  1960:     }
+  1961:     workbench.ui.toast = "该结果操作暂未支持。";
+  1962:     workbench.ui.toast = "璇ョ粨鏋滄搷浣滄殏鏈敮鎸併€?;
+  1963:     render(workbench);
+  1964:     return;
+  1965:   }

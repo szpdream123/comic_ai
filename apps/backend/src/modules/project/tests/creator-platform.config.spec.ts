@@ -37,7 +37,7 @@ describe("creator platform runtime config", () => {
         CREATOR_IMAGE_WORKER_ID: "image-http-worker",
         CREATOR_VIDEO_WORKER_ID: "video-http-worker",
         CREATOR_EXPORT_WORKER_ID: "export-http-worker",
-        CREATOR_SIGNED_URL_EXPIRES_SECONDS: "1200",
+        STORAGE_SIGNED_URL_EXPIRES_SECONDS: "1200",
       },
       {
         fetchImpl: fetch,
@@ -95,5 +95,21 @@ describe("creator platform runtime config", () => {
     );
 
     assert.equal(runtime.providerName, "creator-dev");
+  });
+
+  it("prefers storage signed URL TTL when both storage and creator values are present", () => {
+    const runtime = createCreatorPlatformRuntime(
+      {
+        MODEL_PROVIDER_MODE: "dev",
+        STORAGE_ADAPTER_MODE: "dev",
+        STORAGE_SIGNED_URL_EXPIRES_SECONDS: "600",
+        CREATOR_SIGNED_URL_EXPIRES_SECONDS: "1200",
+      },
+      {
+        fetchImpl: fetch,
+      },
+    );
+
+    assert.equal(runtime.signedUrlExpiresInSeconds, 600);
   });
 });

@@ -10,14 +10,14 @@ describe("creator dev storage adapter", () => {
 
     const result = await adapter.createSignedReadUrl({
       bucket: "creator-dev",
-      objectKey: "organizations/org-1/workspaces/ws-1/projects/project-1/object/file.png",
+      objectKey: "AIManhuaDrama/20260518/object-file-file.png",
       expiresAt,
     });
 
     assert.equal(result.expiresAt.toISOString(), expiresAt.toISOString());
     assert.match(
       result.url,
-      /^https:\/\/dev-storage\.local\/creator-dev\/organizations%2Forg-1%2Fworkspaces%2Fws-1%2Fprojects%2Fproject-1%2Fobject%2Ffile\.png\?expiresAt=/,
+      /^\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2Fobject-file-file\.png\?expiresAt=/,
     );
   });
 });

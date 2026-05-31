@@ -296,6 +296,7 @@ CREATE TABLE shots (
   project_id uuid NOT NULL REFERENCES projects(id),
   episode_id uuid NULL,
   title text NOT NULL,
+  description text NOT NULL DEFAULT '',
   sort_order integer NOT NULL DEFAULT 0,
   content_revision integer NOT NULL DEFAULT 1 CHECK (content_revision >= 1),
   content_status text NOT NULL CHECK (content_status IN ('draft', 'ready', 'stale')),
@@ -319,6 +320,45 @@ CREATE TABLE shots (
 
 CREATE INDEX shots_project_idx
   ON shots (organization_id, project_id, created_at DESC);
+
+CREATE TABLE shot_reference_assets (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  shot_id uuid NOT NULL REFERENCES shots(id),
+  asset_id uuid NOT NULL REFERENCES assets(id),
+  asset_version_id uuid NULL REFERENCES asset_versions(id),
+  reference_role text NOT NULL CHECK (
+    reference_role IN (
+      'character',
+      'scene',
+      'prop',
+      'reference_image',
+      'reference_video',
+      'reference_audio',
+      'first_frame',
+      'last_frame',
+      'source_video',
+      'locked_character'
+    )
+  ),
+  sort_order integer NOT NULL DEFAULT 0,
+  created_by_user_id uuid NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, id),
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id),
+  FOREIGN KEY (organization_id, shot_id)
+    REFERENCES shots (organization_id, id),
+  FOREIGN KEY (organization_id, asset_id)
+    REFERENCES assets (organization_id, id),
+  FOREIGN KEY (organization_id, asset_version_id)
+    REFERENCES asset_versions (organization_id, id)
+);
+
+CREATE INDEX shot_reference_assets_shot_idx
+  ON shot_reference_assets (organization_id, project_id, shot_id, sort_order ASC);
 
 CREATE TABLE calibration_sessions (
   id uuid PRIMARY KEY,

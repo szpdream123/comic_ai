@@ -44,8 +44,27 @@ export const skipCalibrationCommand: ApiCommandContract = {
   verificationIds: ["TC-P0-009"],
 };
 
+export const overrideCalibrationCommand: ApiCommandContract = {
+  name: "OverrideCalibration",
+  operationName: operationNames.calibrationOverride,
+  capability: capabilities.projectEdit,
+  idempotencyRequired: true,
+  requestSchema: { calibrationSessionId: "uuid", reason: "required text" },
+  responseSchema: {
+    calibrationSessionId: "uuid",
+    status: "skipped",
+    decisionType: "override",
+  },
+  resourceScope: "calibration_session:{calibration_session_id}",
+  statePreconditions: ["actor is authorized to override calibration review"],
+  businessErrors: ["calibration_override_not_allowed", "reason_required"],
+  auditEvent: "calibration.override",
+  verificationIds: ["TC-P0-009", "R-024"],
+};
+
 export const calibrationCommandContracts = [
   generateCalibrationCommand,
   passCalibrationCommand,
   skipCalibrationCommand,
+  overrideCalibrationCommand,
 ];

@@ -3,19 +3,39 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
 import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
+import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import {
+  beginOrReplayCommand,
+  IdempotencyConflictError,
+  IdempotencyProcessingError,
+} from "../shared/idempotency/idempotency.service.ts";
+import { SqlIdempotencyRecordStore } from "../shared/idempotency/persistent-idempotency.store.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
-import { upsertAssetVersionSnapshot } from "./asset-version-record.service.ts";
 import {
   ensureDefaultOfficialLibraryAssets,
   listLibraryAssetsForActor,
   type LibraryAssetCategory,
   type LibraryAssetScope,
 } from "./asset-library.service.ts";
+import {
+  buildSignedObjectUrls,
+  deleteStorageObjectRecord,
+  findStorageObject,
+} from "../storage/storage.service.ts";
+import {
+  findUploadSession,
+  type UploadSessionRuntime,
+} from "../storage/upload-session.service.ts";
+import {
+  createAssetVersionSnapshot,
+  upsertAssetVersionSnapshot,
+} from "./asset-version-record.service.ts";
 import type { AssetType } from "./asset.service.ts";
 import { computeAssetReviewSummary } from "./asset-review.service.ts";
 import {
@@ -26,14 +46,22 @@ import {
   replaceAssetReviewCandidatesForProject,
   updateAssetReviewCandidateRecordLabel,
 } from "./asset-review-record.service.ts";
-import { replaceCalibrationSessionForProject, getLatestCalibrationSessionForProject } from "./calibration-record.service.ts";
-import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
-import { CalibrationRuleError } from "./calibration.service.ts";
 import {
-  createCreatorExportArtifact,
-  requestCreatorImageGenerationPlatformBatch,
-  requestCreatorVideoGenerationPlatformBatch,
-} from "./creator-platform.service.ts";
+  getLatestCalibrationSessionForProject,
+  replaceCalibrationSessionForProject,
+} from "./calibration-record.service.ts";
+import { CreatorDevApp, type CreatorDevStateSnapshot } from "./creator-dev-app.ts";
+import {
+  ensureCreatorSqlState,
+  getCreatorDevState,
+  type CreatorSqlState,
+} from "./creator-dev-state.service.ts";
+import {
+  hydrateStateFromSql,
+  loadProjectBundleFromSql,
+  seedCreatorAppFromSql,
+} from "./creator-state-hydration.service.ts";
+import { CalibrationRuleError } from "./calibration.service.ts";
 import {
   createEpisodeForProject,
   deleteEpisodeForProject,
@@ -41,6 +69,11 @@ import {
   replaceEpisodesForProject,
   updateEpisodeForProject,
 } from "./episode-record.service.ts";
+import {
+  createCreatorExportArtifact,
+  requestCreatorImageGenerationPlatformBatch,
+  requestCreatorVideoGenerationPlatformBatch,
+} from "./creator-platform.service.ts";
 import {
   createExportRecord,
   listExportRecordsForProject,
@@ -55,6 +88,10 @@ import {
   upsertShotsForProject,
 } from "./shot-record.service.ts";
 import {
+  listShotReferencesForProject,
+  replaceShotReferencesForShot,
+} from "./shot-reference-record.service.ts";
+import {
   createSqlParseScriptCommandHandler,
   createSqlProjectCommandHandler,
 } from "./sql-project.command.ts";
@@ -64,11 +101,6 @@ import type { ShotRecord } from "./shot.service.ts";
 interface AuthenticatedCreatorUser {
   id: string;
   sessionToken: string;
-}
-
-interface CreatorSqlState {
-  projectId: string | null;
-  scriptId: string | null;
 }
 
 export interface CreatorHttpResponse<T> {
@@ -81,62 +113,129 @@ interface CreatorApplicationDeps {
   workspaceId: string;
   creatorApps?: Map<string, CreatorDevApp>;
   creatorSqlStates?: Map<string, CreatorSqlState>;
+  storageRuntime?: UploadSessionRuntime;
+  signedUrlExpiresInSeconds?: number;
 }
 
 export function createCreatorApplication(deps: CreatorApplicationDeps) {
   const creatorApps = deps.creatorApps ?? new Map<string, CreatorDevApp>();
   const creatorSqlStates = deps.creatorSqlStates ?? new Map<string, CreatorSqlState>();
+  const signedUrlExpiresInSeconds =
+    deps.signedUrlExpiresInSeconds ??
+    Number(
+      process.env.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
+      process.env.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
+      900,
+    );
 
   function getCreatorState(userId: string) {
-    const creatorApp = creatorApps.get(userId) ?? new CreatorDevApp();
-    creatorApps.set(userId, creatorApp);
+    return getCreatorDevState({ userId, creatorApps, creatorSqlStates });
+  }
 
-    const sqlState = creatorSqlStates.get(userId) ?? {
-      projectId: null,
-      scriptId: null,
-    };
-    creatorSqlStates.set(userId, sqlState);
+  function requireStorageRuntime() {
+    if (!deps.storageRuntime) {
+      throw new Error("storage_runtime_missing");
+    }
+    return deps.storageRuntime;
+  }
 
-    return {
-      creatorApp,
-      sqlState,
-    };
+  function isLegacyInlineDataUrl(value: string | null | undefined) {
+    return typeof value === "string" && value.trim().startsWith("data:");
+  }
+
+  async function resolveImportedStorageObject(
+    user: AuthenticatedCreatorUser,
+    input: {
+      projectId: string;
+      uploadSessionId?: string | null;
+      storageObjectId?: string | null;
+    },
+    now: Date,
+  ) {
+    const runtime = deps.storageRuntime;
+    if (!runtime) {
+      return null;
+    }
+
+    if (input.uploadSessionId) {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: user.sessionToken,
+        projectId: input.projectId,
+        now,
+      });
+      const uploadSession = await findUploadSession(deps.db, input.uploadSessionId);
+      if (!uploadSession || uploadSession.organizationId !== actor.organizationId) {
+        throw new Error("upload_session_not_found");
+      }
+      if (uploadSession.status !== "uploaded") {
+        throw new Error("upload_session_not_ready");
+      }
+      const object = await findStorageObject(deps.db, uploadSession.storageObjectId);
+      if (!object || object.status !== "available") {
+        throw new Error("storage_upload_not_ready");
+      }
+      const urls = await buildSignedObjectUrls(deps.db, {
+        sessionToken: user.sessionToken,
+        storageObjectId: object.id,
+        adapter: runtime.adapter,
+        now,
+        expiresInSeconds: signedUrlExpiresInSeconds,
+      });
+      return {
+        id: object.id,
+        objectKey: object.objectKey,
+        sourceUrl: urls.sourceUrl,
+      };
+    }
+
+    if (input.storageObjectId) {
+      const object = await findStorageObject(deps.db, input.storageObjectId);
+      if (!object || object.status !== "available") {
+        throw new Error("storage_upload_not_ready");
+      }
+      const urls = await buildSignedObjectUrls(deps.db, {
+        sessionToken: user.sessionToken,
+        storageObjectId: object.id,
+        adapter: runtime.adapter,
+        now,
+        expiresInSeconds: signedUrlExpiresInSeconds,
+      });
+      return {
+        id: object.id,
+        objectKey: object.objectKey,
+        sourceUrl: urls.sourceUrl,
+      };
+    }
+
+    return null;
   }
 
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
-    if (sqlState.projectId && sqlState.scriptId) {
-      return sqlState;
+    return ensureCreatorSqlState({
+      db: deps.db,
+      workspaceId: deps.workspaceId,
+      userId,
+      sqlState,
+    });
+  }
+
+  async function hydrateActiveCreatorApp(input: {
+    user: AuthenticatedCreatorUser;
+    creatorApp: CreatorDevApp;
+    sqlState: CreatorSqlState;
+    now: Date;
+  }) {
+    await ensureSqlState(input.user.id, input.sqlState);
+    if (!input.sqlState.projectId) {
+      return null;
     }
 
-    const project = await deps.db.query<{
-      project_id: string;
-      script_id: string | null;
-    }>(
-      `
-        SELECT
-          p.id AS project_id,
-          (
-            SELECT s.id
-            FROM scripts s
-            WHERE s.project_id = p.id
-            ORDER BY s.created_at DESC, s.id DESC
-            LIMIT 1
-          ) AS script_id
-        FROM projects p
-        WHERE p.workspace_id = $1
-          AND p.created_by_user_id = $2
-        ORDER BY p.created_at DESC, p.id DESC
-        LIMIT 1
-      `,
-      [deps.workspaceId, userId],
-    );
-    const row = project.rows[0];
-    if (row) {
-      sqlState.projectId = row.project_id;
-      sqlState.scriptId = row.script_id;
-    }
-
-    return sqlState;
+    return seedCreatorAppFromSql(deps.db, input.creatorApp, {
+      projectId: input.sqlState.projectId,
+      scriptId: input.sqlState.scriptId,
+      sessionToken: input.user.sessionToken,
+      now: input.now,
+    });
   }
 
   async function writeLibraryAsset(input: {
@@ -144,7 +243,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     body: {
       kind: "character" | "scene" | "prop" | "image" | "video";
       name?: string | null;
+      uploadSessionId?: string | null;
+      storageObjectId?: string | null;
       storageObjectKey?: string | null;
+      sourceUrl?: string | null;
       mimeType?: string | null;
       width?: number | null;
       height?: number | null;
@@ -173,6 +275,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId,
       now: input.now,
     });
+      if (
+        deps.storageRuntime &&
+        input.source === "import" &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId
+      ) {
+        return {
+          status: 400,
+          body: { error: "upload_reference_required" },
+        };
+      }
+    const resolvedUpload = await resolveImportedStorageObject(input.user, {
+      projectId,
+      uploadSessionId: input.body.uploadSessionId ?? null,
+      storageObjectId: input.body.storageObjectId ?? null,
+    }, input.now);
     const assetType = assetTypeForKind(input.body.kind);
     const assetKey = `${input.body.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")}-${randomUUID().slice(0, 8)}`;
     const asset = {
@@ -190,7 +308,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       organizationId: actor.organizationId,
       assetId: asset.id,
       versionNumber: 1,
+      storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
       storageObjectKey:
+        resolvedUpload?.objectKey ||
         input.body.storageObjectKey?.trim() ||
         `library/${projectId}/${assetType}/${assetKey}`,
       metadata: {
@@ -201,10 +321,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         prompt: input.body.prompt ?? null,
         model: input.body.model ?? null,
         label: name,
+        sourceUrl: resolvedUpload?.sourceUrl ?? (input.body.sourceUrl?.trim() || null),
         previewUrl:
-          input.body.storageObjectKey?.trim().startsWith("data:")
+          resolvedUpload?.sourceUrl ||
+          input.body.sourceUrl?.trim() ||
+          (input.body.storageObjectKey?.trim().startsWith("data:")
             ? input.body.storageObjectKey.trim()
-            : null,
+            : null),
       },
       sourceTaskId: randomUUID(),
       sourceAttemptId: randomUUID(),
@@ -232,6 +355,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<CreatorDevStateSnapshot>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
+      if (sqlState.projectId) {
+        await seedCreatorAppFromSql(deps.db, creatorApp, {
+          projectId: sqlState.projectId,
+          scriptId: sqlState.scriptId,
+          sessionToken: input.user.sessionToken,
+          now: new Date(),
+        });
+      }
       const state = await creatorApp.getState();
       const hydrated = sqlState.projectId
         ? await hydrateStateFromSql(deps.db, state, {
@@ -310,9 +441,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
       });
+      const signedProjects = deps.storageRuntime
+        ? await Promise.all(
+            projects.map((project) =>
+              hydrateProjectCoverUrl(deps.db, {
+                project,
+                sessionToken: input.user.sessionToken,
+                runtime: deps.storageRuntime!,
+                now: input.now,
+                signedUrlExpiresInSeconds,
+              }),
+            ),
+          )
+        : projects;
       return {
         status: 200,
-        body: { projects },
+        body: { projects: signedProjects },
       };
     },
 
@@ -356,6 +500,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: await buildProjectDetail(deps.db, {
           organizationId: actor.organizationId,
           projectId: input.projectId,
+          sessionToken: input.user.sessionToken,
+          runtime: deps.storageRuntime,
+          signedUrlExpiresInSeconds,
           now: input.now,
         }),
       };
@@ -374,6 +521,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const detail = await buildProjectDetail(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
         now: input.now,
       });
       if (!detail.project) {
@@ -392,6 +542,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         name?: string | null;
         phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
         coverImageUrl?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -408,20 +560,60 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (
+        deps.storageRuntime &&
+        input.body.coverImageUrl !== undefined &&
+        input.body.coverImageUrl !== null &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId &&
+        !isLegacyInlineDataUrl(input.body.coverImageUrl)
+      ) {
+        return {
+          status: 400,
+          body: { error: "cover_upload_reference_required" },
+        };
+      }
+      const resolvedCoverUpload =
+        input.body.uploadSessionId || input.body.storageObjectId
+          ? await resolveImportedStorageObject(
+              input.user,
+              {
+                projectId,
+                uploadSessionId: input.body.uploadSessionId ?? null,
+                storageObjectId: input.body.storageObjectId ?? null,
+              },
+              input.now,
+            )
+          : null;
       const updated = await updateProjectRecord(deps.db, {
         organizationId: actor.organizationId,
         projectId,
         name: input.body.name,
         phase: input.body.phase,
-        coverImageUrl: input.body.coverImageUrl,
+        coverImageUrl:
+          resolvedCoverUpload || input.body.coverImageUrl === null
+            ? null
+            : input.body.coverImageUrl,
+        coverStorageObjectId:
+          resolvedCoverUpload?.id ??
+          (input.body.coverImageUrl !== undefined ? null : undefined),
         now: input.now,
       });
       if (!updated) {
         return { status: 404, body: { error: "project_not_found" } };
       }
+      const hydratedProject = deps.storageRuntime
+        ? await hydrateProjectCoverUrl(deps.db, {
+            project: updated,
+            sessionToken: input.user.sessionToken,
+            runtime: deps.storageRuntime!,
+            now: input.now,
+            signedUrlExpiresInSeconds,
+          })
+        : updated;
       return {
         status: 200,
-        body: { project: updated },
+        body: { project: hydratedProject },
       };
     },
 
@@ -465,6 +657,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
 
       const handleParseScript = createSqlParseScriptCommandHandler({ db: deps.db });
       const result = await handleParseScript({
@@ -481,96 +679,120 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return result as CreatorHttpResponse<Record<string, unknown>>;
       }
 
-      const parsed = await creatorApp.parseScript({
-        episodeIdForSourceId: (sourceEpisodeId) =>
-          stableEpisodeUuid(sqlState.projectId!, sourceEpisodeId),
-      });
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: sqlState.projectId,
         now: input.now,
       });
-      const claim = await claimQueuedTask(deps.db, {
-        taskId: result.body.taskId,
-        workerId: "creator-parse-finalizer",
-        now: input.now,
-        leaseMs: 60_000,
-      });
-      if (!claim) {
-        throw new Error(`parse_task_claim_failed:${result.body.taskId}`);
+      if (result.idempotencyResult === "replayed") {
+        const records = await listAssetReviewCandidatesForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId: sqlState.projectId,
+        });
+        const assetCandidates = assetReviewStateFromRecords(records);
+        const shots = await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId: sqlState.projectId,
+        });
+        await creatorApp.seedShotRecords(shots);
+        return {
+          status: result.status,
+          body: {
+            workflow: result.body,
+            assetReview: computeAssetReviewSummary(assetCandidates),
+            assetCandidates,
+            shots,
+          },
+        };
       }
-      await finalizeTaskAttempt(deps.db, {
-        taskId: result.body.taskId,
-        attemptId: claim.attempt.id,
-        status: "succeeded",
-        now: input.now,
-        finalize: async () => {
-          await replaceAssetReviewCandidatesForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            now: input.now,
-            candidates: parsed.parse.candidateAssets.map((candidate) => ({
-              group: candidate.kind,
-              assetKey: candidate.id,
-              label: candidate.name,
-              required: candidate.kind !== "prop",
-            })),
-          });
-          await replaceEpisodesForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            createdByUserId: actor.actorId,
-            now: input.now,
-            episodes: parsed.parse.episodes.map((episode) => ({
-              id: stableEpisodeUuid(sqlState.projectId!, episode.id),
-              title: episode.title,
-              sequence: episode.sequence,
-              status: "draft",
-            })),
-          });
-          const episodeIdBySourceId = new Map(
-            parsed.parse.episodes.map((episode) => [
-              episode.id,
-              stableEpisodeUuid(sqlState.projectId!, episode.id),
-            ]),
-          );
-          const shotEpisodeIdByIndex = new Map(
-            parsed.parse.shots.map((shot, index) => [
-              index,
-              episodeIdBySourceId.get(shot.episodeId) ?? null,
-            ]),
-          );
-          await replaceShotsForProject(deps.db, {
-            organizationId: actor.organizationId,
-            projectId: sqlState.projectId!,
-            createdByUserId: actor.actorId,
-            shots: (parsed.shots as ShotRecord[]).map((shot, index) => ({
-              ...shot,
-              episodeId: shotEpisodeIdByIndex.get(index) ?? null,
-            })),
-            now: input.now,
-          });
-          await deps.db.query(
-            `
-              UPDATE projects
-              SET phase = 'asset_review',
-                  updated_at = $2
-              WHERE id = $1
-            `,
-            [sqlState.projectId, input.now],
-          );
-          await deps.db.query(
-            `
-              UPDATE scripts
-              SET status = 'parsed',
-                  updated_at = $2
-              WHERE id = $1
-            `,
-            [sqlState.scriptId, input.now],
-          );
-        },
+
+      const parsed = await creatorApp.parseScript({
+        episodeIdForSourceId: (sourceEpisodeId) =>
+          stableEpisodeUuid(sqlState.projectId!, sourceEpisodeId),
       });
-      await aggregateWorkflowStatus(deps.db, result.body.workflowId);
+      if (result.body.taskStatus === "queued") {
+        const claim = await claimQueuedTask(deps.db, {
+          taskId: result.body.taskId,
+          workerId: "creator-parse-finalizer",
+          now: input.now,
+          leaseMs: 60_000,
+        });
+        if (!claim) {
+          throw new Error(`parse_task_claim_failed:${result.body.taskId}`);
+        }
+        await finalizeTaskAttempt(deps.db, {
+          taskId: result.body.taskId,
+          attemptId: claim.attempt.id,
+          status: "succeeded",
+          now: input.now,
+          finalize: async () => {
+            await replaceAssetReviewCandidatesForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              now: input.now,
+              candidates: parsed.parse.candidateAssets.map((candidate) => ({
+                group: candidate.kind,
+                assetKey: candidate.id,
+                label: candidate.name,
+                required: candidate.kind !== "prop",
+              })),
+            });
+            await replaceEpisodesForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              createdByUserId: actor.actorId,
+              now: input.now,
+              episodes: parsed.parse.episodes.map((episode) => ({
+                id: stableEpisodeUuid(sqlState.projectId!, episode.id),
+                title: episode.title,
+                sequence: episode.sequence,
+                status: "draft",
+              })),
+            });
+            const episodeIdBySourceId = new Map(
+              parsed.parse.episodes.map((episode) => [
+                episode.id,
+                stableEpisodeUuid(sqlState.projectId!, episode.id),
+              ]),
+            );
+            const shotEpisodeIdByIndex = new Map(
+              parsed.parse.shots.map((shot, index) => [
+                index,
+                episodeIdBySourceId.get(shot.episodeId) ?? null,
+              ]),
+            );
+            await replaceShotsForProject(deps.db, {
+              organizationId: actor.organizationId,
+              projectId: sqlState.projectId!,
+              createdByUserId: actor.actorId,
+              shots: (parsed.shots as ShotRecord[]).map((shot, index) => ({
+                ...shot,
+                episodeId: shotEpisodeIdByIndex.get(index) ?? null,
+              })),
+              now: input.now,
+            });
+            await deps.db.query(
+              `
+                UPDATE projects
+                SET phase = 'asset_review',
+                    updated_at = $2
+                WHERE id = $1
+              `,
+              [sqlState.projectId, input.now],
+            );
+            await deps.db.query(
+              `
+                UPDATE scripts
+                SET status = 'parsed',
+                    updated_at = $2
+                WHERE id = $1
+              `,
+              [sqlState.scriptId, input.now],
+            );
+          },
+        });
+        await aggregateWorkflowStatus(deps.db, result.body.workflowId);
+      }
       const records = await listAssetReviewCandidatesForProject(deps.db, {
         organizationId: actor.organizationId,
         projectId: sqlState.projectId,
@@ -783,12 +1005,81 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
     },
 
+    async updateProjectAsset(input: {
+      user: AuthenticatedCreatorUser;
+      assetId: string;
+      body: {
+        name?: string | null;
+        description?: string | null;
+        isMain?: boolean | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const asset = await findProjectAssetById(deps.db, { assetId: input.assetId });
+      if (!asset) {
+        return { status: 404, body: { error: "asset_not_found" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: asset.projectId,
+        now: input.now,
+      });
+      const updated = await updateProjectAssetRecord(deps.db, {
+        organizationId: actor.organizationId,
+        assetId: input.assetId,
+        name: input.body.name,
+        description: input.body.description,
+        isMain: input.body.isMain,
+        now: input.now,
+      });
+      return updated
+        ? { status: 200, body: { asset: updated } }
+        : { status: 404, body: { error: "asset_not_found" } };
+    },
+
+    async deleteProjectAsset(input: {
+      user: AuthenticatedCreatorUser;
+      assetId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const asset = await findProjectAssetById(deps.db, { assetId: input.assetId });
+      if (!asset) {
+        return { status: 404, body: { error: "asset_not_found" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: asset.projectId,
+        now: input.now,
+      });
+      const deleted = await deleteProjectAssetRecord(deps.db, {
+        organizationId: actor.organizationId,
+        assetId: input.assetId,
+      });
+      if (deleted?.orphanStorageObjectIds?.length) {
+        const runtime = requireStorageRuntime();
+        for (const storageObjectId of deleted.orphanStorageObjectIds) {
+          await deleteStorageObjectRecord(deps.db, {
+            storageObjectId,
+            adapter: runtime.adapter,
+            localObjectStore: runtime.localObjectStore,
+            now: input.now,
+          });
+        }
+      }
+      return deleted
+        ? { status: 200, body: { deleted: true } }
+        : { status: 404, body: { error: "asset_not_found" } };
+    },
+
     async importAsset(input: {
       user: AuthenticatedCreatorUser;
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
         name?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
         storageObjectKey?: string | null;
+        sourceUrl?: string | null;
         mimeType?: string | null;
         width?: number | null;
         height?: number | null;
@@ -841,7 +1132,25 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         assetId: input.assetId,
       });
-      return { status: 200, body: { versions } };
+      const runtime = deps.storageRuntime;
+      if (!runtime) {
+        return { status: 200, body: { versions } };
+      }
+      const signedVersions = await Promise.all(
+        versions.map(async (version) => ({
+          ...version,
+          previewUrl: await resolveStorageBackedPreviewUrl(deps.db, {
+            sessionToken: input.user.sessionToken,
+            storageObjectId: version.storageObjectId ?? null,
+            storageObjectKey: version.storageObjectKey,
+            metadata: version.metadata ?? null,
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds,
+          }),
+        })),
+      );
+      return { status: 200, body: { versions: signedVersions } };
     },
 
     async listProjectEpisodes(input: {
@@ -857,9 +1166,64 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const detail = await buildProjectDetail(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
         now: input.now,
       });
       return { status: 200, body: { episodes: detail.episodes } };
+    },
+
+    async listProjectMembers(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      return {
+        status: 200,
+        body: {
+          members: await listProjectMembersForWorkspace(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId,
+          }),
+        },
+      };
+    },
+
+    async getProjectStats(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const detail = await buildProjectDetail(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
+        now: input.now,
+      });
+      return {
+        status: 200,
+        body: {
+          stats: await buildProjectStats(deps.db, {
+            organizationId: actor.organizationId,
+            projectId: input.projectId,
+            detail,
+            now: input.now,
+          }),
+        },
+      };
     },
 
     async createEpisode(input: {
@@ -953,11 +1317,16 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async createShot(input: {
       user: AuthenticatedCreatorUser;
-      body: { title?: string | null; episodeId?: string | null };
+      body: { title?: string | null; description?: string | null; episodeId?: string | null };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -981,11 +1350,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async updateShot(input: {
       user: AuthenticatedCreatorUser;
-      body: { shotId: string; title?: string | null };
+      body: {
+        shotId: string;
+        title?: string | null;
+        description?: string | null;
+        currentImageAssetVersionId?: string | null;
+        currentVideoAssetVersionId?: string | null;
+      };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1013,7 +1393,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1024,16 +1409,46 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
       const result = await creatorApp.deleteShot(input.body);
       await deps.db.query(
+        `
+          DELETE FROM calibration_items
+          WHERE organization_id = $1
+            AND shot_id = $2
+        `,
+        [actor.organizationId, input.body.shotId],
+      );
+      await deps.db.query(
+        `
+          DELETE FROM shot_reference_assets
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND shot_id = $3
+        `,
+        [actor.organizationId, projectId, input.body.shotId],
+      );
+      const deletedShotRows = await deps.db.query(
         `
           DELETE FROM shots
           WHERE organization_id = $1
             AND project_id = $2
             AND id = $3
+          RETURNING id
         `,
         [actor.organizationId, projectId, input.body.shotId],
       );
+      console.log("creator.deleteShot success", {
+        projectId,
+        shotId: input.body.shotId,
+        remainingShots: Array.isArray(result.shots) ? result.shots.length : null,
+        deletedRows: deletedShotRows.rows.length,
+      });
       return { status: 200, body: result };
     },
 
@@ -1043,7 +1458,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1065,13 +1485,260 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return { status: 200, body: result };
     },
 
-    async runCalibration(input: {
+    async importShotMedia(input: {
       user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        kind: "image" | "video";
+        name?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
+        storageObjectKey?: string | null;
+        sourceUrl?: string | null;
+        mimeType?: string | null;
+        width?: number | null;
+        height?: number | null;
+        durationMs?: number | null;
+      };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
-      const result = await creatorApp.runCalibration();
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      let resolvedShot = shot;
+      if (!resolvedShot) {
+        const memoryState = await creatorApp.getState();
+        const memoryShot = memoryState.shots.find((item) => item.id === input.body.shotId);
+        if (memoryShot) {
+          resolvedShot = memoryShot as ShotRecord;
+          await upsertShotsForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            createdByUserId: actor.actorId,
+            shots: [resolvedShot],
+            now: input.now,
+          });
+        }
+      }
+      if (!resolvedShot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+      if (
+        deps.storageRuntime &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId
+      ) {
+        return {
+          status: 400,
+          body: { error: "upload_reference_required" },
+        };
+      }
+      const resolvedUpload = await resolveImportedStorageObject(input.user, {
+        projectId,
+        uploadSessionId: input.body.uploadSessionId ?? null,
+        storageObjectId: input.body.storageObjectId ?? null,
+      }, input.now);
+      const storageObjectKey = resolvedUpload?.objectKey ?? input.body.storageObjectKey?.trim();
+      if (!storageObjectKey) {
+        return { status: 400, body: { error: "storage_object_key_required" } };
+      }
+
+      const snapshot = await createAssetVersionSnapshot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        assetType: input.body.kind === "video" ? "shot_video" : "shot_image",
+        assetKey: input.body.shotId,
+        createdByUserId: actor.actorId,
+        storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
+        storageObjectKey,
+        metadata: {
+          mimeType:
+            input.body.mimeType?.trim() ||
+            (input.body.kind === "video" ? "video/mp4" : "image/png"),
+          width: input.body.width ?? 1024,
+          height: input.body.height ?? 1024,
+          durationMs: input.body.durationMs ?? null,
+          source: "import",
+          label: input.body.name?.trim() || (input.body.kind === "video" ? "Uploaded video" : "Uploaded image"),
+          sourceUrl: resolvedUpload?.sourceUrl ?? (input.body.sourceUrl?.trim() || null),
+          previewUrl:
+            resolvedUpload?.sourceUrl ||
+            input.body.sourceUrl?.trim() ||
+            (storageObjectKey.startsWith("data:") ? storageObjectKey : null),
+        },
+        sourceTaskId: randomUUID(),
+        sourceAttemptId: randomUUID(),
+        now: input.now,
+      });
+
+      const updated = await updateShotMediaPointer(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        kind: input.body.kind,
+        assetVersionId: snapshot.version.id,
+        now: input.now,
+      });
+      await updateProjectPhase(deps.db, projectId, "shot_generation");
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
+
+      return {
+        status: 200,
+        body: {
+          shot: updated,
+          asset: snapshot.asset,
+          version: snapshot.version,
+        },
+      };
+    },
+
+    async deleteShotMedia(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        kind: "image" | "video";
+        assetVersionId: string;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      if (!shot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+
+      const deleted = await deleteShotMediaVersionRecord(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        kind: input.body.kind,
+        assetVersionId: input.body.assetVersionId,
+        now: input.now,
+      });
+      if (!deleted) {
+        return { status: 404, body: { error: "shot_media_not_found" } };
+      }
+      if (deleted.orphanStorageObjectId) {
+        const runtime = requireStorageRuntime();
+        await deleteStorageObjectRecord(deps.db, {
+          storageObjectId: deleted.orphanStorageObjectId,
+          adapter: runtime.adapter,
+          localObjectStore: runtime.localObjectStore,
+          now: input.now,
+        });
+      }
+
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
+
+      const refreshedShot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+
+      return {
+        status: 200,
+        body: {
+          shot: refreshedShot,
+          deletedAssetVersionId: input.body.assetVersionId,
+        },
+      };
+    },
+
+    async replaceShotReferences(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        shotId: string;
+        items: Array<{
+          role: string;
+          assetId: string;
+          assetVersionId?: string | null;
+          sortOrder?: number | null;
+        }>;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const shot = await findProjectShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+      });
+      if (!shot) {
+        return { status: 404, body: { error: "shot_not_found" } };
+      }
+      const references = await replaceShotReferencesForShot(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        shotId: input.body.shotId,
+        createdByUserId: actor.actorId,
+        items: input.body.items ?? [],
+        now: input.now,
+      });
+      return { status: 200, body: { references } };
+    },
+
+    async runCalibration(input: {
+      user: AuthenticatedCreatorUser;
+      now: Date;
+      idempotencyKey?: string;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id ?? null;
       if (!projectId) {
@@ -1080,35 +1747,57 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.calibrationGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId },
+          now: input.now,
+          execute: async () => runCalibrationAction(),
+        });
+      }
 
-      const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        calibrationId: result.calibration.id,
-        decisionType: result.calibration.decision?.decisionType ?? "passed",
-        reason: result.calibration.decision?.reason ?? null,
-        shotIds: result.calibration.items.map((item) => item.shotId),
-        now: input.now,
-      });
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      await replaceCalibrationSessionForProject(deps.db, {
-        organizationId: actor.organizationId,
-        projectId,
-        session: result.calibration,
-        now: input.now,
-      });
+      return runCalibrationAction();
 
-      return {
-        status: 200,
-        body: {
-          ...result,
-          auditEvent,
-        },
-      };
+      async function runCalibrationAction() {
+        try {
+          const result = await creatorApp.runCalibration();
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: result.calibration.decision?.decisionType ?? "passed",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
+      }
     },
 
     async skipCalibration(input: {
@@ -1117,52 +1806,75 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         reason: string;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      try {
-        const result = await creatorApp.skipCalibration({
-          reason: input.body.reason,
-        });
-        const state = await creatorApp.getState();
-        const projectId = sqlState.projectId ?? state.project?.id ?? null;
-        if (!projectId) {
-          return {
-            status: 409,
-            body: { error: "creator_project_missing" },
-          };
-        }
-
-        const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          calibrationId: result.calibration.id,
-          decisionType: "skipped",
-          reason: result.calibration.decision?.reason ?? null,
-          shotIds: result.calibration.items.map((item) => item.shotId),
-          now: input.now,
-        });
-        const actor = await resolveActorContext(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          now: input.now,
-        });
-        await replaceCalibrationSessionForProject(deps.db, {
-          organizationId: actor.organizationId,
-          projectId,
-          session: result.calibration,
-          now: input.now,
-        });
-
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
+      const state = await creatorApp.getState();
+      const projectId = sqlState.projectId ?? state.project?.id ?? null;
+      if (!projectId) {
         return {
-          status: 200,
-          body: {
-            ...result,
-            auditEvent,
-          },
+          status: 409,
+          body: { error: "creator_project_missing" },
         };
-      } catch (error) {
-        return calibrationErrorResponse(error);
+      }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.projectEdit,
+          operationName: operationNames.calibrationSkip,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId, reason: input.body.reason },
+          now: input.now,
+          execute: async () => skipCalibrationAction(),
+        });
+      }
+
+      return skipCalibrationAction();
+
+      async function skipCalibrationAction() {
+        try {
+          const result = await creatorApp.skipCalibration({
+            reason: input.body.reason,
+          });
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: "skipped",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
       }
     },
 
@@ -1172,52 +1884,79 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         reason?: string | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      try {
-        const result = await creatorApp.overrideCalibration({
-          reason: input.body.reason ?? null,
-        });
-        const state = await creatorApp.getState();
-        const projectId = sqlState.projectId ?? state.project?.id ?? null;
-        if (!projectId) {
-          return {
-            status: 409,
-            body: { error: "creator_project_missing" },
-          };
-        }
-
-        const auditEvent = await appendCalibrationAuditEvent(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          calibrationId: result.calibration.id,
-          decisionType: "override",
-          reason: result.calibration.decision?.reason ?? null,
-          shotIds: result.calibration.items.map((item) => item.shotId),
-          now: input.now,
-        });
-        const actor = await resolveActorContext(deps.db, {
-          sessionToken: input.user.sessionToken,
-          projectId,
-          now: input.now,
-        });
-        await replaceCalibrationSessionForProject(deps.db, {
-          organizationId: actor.organizationId,
-          projectId,
-          session: result.calibration,
-          now: input.now,
-        });
-
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
+      const state = await creatorApp.getState();
+      const projectId = sqlState.projectId ?? state.project?.id ?? null;
+      if (!projectId) {
         return {
-          status: 200,
-          body: {
-            ...result,
-            auditEvent,
-          },
+          status: 409,
+          body: { error: "creator_project_missing" },
         };
-      } catch (error) {
-        return calibrationErrorResponse(error);
+      }
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.projectEdit,
+          operationName: operationNames.calibrationOverride,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            action: "override",
+            reason: input.body.reason ?? null,
+          },
+          now: input.now,
+          execute: async () => overrideCalibrationAction(),
+        });
+      }
+
+      return overrideCalibrationAction();
+
+      async function overrideCalibrationAction() {
+        try {
+          const result = await creatorApp.overrideCalibration({
+            reason: input.body.reason ?? null,
+          });
+
+          const auditEvent = await appendCalibrationAuditEvent(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            calibrationId: result.calibration.id,
+            decisionType: "override",
+            reason: result.calibration.decision?.reason ?? null,
+            shotIds: result.calibration.items.map((item) => item.shotId),
+            now: input.now,
+          });
+          const actor = await resolveActorContext(deps.db, {
+            sessionToken: input.user.sessionToken,
+            projectId,
+            now: input.now,
+          });
+          await replaceCalibrationSessionForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            session: result.calibration,
+            now: input.now,
+          });
+
+          return {
+            status: 200,
+            body: {
+              ...result,
+              auditEvent,
+            },
+          };
+        } catch (error) {
+          return calibrationErrorResponse(error);
+        }
       }
     },
 
@@ -1230,8 +1969,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         parameters?: Record<string, unknown> | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const before = await creatorApp.getState();
       const projectId = sqlState.projectId ?? before.project?.id;
       if (!projectId) {
@@ -1242,91 +1988,129 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
-      const platform = await requestCreatorImageGenerationPlatformBatch(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        options: {
-          shotId: input.body?.shotId ?? null,
-          promptOverride: input.body?.promptOverride ?? null,
-          model: input.body?.model ?? null,
-          parameters: input.body?.parameters ?? null,
-        },
-        shots: requestedShots.map((shot) => ({
-          id: shot.id,
-          title: shot.title,
-          contentRevision: shot.contentRevision,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-        })),
-      }, {
-        deferFinalization: true,
-      });
-      const generated = await creatorApp.generateImagesForTasks(
-        platform.tasks.map((task) => ({
-          shotId: task.shotId,
-          taskId: task.taskId,
-          storageObjectKey: task.storageObjectKey,
-          sourceAttemptId: task.attemptId,
-        })),
-      );
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      const successByTaskId = new Map(
-        (generated.successes as Array<{
-          shot: ShotRecord;
-          asset: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
-          version: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
-        }>).map((success) => [success.version.sourceTaskId, success] as const),
-      );
-      const shotById = new Map(
-        (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
-      );
-
-      for (const task of platform.tasks) {
-        const success = successByTaskId.get(task.taskId);
-        const shot = shotById.get(task.shotId);
-        if (!shot) {
-          throw new Error(`creator_image_shot_missing:${task.shotId}`);
-        }
-
-        await finalizeTaskAttempt(deps.db, {
-          taskId: task.taskId,
-          attemptId: task.attemptId,
-          status: success ? "succeeded" : "failed",
-          failureCode: success ? null : "generation_failed",
-          now: input.now,
-          finalize: async () => {
-            if (success) {
-              await upsertAssetVersionSnapshot(deps.db, {
-                asset: success.asset,
-                version: success.version,
-                now: input.now,
-              });
-            }
-            await upsertShotsForProject(deps.db, {
-              organizationId: actor.organizationId,
-              projectId,
-              createdByUserId: actor.actorId,
-              shots: [shot],
-              now: input.now,
-            });
-            await updateProjectPhase(deps.db, projectId, "shot_generation");
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.shotImageGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            shotIds: requestedShots.map((shot) => shot.id),
+            body: input.body ?? {},
           },
+          now: input.now,
+          execute: async () => generateImagesAction(requestedShots),
         });
       }
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
 
-      return {
-        status: 200,
-        body: {
-          ...generated,
-          platform,
-          request: input.body ?? {},
-        },
-      };
+      return generateImagesAction(requestedShots);
+
+      async function generateImagesAction(
+        selectedShots: CreatorDevStateSnapshot["shots"],
+      ) {
+        const platform = await requestCreatorImageGenerationPlatformBatch(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          options: {
+            shotId: input.body?.shotId ?? null,
+            promptOverride: input.body?.promptOverride ?? null,
+            model: input.body?.model ?? null,
+            parameters: input.body?.parameters ?? null,
+          },
+          shots: selectedShots.map((shot) => ({
+            id: shot.id,
+            title: shot.title,
+            contentRevision: shot.contentRevision,
+            currentImageAssetVersionId: shot.currentImageAssetVersionId,
+          })),
+        }, {
+          deferFinalization: true,
+        });
+        const generated = await creatorApp.generateImagesForTasks(
+          platform.tasks.map((task) => ({
+            shotId: task.shotId,
+            taskId: task.taskId,
+            storageObjectKey: task.storageObjectKey,
+            sourceAttemptId: task.attemptId,
+          })),
+        );
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        const successByTaskId = new Map(
+          (generated.successes as Array<{
+            shot: ShotRecord;
+            asset: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
+            version: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
+          }>).map((success) => [success.version.sourceTaskId, success] as const),
+        );
+        const shotById = new Map(
+          (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
+        );
+
+        for (const task of platform.tasks) {
+          const success = successByTaskId.get(task.taskId);
+          const shot = shotById.get(task.shotId);
+          if (!shot) {
+            throw new Error(`creator_image_shot_missing:${task.shotId}`);
+          }
+
+          await finalizeTaskAttempt(deps.db, {
+            taskId: task.taskId,
+            attemptId: task.attemptId,
+            status: success ? "succeeded" : "failed",
+            failureCode: success ? null : "generation_failed",
+            now: input.now,
+            finalize: async () => {
+              if (success) {
+                await upsertAssetVersionSnapshot(deps.db, {
+                  asset: success.asset,
+                  version: {
+                    ...success.version,
+                    storageObjectId: task.storageObjectId,
+                  },
+                  now: input.now,
+                });
+              }
+              await upsertShotsForProject(deps.db, {
+                organizationId: actor.organizationId,
+                projectId,
+                createdByUserId: actor.actorId,
+                shots: [shot],
+                now: input.now,
+              });
+              await updateProjectPhase(deps.db, projectId, "shot_generation");
+            },
+          });
+        }
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+
+        return {
+          status: 200,
+          body: {
+            ...generated,
+            platform,
+            request: input.body ?? {},
+            selectionContext:
+              input.body?.parameters?.selectionContext &&
+              typeof input.body.parameters.selectionContext === "object"
+                ? input.body.parameters.selectionContext
+                : null,
+            fixedImages: createFixedImageGenerationResults(
+              input.body?.promptOverride ?? null,
+              input.body?.parameters?.selectionContext &&
+                typeof input.body.parameters.selectionContext === "object"
+                ? input.body.parameters.selectionContext
+                : null,
+            ),
+          },
+        };
+      }
     },
 
     async retryShotImage(input: {
@@ -1335,7 +2119,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const projectId = sqlState.projectId;
       if (!projectId) {
         return {
@@ -1453,7 +2242,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           if (success) {
             await upsertAssetVersionSnapshot(deps.db, {
               asset: success.asset,
-              version: success.version,
+              version: {
+                ...success.version,
+                storageObjectId: task.storageObjectId,
+              },
               now: input.now,
             });
           }
@@ -1492,8 +2284,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         lipSyncEnabled?: boolean | null;
       };
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const before = await creatorApp.getState();
       const projectId = sqlState.projectId ?? before.project?.id;
       if (!projectId) {
@@ -1504,96 +2303,125 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
-      const platform = await requestCreatorVideoGenerationPlatformBatch(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        options: {
-          shotId: input.body?.shotId ?? null,
-          motionPrompt: input.body?.motionPrompt ?? null,
-          model: input.body?.model ?? null,
-          parameters: input.body?.parameters ?? null,
-          audioEnabled: input.body?.audioEnabled ?? null,
-          musicEnabled: input.body?.musicEnabled ?? null,
-          lipSyncEnabled: input.body?.lipSyncEnabled ?? null,
-        },
-        shots: requestedShots.map((shot) => ({
-          id: shot.id,
-          title: shot.title,
-          contentRevision: shot.contentRevision,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-        })),
-      }, {
-        deferFinalization: true,
-      });
-      const generated = await creatorApp.generateVideosForTasks(
-        platform.tasks.map((task) => ({
-          shotId: task.shotId,
-          taskId: task.taskId,
-          storageObjectKey: task.storageObjectKey,
-          sourceAttemptId: task.attemptId,
-        })),
-      );
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      const resultByTaskId = new Map(
-        (generated.results as Array<{
-          shot: ShotRecord;
-          asset?: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
-          version?: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
-        }>).map((result) => [result.version?.sourceTaskId ?? `failed:${result.shot.activeVideoTaskId}`, result] as const),
-      );
-      const shotById = new Map(
-        (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
-      );
-
-      for (const task of platform.tasks) {
-        const result =
-          resultByTaskId.get(task.taskId) ??
-          resultByTaskId.get(`failed:${task.taskId}`);
-        const shot = shotById.get(task.shotId);
-        if (!result || !shot) {
-          throw new Error(`creator_video_result_missing:${task.taskId}`);
-        }
-
-        await finalizeTaskAttempt(deps.db, {
-          taskId: task.taskId,
-          attemptId: task.attemptId,
-          status: result.asset && result.version ? "succeeded" : "failed",
-          failureCode: result.asset && result.version ? null : "generation_failed",
-          now: input.now,
-          finalize: async () => {
-            if (result.asset && result.version) {
-              await upsertAssetVersionSnapshot(deps.db, {
-                asset: result.asset,
-                version: result.version,
-                now: input.now,
-              });
-            }
-            await upsertShotsForProject(deps.db, {
-              organizationId: actor.organizationId,
-              projectId,
-              createdByUserId: actor.actorId,
-              shots: [shot],
-              now: input.now,
-            });
-            await updateProjectPhase(deps.db, projectId, "shot_generation");
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          capability: capabilities.generationStart,
+          operationName: operationNames.shotVideoGenerate,
+          idempotencyKey: input.idempotencyKey,
+          request: {
+            projectId,
+            shotIds: requestedShots.map((shot) => shot.id),
+            body: input.body ?? {},
           },
+          now: input.now,
+          execute: async () => generateVideosAction(requestedShots),
         });
       }
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
 
-      return {
-        status: 200,
-        body: {
-          ...generated,
-          platform,
-          request: input.body ?? {},
-        },
-      };
+      return generateVideosAction(requestedShots);
+
+      async function generateVideosAction(
+        selectedShots: CreatorDevStateSnapshot["shots"],
+      ) {
+        const platform = await requestCreatorVideoGenerationPlatformBatch(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          options: {
+            shotId: input.body?.shotId ?? null,
+            motionPrompt: input.body?.motionPrompt ?? null,
+            model: input.body?.model ?? null,
+            parameters: input.body?.parameters ?? null,
+            audioEnabled: input.body?.audioEnabled ?? null,
+            musicEnabled: input.body?.musicEnabled ?? null,
+            lipSyncEnabled: input.body?.lipSyncEnabled ?? null,
+          },
+          shots: selectedShots.map((shot) => ({
+            id: shot.id,
+            title: shot.title,
+            contentRevision: shot.contentRevision,
+            currentImageAssetVersionId: shot.currentImageAssetVersionId,
+          })),
+        }, {
+          deferFinalization: true,
+        });
+        const generated = await creatorApp.generateVideosForTasks(
+          platform.tasks.map((task) => ({
+            shotId: task.shotId,
+            taskId: task.taskId,
+            storageObjectKey: task.storageObjectKey,
+            sourceAttemptId: task.attemptId,
+          })),
+        );
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        const resultByTaskId = new Map(
+          (generated.results as Array<{
+            shot: ShotRecord;
+            asset?: Parameters<typeof upsertAssetVersionSnapshot>[1]["asset"];
+            version?: Parameters<typeof upsertAssetVersionSnapshot>[1]["version"];
+          }>).map((result) => [
+            result.version?.sourceTaskId ?? `failed:${result.shot.activeVideoTaskId}`,
+            result,
+          ] as const),
+        );
+        const shotById = new Map(
+          (generated.shots as ShotRecord[]).map((shot) => [shot.id, shot] as const),
+        );
+
+        for (const task of platform.tasks) {
+          const result =
+            resultByTaskId.get(task.taskId) ??
+            resultByTaskId.get(`failed:${task.taskId}`);
+          const shot = shotById.get(task.shotId);
+          if (!result || !shot) {
+            throw new Error(`creator_video_result_missing:${task.taskId}`);
+          }
+
+          await finalizeTaskAttempt(deps.db, {
+            taskId: task.taskId,
+            attemptId: task.attemptId,
+            status: result.asset && result.version ? "succeeded" : "failed",
+            failureCode: result.asset && result.version ? null : "generation_failed",
+            now: input.now,
+            finalize: async () => {
+              if (result.asset && result.version) {
+                await upsertAssetVersionSnapshot(deps.db, {
+                  asset: result.asset,
+                  version: {
+                    ...result.version,
+                    storageObjectId: task.storageObjectId,
+                  },
+                  now: input.now,
+                });
+              }
+              await upsertShotsForProject(deps.db, {
+                organizationId: actor.organizationId,
+                projectId,
+                createdByUserId: actor.actorId,
+                shots: [shot],
+                now: input.now,
+              });
+              await updateProjectPhase(deps.db, projectId, "shot_generation");
+            },
+          });
+        }
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+
+        return {
+          status: 200,
+          body: {
+            ...generated,
+            platform,
+            request: input.body ?? {},
+          },
+        };
+      }
     },
 
     async retryShotVideo(input: {
@@ -1602,7 +2430,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const projectId = sqlState.projectId;
       if (!projectId) {
         return {
@@ -1731,7 +2564,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           if (result.asset && result.version) {
             await upsertAssetVersionSnapshot(deps.db, {
               asset: result.asset,
-              version: result.version,
+              version: {
+                ...result.version,
+                storageObjectId: task.storageObjectId,
+              },
               now: input.now,
             });
           }
@@ -1752,7 +2588,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: {
           shot: retriedShot,
           asset: result.asset,
-          version: result.version,
+          version: result.version
+            ? {
+                ...result.version,
+                storageObjectId: task.storageObjectId,
+              }
+            : result.version,
           platform,
         },
       };
@@ -1761,9 +2602,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async previewExport(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
+      idempotencyKey?: string;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      const exportPreview = await creatorApp.previewExport();
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id;
       if (!projectId) {
@@ -1772,60 +2619,77 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "creator_project_missing" },
         };
       }
-
-      const platform = await createCreatorExportArtifact(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-        manifest: exportPreview.export,
-      }, {
-        deferFinalization: true,
-      });
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        projectId,
-        now: input.now,
-      });
-      await finalizeTaskAttempt(deps.db, {
-        taskId: platform.taskId,
-        attemptId: platform.attemptId,
-        status: "succeeded",
-        now: input.now,
-        finalize: async () => {
-          await createExportRecord(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId!,
-            projectId,
-            workflowId: platform.workflowId,
-            storageObjectId: platform.storageObjectId,
-            manifestStatus: exportPreview.export.status,
-            allowPartialExport: exportPreview.export.allowPartialExport,
-            itemCount: exportPreview.export.items.length,
-            missingAssetCount: exportPreview.export.missingAssets.length,
-            latestSignedUrlExpiresAt: platform.expiresAt,
-            createdByUserId: actor.actorId,
-            now: input.now,
-          });
-          await updateProjectPhase(deps.db, projectId, "export");
-        },
-      });
-      await aggregateWorkflowStatus(deps.db, platform.workflowId);
-      const exportRecord = (
-        await listExportRecordsForProject(deps.db, {
-          organizationId: actor.organizationId,
+      if (input.idempotencyKey) {
+        return runIdempotentCreatorAction(deps.db, {
+          sessionToken: input.user.sessionToken,
           projectId,
-          limit: 1,
-        })
-      )[0];
+          capability: capabilities.exportCreate,
+          operationName: operationNames.exportCreate,
+          idempotencyKey: input.idempotencyKey,
+          request: { projectId },
+          now: input.now,
+          execute: async () => previewExportAction(),
+        });
+      }
 
-      return {
-        status: 200,
-        body: {
-          ...exportPreview,
-          exportRecord,
-          platform,
-        },
-      };
+      return previewExportAction();
+
+      async function previewExportAction() {
+        const exportPreview = await creatorApp.previewExport();
+        const platform = await createCreatorExportArtifact(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+          manifest: exportPreview.export,
+        }, {
+          deferFinalization: true,
+        });
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          projectId,
+          now: input.now,
+        });
+        await finalizeTaskAttempt(deps.db, {
+          taskId: platform.taskId,
+          attemptId: platform.attemptId,
+          status: "succeeded",
+          now: input.now,
+          finalize: async () => {
+            await createExportRecord(deps.db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId!,
+              projectId,
+              workflowId: platform.workflowId,
+              storageObjectId: platform.storageObjectId,
+              manifestStatus: exportPreview.export.status,
+              allowPartialExport: exportPreview.export.allowPartialExport,
+              itemCount: exportPreview.export.items.length,
+              missingAssetCount: exportPreview.export.missingAssets.length,
+              latestSignedUrlExpiresAt: platform.expiresAt,
+              createdByUserId: actor.actorId,
+              now: input.now,
+            });
+            await updateProjectPhase(deps.db, projectId, "export");
+          },
+        });
+        await aggregateWorkflowStatus(deps.db, platform.workflowId);
+        const exportRecord = (
+          await listExportRecordsForProject(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            limit: 1,
+          })
+        )[0];
+
+        return {
+          status: 200,
+          body: {
+            ...exportPreview,
+            exportRecord,
+            platform,
+          },
+        };
+      }
     },
 
     async listExportHistory(input: {
@@ -1833,6 +2697,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await hydrateActiveCreatorApp({
+        user: input.user,
+        creatorApp,
+        sqlState,
+        now: input.now,
+      });
       const state = await creatorApp.getState();
       const projectId = sqlState.projectId ?? state.project?.id;
       if (!projectId) {
@@ -1851,11 +2721,24 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         organizationId: actor.organizationId,
         projectId,
       });
+      const signedRecords = deps.storageRuntime
+        ? await Promise.all(
+            records.map((record) =>
+              buildSignedExportRecord(deps.db, {
+                record,
+                sessionToken: input.user.sessionToken,
+                runtime: deps.storageRuntime!,
+                now: input.now,
+                signedUrlExpiresInSeconds,
+              }),
+            ),
+          )
+        : records;
 
       return {
         status: 200,
         body: {
-          records,
+          records: signedRecords,
         },
       };
     },
@@ -1904,6 +2787,259 @@ async function releaseVideoRetryClaimIfSafe(
   await releaseShotVideoRetryClaim(db, input);
 }
 
+async function runIdempotentCreatorAction(
+  db: SqlDatabase,
+  input: {
+    sessionToken: string;
+    projectId: string;
+    capability: Capability;
+    operationName: OperationName;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+    now: Date;
+    execute: () => Promise<CreatorHttpResponse<Record<string, unknown>>>;
+  },
+): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+  let transactionOpen = false;
+  let startedRecord:
+    | Awaited<ReturnType<typeof beginOrReplayCommand>>["record"]
+    | null = null;
+
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+
+    const actor = await resolveActorContext(db, {
+      sessionToken: input.sessionToken,
+      projectId: input.projectId,
+      capability: input.capability,
+      now: input.now,
+    });
+    const store = new SqlIdempotencyRecordStore(db);
+    const started = await beginOrReplayCommand(store, {
+      organizationId: actor.organizationId,
+      operationName: input.operationName,
+      idempotencyKey: input.idempotencyKey,
+      requestHash: hashJson(input.request),
+    });
+
+    if (started.kind === "replayed") {
+      await db.query("COMMIT");
+      transactionOpen = false;
+      return {
+        status: responseStatusFromSnapshot(started.record.responseSnapshot),
+        body: responseBodyFromSnapshot(started.record.responseSnapshot),
+      };
+    }
+
+    if (started.kind === "processing") {
+      throw new IdempotencyProcessingError(started.record);
+    }
+
+    startedRecord = started.record;
+    await db.query("COMMIT");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+
+    if (error instanceof IdempotencyConflictError) {
+      return {
+        status: 409,
+        body: { error: error.code },
+      };
+    }
+
+    if (error instanceof IdempotencyProcessingError) {
+      return {
+        status: 202,
+        body: { error: error.code },
+      };
+    }
+
+    throw error;
+  }
+
+  if (!startedRecord) {
+    throw new Error("idempotency_started_record_missing");
+  }
+
+  const response = await input.execute();
+  const store = new SqlIdempotencyRecordStore(db);
+
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+    await store.update({
+      ...startedRecord,
+      responseResourceType: responseResourceTypeForResponse(
+        input.operationName,
+        response,
+      ),
+      responseResourceId: responseResourceIdForResponse(
+        input.operationName,
+        response,
+      ),
+      responseSnapshot: responseSnapshotForResponse(response),
+      status: idempotencyStatusForResponse(response),
+      updatedAt: input.now,
+    });
+
+    await db.query("COMMIT");
+    transactionOpen = false;
+    return response;
+  } catch (error) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+
+    throw error;
+  }
+}
+
+function hashJson(value: unknown) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeJson(value)))
+    .digest("hex");
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJson(item));
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalizeJson(item)]),
+    );
+  }
+
+  return value;
+}
+
+const idempotencyHttpStatusSnapshotKey = "__creatorHttpStatus";
+
+function idempotencyStatusForResponse(
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  return response.status >= 200 && response.status < 300 ? "succeeded" : "failed_terminal";
+}
+
+function responseSnapshotForResponse(
+  response: CreatorHttpResponse<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (response.status >= 200 && response.status < 300) {
+    return response.body;
+  }
+
+  return {
+    ...response.body,
+    [idempotencyHttpStatusSnapshotKey]: response.status,
+  };
+}
+
+function responseResourceTypeForResponse(
+  operationName: OperationName,
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  if (response.status < 200 || response.status >= 300) {
+    return undefined;
+  }
+
+  if (
+    operationName === operationNames.shotImageGenerate ||
+    operationName === operationNames.shotVideoGenerate
+  ) {
+    return "workflow";
+  }
+
+  if (operationName === operationNames.exportCreate) {
+    return "export_record";
+  }
+
+  return "calibration_session";
+}
+
+function responseStatusFromSnapshot(snapshot?: Record<string, unknown>) {
+  if (snapshot) {
+    const parsed = snapshot[idempotencyHttpStatusSnapshotKey];
+    if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 100 && parsed <= 599) {
+      return parsed;
+    }
+    if (typeof parsed === "string") {
+      const parsedNumber = Number(parsed);
+      if (Number.isInteger(parsedNumber) && parsedNumber >= 100 && parsedNumber <= 599) {
+        return parsedNumber;
+      }
+    }
+  }
+
+  return 200;
+}
+
+function responseBodyFromSnapshot(
+  snapshot?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!snapshot) {
+    return {};
+  }
+
+  if (Object.hasOwn(snapshot, idempotencyHttpStatusSnapshotKey)) {
+    const { [idempotencyHttpStatusSnapshotKey]: _status, ...body } = snapshot;
+    return body;
+  }
+
+  return snapshot;
+}
+
+function responseResourceIdForResponse(
+  operationName: OperationName,
+  response: CreatorHttpResponse<Record<string, unknown>>,
+) {
+  if (response.status < 200 || response.status >= 300) {
+    return undefined;
+  }
+
+  return responseResourceIdFromBody(operationName, response.body);
+}
+
+function responseResourceIdFromBody(
+  operationName: OperationName,
+  body: Record<string, unknown>,
+) {
+  if (
+    operationName === operationNames.shotImageGenerate ||
+    operationName === operationNames.shotVideoGenerate
+  ) {
+    const platform = body.platform as { workflowId?: string } | undefined;
+    if (!platform?.workflowId) {
+      throw new Error("idempotency_response_resource_missing:workflow");
+    }
+    return platform.workflowId;
+  }
+
+  if (operationName === operationNames.exportCreate) {
+    const exportRecord = body.exportRecord as { id?: string } | undefined;
+    if (!exportRecord?.id) {
+      throw new Error("idempotency_response_resource_missing:export_record");
+    }
+    return exportRecord.id;
+  }
+
+  const calibration = body.calibration as { id?: string } | undefined;
+  if (!calibration?.id) {
+    throw new Error("idempotency_response_resource_missing:calibration_session");
+  }
+  return calibration.id;
+}
+
 async function appendCalibrationAuditEvent(
   db: SqlDatabase,
   input: {
@@ -1949,6 +3085,7 @@ async function listProjectsForWorkspace(
     id: string;
     name: string;
     cover_image_url: string | null;
+    cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
     phase: string;
@@ -1961,6 +3098,7 @@ async function listProjectsForWorkspace(
         id,
         name,
         cover_image_url,
+        cover_storage_object_id,
         aspect_ratio,
         resolution,
         phase,
@@ -1979,12 +3117,53 @@ async function listProjectsForWorkspace(
     id: project.id,
     name: project.name,
     coverImageUrl: project.cover_image_url,
+    coverStorageObjectId: project.cover_storage_object_id,
     aspectRatio: project.aspect_ratio,
     resolution: project.resolution,
     phase: project.phase,
     createdByUserId: project.created_by_user_id,
     createdAt: new Date(project.created_at),
     updatedAt: new Date(project.updated_at),
+  }));
+}
+
+async function listProjectMembersForWorkspace(
+  db: SqlDatabase,
+  input: { organizationId: string; workspaceId: string },
+) {
+  const result = await db.query<{
+    membership_id: string;
+    user_id: string;
+    phone_e164: string;
+    role: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `
+      SELECT
+        m.id AS membership_id,
+        m.user_id,
+        u.phone_e164,
+        m.role,
+        m.status,
+        m.created_at
+      FROM memberships m
+      JOIN users u
+        ON u.id = m.user_id
+      WHERE m.organization_id = $1
+        AND m.workspace_id = $2
+      ORDER BY m.created_at ASC, m.id ASC
+    `,
+    [input.organizationId, input.workspaceId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.membership_id,
+    userId: row.user_id,
+    phone: row.phone_e164,
+    role: row.role,
+    status: row.status,
+    joinedAt: new Date(row.created_at),
   }));
 }
 
@@ -1996,6 +3175,7 @@ async function updateProjectRecord(
     name?: string | null;
     phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
     coverImageUrl?: string | null;
+    coverStorageObjectId?: string | null;
     now: Date;
   },
 ) {
@@ -2004,6 +3184,7 @@ async function updateProjectRecord(
       id: string;
       name: string;
       cover_image_url: string | null;
+      cover_storage_object_id: string | null;
       aspect_ratio: string;
       resolution: string;
       phase: "script_input" | "asset_review" | "shot_generation" | "export";
@@ -2035,7 +3216,8 @@ async function updateProjectRecord(
         SET name = $3,
             phase = $4,
             cover_image_url = $5,
-            updated_at = $6
+            cover_storage_object_id = $6,
+            updated_at = $7
         WHERE organization_id = $1
           AND id = $2
         RETURNING *
@@ -2046,6 +3228,9 @@ async function updateProjectRecord(
         name,
         input.phase ?? current.phase,
         input.coverImageUrl === undefined ? current.cover_image_url : input.coverImageUrl,
+        input.coverStorageObjectId === undefined
+          ? current.cover_storage_object_id
+          : input.coverStorageObjectId,
         input.now,
       ],
     )
@@ -2055,6 +3240,7 @@ async function updateProjectRecord(
     id: row.id,
     name: row.name,
     coverImageUrl: row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
     aspectRatio: row.aspect_ratio,
     resolution: row.resolution,
     phase: row.phase,
@@ -2064,10 +3250,489 @@ async function updateProjectRecord(
   };
 }
 
+async function findProjectAssetById(
+  db: SqlDatabase,
+  input: { assetId: string },
+) {
+  const result = await db.query<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+    asset_type: string;
+    asset_key: string;
+  }>(
+    `
+      SELECT id, organization_id, project_id, asset_type, asset_key
+      FROM assets
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [input.assetId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    assetType: row.asset_type,
+    assetKey: row.asset_key,
+  };
+}
+
+async function updateProjectAssetRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    assetId: string;
+    name?: string | null;
+    description?: string | null;
+    isMain?: boolean | null;
+    now: Date;
+  },
+) {
+  const latestVersion = (
+    await db.query<{
+      id: string;
+      metadata_json: Record<string, unknown> | null;
+    }>(
+      `
+        SELECT id, metadata_json
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+        ORDER BY version_number DESC
+        LIMIT 1
+      `,
+      [input.organizationId, input.assetId],
+    )
+  ).rows[0];
+  if (!latestVersion) {
+    return null;
+  }
+
+  const metadata = { ...(latestVersion.metadata_json ?? {}) } as Record<string, unknown>;
+  if (input.name !== undefined) {
+    const nextName = input.name?.trim();
+    if (!nextName) {
+      throw new Error("asset_name_required");
+    }
+    metadata.label = nextName;
+  }
+  if (input.description !== undefined) {
+    metadata.description = input.description?.trim() || null;
+  }
+  if (input.isMain !== undefined && input.isMain !== null) {
+    metadata.isMain = Boolean(input.isMain);
+  }
+
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, latestVersion.id, metadata],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId, input.now],
+  );
+
+  return latestVersion.id;
+}
+
+async function deleteShotMediaVersionRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    shotId: string;
+    kind: "image" | "video";
+    assetVersionId: string;
+    now: Date;
+  },
+) {
+  const assetType = input.kind === "video" ? "shot_video" : "shot_image";
+  let versionRow = (
+    await db.query<{
+      asset_id: string;
+      version_id: string;
+      storage_object_id: string | null;
+      storage_object_key: string | null;
+    }>(
+      `
+        SELECT v.asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
+        FROM asset_versions v
+        JOIN assets a
+          ON a.organization_id = v.organization_id
+         AND a.id = v.asset_id
+        WHERE v.organization_id = $1
+          AND a.project_id = $2
+          AND a.asset_key = $3
+          AND a.asset_type = $4
+          AND v.id = $5
+        LIMIT 1
+      `,
+      [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+    )
+  ).rows[0];
+  if (!versionRow) {
+    const assetVersionRows = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.organization_id = $1
+            AND a.project_id = $2
+            AND a.asset_key = $3
+            AND a.asset_type = $4
+            AND a.id = $5
+          ORDER BY v.version_number DESC, v.created_at DESC
+          LIMIT 2
+        `,
+        [
+          input.organizationId,
+          input.projectId,
+          input.shotId,
+          assetType,
+          input.assetVersionId,
+        ],
+      )
+    ).rows;
+    if (assetVersionRows.length === 1) {
+      versionRow = assetVersionRows[0];
+    }
+  }
+  if (!versionRow) {
+    const currentVersionColumn =
+      input.kind === "video" ? "current_video_asset_version_id" : "current_image_asset_version_id";
+    versionRow = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
+          FROM shots s
+          JOIN asset_versions v
+            ON v.organization_id = s.organization_id
+           AND v.id = s.${currentVersionColumn}
+          JOIN assets a
+            ON a.organization_id = v.organization_id
+           AND a.id = v.asset_id
+          WHERE s.organization_id = $1
+            AND s.project_id = $2
+            AND s.id = $3
+            AND a.project_id = $2
+            AND a.asset_type = $4
+            AND (
+              v.id = $5
+              OR a.id = $5
+              OR s.${currentVersionColumn} = $5
+            )
+          LIMIT 1
+        `,
+        [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+      )
+    ).rows[0];
+  }
+  if (!versionRow) {
+    const candidateRows = (
+      await db.query<{
+        asset_id: string;
+        version_id: string;
+        storage_object_id: string | null;
+        storage_object_key: string | null;
+      }>(
+        `
+          SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.organization_id = $1
+            AND a.project_id = $2
+            AND a.asset_key = $3
+            AND a.asset_type = $4
+          ORDER BY v.version_number DESC, v.created_at DESC
+          LIMIT 2
+        `,
+        [input.organizationId, input.projectId, input.shotId, assetType],
+      )
+    ).rows;
+    if (candidateRows.length === 1) {
+      versionRow = candidateRows[0];
+    }
+  }
+  if (!versionRow) {
+    return false;
+  }
+
+  const resolvedVersionId = versionRow.version_id;
+
+  const remainingVersions = (
+    await db.query<{ id: string }>(
+      `
+        SELECT id
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+          AND id <> $3
+        ORDER BY version_number DESC, created_at DESC
+      `,
+      [input.organizationId, versionRow.asset_id, resolvedVersionId],
+    )
+  ).rows;
+  const nextVersionId = remainingVersions[0]?.id ?? null;
+
+  if (input.kind === "video") {
+    await db.query(
+      `
+        UPDATE shots
+        SET current_video_asset_version_id =
+              CASE
+                WHEN current_video_asset_version_id = $4 THEN $5
+                ELSE current_video_asset_version_id
+              END,
+            video_status =
+              CASE
+                WHEN current_video_asset_version_id = $4 AND $5 IS NULL THEN 'not_ready'
+                ELSE video_status
+              END,
+            updated_at = $6
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+      `,
+      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+    );
+  } else {
+    await db.query(
+      `
+        UPDATE shots
+        SET current_image_asset_version_id =
+              CASE
+                WHEN current_image_asset_version_id = $4 THEN $5
+                ELSE current_image_asset_version_id
+              END,
+            image_status =
+              CASE
+                WHEN current_image_asset_version_id = $4 AND $5 IS NULL THEN 'ready'
+                ELSE image_status
+              END,
+            updated_at = $6
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+      `,
+      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+    );
+  }
+
+  await db.query(
+    `
+      DELETE FROM asset_versions
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, resolvedVersionId],
+  );
+
+  if (!remainingVersions.length) {
+    await db.query(
+      `
+        DELETE FROM assets
+        WHERE organization_id = $1
+          AND id = $2
+      `,
+      [input.organizationId, versionRow.asset_id],
+    );
+  }
+
+  let orphanStorageObjectId = versionRow.storage_object_id;
+  if (!orphanStorageObjectId && versionRow.storage_object_key) {
+    orphanStorageObjectId = (
+      await db.query<{ id: string }>(
+        `
+          SELECT id
+          FROM storage_objects
+          WHERE organization_id = $1
+            AND object_key = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [input.organizationId, versionRow.storage_object_key],
+      )
+    ).rows[0]?.id ?? null;
+  }
+
+  const referencedStorageObject = orphanStorageObjectId
+    ? (
+        await db.query<{ count: number | string }>(
+          `
+            SELECT COUNT(*) AS count
+            FROM asset_versions
+            WHERE organization_id = $1
+              AND storage_object_id = $2
+          `,
+          [input.organizationId, orphanStorageObjectId],
+        )
+      ).rows[0]
+    : null;
+
+  return {
+    deleted: true,
+    orphanStorageObjectId:
+      orphanStorageObjectId &&
+      Number(referencedStorageObject?.count ?? 0) === 0
+        ? orphanStorageObjectId
+        : null,
+  };
+}
+
+async function deleteProjectAssetRecord(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    assetId: string;
+  },
+) {
+  const existing = await findProjectAssetById(db, { assetId: input.assetId });
+  if (!existing || existing.organizationId !== input.organizationId) {
+    return false;
+  }
+  const versionRows = (
+    await db.query<{ storage_object_id: string | null }>(
+      `
+        SELECT storage_object_id
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND asset_id = $2
+      `,
+      [input.organizationId, input.assetId],
+    )
+  ).rows;
+  await db.query(
+    `
+      DELETE FROM shot_reference_assets
+      WHERE organization_id = $1
+        AND asset_id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  await db.query(
+    `
+      DELETE FROM asset_versions
+      WHERE organization_id = $1
+        AND asset_id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  await db.query(
+    `
+      DELETE FROM assets
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId],
+  );
+  const orphanStorageObjectIds = [];
+  for (const row of versionRows) {
+    if (!row.storage_object_id) {
+      continue;
+    }
+    const remaining = await db.query<{ count: number | string }>(
+      `
+        SELECT COUNT(*) AS count
+        FROM asset_versions
+        WHERE organization_id = $1
+          AND storage_object_id = $2
+      `,
+      [input.organizationId, row.storage_object_id],
+    );
+    if (Number(remaining.rows[0]?.count ?? 0) === 0) {
+      orphanStorageObjectIds.push(row.storage_object_id);
+    }
+  }
+  return { deleted: true, orphanStorageObjectIds };
+}
+
+async function buildProjectStats(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    detail: Awaited<ReturnType<typeof buildProjectDetail>>;
+    now: Date;
+  },
+) {
+  const membersResult = await db.query<{ count: number | string }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM memberships m
+      JOIN projects p
+        ON p.organization_id = m.organization_id
+       AND p.workspace_id = m.workspace_id
+      WHERE p.organization_id = $1
+        AND p.id = $2
+    `,
+    [input.organizationId, input.projectId],
+  );
+
+  const stats = {
+    memberCount: Number(membersResult.rows[0]?.count ?? 0),
+    episodeCount: input.detail.episodes.length,
+    shotCount: input.detail.shots.length,
+    assetCount:
+      input.detail.assetsByType.character.length +
+      input.detail.assetsByType.scene.length +
+      input.detail.assetsByType.prop.length +
+      input.detail.assetsByType.other.image.length +
+      input.detail.assetsByType.other.video.length,
+    exportCount: input.detail.exportHistory.length,
+    generatedImageCount: input.detail.shots.filter((shot) => shot.imageStatus === "ready").length,
+    generatedVideoCount: input.detail.shots.filter((shot) => shot.videoStatus === "ready").length,
+    lastActivityAt:
+      input.detail.project?.updatedAt ??
+      input.detail.exportHistory[0]?.createdAt ??
+      input.now,
+  };
+
+  return stats;
+}
+
 async function deleteProjectRecord(
   db: SqlDatabase,
   input: { organizationId: string; projectId: string },
 ) {
+  await db.query(
+    `
+      UPDATE projects
+      SET cover_storage_object_id = NULL
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.projectId],
+  );
   await db.query("DELETE FROM provider_requests WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -2093,10 +3758,10 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
-  await db.query("DELETE FROM storage_objects WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query(
+    "DELETE FROM storage_upload_sessions WHERE organization_id = $1 AND project_id = $2",
+    [input.organizationId, input.projectId],
+  );
   await db.query(
     `
       DELETE FROM asset_versions
@@ -2108,6 +3773,10 @@ async function deleteProjectRecord(
     [input.organizationId, input.projectId],
   );
   await db.query("DELETE FROM assets WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
+  await db.query("DELETE FROM storage_objects WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
   ]);
@@ -2156,6 +3825,9 @@ async function buildProjectDetail(
   input: {
     organizationId: string;
     projectId: string;
+    sessionToken: string;
+    runtime?: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
     now: Date;
   },
 ) {
@@ -2179,6 +3851,14 @@ async function buildProjectDetail(
     organizationId: input.organizationId,
     projectId: input.projectId,
   });
+  const assetVersions = await listAssetVersionsForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
+  const references = await listShotReferencesForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
   const shots = await listShotsForProject(db, {
     organizationId: input.organizationId,
     projectId: input.projectId,
@@ -2193,6 +3873,86 @@ async function buildProjectDetail(
   });
 
   const assetsByType = groupAssetsByUiType(assets);
+  const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
+  const referencesByShotId = groupReferencesByShotId(references);
+  const runtime = input.runtime;
+  const signedAssets = runtime
+    ? await Promise.all(
+        assets.map(async (asset) => ({
+          ...asset,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+                  storageObjectId: asset.latestVersion?.storageObjectId ?? null,
+                  storageObjectKey: asset.latestVersion?.storageObjectKey ?? null,
+                  metadata: asset.latestVersion?.metadata ?? null,
+                  now: input.now,
+                  runtime,
+                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+                }),
+          latestVersion: asset.latestVersion
+            ? {
+                ...asset.latestVersion,
+                previewUrl: await resolveStorageBackedPreviewUrl(db, {
+                  sessionToken: input.sessionToken,
+                  storageObjectId: asset.latestVersion.storageObjectId ?? null,
+                  storageObjectKey: asset.latestVersion.storageObjectKey ?? null,
+                  metadata: asset.latestVersion.metadata ?? null,
+                  now: input.now,
+                  runtime,
+                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+                }),
+              }
+            : null,
+        })),
+      )
+    : assets;
+  const signedAssetVersions = runtime
+    ? await Promise.all(
+        assetVersions.map(async (version) => ({
+          ...version,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+            storageObjectId: version.storageObjectId ?? null,
+            storageObjectKey: version.storageObjectKey,
+            metadata: version.metadata ?? null,
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        })),
+      )
+    : assetVersions;
+  const signedReferences = runtime
+    ? await Promise.all(
+        references.map(async (reference) => ({
+          ...reference,
+          previewUrl: await resolveStorageBackedPreviewUrl(db, {
+            sessionToken: input.sessionToken,
+            storageObjectId: reference.storageObjectId ?? null,
+            storageObjectKey: null,
+            metadata: { previewUrl: reference.previewUrl ?? null },
+            now: input.now,
+            runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        })),
+      )
+    : references;
+  const signedReferencesByShotId = groupReferencesByShotId(signedReferences);
+  const signedVersionsByShotId = groupShotAssetVersionsByShotId(signedAssetVersions);
+  const signedExportHistory = runtime
+    ? await Promise.all(
+        exportHistory.map((record) =>
+          buildSignedExportRecord(db, {
+            record,
+            sessionToken: input.sessionToken,
+            runtime,
+            now: input.now,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        ),
+      )
+    : exportHistory;
   const projectEpisodes = episodes.length
     ? episodes
     : shots.length
@@ -2210,12 +3970,21 @@ async function buildProjectDetail(
           },
         ]
       : [];
+  const signedProject = runtime
+    ? await hydrateProjectCoverUrl(db, {
+        project: projectBundle.project,
+        sessionToken: input.sessionToken,
+        runtime,
+        now: input.now,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      })
+    : projectBundle.project;
 
   return {
-    project: projectBundle.project,
+    project: signedProject,
     script: projectBundle.script,
-    assetSummary: buildAssetSummary(assetsByType),
-    assetsByType,
+    assetSummary: buildAssetSummary(groupAssetsByUiType(signedAssets)),
+    assetsByType: groupAssetsByUiType(signedAssets),
     episodes: projectEpisodes.map((episode) => {
       const episodeShots = shots.filter((shot) =>
         episode.id === "episode-primary" ? true : shot.episodeId === episode.id,
@@ -2228,21 +3997,27 @@ async function buildProjectDetail(
         createdAt: episode.createdAt,
         updatedAt: episode.updatedAt,
         storyboardCount: episodeShots.length,
-        previewUrl: findEpisodePreviewUrl(episodeShots, assets),
+        previewUrl: findEpisodePreviewUrl(episodeShots, signedAssets),
       };
     }),
     shots: shots.map((shot) => ({
       id: shot.id,
       episodeId: shot.episodeId,
       title: shot.title,
+      description: shot.description,
       sortOrder: shot.sortOrder,
       contentRevision: shot.contentRevision,
       imageStatus: shot.imageStatus,
       videoStatus: shot.videoStatus,
       currentImageAssetVersionId: shot.currentImageAssetVersionId,
       currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
+      previewImageUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentImageAssetVersionId),
+      previewVideoUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentVideoAssetVersionId),
+      imageVersions: signedVersionsByShotId.get(shot.id)?.image ?? [],
+      videoVersions: signedVersionsByShotId.get(shot.id)?.video ?? [],
+      references: signedReferencesByShotId.get(shot.id) ?? [],
     })),
-    exportHistory,
+    exportHistory: signedExportHistory,
   };
 }
 
@@ -2258,6 +4033,7 @@ async function listAssetsForProject(
     updated_at: Date | string;
     version_id: string | null;
     version_number: number | string | null;
+    storage_object_id: string | null;
     storage_object_key: string | null;
     metadata_json: Record<string, unknown> | null;
     version_created_at: Date | string | null;
@@ -2271,6 +4047,7 @@ async function listAssetsForProject(
         a.updated_at,
         v.id AS version_id,
         v.version_number,
+        v.storage_object_id,
         v.storage_object_key,
         v.metadata_json,
         v.created_at AS version_created_at
@@ -2302,6 +4079,7 @@ async function listAssetsForProject(
       ? {
           id: row.version_id,
           versionNumber: Number(row.version_number),
+          storageObjectId: row.storage_object_id,
           storageObjectKey: row.storage_object_key,
           metadata: row.metadata_json,
           previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
@@ -2312,6 +4090,65 @@ async function listAssetsForProject(
 }
 
 type ListedAsset = Awaited<ReturnType<typeof listAssetsForProject>>[number];
+
+async function listAssetVersionsForProject(
+  db: SqlDatabase,
+  input: { organizationId: string; projectId: string },
+) {
+  const result = await db.query<{
+    asset_id: string;
+    asset_type: string;
+    asset_key: string;
+    version_id: string;
+    version_number: number | string;
+    storage_object_id: string | null;
+    storage_object_key: string;
+    metadata_json: Record<string, unknown> | null;
+    source_task_id: string | null;
+    source_attempt_id: string | null;
+    created_at: Date | string;
+  }>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_type,
+        a.asset_key,
+        v.id AS version_id,
+        v.version_number,
+        v.storage_object_id,
+        v.storage_object_key,
+        v.metadata_json,
+        v.source_task_id,
+        v.source_attempt_id,
+        v.created_at
+      FROM assets a
+      JOIN asset_versions v
+        ON v.organization_id = a.organization_id
+       AND v.asset_id = a.id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+      ORDER BY a.asset_key ASC, v.version_number DESC
+    `,
+    [input.organizationId, input.projectId],
+  );
+
+  return result.rows.map((row) => ({
+    assetId: row.asset_id,
+    assetType: row.asset_type,
+    assetKey: row.asset_key,
+    id: row.version_id,
+    versionNumber: Number(row.version_number),
+    storageObjectId: row.storage_object_id,
+    storageObjectKey: row.storage_object_key,
+    metadata: row.metadata_json ?? {},
+    sourceTaskId: row.source_task_id,
+    sourceAttemptId: row.source_attempt_id,
+    previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json ?? {}),
+    createdAt: new Date(row.created_at),
+  }));
+}
+
+type ListedAssetVersion = Awaited<ReturnType<typeof listAssetVersionsForProject>>[number];
 
 function createEmptyAssetsByType() {
   return {
@@ -2368,6 +4205,48 @@ function summarizeAssets(assets: ListedAsset[]) {
   };
 }
 
+function groupShotAssetVersionsByShotId(versions: ListedAssetVersion[]) {
+  const grouped = new Map<
+    string,
+    { image: ListedAssetVersion[]; video: ListedAssetVersion[] }
+  >();
+  for (const version of versions) {
+    if (version.assetType !== "shot_image" && version.assetType !== "shot_video") {
+      continue;
+    }
+    const entry = grouped.get(version.assetKey) ?? { image: [], video: [] };
+    if (version.assetType === "shot_video") {
+      entry.video.push(version);
+    } else {
+      entry.image.push(version);
+    }
+    grouped.set(version.assetKey, entry);
+  }
+  return grouped;
+}
+
+function groupReferencesByShotId(
+  references: Awaited<ReturnType<typeof listShotReferencesForProject>>,
+) {
+  const grouped = new Map<string, typeof references>();
+  for (const reference of references) {
+    const items = grouped.get(reference.shotId) ?? [];
+    items.push(reference);
+    grouped.set(reference.shotId, items);
+  }
+  return grouped;
+}
+
+function findVersionPreviewUrl(
+  versions: ListedAssetVersion[],
+  assetVersionId: string | null,
+) {
+  if (!assetVersionId) {
+    return null;
+  }
+  return versions.find((version) => version.id === assetVersionId)?.previewUrl ?? null;
+}
+
 function findEpisodePreviewUrl(shots: ShotRecord[], assets: ListedAsset[]) {
   const imageVersionIds = new Set(
     shots.map((shot) => shot.currentImageAssetVersionId).filter(Boolean),
@@ -2396,6 +4275,95 @@ function getAssetPreviewUrl(
   return null;
 }
 
+async function resolveStorageBackedPreviewUrl(
+  db: SqlDatabase,
+  input: {
+    sessionToken: string;
+    storageObjectId: string | null;
+    storageObjectKey: string | null;
+    metadata: Record<string, unknown> | null;
+    now: Date;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  if (input.storageObjectId) {
+    try {
+      const urls = await buildSignedObjectUrls(db, {
+        sessionToken: input.sessionToken,
+        storageObjectId: input.storageObjectId,
+        adapter: input.runtime.adapter,
+        now: input.now,
+        expiresInSeconds: input.signedUrlExpiresInSeconds,
+      });
+      return urls.previewUrl;
+    } catch {
+      return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+    }
+  }
+  return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+}
+
+async function hydrateProjectCoverUrl(
+  db: SqlDatabase,
+  input: {
+    project: CreatorDevStateSnapshot["project"];
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    now: Date;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  if (!input.project?.coverStorageObjectId) {
+    return input.project;
+  }
+  try {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.project.coverStorageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    return {
+      ...input.project,
+      coverImageUrl: urls.previewUrl,
+    };
+  } catch {
+    return input.project;
+  }
+}
+
+async function buildSignedExportRecord(
+  db: SqlDatabase,
+  input: {
+    record: Awaited<ReturnType<typeof listExportRecordsForProject>>[number];
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    now: Date;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  try {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.record.storageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    return {
+      ...input.record,
+      signedUrl: urls.downloadUrl,
+      sourceUrl: urls.sourceUrl,
+      downloadUrl: urls.downloadUrl,
+      expiresAt: urls.expiresAt,
+    };
+  } catch {
+    return input.record;
+  }
+}
+
 async function listAssetVersions(
   db: SqlDatabase,
   input: { organizationId: string; assetId: string },
@@ -2403,6 +4371,7 @@ async function listAssetVersions(
   const result = await db.query<{
     id: string;
     version_number: number | string;
+    storage_object_id: string | null;
     storage_object_key: string;
     metadata_json: Record<string, unknown>;
     source_task_id: string | null;
@@ -2413,6 +4382,7 @@ async function listAssetVersions(
       SELECT
         id,
         version_number,
+        storage_object_id,
         storage_object_key,
         metadata_json,
         source_task_id,
@@ -2429,6 +4399,7 @@ async function listAssetVersions(
   return result.rows.map((row) => ({
     id: row.id,
     versionNumber: Number(row.version_number),
+    storageObjectId: row.storage_object_id,
     storageObjectKey: row.storage_object_key,
     metadata: row.metadata_json,
     sourceTaskId: row.source_task_id,
@@ -2506,6 +4477,42 @@ function filterRequestedShots(
   return shots.filter((shot) => shot.id === shotId);
 }
 
+function createFixedImageGenerationResults(
+  promptOverride?: string | null,
+  selectionContext?: Record<string, unknown> | null,
+) {
+  const prompt = promptOverride?.trim() || "Fixed local image generation result.";
+  return [
+    {
+      id: "fixed-character-sheet-1",
+      kind: "image",
+      label: "图片",
+      prompt,
+      selectionContext,
+      url:
+        "data:image/svg+xml;charset=UTF-8," +
+        encodeURIComponent(`
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 320">
+            <rect width="360" height="320" fill="#f6f5f0"/>
+            <path d="M22 42c20-24 57-24 80 4 18 22 19 52 3 81-17 31-42 53-72 71-18-49-27-102-11-156Z" fill="#17191e"/>
+            <path d="M88 42c44-18 84 12 78 58-5 38-39 68-75 78-15-48-17-92-3-136Z" fill="#22262d"/>
+            <circle cx="72" cy="94" r="33" fill="#e9c2ab"/>
+            <path d="M39 88c14-36 56-51 89-31-3 30-24 52-58 66-9-8-19-18-31-35Z" fill="#15171c"/>
+            <path d="M143 65c28-33 78-31 104 2 20 26 22 61 4 96-19 38-50 62-89 74-18-60-28-123-19-172Z" fill="#191b20"/>
+            <circle cx="195" cy="125" r="34" fill="#e3b69e"/>
+            <path d="M166 112c12-42 63-61 97-32-2 32-24 57-62 75-10-9-22-23-35-43Z" fill="#111317"/>
+            <path d="M170 160h58l14 108H154l16-108Z" fill="#20242b"/>
+            <path d="M163 184h74" stroke="#868a94" stroke-width="8" stroke-linecap="round"/>
+            <path d="M264 68c25-30 71-28 95 3v249h-95V68Z" fill="#17191f"/>
+            <circle cx="311" cy="126" r="32" fill="#e4b69e"/>
+            <path d="M283 112c11-39 57-56 89-29-5 31-27 54-61 70-9-9-18-22-28-41Z" fill="#111318"/>
+            <path d="M286 160h54l13 112h-78l11-112Z" fill="#252a31"/>
+          </svg>
+        `),
+    },
+  ];
+}
+
 async function updateProjectPhase(
   db: SqlDatabase,
   projectId: string,
@@ -2520,6 +4527,113 @@ async function updateProjectPhase(
     `,
     [projectId, phase],
   );
+}
+
+async function updateShotMediaPointer(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    shotId: string;
+    kind: "image" | "video";
+    assetVersionId: string;
+    now: Date;
+  },
+): Promise<ShotRecord | null> {
+  const row = (
+    await db.query<{
+      id: string;
+      organization_id: string;
+      project_id: string;
+      episode_id: string | null;
+      title: string;
+      description: string;
+      sort_order: number | string;
+      content_revision: number;
+      content_status: ShotRecord["contentStatus"];
+      image_status: ShotRecord["imageStatus"];
+      video_status: ShotRecord["videoStatus"];
+      current_image_asset_version_id: string | null;
+      active_image_task_id: string | null;
+      active_image_revision: number | null;
+      current_video_asset_version_id: string | null;
+      active_video_task_id: string | null;
+      active_video_image_asset_version_id: string | null;
+      created_by_user_id: string | null;
+      created_at: Date | string;
+      updated_at: Date | string;
+    }>(
+      input.kind === "image"
+        ? `
+          UPDATE shots
+          SET current_image_asset_version_id = $4,
+              image_status = 'completed',
+              video_status = 'ready',
+              current_video_asset_version_id = NULL,
+              active_image_task_id = NULL,
+              active_image_revision = NULL,
+              active_video_task_id = NULL,
+              active_video_image_asset_version_id = NULL,
+              updated_at = $5
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+          RETURNING *
+        `
+        : `
+          UPDATE shots
+          SET current_video_asset_version_id = $4,
+              video_status = 'completed',
+              active_video_task_id = NULL,
+              active_video_image_asset_version_id = NULL,
+              updated_at = $5
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+          RETURNING *
+        `,
+      [
+        input.organizationId,
+        input.projectId,
+        input.shotId,
+        input.assetVersionId,
+        input.now,
+      ],
+    )
+  ).rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    episodeId: row.episode_id,
+    title: row.title,
+    description: row.description ?? "",
+    sortOrder: Number(row.sort_order),
+    contentRevision: row.content_revision,
+    contentStatus: row.content_status,
+    imageStatus: row.image_status,
+    videoStatus: row.video_status,
+    currentImageAssetVersionId: row.current_image_asset_version_id,
+    currentVideoAssetVersionId: row.current_video_asset_version_id,
+    activeImageTaskId: row.active_image_task_id,
+    activeImageRevision: row.active_image_revision,
+    activeVideoTaskId: row.active_video_task_id,
+    activeVideoImageAssetVersionId: row.active_video_image_asset_version_id,
+    completedImageAssetVersionIds: row.current_image_asset_version_id
+      ? [row.current_image_asset_version_id]
+      : [],
+    completedVideoAssetVersionIds: row.current_video_asset_version_id
+      ? [row.current_video_asset_version_id]
+      : [],
+    createdByUserId: row.created_by_user_id ?? "",
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
 }
 
 function calibrationDecisionEventType(decisionType: string): string {
@@ -2603,6 +4717,7 @@ async function hydrateStateFromSql(
           id: shot.id,
           episodeId: shot.episodeId,
           title: shot.title,
+          description: shot.description,
           contentRevision: shot.contentRevision,
           imageStatus: shot.imageStatus,
           videoStatus: shot.videoStatus,
@@ -2632,6 +4747,7 @@ async function loadProjectBundleFromSql(
     workspace_id: string;
     name: string;
     cover_image_url: string | null;
+    cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
     phase: "script_input" | "asset_review" | "shot_generation" | "export";
@@ -2681,6 +4797,7 @@ async function loadProjectBundleFromSql(
       workspaceId: project.workspace_id,
       name: project.name,
       coverImageUrl: project.cover_image_url,
+      coverStorageObjectId: project.cover_storage_object_id,
       aspectRatio: project.aspect_ratio,
       resolution: project.resolution,
       phase: project.phase,

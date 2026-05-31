@@ -37,6 +37,7 @@ interface CreatorShotView {
   id: string;
   episodeId: string | null;
   title: string;
+  description: string;
   contentRevision: number;
   imageStatus: string;
   videoStatus: string;
@@ -113,6 +114,20 @@ export class CreatorDevApp {
     }
   }
 
+  async seedState(input: {
+    bundle: ProjectBundle;
+    assetCandidates: AssetReviewState | null;
+    calibration: CalibrationSessionRecord | null;
+    shots: ShotRecord[];
+    exportPreview?: ExportManifest | null;
+  }) {
+    this.activeBundle = input.bundle;
+    this.activeAssetReview = input.assetCandidates;
+    this.activeCalibration = input.calibration;
+    this.exportPreview = input.exportPreview ?? null;
+    await this.seedShotRecords(input.shots);
+  }
+
   async parseScript(input?: { episodeIdForSourceId?: (sourceEpisodeId: string) => string }) {
     const bundle = this.requireBundle();
     const parsed = createDeterministicMockParseResult(bundle.script.inputText);
@@ -124,6 +139,7 @@ export class CreatorDevApp {
         projectId: bundle.project.id,
         episodeId: input?.episodeIdForSourceId?.(shot.episodeId) ?? shot.episodeId,
         title: `Shot ${String(shot.sequence).padStart(3, "0")}`,
+        description: `Shot ${String(shot.sequence).padStart(3, "0")}`,
         createdByUserId: bundle.project.createdByUserId,
       });
       this.shotIds.push(created.id);
@@ -217,13 +233,14 @@ export class CreatorDevApp {
     };
   }
 
-  async createShot(input: { title?: string | null; episodeId?: string | null }) {
+  async createShot(input: { title?: string | null; description?: string | null; episodeId?: string | null }) {
     const bundle = this.requireBundle();
     const created = await createShotDraft(this.shotStore, {
       organizationId: bundle.project.organizationId,
       projectId: bundle.project.id,
       episodeId: input.episodeId ?? null,
       title: input.title?.trim() || `Shot ${String(this.shotIds.length + 1).padStart(3, "0")}`,
+      description: input.description,
       createdByUserId: bundle.project.createdByUserId,
     });
     const sorted = await this.shotStore.saveShot({
@@ -235,18 +252,36 @@ export class CreatorDevApp {
     return { shot: sorted, shots: await this.listShotRecords() };
   }
 
-  async updateShot(input: { shotId: string; title?: string | null }) {
+  async updateShot(input: {
+    shotId: string;
+    title?: string | null;
+    description?: string | null;
+    currentImageAssetVersionId?: string | null;
+    currentVideoAssetVersionId?: string | null;
+  }) {
     const shot = await this.shotStore.findShot(input.shotId);
     if (!shot || !this.shotIds.includes(input.shotId)) {
       throw new Error("creator_shot_missing");
     }
+    const nextImageVersionId =
+      input.currentImageAssetVersionId === undefined
+        ? shot.currentImageAssetVersionId
+        : input.currentImageAssetVersionId;
+    const nextVideoVersionId =
+      input.currentVideoAssetVersionId === undefined
+        ? shot.currentVideoAssetVersionId
+        : input.currentVideoAssetVersionId;
     const updated = await this.shotStore.saveShot({
       ...shot,
       title: input.title?.trim() || shot.title,
+      description:
+        input.description === undefined ? shot.description : (input.description?.trim() ?? ""),
+      currentImageAssetVersionId: nextImageVersionId,
+      currentVideoAssetVersionId: nextVideoVersionId,
       contentRevision: shot.contentRevision + 1,
       contentStatus: "ready",
-      imageStatus: shot.currentImageAssetVersionId ? "stale" : shot.imageStatus,
-      videoStatus: shot.currentVideoAssetVersionId ? "stale" : shot.videoStatus,
+      imageStatus: nextImageVersionId ? "stale" : "ready",
+      videoStatus: nextVideoVersionId ? "stale" : "not_ready",
       activeImageTaskId: null,
       activeImageRevision: null,
       activeVideoTaskId: null,
@@ -472,6 +507,7 @@ export class CreatorDevApp {
       id: shot.id,
       episodeId: shot.episodeId,
       title: shot.title,
+      description: shot.description,
       contentRevision: shot.contentRevision,
       imageStatus: shot.imageStatus,
       videoStatus: shot.videoStatus,

@@ -1,0 +1,53 @@
+{
+  "project": {
+    "id": "c53fb46d-c458-40fa-acd3-db9cdeec4b3a",
+    "name": "COS Fix QA 1779861498727"
+  },
+  "shot": {
+    "id": "fbc34571-4a4b-4a96-93d8-6bcf90162a5d"
+  },
+  "progress": {
+    "projectCover": [
+      0,
+      1
+    ],
+    "assetImage": [
+      0,
+      1
+    ],
+    "assetVideo": [
+      0,
+      1
+    ],
+    "storyboardImage": [
+      0,
+      1
+    ],
+    "storyboardVideo": [
+      0,
+      1
+    ]
+  },
+  "echoBeforeDelete": {
+    "coverImageUrl": "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/91085163-bda3-4e63-98ca-09a790961489-cover.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDaTAdrtiJhtvjIeWDINXggT2MRHtGOHo2%2F20260527%2Fap-guangzhou%2Fs3%2Faws4_request&X-Amz-Date=20260527T055821Z&X-Amz-Expires=900&X-Amz-Signature=f2069e28924629472b65a4a9f08c56025348b8bfb7e6adad72d4fd94bd6d6a30&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+    "assetVideoPreviewUrl": "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/57f18e5d-224d-4cd0-9b86-1d6bff879a31-story.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDaTAdrtiJhtvjIeWDINXggT2MRHtGOHo2%2F20260527%2Fap-guangzhou%2Fs3%2Faws4_request&X-Amz-Date=20260527T055821Z&X-Amz-Expires=900&X-Amz-Signature=da9a25677e4e59ab8c64e4b280946641994f21798cc7eb90a879d4325cc7ade5&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+    "storyboardPreviewImageUrl": "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/2aed977f-94e2-40a5-b623-38752f6cf566-story.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDaTAdrtiJhtvjIeWDINXggT2MRHtGOHo2%2F20260527%2Fap-guangzhou%2Fs3%2Faws4_request&X-Amz-Date=20260527T055820Z&X-Amz-Expires=900&X-Amz-Signature=3e5f41a6a933e63ac9712c3c24ebabcd76bd7f322582ff251f157d90014a0a5e&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+    "storyboardPreviewVideoUrl": "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/57f18e5d-224d-4cd0-9b86-1d6bff879a31-story.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDaTAdrtiJhtvjIeWDINXggT2MRHtGOHo2%2F20260527%2Fap-guangzhou%2Fs3%2Faws4_request&X-Amz-Date=20260527T055821Z&X-Amz-Expires=900&X-Amz-Signature=da9a25677e4e59ab8c64e4b280946641994f21798cc7eb90a879d4325cc7ade5&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+    "storyboardImageCount": 1,
+    "storyboardVideoCount": 1
+  },
+  "deleteChecks": {
+    "deletedAssetImageUrlStatus": 404,
+    "deletedStoryboardImageUrlStatus": 404,
+    "deletedStoryboardVideoUrlStatus": 404,
+    "keptCoverUrlStatus": 200,
+    "keptAssetVideoUrlStatus": 200
+  },
+  "echoAfterDelete": {
+    "assetVideoCount": 1,
+    "storyboardPreviewImageUrl": null,
+    "storyboardPreviewVideoUrl": null,
+    "storyboardImageCount": 0,
+    "storyboardVideoCount": 0
+  }
+}

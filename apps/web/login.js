@@ -238,7 +238,10 @@ const statusMessage = document.querySelector("#status-message");
 const debugPanel = document.querySelector("#debug-panel");
 
 let activeChallengeId = null;
-const appUrl = new URL("./app.html#project", window.location.href).toString();
+const appUrl =
+  window.location.protocol === "file:"
+    ? resolveApiUrl("/app.html#project")
+    : new URL("./app.html#project", window.location.href).toString();
 
 function resolveApiUrl(url) {
   if (/^https?:\/\//i.test(url)) {

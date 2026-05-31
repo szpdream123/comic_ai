@@ -40,10 +40,12 @@ type ParseScriptCommandResponse =
   | {
       status: 202;
       body: WorkflowRequestResult;
+      idempotencyResult: "created" | "replayed";
     }
   | {
       status: 403 | 409;
       body: { error: string };
+      idempotencyResult?: undefined;
     };
 
 export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
@@ -98,6 +100,10 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
             now: request.now,
           }),
         replay: async ({ idempotencyRecord }) => {
+          if (idempotencyRecord.responseSnapshot) {
+            return idempotencyRecord.responseSnapshot as ReturnType<typeof createProjectResponseBody>;
+          }
+
           const projectId = idempotencyRecord.responseResourceId;
           if (!projectId) {
             throw new Error("project_replay_missing_resource");
@@ -176,6 +182,10 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
             now: request.now,
           }),
         replay: async ({ idempotencyRecord }) => {
+          if (idempotencyRecord.responseSnapshot) {
+            return idempotencyRecord.responseSnapshot as WorkflowRequestResult;
+          }
+
           const workflowId = idempotencyRecord.responseResourceId;
           if (!workflowId) {
             throw new Error("parse_script_replay_missing_resource");
@@ -267,6 +277,7 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
       return {
         status: 202,
         body: executed.result,
+        idempotencyResult: executed.idempotencyResult,
       };
     } catch (error) {
       return mapParseCommandError(error);

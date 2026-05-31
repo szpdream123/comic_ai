@@ -49,7 +49,8 @@ export function createCreatorPlatformRuntime(
     videoWorkerId: normalize(env.CREATOR_VIDEO_WORKER_ID) ?? "creator-video-worker",
     exportWorkerId: normalize(env.CREATOR_EXPORT_WORKER_ID) ?? "creator-export-worker",
     signedUrlExpiresInSeconds: parsePositiveInteger(
-      env.CREATOR_SIGNED_URL_EXPIRES_SECONDS,
+      env.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
+        env.CREATOR_SIGNED_URL_EXPIRES_SECONDS,
       900,
     ),
   };

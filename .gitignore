@@ -3,6 +3,7 @@ node_modules
 .idea/
 tmp-ui-screenshots/
 artifacts/worker-c-preview/
+.local/
 *.log
 .env
 .env.local
@@ -14,3 +15,4 @@ dist
 tmp/
 tmp-dev-server/
 tmp-ui-screenshots/
+.worktrees/

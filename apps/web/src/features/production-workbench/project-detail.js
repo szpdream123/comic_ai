@@ -1,9 +1,13 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeWorkbench } from "./episode-workbench.js";
+import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js";
 import { renderExportPanel } from "./export-panel.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
+import {
+  renderOriginalScriptModal,
+  renderScriptManagementPage,
+} from "./script-page.js";
 import { getProjectDetailState } from "./storyboard-state.js";
-import { disabled, escapeHtml } from "./markup.js";
+import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam } from "../library-team/index.js";
 
 const PROJECT_STATUS_OPTIONS = ["未开始", "制作中", "一稿交付", "完结"];
@@ -113,7 +117,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session)}
+          ${renderGlobalStatusbar(session, { hideBrand: true })}
           ${renderProjectInteriorShell({ state, ui, detailState })}
         </section>
       </section>
@@ -142,10 +146,7 @@ export function renderProjectDetail(context = {}) {
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
-        <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session)}
-          ${renderEpisodeWorkbenchScreen({ state, ui })}
-        </section>
+        ${renderEpisodeWorkbenchScreen({ state, ui, session })}
       </section>
       ${renderAssetExtractModal({
         activeTab: ui.scriptTab,
@@ -196,6 +197,11 @@ export function renderProjectDetail(context = {}) {
       selectedProjectType: ui.createProjectType ?? "anime",
       notice: ui.createProjectNotice ?? "",
     })}
+    ${renderOriginalScriptModal({
+      show: ui.isOriginalScriptModalOpen,
+      draft: ui.originalScriptDraft,
+      busy: ui.busy,
+    })}
     ${renderProjectRenameModal({
       show: Boolean(ui.renameProjectId),
       value: ui.renameProjectName ?? "",
@@ -220,15 +226,32 @@ function renderWorkbenchRail(activeNavTab) {
   `;
 }
 
-function renderEpisodeWorkbenchScreen({ state, ui }) {
+function renderEpisodeWorkbenchScreen({ state, ui, session }) {
   const episodes = getEpisodeHubEntries(state, ui);
+  const hasRealEpisodes = episodes.some((episode) => episode?.id && episode.id !== "episode-primary");
+  const selectedEpisodeId =
+    ui.selectedEpisodeId && episodes.some((episode) => episode.id === ui.selectedEpisodeId)
+      ? ui.selectedEpisodeId
+      : null;
+  const fallbackEpisodeId = selectedEpisodeId ?? episodes[0]?.id ?? (hasRealEpisodes ? "" : "episode-primary");
   const activeEpisode =
-    episodes.find((episode) => episode.id === ui.selectedEpisodeId) ??
+    episodes.find((episode) => episode.id === fallbackEpisodeId) ??
     episodes[0] ??
+    {
+      id: hasRealEpisodes ? "" : "episode-primary",
+      title: "剧一",
+      storyboardCount: Array.isArray(ui.storyboards) ? ui.storyboards.length : 0,
+    };
+  const activeStoryboardEpisodeId = activeEpisode?.id || (hasRealEpisodes ? "" : "episode-primary");
+  const activeStoryboards = getEpisodePreviewStoryboards(activeStoryboardEpisodeId, ui);
+  const selectedStoryboard =
+    activeStoryboards.find((storyboard) => storyboard.id === ui.selectedStoryboardId) ??
+    ui.selectedStoryboard ??
+    activeStoryboards[0] ??
     null;
   const episodeTitle = activeEpisode?.title ?? "Episode 1";
   const episodeStatus = activeEpisode?.status ?? "Draft";
-  const storyboardCount = activeEpisode?.storyboardCount ?? ui.storyboards?.length ?? 0;
+  const storyboardCount = activeEpisode?.storyboardCount ?? activeStoryboards.length ?? 0;
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
@@ -240,19 +263,35 @@ function renderEpisodeWorkbenchScreen({ state, ui }) {
         <em>${escapeHtml(episodeStatus)} · ${storyboardCount} 个分镜</em>
       </header>
       ${renderEpisodeWorkbench({
-        storyboards: ui.storyboards ?? [],
-        selectedStoryboard: ui.selectedStoryboard,
+        session,
+        episodeId: activeEpisode?.id ?? "",
+        episodeTitle: activeEpisode?.title ?? "",
+        storyboards: activeStoryboards,
+        selectedStoryboard,
+        assetLibrary: {
+          character: getImportedAssetEntries(state, ui, "character", "image"),
+          scene: getImportedAssetEntries(state, ui, "scene", "image"),
+          prop: getImportedAssetEntries(state, ui, "prop", "image"),
+        },
+        activeAssetTab: ui.projectAssetTab ?? "character",
+        selectedEpisodeCardId: ui.selectedEpisodeCardId ?? null,
+        selectedEpisodeAssetId: ui.selectedEpisodeAssetId ?? null,
+        selectedEpisodeAssetIds: ui.selectedEpisodeAssetIds ?? [],
+        episodeWorkbenchSelectedAttachmentIds: ui.episodeWorkbenchSelectedAttachmentIds ?? [],
         isStoryboardDescriptionModalOpen: Boolean(ui.isStoryboardDescriptionModalOpen),
         storyboardDescriptionDraft: ui.storyboardDescriptionDraft ?? "",
         selectedModelId: ui.selectedModelId,
         prompt: ui.prompt,
         busy: ui.busy,
         canParse: Boolean(state.project),
-        canCalibrate: Boolean(state.assetReview?.readyForGeneration && ui.storyboards?.length),
-        canGenerateImages: Boolean(ui.storyboards?.length),
+        canCalibrate: Boolean(state.assetReview?.readyForGeneration && activeStoryboards.length),
+        canGenerateImages: Boolean(state.calibration && activeStoryboards.length),
         canGenerateVideos: Boolean(
-          ui.selectedStoryboard?.imageStatus === "ready" ||
-            ui.storyboards?.some((storyboard) => storyboard.imageStatus === "ready"),
+          state.calibration &&
+            (
+              selectedStoryboard?.imageStatus === "ready" ||
+              activeStoryboards.some((storyboard) => storyboard.imageStatus === "ready")
+            ),
         ),
         validationMessage: ui.validationMessage ?? "",
         calibrationSkipReason: ui.calibrationSkipReason ?? "",
@@ -262,8 +301,44 @@ function renderEpisodeWorkbenchScreen({ state, ui }) {
         mediaMode: ui.episodeMediaMode ?? "image",
         videoMode: ui.videoGenerationMode ?? "first-frame",
         imageMode: ui.imageGenerationMode ?? "single-image",
+        generationControls: {
+          videoDurationSec: ui.videoDurationSec,
+          videoResolution: ui.videoResolution,
+          videoCount: ui.videoCount,
+          videoAudioEnabled: ui.videoAudioEnabled,
+          videoMusicEnabled: ui.videoMusicEnabled,
+          videoLipSyncEnabled: ui.videoLipSyncEnabled,
+          imageCount: ui.imageCount,
+          imageResolution: ui.imageResolution,
+          imageAspectRatio: ui.imageAspectRatio,
+          multiImageStrategy: ui.multiImageStrategy,
+          uploadLimits: ui.episodeGenerationConfig?.uploadLimits ?? null,
+        },
+        generationUiState: {
+          isVideoModelMenuOpen: Boolean(ui.isVideoModelMenuOpen),
+          openGenerationSelectMenu: ui.openGenerationSelectMenu ?? null,
+          isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
+          activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
+          isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+          museBoardMode: ui.museBoardMode ?? "operation",
+          museScopeMode: ui.museScopeMode ?? "storyboard",
+          musePromptMenu: ui.musePromptMenu ?? null,
+        },
+        storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
+        storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
+        storyboardVideoDeleteTarget: ui.storyboardVideoDeleteTarget ?? null,
+        episodeAssetCreateModal: ui.episodeAssetCreateModal ?? null,
+        assetInspector: ui.assetInspector ?? null,
+        episodeWorkbenchAttachments: ui.episodeWorkbenchAttachments ?? [],
+        episodeVoiceModal: ui.episodeVoiceModal ?? null,
+        generationPollingActive: Boolean(ui.generationPollingActive),
+        imageGenerationResult: ui.imageGenerationResult ?? null,
+        videoGenerationResult: ui.videoGenerationResult ?? null,
+        assetSearchQuery: ui.assetSearchQuery ?? "",
+        exportPreviewResult: ui.exportPreviewResult ?? null,
+        episodeBatchModal: ui.episodeBatchModal ?? null,
       })}
-      <p id="workspace-status" class="workbench-toast interior-toast" role="status">${escapeHtml(ui.toast ?? "Entered episode workbench.")}</p>
+      <p id="workspace-status" class="workbench-toast interior-toast" role="status">${escapeHtml(ui.toast ?? "")}</p>
     </section>
   `;
 }
@@ -285,7 +360,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
     <section class="project-interior" aria-label="项目内部工作台">
       <header class="project-interior-topbar">
         <div class="project-switcher">
-          <button class="project-back-button" type="button" data-action="set-nav-tab" data-tab="project" aria-label="返回项目列表">←</button>
+          <button class="project-back-button" type="button" data-action="set-nav-tab" data-tab="project" aria-label="返回项目列表">返回</button>
           <strong>${escapeHtml(projectName)}</strong>
           <button
             class="project-status-select"
@@ -314,6 +389,10 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
             ? renderProjectAssetLibrary({ state, ui, activeAssetTab })
             : activeInteriorSection === "episodes"
               ? renderProjectEpisodesInterior({ state, ui })
+              : activeInteriorSection === "members"
+                ? renderProjectMembersInterior(ui)
+                : activeInteriorSection === "stats"
+                  ? renderProjectStatsInterior(ui)
             : renderProjectOverviewInterior({
                 state,
                 ui,
@@ -329,6 +408,8 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
       ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui) : ""}
+      ${renderEpisodeRenameModal(ui)}
+      ${renderEpisodeDeleteModal(ui)}
       ${renderImportedAssetRenameModal(ui)}
       ${renderImportedAssetDeleteModal(ui)}
     </section>
@@ -340,8 +421,93 @@ function renderProjectEpisodesInterior({ state, ui }) {
   return renderEpisodeHub({ episodes, ui });
 }
 
+function renderProjectMembersInterior(ui) {
+  const members = Array.isArray(ui.projectMembers) ? ui.projectMembers : [];
+  return `
+    <section class="project-info-panel" aria-label="成员">
+      <header class="project-info-header">
+        <h1>成员</h1>
+        <p>当前项目所在协作空间的真实成员列表。</p>
+      </header>
+      <div class="project-info-grid">
+        ${
+          members.length
+            ? members
+                .map(
+                  (member) => `
+                    <article class="project-info-card member-card">
+                      <strong>${escapeHtml(member.phone ?? member.userId ?? "未命名成员")}</strong>
+                      <span>角色：${escapeHtml(member.role ?? "unknown")}</span>
+                      <span>状态：${escapeHtml(member.status ?? "unknown")}</span>
+                    </article>
+                  `,
+                )
+                .join("")
+            : '<article class="project-info-card empty"><strong>暂无成员数据</strong><span>当前项目尚未返回可展示的成员信息。</span></article>'
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderProjectStatsInterior(ui) {
+  const stats = ui.projectStats ?? null;
+  const exportHistory = ui.exportHistory ?? [];
+  return `
+    <section class="project-info-panel" aria-label="统计">
+      <header class="project-info-header">
+        <h1>统计</h1>
+        <p>聚合当前项目的剧集、分镜、资产与导出记录。</p>
+      </header>
+      <div class="project-stats-grid">
+        ${renderProjectStatMetric("成员", stats?.memberCount ?? 0)}
+        ${renderProjectStatMetric("剧集", stats?.episodeCount ?? 0)}
+        ${renderProjectStatMetric("分镜", stats?.shotCount ?? 0)}
+        ${renderProjectStatMetric("资产", stats?.assetCount ?? 0)}
+        ${renderProjectStatMetric("导出", stats?.exportCount ?? 0)}
+        ${renderProjectStatMetric("图片生成", stats?.generatedImageCount ?? 0)}
+        ${renderProjectStatMetric("视频生成", stats?.generatedVideoCount ?? 0)}
+      </div>
+      <section class="project-export-history-panel">
+        <div class="project-info-header compact">
+          <h2>导出历史</h2>
+          <p>显示当前项目最近的真实导出记录。</p>
+        </div>
+        <div class="project-export-history-list">
+          ${
+            exportHistory.length
+              ? exportHistory
+                  .map(
+                    (record) => `
+                      <article class="project-info-card export-card">
+                        <strong>${escapeHtml(record.workflowId ?? record.id ?? "导出记录")}</strong>
+                        <span>状态：${escapeHtml(record.manifestStatus ?? "unknown")}</span>
+                        <span>时间：${escapeHtml(formatEpisodeHubDate(record.createdAt ?? Date.now()))}</span>
+                      </article>
+                    `,
+                  )
+                  .join("")
+              : '<article class="project-info-card empty"><strong>暂无导出记录</strong><span>当项目发生导出后，会在这里展示真实历史。</span></article>'
+          }
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderProjectStatMetric(label, value) {
+  return `
+    <article class="project-info-card stat-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </article>
+  `;
+}
+
 function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, hasAssets, episodeCount }) {
-  const primaryEpisodeTitle = detailState.episodes?.[0]?.title || "剧一";
+  const episodes = getEpisodeHubEntries(state, ui);
+  const hasEpisodes = episodes.length > 0;
+  const primaryEpisodeTitle = episodes[0]?.title || detailState.episodes?.[0]?.title || "剧一";
   return `
     <section class="project-settings-panel">
       <header class="settings-header">
@@ -381,20 +547,36 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
           >
             剧集创作 <span aria-hidden="true">→</span>
           </button>
-          <span class="episode-section-name">${escapeHtml(primaryEpisodeTitle)}</span>
+          <span class="episode-section-name">${escapeHtml(hasEpisodes ? primaryEpisodeTitle : "从这里开始创建第一集")}</span>
         </div>
-        <div class="episode-empty-canvas">
-          <div class="episode-canvas-glow"></div>
-          <div class="episode-canvas-copy always-visible">
-            <strong>${episodeCount > 0 ? `${primaryEpisodeTitle} 已准备就绪` : "从这里开始创建第一集"}</strong>
-            <span>
-              从 <button type="button" class="episode-inline-link" data-action="open-single-episode-flow">单集创建</button>
-              或 <button type="button" class="episode-inline-link" data-action="open-batch-episode-flow">AI 批量创建</button>
-            </span>
-          </div>
-        </div>
+        ${
+          hasEpisodes
+            ? renderOverviewEpisodePanel({ episodes, ui })
+            : `
+                <div class="episode-empty-canvas">
+                  <div class="episode-canvas-glow"></div>
+                  <div class="episode-canvas-copy always-visible">
+                    <strong>从这里开始创建第一集</strong>
+                    <span>
+                      从 <button type="button" class="episode-inline-link" data-action="open-single-episode-flow">单集创建</button>
+                      或 <button type="button" class="episode-inline-link" data-action="open-batch-episode-flow">AI 批量创建</button>
+                    </span>
+                  </div>
+                </div>
+              `
+        }
       </section>
     </section>
+  `;
+}
+
+function renderOverviewEpisodePanel({ episodes = [], ui }) {
+  return `
+    <div class="episode-overview-canvas" aria-label="总览剧集列表">
+      <div class="episode-overview-list">
+        ${episodes.map((episode) => renderEpisodeHubCard(episode, ui)).join("")}
+      </div>
+    </div>
   `;
 }
 
@@ -404,12 +586,12 @@ function renderEpisodeCreationHub(ui) {
       <header class="episode-hub-header">
         <div class="episode-hub-tabs">
           <strong>剧集 (0)</strong>
-          <button class="episode-history-tab" type="button">导出历史</button>
+          <button class="episode-history-tab" type="button" data-action="open-episode-export-history">导出历史</button>
         </div>
       </header>
 
       <div class="episode-hub-cards">
-        <article class="episode-launch-card ai">
+        <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
           <div class="episode-launch-copy">
             <h2>AI 批量创建分集 <span class="launch-badge">首次免费</span></h2>
             <p>从剧本批量创建分集，快速搭建整部漫画的剧集内容。</p>
@@ -421,7 +603,7 @@ function renderEpisodeCreationHub(ui) {
           <div class="episode-launch-art collage" aria-hidden="true"></div>
         </article>
 
-        <article class="episode-launch-card single">
+        <article class="episode-launch-card single" data-action="open-single-episode-flow">
           <div class="episode-launch-copy">
             <h2>单集创建</h2>
             <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
@@ -447,13 +629,13 @@ function renderEpisodeHub({ episodes = [], ui }) {
       <header class="episode-hub-header">
         <div class="episode-hub-tabs">
           <strong>剧集 (${episodes.length})</strong>
-          <button class="episode-history-tab" type="button">导出历史</button>
+          <button class="episode-history-tab" type="button" data-action="open-episode-export-history">导出历史</button>
         </div>
       </header>
 
-      <div class="episode-hub-layout">
+      <div class="episode-hub-grid">
         <div class="episode-hub-launches">
-          <article class="episode-launch-card ai">
+          <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
             <div class="episode-launch-copy">
               <h2>AI 批量创建分集 <span class="launch-badge">首次免费</span></h2>
               <p>从剧本批量创建分集，快速搭建整部漫画的剧集内容。</p>
@@ -465,7 +647,7 @@ function renderEpisodeHub({ episodes = [], ui }) {
             <div class="episode-launch-art collage" aria-hidden="true"></div>
           </article>
 
-          <article class="episode-launch-card single">
+          <article class="episode-launch-card single" data-action="open-single-episode-flow">
             <div class="episode-launch-copy">
               <h2>单集创建</h2>
               <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
@@ -490,14 +672,19 @@ function renderEpisodeHubCard(episode, ui) {
   const isMenuOpen = ui.episodeCardMenuId === episode.id;
   return `
     <article class="episode-card episode-library-card" data-action="open-episode-workbench" data-episode-id="${escapeHtml(episode.id)}">
-      <div class="episode-card-preview" aria-hidden="true">
-        ${episode.previewUrl ? `<img src="${escapeHtml(episode.previewUrl)}" alt="" />` : "<span>剧</span>"}
+      <div class="episode-card-preview ${episode.previewMedia?.kind === "video" ? "has-video-preview" : ""}" aria-hidden="true">
+        ${
+          episode.previewMedia?.src
+            ? episode.previewMedia.kind === "video"
+              ? `<video src="${escapeAttr(episode.previewMedia.src)}" muted playsinline preload="metadata"></video><i>▶</i>`
+              : `<img src="${escapeAttr(episode.previewMedia.src)}" alt="" />`
+            : "<span>剧</span>"
+        }
       </div>
       <div class="episode-card-body">
         <div class="episode-card-copy">
-          <h3>${escapeHtml(episode.title)}</h3>
-          <p>创建于：${escapeHtml(episode.createdAt ?? "2026/05/22")}</p>
-          <strong>${escapeHtml(episode.status)} · ${episode.storyboardCount} 个分镜</strong>
+          <h3 title="${escapeHtml(episode.title)}">${escapeHtml(truncateEpisodeTitle(episode.title))}</h3>
+          <p>${escapeHtml(formatEpisodeHubDate(episode.createdAt ?? "2026/05/22"))}</p>
         </div>
         <div class="episode-card-actions">
           <button
@@ -509,44 +696,87 @@ function renderEpisodeHubCard(episode, ui) {
             aria-label="剧集菜单"
           >
             ⋯          </button>
-          ${isMenuOpen ? renderEpisodeHubMenu() : ""}
+          ${isMenuOpen ? renderEpisodeHubMenu(episode) : ""}
         </div>
       </div>
     </article>
   `;
 }
 
-function renderEpisodeHubMenu() {
+function renderEpisodeHubMenu(episode) {
   return `
     <div class="episode-card-menu" role="menu" aria-label="剧集操作">
-      <button class="episode-card-menu-item" type="button">积分明细</button>
-      <button class="episode-card-menu-item" type="button">重命名</button>
-      <button class="episode-card-menu-item danger" type="button">删除</button>
+      <button class="episode-card-menu-item" type="button" data-action="rename-episode-card" data-episode-id="${escapeHtml(episode.id)}">重命名</button>
+      <button class="episode-card-menu-item danger" type="button" data-action="delete-episode-card" data-episode-id="${escapeHtml(episode.id)}">删除</button>
     </div>
   `;
 }
 
 function renderSingleEpisodeModal(ui) {
+  const aspectOptions = [
+    { value: "16:9", label: "水平" },
+    { value: "9:16", label: "垂直" },
+    { value: "1:1", label: "自定义" },
+  ];
+  const modelOptions = [
+    { value: "veo-3.1", label: "多参模式（Veo3.1）" },
+    { value: "seedance-2.0", label: "主体固定模式（seeDance2.0）" },
+  ];
+  const selectedAspect = ui.singleEpisodeAspectRatio ?? "9:16";
+  const selectedModel = ui.singleEpisodeModel ?? "seedance-2.0";
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
-      <div class="single-episode-modal">
+      <div class="single-episode-modal single-episode-studio">
         <div class="single-episode-modal-head">
-          <h2>新建剧集</h2>
+          <div class="single-episode-modal-heading">
+            <p>Single Episode</p>
+            <h2>请输入您的剧本开始创作</h2>
+          </div>
           <button class="modal-close" type="button" data-action="close-single-episode-modal" aria-label="关闭">×</button>
         </div>
-        <label class="single-episode-field">
-          <input
-            id="single-episode-name-input"
-            type="text"
-            value="${escapeHtml(ui.singleEpisodeName ?? "")}"
-            placeholder="请输入剧集名称"
-          />
-          <span class="single-episode-count">${[...(ui.singleEpisodeName ?? "")].length}/50</span>
+        <p class="single-episode-lead">从一句设定、一段对白或完整剧情开始，我们会为你生成新的单集创作工作台。</p>
+        <label class="single-episode-field single-episode-script-field">
+          <textarea id="single-episode-script-input" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(ui.singleEpisodeScript ?? "")}</textarea>
+          <span class="single-episode-count">${[...(ui.singleEpisodeScript ?? "")].length}/5000</span>
         </label>
-        <div class="single-episode-actions">
+        <div class="single-episode-toolbar single-episode-toolbar-replica">
+          <div class="single-episode-toolbar-left">
+            <div class="single-episode-aspect-group">
+              ${aspectOptions
+                .map(
+                  (option) => `
+                    <button
+                      class="single-episode-aspect-chip ${selectedAspect === option.value ? "active" : ""}"
+                      type="button"
+                      data-action="set-single-episode-aspect"
+                      data-aspect="${option.value}"
+                    >
+                      <strong>${option.label}</strong>
+                    </button>
+                  `,
+                )
+                .join("")}
+            </div>
+            <label class="single-episode-model-field">
+              <select id="single-episode-model-select">
+                ${modelOptions
+                  .map(
+                    (option) => `
+                      <option value="${option.value}" ${selectedModel === option.value ? "selected" : ""}>${option.label}</option>
+                    `,
+                  )
+                  .join("")}
+              </select>
+            </label>
+          </div>
+          <div class="single-episode-actions">
+            <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode">创建空白章节</button>
+            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">AI 智能分镜</button>
+          </div>
+        </div>
+        <div class="single-episode-status-row">
           <p class="modal-inline-status">${escapeHtml(ui.singleEpisodeNotice ?? "")}</p>
-          <button class="secondary-action" type="button" data-action="close-single-episode-modal">取消</button>
-          <button class="primary-action" type="button" data-action="confirm-single-episode">确认</button>
+          <button class="secondary-action single-episode-cancel" type="button" data-action="close-single-episode-modal">取消</button>
         </div>
       </div>
     </section>
@@ -555,35 +785,95 @@ function renderSingleEpisodeModal(ui) {
 
 function getEpisodeHubEntries(state, ui) {
   if (Array.isArray(state?.projectDetail?.episodes)) {
-    return state.projectDetail.episodes.map((episode) => ({
+    const detailEpisodes = state.projectDetail.episodes.map((episode) => ({
       id: episode.id,
       title: episode.title,
+      sequence: Number(episode.sequence ?? 0),
       status: episode.status === "ready" ? "已定稿" : "未定稿",
       createdAt: episode.createdAt ?? "2026/05/22",
       createdAtMs: getEpisodeCreatedAtValue(episode.createdAt),
       storyboardCount: episode.storyboardCount ?? 0,
-      previewUrl: episode.previewUrl ?? null,
+      previewMedia: getEpisodePreviewMedia(episode.id, ui, episode.previewUrl ?? null),
     }));
+    const primaryEpisode = buildPrimaryEpisodeEntry(state, ui);
+    const mergedEpisodes = primaryEpisode
+      ? [primaryEpisode, ...detailEpisodes.filter((episode) => episode.id !== primaryEpisode.id)]
+      : detailEpisodes;
+    return sortEpisodeEntriesByLatest(mergedEpisodes);
   }
   const derivedEpisodes = state?.shots?.length
     ? [
         {
           id: "episode-primary",
           title: "剧一",
+          sequence: 0,
           status: "未定稿",
           createdAt: "2026/05/22",
           createdAtMs: getEpisodeCreatedAtValue("2026/05/22"),
           storyboardCount: state.shots.length,
+          previewMedia: getEpisodePreviewMedia("episode-primary", ui, null),
         },
       ]
     : [];
-  const customEpisodes = Array.isArray(ui.customEpisodes) ? ui.customEpisodes : [];
+  const customEpisodes = Array.isArray(ui.customEpisodes)
+    ? ui.customEpisodes.map((episode) => ({
+        ...episode,
+        previewMedia: getEpisodePreviewMedia(
+          episode.id,
+          ui,
+          episode.previewMedia?.src ?? episode.previewUrl ?? null,
+        ),
+      }))
+    : [];
 
-  return [...customEpisodes, ...derivedEpisodes].sort(
-    (left, right) =>
+  return sortEpisodeEntriesByLatest([...customEpisodes, ...derivedEpisodes]);
+}
+
+  function buildPrimaryEpisodeEntry(state, ui) {
+  const shots = Array.isArray(state?.projectDetail?.shots)
+    ? state.projectDetail.shots
+    : (Array.isArray(state?.shots) ? state.shots : []);
+  const unassignedShots = shots.filter((shot) => !shot?.episodeId);
+  if (!unassignedShots.length) {
+    return null;
+  }
+
+    const episodes = Array.isArray(state?.projectDetail?.episodes) ? state.projectDetail.episodes : [];
+    if (episodes.length > 0) {
+      return null;
+    }
+    if (episodes.some((episode) => episode?.id === "episode-primary")) {
+      return null;
+    }
+
+  const primaryCreatedAt = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "2026/05/22";
+
+  return {
+    id: "episode-primary",
+    title: "剧一",
+    sequence: 0,
+    status: "未定稿",
+    createdAt: primaryCreatedAt,
+    createdAtMs: getEpisodeCreatedAtValue(primaryCreatedAt),
+    storyboardCount: unassignedShots.length,
+    previewMedia: getEpisodePreviewMedia("episode-primary", ui, null),
+  };
+}
+
+function sortEpisodeEntriesByLatest(episodes) {
+  return [...episodes].sort((left, right) => {
+    const timeDelta =
       getEpisodeCreatedAtValue(right.createdAtMs ?? right.createdAt) -
-      getEpisodeCreatedAtValue(left.createdAtMs ?? left.createdAt),
-  );
+      getEpisodeCreatedAtValue(left.createdAtMs ?? left.createdAt);
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+    const sequenceDelta = Number(right.sequence ?? 0) - Number(left.sequence ?? 0);
+    if (sequenceDelta !== 0) {
+      return sequenceDelta;
+    }
+    return String(right.id ?? "").localeCompare(String(left.id ?? ""), "zh-CN-u-kn-true");
+  });
 }
 
 function getEpisodeCreatedAtValue(value) {
@@ -597,6 +887,84 @@ function getEpisodeCreatedAtValue(value) {
     }
   }
   return 0;
+}
+
+function getEpisodePreviewMedia(episodeId, ui, fallbackSource) {
+  const storyboards = getEpisodePreviewStoryboards(episodeId, ui);
+  const firstVideoStoryboard = storyboards.find((storyboard) => getStoryboardVideoSource(storyboard));
+
+  if (firstVideoStoryboard) {
+    return {
+      kind: "video",
+      src: getStoryboardVideoSource(firstVideoStoryboard),
+    };
+  }
+
+  if (fallbackSource) {
+    return {
+      kind: isVideoSource(fallbackSource) ? "video" : "image",
+      src: fallbackSource,
+    };
+  }
+
+  return null;
+}
+
+function getEpisodePreviewStoryboards(episodeId, ui) {
+  if (episodeId === "episode-primary") {
+    return Array.isArray(ui.storyboards) ? ui.storyboards : [];
+  }
+  if (!episodeId) {
+    return [];
+  }
+  return Array.isArray(ui.episodeStoryboardMap?.[episodeId]) ? ui.episodeStoryboardMap[episodeId] : [];
+}
+
+function getStoryboardVideoSource(storyboard) {
+  if (!storyboard) {
+    return "";
+  }
+
+  if (storyboard.previewVideo) {
+    return storyboard.previewVideo;
+  }
+
+  const selectedUploadedVideo = (storyboard.uploadedVideos ?? []).find(
+    (video) => video.id === storyboard.selectedUploadedVideoId && video.status === "ready" && video.src,
+  );
+  if (selectedUploadedVideo?.src) {
+    return selectedUploadedVideo.src;
+  }
+
+  const firstUploadedVideo = (storyboard.uploadedVideos ?? []).find(
+    (video) => video.status === "ready" && video.src,
+  );
+  if (firstUploadedVideo?.src) {
+    return firstUploadedVideo.src;
+  }
+
+  return isVideoSource(storyboard.previewUrl) ? storyboard.previewUrl : "";
+}
+
+function isVideoSource(value) {
+  return /\.(mp4|mov|webm|m4v)(\?|$)/i.test(String(value ?? ""));
+}
+
+function formatEpisodeHubDate(value) {
+  const createdAtMs = getEpisodeCreatedAtValue(value);
+  if (!createdAtMs) {
+    return "2026/05/22";
+  }
+  const date = new Date(createdAtMs);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
+function truncateEpisodeTitle(value, maxLength = 10) {
+  const title = String(value ?? "");
+  return [...title].length > maxLength ? `${[...title].slice(0, maxLength).join("")}...` : title;
 }
 
 function renderInteriorNavItem(item, active = false) {
@@ -641,8 +1009,17 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
   const tab = ASSET_TABS.find((item) => item.id === activeAssetTab) ?? ASSET_TABS[0];
   const isOther = tab.id === "other";
   const mediaType = ui.projectOtherAssetMediaType ?? "video";
-  const importedAssets = getImportedAssetEntries(state, ui, tab.id, mediaType);
+  const importedAssets = filterAndSortImportedAssets(
+    getImportedAssetEntries(state, ui, tab.id, mediaType),
+    ui,
+  );
   const mediaLabel = mediaType === "image" ? "图片" : "视频";
+  const filterLabel =
+    ui.assetFilterMode === "with-preview"
+      ? "有预览"
+      : ui.assetFilterMode === "generated"
+        ? "已生成"
+        : "全部";
 
   return `
     <section class="project-asset-library" aria-label="资产">
@@ -653,23 +1030,24 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
         </div>
         ${isOther ? renderOtherAssetSubtabs(mediaType) : ""}
         <div class="asset-library-tools">
-          <button class="asset-sort-button" type="button">时间倒序 <span aria-hidden="true">⌄</span></button>
+          <button class="asset-sort-button" type="button" data-action="toggle-asset-sort-order">${ui.assetSortOrder === "desc" ? "时间倒序" : "时间正序"} <span aria-hidden="true">⌄</span></button>
           ${
             isOther
               ? ""
-              : '<button class="asset-filter-button" type="button">全部 <span aria-hidden="true">⌄</span></button><label class="asset-main-check"><input type="checkbox" />主体</label>'
+              : `<button class="asset-filter-button" type="button" data-action="toggle-asset-filter-mode">${escapeHtml(filterLabel)} <span aria-hidden="true">⌄</span></button><label class="asset-main-check"><input id="asset-only-main-input" type="checkbox" ${ui.assetOnlyMain ? "checked" : ""} />主体</label>`
           }
           <label class="asset-search-field">
             <span aria-hidden="true">⌕</span>
-            <input type="search" placeholder="${escapeHtml(isOther ? ('搜索你所需要的' + mediaLabel) : tab.search)}" />
+            <input id="asset-search-input" type="search" value="${escapeHtml(ui.assetSearchQuery ?? "")}" placeholder="${escapeHtml(isOther ? ('搜索你所需要的' + mediaLabel) : tab.search)}" />
           </label>
           ${
             isOther
               ? ""
-              : '<div class="asset-view-toggle"><button class="active" type="button">▦</button><button type="button">☰</button></div>'
+              : `<div class="asset-view-toggle"><button class="${ui.assetViewMode !== "list" ? "active" : ""}" type="button" data-action="set-asset-view-mode" data-view-mode="grid">▦</button><button class="${ui.assetViewMode === "list" ? "active" : ""}" type="button" data-action="set-asset-view-mode" data-view-mode="list">☰</button></div>`
           }
         </div>
       </header>
+      ${renderAssetLibraryReturnNotice(ui, tab.id, mediaType)}
 
       <div class="asset-library-stage ${isOther ? "other-mode" : ""}">
         ${
@@ -764,7 +1142,7 @@ function renderAssetLibraryCollection(tab, importedAssets, ui) {
       <div class="asset-library-actions-column">
         ${renderAssetCreationCards(tab)}
       </div>
-      <div class="asset-library-content-grid">
+      <div class="asset-library-content-grid ${ui.assetViewMode === "list" ? "list-mode" : "grid-mode"}">
         ${
           importedAssets.length
             ? importedAssets.map((asset) => renderImportedAssetCard(asset, ui)).join("")
@@ -816,13 +1194,21 @@ function renderImportedAssetCard(asset, ui) {
   const preview = asset.preview || asset.previewUrl || asset.latestVersion?.previewUrl || "";
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
+  const isHighlighted = isImportedAssetHighlighted(ui, asset.kind, "image", asset.id);
   return `
-    <article class="imported-asset-card ${escapeHtml(ASSET_LIBRARY_CONFIG[asset.kind]?.importedCardClass ?? "portrait")}">
+    <article
+      class="imported-asset-card ${escapeHtml(ASSET_LIBRARY_CONFIG[asset.kind]?.importedCardClass ?? "portrait")} ${isHighlighted ? "just-imported" : ""}"
+      data-imported-asset-id="${escapeHtml(asset.id)}"
+      tabindex="-1"
+    >
       <div class="imported-asset-preview">
         ${preview ? `<img src="${escapeHtml(preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
       </div>
       <div class="imported-asset-meta asset-card-meta-row">
-        <strong>${escapeHtml(asset.name)}</strong>
+        <div class="asset-card-copy">
+          <strong>${escapeHtml(asset.name)}</strong>
+          <span>${escapeHtml(asset.description || (asset.source === "generated" ? "已生成资产" : "已导入资产"))}</span>
+        </div>
         <button
           class="asset-card-menu-button"
           type="button"
@@ -842,15 +1228,23 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
   const preview = asset.preview || asset.previewUrl || asset.latestVersion?.previewUrl || "";
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
+  const isHighlighted = isImportedAssetHighlighted(ui, "other", mediaType, asset.id);
   return `
-    <article class="other-imported-card ${mediaType}">
+    <article
+      class="other-imported-card ${mediaType} ${isHighlighted ? "just-imported" : ""}"
+      data-imported-asset-id="${escapeHtml(asset.id)}"
+      tabindex="-1"
+    >
       <div class="other-imported-preview">
         ${preview ? `<img src="${escapeHtml(preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
         ${mediaType === "video" ? '<span class="other-imported-play" aria-hidden="true">▶</span>' : ""}
         <span class="other-imported-badge">审核中</span>
       </div>
       <div class="asset-card-meta-row">
-        <strong>${escapeHtml(asset.name)}</strong>
+        <div class="asset-card-copy">
+          <strong>${escapeHtml(asset.name)}</strong>
+          <span>${escapeHtml(asset.description || (asset.source === "generated" ? "已生成资产" : "已导入资产"))}</span>
+        </div>
         <button
           class="asset-card-menu-button"
           type="button"
@@ -1097,6 +1491,20 @@ function renderAssetImportReview(ui, assetKind) {
 }
 
 function getImportedAssetEntries(state, ui, assetKind, mediaType = "video") {
+  const preferWorkbenchAssets = ui.projectPanelMode === "episode-workbench";
+  if (preferWorkbenchAssets) {
+    if (assetKind === "other") {
+      const workbenchOther = ui.importedAssets?.other?.[mediaType] ?? [];
+      if (workbenchOther.length) {
+        return workbenchOther;
+      }
+    } else {
+      const workbenchAssets = ui.importedAssets?.[assetKind] ?? [];
+      if (workbenchAssets.length) {
+        return workbenchAssets;
+      }
+    }
+  }
   const detailAssets = state?.projectDetail?.assetsByType;
   if (detailAssets) {
     if (assetKind === "other") {
@@ -1115,9 +1523,73 @@ function mapDetailAssets(assets, kind) {
     id: asset.id,
     name: asset.label ?? asset.assetKey ?? "未命名资产",
     preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-    description: asset.assetKey ?? "",
+    description: asset.latestVersion?.metadata?.description ?? asset.assetKey ?? "",
     kind,
+    isMain: Boolean(asset.latestVersion?.metadata?.isMain),
+    source: asset.latestVersion?.metadata?.source ?? "import",
+    updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? asset.createdAt ?? null,
+    latestVersion: asset.latestVersion ?? null,
   }));
+}
+
+function filterAndSortImportedAssets(assets, ui) {
+  const query = String(ui.assetSearchQuery ?? "").trim().toLowerCase();
+  const filterMode = ui.assetFilterMode ?? "all";
+  const onlyMain = Boolean(ui.assetOnlyMain);
+  const sortOrder = ui.assetSortOrder ?? "desc";
+
+  return [...assets]
+    .filter((asset) => {
+      if (query) {
+        const haystack = `${asset.name ?? ""} ${asset.description ?? ""}`.toLowerCase();
+        if (!haystack.includes(query)) {
+          return false;
+        }
+      }
+      if (onlyMain && !asset.isMain) {
+        return false;
+      }
+      if (filterMode === "with-preview" && !asset.preview) {
+        return false;
+      }
+      if (filterMode === "generated" && asset.source !== "generated") {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.updatedAt ?? "") || 0;
+      const rightTime = Date.parse(right.updatedAt ?? "") || 0;
+      return sortOrder === "asc" ? leftTime - rightTime : rightTime - leftTime;
+    });
+}
+
+function renderAssetLibraryReturnNotice(ui, assetKind, mediaType) {
+  const message = String(ui.assetLibraryHighlightMessage ?? "").trim();
+  if (!message) {
+    return "";
+  }
+  const matchesKind = (ui.assetLibraryHighlightKind ?? null) === assetKind;
+  const matchesMedia =
+    assetKind !== "other" || (ui.assetLibraryHighlightMediaType ?? "video") === mediaType;
+  if (!matchesKind || !matchesMedia) {
+    return "";
+  }
+  return `<p class="asset-library-return-note" role="status">${escapeHtml(message)}</p>`;
+}
+
+function isImportedAssetHighlighted(ui, assetKind, mediaType, assetId) {
+  const highlightedIds = ui.assetLibraryHighlightAssetIds ?? [];
+  if (!highlightedIds.includes(assetId)) {
+    return false;
+  }
+  if ((ui.assetLibraryHighlightKind ?? null) !== assetKind) {
+    return false;
+  }
+  if (assetKind === "other" && (ui.assetLibraryHighlightMediaType ?? "video") !== mediaType) {
+    return false;
+  }
+  return true;
 }
 
 function getAssetModalLabel(assetKind, mediaType = "video") {
@@ -1271,7 +1743,7 @@ function renderAssetGeneratorModal(ui) {
                 <span>${escapeHtml(ui.assetGeneratorResolution ?? "2K")}</span>
                 <span>生成${escapeHtml(String(ui.assetGeneratorCount ?? 1))}张</span>
                 <span>✦ 2 积分</span>
-                <button type="button">${isEditing ? "保存" : "生成"}</button>
+                <button type="button" data-action="submit-asset-generator">${isEditing ? "保存" : "生成"}</button>
               </footer>
             </div>
           </label>
@@ -1450,6 +1922,67 @@ function renderImportedAssetRenameModal(ui) {
   `;
 }
 
+function renderEpisodeRenameModal(ui) {
+  if (!ui.renameEpisodeId) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名剧集">
+      <div class="rename-project-modal asset-rename-modal">
+        <div class="rename-project-head">
+          <h2>重命名</h2>
+          <button class="modal-close" type="button" data-action="close-rename-episode-modal" aria-label="关闭">×</button>
+        </div>
+        <label class="rename-project-field">
+          <input
+            id="episode-rename-name-input"
+            type="text"
+            value="${escapeHtml(ui.renameEpisodeName ?? "")}"
+            placeholder="请输入剧集名称"
+          />
+          <span class="rename-project-count asset-rename-count">${[...(ui.renameEpisodeName ?? "")].length}/50</span>
+        </label>
+        <div class="rename-project-actions">
+          <p class="modal-inline-status">${escapeHtml(ui.renameEpisodeNotice ?? "")}</p>
+          <div class="rename-project-button-row">
+            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-episode-modal">取消</button>
+            <button class="primary-action rename-save-button" type="button" data-action="confirm-rename-episode-card">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderEpisodeDeleteModal(ui) {
+  if (!ui.deleteEpisodeId) {
+    return "";
+  }
+
+  const episodeName =
+    (ui.projectDetail?.episodes ?? []).find((episode) => episode.id === ui.deleteEpisodeId)?.title ?? "";
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除剧集">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>所选内容将被删除，确定删除${episodeName ? `“${escapeHtml(episodeName)}”` : ""}？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-episode-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-episode-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-delete-episode-card">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderImportedAssetDeleteModal(ui) {
   if (!ui.deleteImportedAsset) {
     return "";
@@ -1541,19 +2074,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      <section class="script-tab-panel">
-        <div class="script-tab-copy">
-          <p class="section-kicker">剧本入口</p>
-          <h2>脚本与分镜单</h2>
-          <p>从剧本库、剧本上传或分镜单上传继续进入生产工作流。左侧菜单保持常驻，点击只切换这里的内容区域。</p>
-        </div>
-        <div class="script-tab-actions">
-          <button id="script-upload-button" class="primary-action" type="button" data-action="open-script-modal">打开上传面板</button>
-          <button id="parse-script-button" class="secondary-action" type="button" data-action="parse-script" ${disabled(!state.project || ui.busy)}>AI 拆分镜</button>
-        </div>
-      </section>
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      ${renderScriptManagementPage({ ui })}
     `;
   }
 
@@ -1577,6 +2098,9 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
           libraryDetailAssetId: ui.libraryDetailAssetId,
           libraryDetailView: ui.libraryDetailView,
           pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+          projectName: detailState.project.name,
+          members: ui.projectMembers ?? [],
+          stats: ui.projectStats ?? null,
         })}
       </div>
     `;
@@ -1601,6 +2125,9 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
+        projectName: detailState.project.name,
+        members: ui.projectMembers ?? [],
+        stats: ui.projectStats ?? null,
       })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
     `;
@@ -1665,7 +2192,33 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       calibrationOverrideReason: ui.calibrationOverrideReason ?? "",
       imageGenerationResult: ui.imageGenerationResult ?? null,
       videoGenerationResult: ui.videoGenerationResult ?? null,
-    })}
+      mediaMode: ui.episodeMediaMode ?? "image",
+      videoMode: ui.videoGenerationMode ?? "first-frame",
+      imageMode: ui.imageGenerationMode ?? "single-image",
+      generationControls: {
+        videoDurationSec: ui.videoDurationSec,
+        videoResolution: ui.videoResolution,
+        videoCount: ui.videoCount,
+        videoAudioEnabled: ui.videoAudioEnabled,
+        videoMusicEnabled: ui.videoMusicEnabled,
+        videoLipSyncEnabled: ui.videoLipSyncEnabled,
+        imageCount: ui.imageCount,
+        imageResolution: ui.imageResolution,
+        imageAspectRatio: ui.imageAspectRatio,
+        multiImageStrategy: ui.multiImageStrategy,
+      },
+      generationUiState: {
+        isVideoModelMenuOpen: Boolean(ui.isVideoModelMenuOpen),
+        openGenerationSelectMenu: ui.openGenerationSelectMenu ?? null,
+        isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
+        activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
+        isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+        },
+        storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
+        storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
+        storyboardVideoDeleteTarget: ui.storyboardVideoDeleteTarget ?? null,
+        assetInspector: ui.assetInspector ?? null,
+      })}
     ${renderExportPanel({
       exportPreview: state.exportPreview,
       exportHistory: ui.exportHistory ?? [],
@@ -1691,9 +2244,10 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
-function renderGlobalStatusbar(session) {
+function renderGlobalStatusbar(session, options = {}) {
+  const { hideBrand = false } = options;
   return `
-    <header class="global-statusbar" aria-label="全局状态栏">
+    <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
         <div class="statusbar-wondershare">
           <span class="wondershare-w" aria-hidden="true">W</span>
@@ -1785,7 +2339,7 @@ function renderProjectGallery({ ui }) {
     filterProjectsByStatus(sortProjectsByCreatedAt(projects), statusFilters),
     searchQuery,
   );
-  const pageSize = 8;
+  const pageSize = getAdaptiveProjectPageSize();
   const totalPages = Math.max(1, Math.ceil(filteredProjects.length / pageSize));
   const currentPage = clampPage(ui.projectLibraryPage ?? 1, totalPages);
   const visibleProjects = paginateProjects(filteredProjects, currentPage, pageSize);
@@ -1827,10 +2381,10 @@ function renderProjectGallery({ ui }) {
         }
       </section>
       ${filteredProjects.length > pageSize ? renderProjectPagination({ currentPage, totalPages }) : ""}
+      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
     </section>
   `;
 }
@@ -1859,16 +2413,17 @@ function renderProjectStatusMenu(activeStatuses) {
 
 function renderProjectCard(project, isMenuOpen) {
   const hasCover = Boolean(project.coverImageUrl);
+  const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
     <article class="project-gallery-card" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
       <div class="project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}">
-        <button class="project-cover-placeholder" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">
+        <label class="project-cover-placeholder" for="${coverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
           <strong>上传封面</strong>
-        </button>
+        </label>
         <img class="project-gallery-cover" src="${escapeHtml(getProjectCoverSrc(project))}" alt="${escapeHtml(project.name)} 封面" />
       </div>
-      <input class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
+      <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
       <div class="project-gallery-meta">
         <div>
           <h2>${escapeHtml(project.name)}</h2>
@@ -1933,10 +2488,11 @@ function escapeSvg(value) {
 }
 
 function renderProjectCardMenu(project) {
+  const menuCoverInputId = `project-cover-menu-input-${escapeHtml(project.id)}`;
   return `
     <div class="project-card-menu" role="menu" aria-label="项目操作">
-      <input class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
-      <button class="project-card-menu-item" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">替换封面</button>
+      <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
+      <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">上传封面</label>
       <button class="project-card-menu-item" type="button" data-action="rename-project-card" data-project-id="${escapeHtml(project.id)}">重命名</button>
       <button class="project-card-menu-item danger" type="button" data-action="delete-project-card" data-project-id="${escapeHtml(project.id)}">删除</button>
     </div>
@@ -1959,10 +2515,11 @@ function renderProjectRenameModal({ show, value, notice }) {
           <input
             id="project-rename-name-input"
             type="text"
+            maxlength="50"
             value="${escapeHtml(value)}"
             placeholder="请输入项目名称"
           />
-          <span class="rename-project-count">${[...value].length}</span>
+          <span class="rename-project-count">${[...value].length}/50</span>
         </label>
         <div class="rename-project-actions">
           <p class="modal-inline-status">${escapeHtml(notice)}</p>
@@ -2085,6 +2642,17 @@ function getProjectCreatedAtValue(project) {
     }
   }
   return 0;
+}
+
+function getAdaptiveProjectPageSize() {
+  if (typeof window === "undefined") {
+    return 8;
+  }
+
+  const viewportWidth = Math.max(window.innerWidth || 0, 1280);
+  const availableWidth = Math.max(0, viewportWidth - 180);
+  const columns = Math.max(1, Math.floor((availableWidth + 16) / 290));
+  return Math.max(columns, columns * 2);
 }
 
 function paginateProjects(projects, currentPage, pageSize) {
@@ -2228,5 +2796,3 @@ function getProgress(state) {
     totalSteps: steps.length,
   };
 }
-
-

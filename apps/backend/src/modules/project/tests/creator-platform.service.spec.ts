@@ -53,12 +53,28 @@ describe("creator platform service", { concurrency: false }, () => {
             (SELECT count(*)::int FROM tasks WHERE task_type = 'generate_shot_image') AS task_count,
             (SELECT count(*)::int FROM provider_requests WHERE provider_operation = 'shot.image.generate') AS provider_request_count,
             (SELECT count(*)::int FROM storage_objects WHERE project_id = $1) AS storage_object_count
+          `,
+        [projectId],
+      );
+      const objectRows = await db.query<{ object_key: string }>(
+        `
+          SELECT object_key
+          FROM storage_objects
+          WHERE project_id = $1
+          ORDER BY created_at ASC
         `,
         [projectId],
       );
 
       assert.equal(result.workflowStatus, "succeeded");
       assert.equal(result.tasks.length, 2);
+      assert.equal(objectRows.rows.length, 2);
+      for (const row of objectRows.rows) {
+        assert.match(
+          row.object_key,
+          /^AIManhuaDrama\/20260518\/[0-9a-f-]{36}-image-[0-9a-f-]{36}\.png$/,
+        );
+      }
       assert.deepEqual(counts.rows[0], {
         workflow_count: 1,
         task_count: 2,
@@ -155,12 +171,29 @@ describe("creator platform service", { concurrency: false }, () => {
             (SELECT count(*)::int FROM tasks WHERE task_type = 'create_export') AS task_count,
             (SELECT count(*)::int FROM storage_objects WHERE project_id = $1 AND content_type = 'application/json') AS storage_object_count,
             (SELECT count(*)::int FROM export_records WHERE project_id = $1) AS export_record_count
+          `,
+        [projectId],
+      );
+      const objectRows = await db.query<{ object_key: string }>(
+        `
+          SELECT object_key
+          FROM storage_objects
+          WHERE project_id = $1 AND content_type = 'application/json'
+          ORDER BY created_at ASC
         `,
         [projectId],
       );
 
       assert.equal(result.workflowStatus, "succeeded");
-      assert.match(result.signedUrl, /^https:\/\/dev-storage\.local\//);
+      assert.equal(objectRows.rows.length, 1);
+      assert.match(
+        objectRows.rows[0]?.object_key ?? "",
+        /^AIManhuaDrama\/20260518\/[0-9a-f-]{36}-manifest-[0-9a-f-]{36}\.json$/,
+      );
+      assert.match(
+        result.signedUrl,
+        /^\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=/,
+      );
       assert.equal(result.exportRecord.manifestStatus, "ready");
       assert.deepEqual(counts.rows[0], {
         workflow_count: 1,
@@ -276,9 +309,9 @@ describe("creator platform service", { concurrency: false }, () => {
         `,
         [imageResult.workflowId],
       );
-      const objectRows = await db.query<{ bucket: string }>(
+      const objectRows = await db.query<{ bucket: string; object_key: string }>(
         `
-          SELECT bucket
+          SELECT bucket, object_key
           FROM storage_objects
           WHERE project_id = $1
           ORDER BY created_at ASC
@@ -301,8 +334,16 @@ describe("creator platform service", { concurrency: false }, () => {
       });
       assert.equal(objectRows.rows[0]?.bucket, "creator-prod");
       assert.match(
+        objectRows.rows[0]?.object_key ?? "",
+        /^AIManhuaDrama\/20260518\/[0-9a-f-]{36}-image-[0-9a-f-]{36}\.png$/,
+      );
+      assert.match(
+        objectRows.rows[1]?.object_key ?? "",
+        /^AIManhuaDrama\/20260518\/[0-9a-f-]{36}-manifest-[0-9a-f-]{36}\.json$/,
+      );
+      assert.match(
         exportResult.signedUrl,
-        /^https:\/\/cdn\.example\.test\/assets\/creator-prod\//,
+        /^https:\/\/cdn\.example\.test\/assets\/creator-prod\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=/,
       );
       assert.equal(
         exportResult.expiresAt.toISOString(),

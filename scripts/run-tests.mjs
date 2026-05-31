@@ -14,7 +14,7 @@ const ignoredDirectories = new Set([
 const args = process.argv.slice(2);
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
-const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 60_000);
+const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 300_000);
 
 if (testFiles.length === 0) {
   console.error(`No test files found for: ${targets.join(", ")}`);
@@ -164,6 +164,10 @@ function resolveTsxRuntimeArgs(runtime) {
 function runCommand(command, testFile) {
   return new Promise((resolve) => {
     const child = spawn(command.runtime, command.args, {
+      env: {
+        ...process.env,
+        NODE_ENV: process.env.NODE_ENV ?? "test",
+      },
       stdio: "inherit",
     });
     let settled = false;

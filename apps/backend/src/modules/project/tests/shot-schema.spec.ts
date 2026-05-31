@@ -14,6 +14,7 @@ describe("shot schema assumptions", () => {
 
     assert.match(sql, /CREATE TABLE shots \(/);
     assert.match(sql, /episode_id uuid NULL/);
+    assert.match(sql, /description text NOT NULL DEFAULT ''/);
     assert.match(sql, /content_revision integer NOT NULL DEFAULT 1 CHECK \(content_revision >= 1\)/);
     assert.match(sql, /content_status text NOT NULL CHECK \(content_status IN \('draft', 'ready', 'stale'\)\)/);
     assert.match(sql, /image_status text NOT NULL CHECK \(image_status IN \('draft', 'ready', 'generating', 'completed', 'failed', 'stale'\)\)/);
@@ -41,5 +42,23 @@ describe("shot schema assumptions", () => {
     assert.match(sql, /status text NOT NULL CHECK \(status IN \('draft', 'ready', 'archived'\)\)/);
     assert.match(sql, /UNIQUE \(organization_id, project_id, sequence\)/);
     assert.match(sql, /CREATE INDEX episodes_project_idx/);
+  });
+
+  it("adds persistent shot references for generation controls", async () => {
+    const sql = await readFile(
+      new URL(
+        "../../../../../../packages/db/migrations/0001_foundation.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    assert.match(sql, /CREATE TABLE shot_reference_assets \(/);
+    assert.match(sql, /shot_id uuid NOT NULL REFERENCES shots\(id\)/);
+    assert.match(sql, /asset_id uuid NOT NULL REFERENCES assets\(id\)/);
+    assert.match(sql, /asset_version_id uuid NULL REFERENCES asset_versions\(id\)/);
+    assert.match(sql, /reference_role text NOT NULL CHECK/);
+    assert.match(sql, /'locked_character'/);
+    assert.match(sql, /CREATE INDEX shot_reference_assets_shot_idx/);
   });
 });

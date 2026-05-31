@@ -20,6 +20,7 @@ interface ProjectRow {
   workspace_id: string;
   name: string;
   cover_image_url: string | null;
+  cover_storage_object_id: string | null;
   aspect_ratio: ProjectAspectRatio;
   resolution: ProjectResolution;
   phase: ProjectRecord["phase"];
@@ -289,6 +290,7 @@ function projectFromRow(row: ProjectRow): ProjectRecord {
     workspaceId: row.workspace_id,
     name: row.name,
     coverImageUrl: row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
     aspectRatio: row.aspect_ratio,
     resolution: row.resolution,
     phase: row.phase,

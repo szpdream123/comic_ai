@@ -20,15 +20,19 @@ describe("login page shell", () => {
   });
 
   it("renders production workbench controls and Chinese copy", async () => {
-    const js = await readFile(
+    const indexJs = await readFile(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
     );
+    const detailJs = await readFile(
+      new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
+      "utf8",
+    );
 
-    assert.match(js, /set-nav-tab/);
-    assert.match(js, /home: "首页"/);
-    assert.match(js, /script: "剧本"/);
-    assert.match(js, /project: "项目"/);
+    assert.match(indexJs, /set-nav-tab/);
+    assert.match(detailJs, /id: "home", label: "首页"/);
+    assert.match(detailJs, /id: "script", label: "剧本"/);
+    assert.match(detailJs, /id: "project", label: "项目"/);
   });
 });
 
@@ -42,6 +46,7 @@ describe("login page client flow", () => {
     assert.match(js, /\/api\/auth\/dev\/challenges\//);
     assert.match(js, /debug-panel/);
     assert.match(js, /\/app\.html/);
+    assert.match(js, /window\.location\.protocol === "file:"/);
   });
 
   it("wires the creator workspace to the mock creator APIs", async () => {

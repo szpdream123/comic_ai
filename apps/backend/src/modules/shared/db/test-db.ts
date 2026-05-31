@@ -1,21 +1,23 @@
-import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
-import { PGlite } from "@electric-sql/pglite";
-
+import { applySqlMigrations } from "./migrations.ts";
 import type { SqlDatabase } from "./sql.ts";
 
-export type TestDatabase = PGlite & SqlDatabase;
+export type TestDatabase = SqlDatabase;
 
 export async function createMigratedTestDb(): Promise<TestDatabase> {
-  const db = new PGlite(`memory://${randomUUID()}`) as TestDatabase;
-  const migration = await readFile(
-    join(process.cwd(), "packages", "db", "migrations", "0001_foundation.sql"),
-    "utf8",
+  const { PGlite } = await import("@electric-sql/pglite");
+  const localTestDbPath = resolve(
+    process.cwd(),
+    ".local",
+    "test-db",
+    randomUUID(),
   );
-
-  await db.exec(migration);
+  await mkdir(dirname(localTestDbPath), { recursive: true });
+  const db = new PGlite(localTestDbPath) as TestDatabase;
+  await applySqlMigrations(db);
   return db;
 }
 
@@ -47,4 +49,21 @@ export async function listColumnNames(
   );
 
   return result.rows.map((row) => row.column_name);
+}
+
+export async function listIndexNames(
+  db: SqlDatabase,
+  tableName: string,
+): Promise<string[]> {
+  const result = await db.query<{ indexname: string }>(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = $1
+      ORDER BY indexname
+    `,
+    [tableName],
+  );
+
+  return result.rows.map((row) => row.indexname);
 }

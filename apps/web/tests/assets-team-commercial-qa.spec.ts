@@ -1883,6 +1883,35 @@ describe("Worker C team management surfaces", () => {
     assert.match(html, /data-placeholder-message="[^"]*成员筛选[^"]*"/);
   });
 
+  it("renders real members and stats when supplied by the workbench context", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      projectName: "废土人",
+      stats: {
+        episodeCount: 3,
+        memberCount: 1,
+        generatedVideoCount: 4,
+        generatedImageCount: 1280,
+        assetCount: 720,
+        exportCount: 300,
+      },
+      members: [
+        {
+          phone: "13800138000",
+          userId: "user-1",
+          role: "管理员",
+          status: "enabled",
+          consumedCredits: 512,
+          scriptCount: 8,
+          projectCount: 3,
+          projectAverageCredits: 171,
+        },
+      ],
+    });
+
+    assertIncludesAll(html, ["废土人", "1/1", "13800138000", "管理员", "512", "8", "enabled"]);
+  });
+
   it("renders the team dashboard route without requiring shell DOM", () => {
     const html = renderLibraryTeam({ route: "team-dashboard" });
 
