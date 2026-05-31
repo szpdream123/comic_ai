@@ -382,6 +382,7 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 }
 
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
+const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
 export async function initProductionWorkbench({ root, session, api, onLogout }) {
   const workbench = {
@@ -5648,18 +5649,28 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
     acceptedFiles.push({ file, validation });
   }
 
-  if (!acceptedFiles.length) {
+  const currentUploads = workbench.ui.teamAssetLocalUploads ?? {};
+  const currentCategoryUploads = Array.isArray(currentUploads[category])
+    ? currentUploads[category]
+    : [];
+  const slotsLeft = Math.max(TEAM_ASSET_LOCAL_UPLOAD_LIMIT - currentCategoryUploads.length, 0);
+  const filesWithinLimit = acceptedFiles.slice(0, slotsLeft);
+  const skippedForLimitCount = Math.max(acceptedFiles.length - filesWithinLimit.length, 0);
+
+  if (!filesWithinLimit.length) {
     workbench.ui.toast = rejectMessage || "请选择支持格式的文件。";
+    if (acceptedFiles.length && skippedForLimitCount > 0) {
+      workbench.ui.toast = `当前分类本地上传最多保留 ${TEAM_ASSET_LOCAL_UPLOAD_LIMIT} 个文件，${skippedForLimitCount} 个文件已跳过。`;
+    }
     render(workbench);
     return;
   }
 
   const nextUploads = await Promise.all(
-    acceptedFiles.map(({ file, validation }) =>
+    filesWithinLimit.map(({ file, validation }) =>
       buildTeamAssetLocalUploadRecord(category, file, validation),
     ),
   );
-  const currentUploads = workbench.ui.teamAssetLocalUploads ?? {};
 
   workbench.ui.teamAssetLocalUploads = {
     character: [],
@@ -5667,13 +5678,14 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
     prop: [],
     voice: [],
     ...currentUploads,
-    [category]: [...(currentUploads[category] ?? []), ...nextUploads],
+    [category]: [...currentCategoryUploads, ...nextUploads],
   };
 
   const label = category === "voice" ? "音频" : "图片";
+  const skippedCount = rejectedCount + skippedForLimitCount;
   workbench.ui.toast =
-    rejectedCount > 0
-      ? `已添加 ${nextUploads.length} 个本地${label}预览，${rejectedCount} 个文件格式不支持。`
+    skippedCount > 0
+      ? `已添加 ${nextUploads.length} 个本地${label}预览，${skippedCount} 个文件已跳过。`
       : `已添加 ${nextUploads.length} 个本地${label}预览。`;
   render(workbench, { preserveLibraryScroll: true });
 }

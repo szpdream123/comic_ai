@@ -673,9 +673,15 @@
 .library-team-local-upload-card-title {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.library-team-local-upload-card-name {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
 }
 
 .library-team-local-upload-card h3 {
@@ -687,6 +693,20 @@
   font-weight: 800;
   line-height: 1.25;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-team-local-upload-status {
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid rgba(197, 156, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(197, 156, 255, 0.08);
+  color: #cdb7ff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
   white-space: nowrap;
 }
 

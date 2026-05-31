@@ -473,7 +473,7 @@ function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
 }
 
 function renderTeamAssetLocalUploadCard(asset, config) {
-  const name = asset.name ?? asset.fileName ?? "未命名上传";
+  const name = formatLocalUploadDisplayName(asset.name ?? asset.fileName ?? "未命名上传");
   const previewUrl = asset.previewUrl ?? asset.sourceUrl ?? asset.url ?? "";
   const meta = [asset.sizeLabel, asset.mimeType || asset.extension].filter(Boolean).join(" · ");
   const deleteButton = renderTeamAssetLocalUploadDeleteButton(asset, name);
@@ -484,7 +484,10 @@ function renderTeamAssetLocalUploadCard(asset, config) {
         <div class="library-team-local-upload-audio-icon" aria-hidden="true"></div>
         <div class="library-team-local-upload-card-body">
           <div class="library-team-local-upload-card-title">
-            <h3>${escapeHtml(name)}</h3>
+            <div class="library-team-local-upload-card-name">
+              <h3>${escapeHtml(name)}</h3>
+              <span class="library-team-local-upload-status">待同步</span>
+            </div>
             ${deleteButton}
           </div>
           ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
@@ -498,7 +501,10 @@ function renderTeamAssetLocalUploadCard(asset, config) {
     <article class="library-team-local-upload-card is-image" data-local-upload-id="${escapeAttr(asset.id ?? "")}">
       <div class="library-team-local-upload-card-body">
         <div class="library-team-local-upload-card-title">
-          <h3>${escapeHtml(name)}</h3>
+          <div class="library-team-local-upload-card-name">
+            <h3>${escapeHtml(name)}</h3>
+            <span class="library-team-local-upload-status">待同步</span>
+          </div>
           ${deleteButton}
         </div>
         ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
@@ -512,6 +518,14 @@ function renderTeamAssetLocalUploadCard(asset, config) {
       </figure>
     </article>
   `;
+}
+
+function formatLocalUploadDisplayName(name) {
+  const value = String(name ?? "").trim();
+  if (!value) {
+    return "未命名上传";
+  }
+  return value.replace(/\.[^./\\]+$/, "") || value;
 }
 
 function renderTeamAssetLocalUploadDeleteButton(asset, name) {

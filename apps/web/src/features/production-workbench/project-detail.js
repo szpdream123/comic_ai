@@ -2103,6 +2103,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
           stats: ui.projectStats ?? null,
         })}
       </div>
+      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已进入资产库。")}</p>
     `;
   }
 

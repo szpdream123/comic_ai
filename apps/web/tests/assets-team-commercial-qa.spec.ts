@@ -465,12 +465,14 @@ describe("Worker C asset library surfaces", () => {
       },
     });
 
-    assertIncludesAll(html, ["本地上传，待同步", "自定义主角.png", "1.2 MB", "团队资产库为专业版会员权益"]);
+    assertIncludesAll(html, ["本地上传，待同步", "自定义主角", "1.2 MB", "团队资产库为专业版会员权益"]);
     assert.match(html, /library-team-local-upload-section/);
     assert.match(html, /src="data:image\/png;base64,custom-character"/);
     assert.match(html, /data-action="delete-team-asset-local-upload"/);
     assert.match(html, /data-local-upload-id="local-character-1"/);
-    assert.match(html, /aria-label="删除自定义主角\.png"/);
+    assert.match(html, /aria-label="删除自定义主角"/);
+    assert.match(html, /library-team-local-upload-status/);
+    assert.doesNotMatch(html, /<h3>自定义主角\.png<\/h3>/);
     assert.match(html, /library-team-locked-panel/);
     assert.ok(
       html.indexOf("本地上传，待同步") < html.indexOf("library-team-locked-panel"),
@@ -500,12 +502,14 @@ describe("Worker C asset library surfaces", () => {
       },
     });
 
-    assertIncludesAll(html, ["本地上传，待同步", "旁白音色.m4a", "860 KB"]);
+    assertIncludesAll(html, ["本地上传，待同步", "旁白音色", "860 KB"]);
     assert.match(html, /<audio[^>]+controls/);
     assert.match(html, /src="blob:http:\/\/localhost\/local-voice-1"/);
     assert.match(html, /library-team-local-upload-card is-audio/);
     assert.match(html, /data-action="delete-team-asset-local-upload"/);
     assert.match(html, /data-local-upload-id="local-voice-1"/);
+    assert.match(html, /library-team-local-upload-status/);
+    assert.doesNotMatch(html, /<h3>旁白音色\.m4a<\/h3>/);
   });
 
   it("removes a local team upload without touching other categories", () => {
@@ -647,10 +651,12 @@ describe("Worker C asset library surfaces", () => {
       ]);
 
       assert.equal(workbench.ui.teamAssetLocalUploads.character.length, 1);
-      assert.match(root.innerHTML, /hero\.png/);
+      assert.match(root.innerHTML, /hero/);
+      assert.doesNotMatch(root.innerHTML, /<h3>hero\.png<\/h3>/);
       assert.match(root.innerHTML, /data:image\/png;base64,cHJldmlldw==/);
       assert.match(root.innerHTML, /1\.5 KB/);
       assert.match(root.innerHTML, /data-action="delete-team-asset-local-upload"/);
+      assert.match(root.innerHTML, /library-team-local-upload-status/);
 
       const voiceRoot = {
         innerHTML: "",
@@ -678,11 +684,75 @@ describe("Worker C asset library surfaces", () => {
       ]);
 
       assert.equal(voiceWorkbench.ui.teamAssetLocalUploads.voice.length, 1);
-      assert.match(voiceRoot.innerHTML, /narrator\.mp3/);
+      assert.match(voiceRoot.innerHTML, /narrator/);
+      assert.doesNotMatch(voiceRoot.innerHTML, /<h3>narrator\.mp3<\/h3>/);
       assert.match(voiceRoot.innerHTML, /blob:http:\/\/localhost\/probe-voice/);
       assert.match(voiceRoot.innerHTML, /2 KB/);
       assert.match(voiceRoot.innerHTML, /<audio[^>]+controls/);
       assert.match(voiceRoot.innerHTML, /data-action="delete-team-asset-local-upload"/);
+      assert.match(voiceRoot.innerHTML, /library-team-local-upload-status/);
+
+      const invalidRoot = {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      };
+      const invalidWorkbench = {
+        ...workbench,
+        root: invalidRoot,
+        ui: {
+          ...workbench.ui,
+          teamAssetLocalUploads: {
+            character: [],
+            scene: [],
+            prop: [],
+            voice: [],
+          },
+        },
+      };
+
+      await handleTeamAssetLocalUploadFiles(invalidWorkbench, "character", [
+        { name: "notes.pdf", type: "application/pdf", size: 2048 },
+      ]);
+
+      assert.equal(invalidWorkbench.ui.teamAssetLocalUploads.character.length, 0);
+      assert.match(invalidRoot.innerHTML, /workbench-toast/);
+      assert.match(invalidRoot.innerHTML, /PNG、JPG/);
+      assert.doesNotMatch(invalidRoot.innerHTML, /library-team-local-upload-card/);
+
+      const limitRoot = {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      };
+      const limitWorkbench = {
+        ...workbench,
+        root: limitRoot,
+        ui: {
+          ...workbench.ui,
+          libraryCategory: "scene",
+          teamAssetLocalUploads: {
+            character: [],
+            scene: [],
+            prop: [],
+            voice: [],
+          },
+        },
+      };
+      const limitFiles = Array.from({ length: 21 }, (_, index) => ({
+        name: `scene-${index + 1}.png`,
+        type: "image/png",
+        size: 1024,
+      }));
+
+      await handleTeamAssetLocalUploadFiles(limitWorkbench, "scene", limitFiles);
+
+      assert.equal(limitWorkbench.ui.teamAssetLocalUploads.scene.length, 20);
+      assert.match(limitRoot.innerHTML, /20 张图片/);
+      assert.match(limitRoot.innerHTML, /1 个文件已跳过/);
+      assert.doesNotMatch(limitRoot.innerHTML, /<h3>scene-21<\/h3>/);
     } finally {
       if (originalCreateObjectURL) {
         urlApi.createObjectURL = originalCreateObjectURL;
@@ -705,6 +775,28 @@ describe("Worker C asset library surfaces", () => {
         delete globals.window;
       }
     }
+  });
+
+  it("renders library upload toast feedback inside the asset library tab", () => {
+    const html = renderWorkbenchTab("library", {
+      libraryTeamAssetScope: "team",
+      libraryCategory: "character",
+      libraryEntitlement: {
+        hasTeamAssetLibrary: false,
+        blockReason: "team_asset_library_entitlement_required",
+      },
+      teamAssetLocalUploads: {
+        character: [],
+        scene: [],
+        prop: [],
+        voice: [],
+      },
+      toast: "已添加 1 个本地图片预览。",
+    });
+
+    assert.match(html, /id="workspace-status"/);
+    assert.match(html, /workbench-toast/);
+    assert.match(html, /已添加 1 个本地图片预览。/);
   });
 
   it("revokes local voice blob URLs when removing uploads", () => {
@@ -1854,7 +1946,7 @@ describe("Worker C production workbench integration", () => {
 
     assert.match(html, /library-team-page/);
     assert.match(html, /library-workspace-scroll/);
-    assert.doesNotMatch(html, /workspace-status/);
+    assert.match(html, /workspace-status/);
     assertIncludesAll(html, [
       "官方资产库",
       "团队资产库",
