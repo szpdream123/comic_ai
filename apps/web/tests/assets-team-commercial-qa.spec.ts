@@ -7,6 +7,7 @@ import { inflateSync } from "node:zlib";
 import { renderLibraryTeam } from "../src/features/library-team/index.js";
 import { validateTeamAssetLocalUploadFile } from "../src/features/library-team/asset-library-page.js";
 import {
+  handleTeamAssetLocalUploadFiles,
   handleProductionWorkbenchAction,
   removeTeamAssetLocalUpload,
   renderProductionWorkbench,
@@ -570,6 +571,140 @@ describe("Worker C asset library surfaces", () => {
     await handleProductionWorkbenchAction({ ui: { busy: false } }, button);
 
     assert.equal(clicked, true);
+  });
+
+  it("renders local upload previews and delete actions after selecting valid files", async () => {
+    const globals = globalThis as typeof globalThis & {
+      FileReader?: typeof FileReader;
+      document?: Document;
+      window?: Window & typeof globalThis;
+    };
+    const originalFileReader = globals.FileReader;
+    const originalDocument = globals.document;
+    const originalWindow = globals.window;
+    const urlApi = globalThis.URL as typeof URL & { createObjectURL?: (file: unknown) => string };
+    const originalCreateObjectURL = urlApi.createObjectURL;
+    const root = {
+      innerHTML: "",
+      querySelector() {
+        return null;
+      },
+    };
+
+    class TestFileReader {
+      result = "";
+      error = null;
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+
+      readAsDataURL(file: { type?: string }) {
+        this.result = `data:${file.type || "application/octet-stream"};base64,cHJldmlldw==`;
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    globals.FileReader = TestFileReader as unknown as typeof FileReader;
+    urlApi.createObjectURL = () => "blob:http://localhost/probe-voice";
+    globals.document = {
+      scrollingElement: { scrollLeft: 0, scrollTop: 0 },
+      documentElement: { scrollLeft: 0, scrollTop: 0 },
+    } as unknown as Document;
+    globals.window = {
+      scrollX: 0,
+      scrollY: 0,
+    } as unknown as Window & typeof globalThis;
+
+    try {
+      const workbench = {
+        root,
+        state: {},
+        session: { user: { phone: "13800138000" } },
+        ui: {
+          activeNavTab: "library",
+          busy: false,
+          toast: "",
+          libraryTeamAssetScope: "team",
+          libraryCategory: "character",
+          libraryFolder: "",
+          libraryQuery: "",
+          libraryEntitlement: {
+            hasTeamAssetLibrary: false,
+            blockReason: "team_asset_library_entitlement_required",
+          },
+          teamAssetLocalUploads: {
+            character: [],
+            scene: [],
+            prop: [],
+            voice: [],
+          },
+          storyboards: [],
+          exportHistory: [],
+        },
+      };
+
+      await handleTeamAssetLocalUploadFiles(workbench, "character", [
+        { name: "hero.png", type: "image/png", size: 1536 },
+      ]);
+
+      assert.equal(workbench.ui.teamAssetLocalUploads.character.length, 1);
+      assert.match(root.innerHTML, /hero\.png/);
+      assert.match(root.innerHTML, /data:image\/png;base64,cHJldmlldw==/);
+      assert.match(root.innerHTML, /1\.5 KB/);
+      assert.match(root.innerHTML, /data-action="delete-team-asset-local-upload"/);
+
+      const voiceRoot = {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      };
+      const voiceWorkbench = {
+        ...workbench,
+        root: voiceRoot,
+        ui: {
+          ...workbench.ui,
+          libraryCategory: "voice",
+          teamAssetLocalUploads: {
+            character: [],
+            scene: [],
+            prop: [],
+            voice: [],
+          },
+        },
+      };
+
+      await handleTeamAssetLocalUploadFiles(voiceWorkbench, "voice", [
+        { name: "narrator.mp3", type: "audio/mpeg", size: 2048 },
+      ]);
+
+      assert.equal(voiceWorkbench.ui.teamAssetLocalUploads.voice.length, 1);
+      assert.match(voiceRoot.innerHTML, /narrator\.mp3/);
+      assert.match(voiceRoot.innerHTML, /blob:http:\/\/localhost\/probe-voice/);
+      assert.match(voiceRoot.innerHTML, /2 KB/);
+      assert.match(voiceRoot.innerHTML, /<audio[^>]+controls/);
+      assert.match(voiceRoot.innerHTML, /data-action="delete-team-asset-local-upload"/);
+    } finally {
+      if (originalCreateObjectURL) {
+        urlApi.createObjectURL = originalCreateObjectURL;
+      } else {
+        delete urlApi.createObjectURL;
+      }
+      if (originalFileReader) {
+        globals.FileReader = originalFileReader;
+      } else {
+        delete globals.FileReader;
+      }
+      if (originalDocument) {
+        globals.document = originalDocument;
+      } else {
+        delete globals.document;
+      }
+      if (originalWindow) {
+        globals.window = originalWindow;
+      } else {
+        delete globals.window;
+      }
+    }
   });
 
   it("revokes local voice blob URLs when removing uploads", () => {

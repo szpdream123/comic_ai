@@ -5633,7 +5633,7 @@ function getWorkbenchStorageKey(projectId) {
   return `${WORKBENCH_STORAGE_PREFIX}:${projectId}`;
 }
 
-async function handleTeamAssetLocalUploadFiles(workbench, category, files) {
+export async function handleTeamAssetLocalUploadFiles(workbench, category, files) {
   const acceptedFiles = [];
   let rejectedCount = 0;
   let rejectMessage = "";
@@ -5689,12 +5689,35 @@ async function buildTeamAssetLocalUploadRecord(category, file, validation) {
     id: `team-local-${category}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: file.name,
     fileName: file.name,
+    category,
     previewUrl,
     mimeType: file.type || validation.mimeType || validation.extension?.toUpperCase() || "",
     extension: validation.extension,
     sizeLabel: formatFileSizeLabel(file.size),
     createdAt: Date.now(),
   };
+}
+
+function formatFileSizeLabel(size) {
+  const bytes = Number(size ?? 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const formatted =
+    unitIndex === 0
+      ? String(Math.round(value))
+      : (value >= 10 ? String(Math.round(value)) : value.toFixed(1)).replace(/\.0$/, "");
+  return `${formatted} ${units[unitIndex]}`;
 }
 
 async function handleAssetImportFiles(workbench, files) {
