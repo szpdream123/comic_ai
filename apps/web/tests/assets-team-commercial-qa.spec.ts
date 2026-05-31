@@ -7,8 +7,10 @@ import { inflateSync } from "node:zlib";
 import { renderLibraryTeam } from "../src/features/library-team/index.js";
 import { validateTeamAssetLocalUploadFile } from "../src/features/library-team/asset-library-page.js";
 import {
+  handleProductionWorkbenchAction,
   removeTeamAssetLocalUpload,
   renderProductionWorkbench,
+  resolveTeamAssetLocalUploadInput,
 } from "../src/features/production-workbench/index.js";
 import { officialAssetLibraryFixture } from "../src/features/library-team/asset-fixtures.js";
 import { renderPricingModal } from "../src/features/library-team/pricing-modal.js";
@@ -524,6 +526,50 @@ describe("Worker C asset library surfaces", () => {
       { id: "local-voice-1", name: "旁白音色.m4a" },
     ]);
     assert.equal(removeTeamAssetLocalUpload(ui, "character", "missing-upload"), false);
+  });
+
+  it("resolves the hidden file input from a team local upload button", () => {
+    const input = { click() {} };
+    const toolbar = {
+      querySelector(selector: string) {
+        assert.equal(selector, ".team-asset-local-upload-input");
+        return input;
+      },
+    };
+    const button = {
+      closest(selector: string) {
+        assert.equal(selector, ".library-team-local-upload-toolbar");
+        return toolbar;
+      },
+    };
+
+    assert.equal(resolveTeamAssetLocalUploadInput(button), input);
+  });
+
+  it("routes team local upload button clicks to the hidden file input", async () => {
+    let clicked = false;
+    const input = {
+      click() {
+        clicked = true;
+      },
+    };
+    const toolbar = {
+      querySelector(selector: string) {
+        assert.equal(selector, ".team-asset-local-upload-input");
+        return input;
+      },
+    };
+    const button = {
+      dataset: { action: "pick-team-asset-local-upload" },
+      closest(selector: string) {
+        assert.equal(selector, ".library-team-local-upload-toolbar");
+        return toolbar;
+      },
+    };
+
+    await handleProductionWorkbenchAction({ ui: { busy: false } }, button);
+
+    assert.equal(clicked, true);
   });
 
   it("revokes local voice blob URLs when removing uploads", () => {

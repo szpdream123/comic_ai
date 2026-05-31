@@ -40,6 +40,14 @@ export function removeTeamAssetLocalUpload(ui, category, uploadId) {
   return true;
 }
 
+export function resolveTeamAssetLocalUploadInput(target) {
+  return (
+    target
+      ?.closest?.(".library-team-local-upload-toolbar")
+      ?.querySelector?.(".team-asset-local-upload-input") ?? null
+  );
+}
+
 function revokeTeamAssetLocalUploadUrl(asset) {
   const previewUrl = asset?.previewUrl ?? asset?.sourceUrl ?? asset?.url ?? "";
   if (!String(previewUrl).startsWith("blob:")) {
@@ -589,7 +597,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         "textarea, input, button, select, option, label, a, [contenteditable='true']",
       );
       if (cardTarget && !blockedInteractiveTarget) {
-        void handleAction(workbench, {
+        void handleProductionWorkbenchAction(workbench, {
           dataset: {
             action: "set-episode-asset",
             assetId: cardTarget.dataset.assetCardId ?? "",
@@ -638,7 +646,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       dataset: datasetToObject(actionTarget.dataset),
       label: actionTarget.textContent?.trim()?.slice(0, 120) ?? "",
     });
-    void handleAction(workbench, actionTarget).catch((error) => {
+    void handleProductionWorkbenchAction(workbench, actionTarget).catch((error) => {
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     });
@@ -1375,7 +1383,7 @@ function mergeGenerationState(currentState, nextState) {
   };
 }
 
-async function handleAction(workbench, target) {
+export async function handleProductionWorkbenchAction(workbench, target) {
   const action = target.dataset.action;
   const allowWhileBusy = new Set([
     "open-delete-sidebar-storyboard-modal",
@@ -1518,6 +1526,11 @@ async function handleAction(workbench, target) {
     workbench.ui.libraryDetailView =
       target.dataset.detailView ?? target.dataset.libraryDetailView ?? "turnaround";
     render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "pick-team-asset-local-upload") {
+    resolveTeamAssetLocalUploadInput(target)?.click?.();
     return;
   }
 
