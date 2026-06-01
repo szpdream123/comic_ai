@@ -18,6 +18,7 @@ export const operationNames = {
   opsRetryTask: "ops.retry_task",
   opsMarkPaymentRiskReviewed: "ops.mark_payment_risk_reviewed",
   opsRepairPaidWithoutCredit: "ops.repair_paid_without_credit",
+  llmChatCompletions: "llm.chat.completions",
 } as const;
 
 export type OperationName = (typeof operationNames)[keyof typeof operationNames];
