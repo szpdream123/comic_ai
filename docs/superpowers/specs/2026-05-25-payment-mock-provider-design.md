@@ -1,28 +1,28 @@
-# Payment Mock Provider Design
+# Payment Provider Integration Design
 
 > Date: 2026-05-25  
-> Status: Design baseline with open-source research and local integration direction
-> Scope: Local payment provider simulation for one-time credit package purchases  
+> Status: PayLab-first provider architecture with open-source research and local fallback direction
+> Scope: Payment provider integration for one-time credit package purchases; PayLab first, WeChat Pay and Alipay later
 > Non-scope: Object storage, text model gateway, subscriptions, revenue sharing, auto-renewal, postpaid billing
 
 ## 1. Goal
 
-The local payment mock must help the team test the real platform payment lifecycle before WeChat Pay and Alipay are connected.
+The payment provider integration must help the team test the real platform payment lifecycle before WeChat Pay and Alipay are connected.
 
-It should not be a shortcut that directly marks orders paid or grants credits. It should behave like a local provider, so that the platform backend still exercises the same boundaries it will use in production:
+PayLab is the recommended first external test provider. A first-party local mock remains a fallback for deterministic edge cases, but neither PayLab nor the mock can become a shortcut that directly marks orders paid or grants credits. The platform backend must keep exercising the same boundaries it will use in production:
 
 ```text
 Platform creates order
   -> Platform creates payment intent through a provider adapter
-  -> Mock provider returns a provider-like pay action
-  -> Mock provider sends an async callback to the platform
+  -> Provider returns a provider-like pay action
+  -> Provider sends an async callback to the platform
   -> Commerce/Payment verifies and records the provider event
   -> Commerce/Payment marks the payment intent/order according to verified facts
   -> Commerce/Payment emits payment.succeeded through outbox
   -> Credit/Billing consumes payment.succeeded and grants credits
 ```
 
-Recommended shape: an independent local provider simulator. It should run beside the backend, expose provider-like endpoints, sign callback payloads, and support scenario injection.
+Recommended shape: platform-owned payment domain plus replaceable provider adapters. PayLab is the first provider adapter for test environments; the local mock adapter is used only when PayLab cannot cover a required scenario.
 
 ## 2. Current Project Context
 
@@ -38,7 +38,7 @@ The current project already has the core payment and credit facts in place:
 | Credit accounting | `Credit/Billing` | `credit_ledger_entries` |
 | Async success bridge | `Commerce/Payment` -> `Credit/Billing` | `outbox_events`, `inbox_events` |
 
-The existing `/api/billing/payment-callback/mock` route is useful for tests, but it is not the long-term mock boundary. It lets tests inject a callback directly into the platform. The long-term local mock should instead simulate a provider outside the platform and call back into the platform through the same callback contract that real providers will use.
+The existing `/api/billing/payment-callback/mock` route is useful for tests, but it is not the long-term provider boundary. It lets tests inject a callback directly into the platform. The long-term test flow should use PayLab first, and only use a local fallback mock when PayLab cannot cover a required scenario.
 
 ## 3. Boundary And Ownership
 
@@ -82,7 +82,7 @@ Does not own:
 
 Rule: `Credit/Billing` consumes durable payment facts. It must never parse WeChat Pay or Alipay payloads.
 
-### 3.3 Mock Provider
+### 3.3 Provider And Fallback Mock Provider
 
 Owns:
 
@@ -103,7 +103,7 @@ Does not own:
 - Platform user, organization, or membership data.
 - Admin/Ops repair decisions.
 
-Rule: the mock provider simulates an external system. It should only communicate through provider adapter calls and callback HTTP calls.
+Rule: PayLab, WeChat Pay, Alipay, and the fallback mock all behave as external providers from the platform's point of view. They should only communicate through provider adapter calls and callback HTTP calls.
 
 ### 3.4 Admin/Ops
 
@@ -127,7 +127,7 @@ Creator Web
   -> Platform Backend
     -> Commerce/Payment
       -> PaymentProviderAdapter
-        -> Local Mock Provider
+        -> PayLab / WeChat Pay / Alipay / Fallback Mock
           -> async callback back to Platform Backend
     -> Payment provider event records
     -> Outbox
@@ -135,16 +135,159 @@ Creator Web
     -> Credit ledger
 ```
 
-The adapter boundary is the replaceable part. The platform should be able to switch from `mock_provider` to `wechat_pay` or `alipay` by changing provider adapter implementation and runtime configuration, without changing order, provider event, outbox, or credit ledger ownership.
+The adapter boundary is the replaceable part. The platform should be able to switch from `paylab` to `wechat_pay` or `alipay` by changing provider adapter implementation and runtime configuration, without changing order, provider event, outbox, or credit ledger ownership.
+
+### 4.1 Payment Service Model Recommendation
+
+Recommended architecture: **platform-owned payment domain + provider registry + PayLab as the first external test provider**.
+
+PayLab should be treated as a real provider from the platform's point of view, not as a helper function inside `Commerce/Payment`. The first production-shaped test flow should therefore be:
+
+```text
+Creator Web
+  -> POST /api/billing/orders
+  -> POST /api/billing/payment-intents { provider: "paylab" }
+Platform Backend
+  -> Commerce/Payment creates payment_intents row
+  -> PaymentProviderRegistry resolves PayLabAdapter
+  -> PayLabAdapter calls PayLab Mock PSP
+PayLab
+  -> Sends signed webhook to /api/payment-provider-callbacks/paylab
+Platform Backend
+  -> PayLabAdapter verifies + normalizes callback
+  -> Commerce/Payment stores payment_provider_events first
+  -> Commerce/Payment updates intent/order only after platform validation
+  -> Commerce/Payment emits payment.succeeded outbox
+Credit/Billing
+  -> consumes payment.succeeded
+  -> writes credit_ledger_entries
+```
+
+This keeps the adapter replaceable while making the test environment exercise the same asynchronous shape that WeChat Pay and Alipay will use later.
+
+#### 4.1.1 Provider Submission State Machine
+
+Provider creation has two sources of truth: our database and the external provider. The design must not hide the gap between them.
+
+Rules:
+
+1. Do not hold a database transaction open while calling PayLab, WeChat Pay, or Alipay.
+2. Create or reuse a platform `payment_intents` row in `created` state before the provider call.
+3. Call the provider with a deterministic provider idempotency key derived from the platform idempotency record or payment intent ID.
+4. If the provider accepts the request, update the intent to `submitted`, store provider-safe metadata, `provider_payload_hash`, `submitted_at`, and the returned `ProviderPayAction`.
+5. If the provider call times out or returns an ambiguous error, mark the intent `unknown`, return a retryable response, and rely on `queryPaymentStatus` reconciliation.
+6. If the provider accepts the request but our update fails, the next retry must use the same provider idempotency key and repair local state through provider query rather than creating a second provider payment.
+7. Only provider callback or reconciliation can move an intent to `succeeded`, `failed`, or `closed`.
+
+```text
+created
+  -> submitted       provider create accepted and local update committed
+  -> unknown         provider outcome uncertain
+submitted
+  -> succeeded       verified callback or reconciliation confirms success
+  -> failed          verified callback or reconciliation confirms failure
+  -> closed          verified callback, close call, or reconciliation confirms close
+unknown
+  -> submitted       provider query finds a live provider payment
+  -> succeeded       provider query finds completed payment
+  -> failed/closed   provider query finds terminal non-success
+  -> expired         platform timeout with no provider evidence
+```
+
+Crash recovery expectations:
+
+- Platform intent exists but provider call was never attempted: reconciliation may attempt provider creation once with the original idempotency key, or expire the intent if the order is no longer payable.
+- Provider payment exists but local intent is still `created` or `unknown`: reconciliation updates the platform intent and never creates a second provider payment.
+- Provider callback arrives before the local `submitted` update: callback lookup by `(provider, merchantOrderNo)` must still find the intent and process normally.
+
+### 4.2 Bounded Contexts
+
+| Context | Owns | Must not own |
+| --- | --- | --- |
+| `Commerce/Payment` | package catalog, `billing_orders`, payment intent state, provider event ingestion, validation, risk events, payment outbox | credit ledger mutation, provider SDK details, frontend-only success |
+| `PaymentProviderIntegration` | provider registry, adapter contracts, provider clients, provider-specific signing/verification, provider query/close/refund APIs | platform order lifecycle, credits, admin repair decisions |
+| `Credit/Billing` | append-only credit ledger, payment success credit grants, reservation/consume/release | provider payload parsing, provider signatures, payment callback routing |
+| `Admin/Ops` | risk review, paid-without-credit repair, callback/reconciliation observability | silent record mutation that bypasses domain commands |
+| `Provider` (`paylab`, `wechat_pay`, `alipay`) | payment action generation, provider trade IDs, async events, queryable provider status | platform truth tables and credit accounting |
+
+First-principles boundary: the provider can report facts, but only the platform decides whether those facts are sufficient to mark an order paid and emit `payment.succeeded`.
+
+### 4.3 Domain Data Model
+
+The current tables are the right core model. The main change is to make them provider-extensible:
+
+| Table | Role | Required change for PayLab first |
+| --- | --- | --- |
+| `billing_orders` | Business order for a one-time credit package purchase. | No PayLab-specific fields. |
+| `payment_intents` | One provider attempt for one order. | Extend provider constraint/type from `wechat_pay | alipay` to `paylab | wechat_pay | alipay`; store PayLab payment intent/payment ID only in provider metadata and `provider_trade_id`. |
+| `payment_provider_events` | Immutable inbound provider facts. | Extend provider constraint/type; preserve raw payload hash; store normalized safe payload; dedup by `(provider, provider_event_dedup_key)`. |
+| `payment_risk_events` | Manual review and fraud/integrity queue. | Add risk rows for signature failure, amount/currency mismatch, merchant mismatch, duplicate trade, unknown event, and callback/reconciliation disagreement. |
+| `outbox_events` | Durable bridge from payment truth to downstream consumers. | Keep `payment.succeeded` as the only credit grant trigger. |
+| `credit_ledger_entries` | Credit accounting truth. | No provider-specific fields. Credit grant links back to the platform order/source. |
+
+P0 can keep provider credentials and endpoint URLs in environment config. Add a `payment_provider_accounts` table only when we need multiple merchant accounts, per-organization provider routing, or admin-editable credentials.
+
+### 4.4 Provider Registry
+
+The registry is the only place that knows how to choose a provider adapter.
+
+```ts
+type PaymentProvider = "paylab" | "wechat_pay" | "alipay";
+
+interface PaymentProviderRegistry {
+  get(provider: PaymentProvider): PaymentProviderAdapter;
+  listEnabled(): Array<{
+    provider: PaymentProvider;
+    productModes: PaymentProductMode[];
+    environment: "test" | "sandbox" | "production";
+  }>;
+}
+```
+
+Recommended rollout:
+
+1. `paylab` enabled in local/test/staging.
+2. `wechat_pay` and `alipay` disabled until credentials and adapter contract tests pass.
+3. Feature flag selects enabled providers per environment; frontend only renders enabled provider modes.
+
+### 4.5 Architecture Options
+
+| Option | What | Pros | Cons | Verdict |
+| --- | --- | --- | --- | --- |
+| A. PayLab-first provider registry | Add `paylab` as the first external provider adapter, then add WeChat/Alipay adapters to the same seam. | Exercises realistic provider behavior early; keeps platform model stable; fastest path to test env. | PayLab maturity risk; PayLab event model is not identical to WeChat/Alipay. | Recommended. |
+| B. First-party local mock only | Build and use only our own local mock provider. | Full control; deterministic; no external dependency. | Less realistic provider console/lifecycle; more custom simulator code. | Keep as fallback or unit-test harness. |
+| C. Full payment gateway | Embed a complete gateway/payment system. | Many features already exist. | Owns too much domain; conflicts with our order/credit model; high long-term coupling. | Reject for P0. |
+
+The recommended model is Option A with Option B as a safety valve. PayLab should be easy to replace in one adapter directory; that is the confidence mechanism.
+
+### 4.6 Confidence And Optimization Loop
+
+I am confident in the boundary design. I am not 100% confident that PayLab itself should become a long-term dependency until a spike proves it can satisfy our callback, signing, replay, and CI requirements. The repair is to turn every uncertainty into an adapter contract or acceptance test.
+
+| Hole | Why it can break us | Required repair before implementation is considered solid |
+| --- | --- | --- |
+| Current code/SQL only allow `wechat_pay` and `alipay`. | `paylab` cannot be stored or routed without weakening constraints. | Migration and TS domain update must add `paylab` everywhere provider values are checked. |
+| Current callback parser accepts a platform-shaped JSON body. | WeChat/Alipay/PayLab each send different raw payloads and headers. | Callback endpoint must pass raw body + headers to adapter `verifyCallback` and `normalizeCallback`. |
+| Current signature is a single HMAC helper. | Real providers have provider-specific signature/ack rules. | Signature verification and ack response move behind `PaymentProviderAdapter`. |
+| PayLab hosted API may be early/unstable. | Test environment can become blocked by third-party changes. | Adapter contract tests, timeout/retry policy, and optional first-party fallback mock. |
+| PayLab's canonical model may not match WeChat/Alipay exactly. | We could accidentally design to PayLab rather than real payment providers. | Keep normalized event model provider-neutral; write separate real-provider RFC mappings before enabling real money. |
+| Frontend pay action could be treated as success. | Credits could be granted before verified funds. | UI can only show pending/success hints; order paid state must come from callback or reconciliation. |
+| Duplicate webhook can double grant credits. | Providers retry; PayLab can deliberately duplicate. | Dedup `payment_provider_events`, outbox unique semantics, and credit consumer inbox idempotency. |
+| Paid-without-credit can be hidden. | Async consumer failures become financial support issues. | Admin/Ops paid-without-credit view and repair flow remain required. |
+| Provider query/reconciliation missing. | Missed callbacks leave orders stuck. | Add `queryPaymentStatus`, service-level reconciliation, and a scheduled/ops runner before real provider launch. |
+
+After these repairs, the architecture can reach practical 100% confidence: provider uncertainty is contained behind adapters, and money/credit truth remains platform-owned.
 
 ## 5. Provider Adapter Contract
 
 The provider adapter should normalize provider differences before data crosses into `Commerce/Payment`.
 
 ```ts
-type PaymentProvider = "mock_provider" | "wechat_pay" | "alipay";
+type PaymentProvider = "paylab" | "wechat_pay" | "alipay";
 
 type PaymentProductMode =
+  | "paylab_card"
+  | "paylab_redirect"
   | "wechat_native_qr"
   | "alipay_pc_page"
   | "alipay_qr_code";
@@ -163,12 +306,27 @@ type ProviderPayAction =
       redirectUrl: string;
       expiresAt: string;
       safeMetadata: Record<string, unknown>;
+    }
+  | {
+      kind: "provider_console";
+      provider: PaymentProvider;
+      consoleUrl: string;
+      expiresAt: string;
+      safeMetadata: Record<string, unknown>;
+    }
+  | {
+      kind: "manual_confirm";
+      provider: PaymentProvider;
+      confirmationMode: "test_api" | "provider_console";
+      expiresAt: string;
+      safeMetadata: Record<string, unknown>;
     };
 
 interface CreateProviderPaymentIntentInput {
   provider: PaymentProvider;
   productMode: PaymentProductMode;
   merchantOrderNo: string;
+  providerIdempotencyKey: string;
   amountMinor: number;
   currency: "CNY";
   subject: string;
@@ -179,6 +337,9 @@ interface CreateProviderPaymentIntentInput {
 }
 
 interface CreateProviderPaymentIntentResult {
+  providerIntentId: string;
+  providerPaymentId?: string;
+  providerTradeId?: string;
   providerPayloadHash: string;
   providerSafeMetadata: Record<string, unknown>;
   payAction: ProviderPayAction;
@@ -187,6 +348,11 @@ interface CreateProviderPaymentIntentResult {
 interface VerifyCallbackResult {
   signatureStatus: "verified" | "invalid";
   rawPayloadHash: string;
+  signatureAlgorithm: string;
+  signatureTimestamp?: string;
+  replayWindowStatus: "within_window" | "outside_window" | "not_applicable";
+  providerAccountRef?: string;
+  failureCode?: "signature_invalid" | "timestamp_outside_window" | "missing_signature" | "malformed_payload";
 }
 
 interface NormalizedPaymentEvent {
@@ -201,21 +367,49 @@ interface NormalizedPaymentEvent {
     | "unknown";
   amountMinor: number;
   currency: "CNY";
-  merchantId: string;
+  providerAccountRef: string;
   providerEventDedupKey: string;
   rawPayloadHash: string;
   signatureStatus: "verified" | "invalid";
+  eventOccurredAt?: string;
   safeMetadata: Record<string, unknown>;
 }
 
+type NormalizedPaymentStatus =
+  | {
+      status: "pending" | "succeeded" | "failed" | "closed" | "expired" | "unknown";
+      provider: PaymentProvider;
+      merchantOrderNo: string;
+      providerIntentId?: string;
+      providerPaymentId?: string;
+      providerTradeId?: string;
+      amountMinor?: number;
+      currency?: "CNY";
+      providerAccountRef?: string;
+      observedAt: string;
+      safeMetadata: Record<string, unknown>;
+    }
+  | {
+      status: "not_found";
+      provider: PaymentProvider;
+      merchantOrderNo: string;
+      observedAt: string;
+    };
+
 interface PaymentProviderAdapter {
+  readonly provider: PaymentProvider;
+
   createPaymentIntent(
     input: CreateProviderPaymentIntentInput,
   ): Promise<CreateProviderPaymentIntentResult>;
 
-  verifyCallback(rawBody: unknown, headers: Record<string, string>): VerifyCallbackResult;
+  verifyCallback(rawBody: Buffer | string, headers: Record<string, string>): VerifyCallbackResult;
 
-  normalizeCallback(rawBody: unknown): NormalizedPaymentEvent | null;
+  normalizeCallback(
+    rawBody: Buffer | string,
+    headers: Record<string, string>,
+    verification: VerifyCallbackResult,
+  ): NormalizedPaymentEvent | null;
 
   buildAckResponse(
     result: "accepted" | "rejected",
@@ -223,15 +417,57 @@ interface PaymentProviderAdapter {
 
   queryPaymentStatus(input: {
     merchantOrderNo: string;
-  }): Promise<NormalizedPaymentEvent | { status: "not_found" | "unknown" }>;
+    providerIntentId?: string;
+    providerPaymentId?: string;
+    providerTradeId?: string;
+  }): Promise<NormalizedPaymentStatus>;
+
+  closePaymentIntent?(input: {
+    merchantOrderNo: string;
+    providerTradeId?: string;
+  }): Promise<{ status: "closed" | "already_final" | "not_found" | "unknown" }>;
+
+  refundPayment?(input: {
+    merchantOrderNo: string;
+    providerTradeId: string;
+    amountMinor: number;
+    reason: string;
+  }): Promise<{ providerRefundId: string; status: "submitted" | "succeeded" | "failed" | "unknown" }>;
 }
 ```
 
-This contract is intentionally provider-shaped but platform-owned. Real WeChat Pay and Alipay SDKs can help implement adapters, but they must not define platform domain objects.
+This contract is intentionally provider-shaped but platform-owned. PayLab, WeChat Pay, and Alipay SDKs can help implement adapters, but they must not define platform domain objects.
 
-## 6. Mock Provider Scenario Model
+`providerIdempotencyKey` is mandatory. It is not the browser's raw `Idempotency-Key`; it is a stable platform-derived key. Preferred sources, in order:
 
-The mock provider should expose scenario controls instead of requiring engineers to edit platform records by hand.
+1. Platform idempotency record ID when one exists.
+2. Platform payment intent ID.
+3. A deterministic hash of `(provider, merchantOrderNo)` only for repair flows where the original record ID is unavailable.
+
+`providerIntentId`, `providerPaymentId`, and `providerTradeId` are provider-side identities. Store the safest durable identity available for future query/reconciliation. For PayLab this will usually be its payment intent/payment ID; for WeChat/Alipay it may be provider transaction IDs that appear only after payment succeeds.
+
+`NormalizedPaymentStatus` is deliberately separate from `NormalizedPaymentEvent`. Query/reconciliation returns observed provider state, not a provider webhook event, so it must not pretend a webhook was received. If reconciliation needs to transition platform money state, the platform records an internal provider fact with a deterministic `reconciliation:{provider}:{merchantOrderNo}:{status}:{providerPayloadHash}` key and `signatureStatus = "unverified"`, then still reuses the same amount/currency/trade validation, risk, outbox, and credit-consumer boundaries. This keeps credit grants tied to durable payment evidence without confusing it with provider-signed callback evidence.
+
+`ProviderPayAction` describes the next user/test action, not proof of payment:
+
+- `qr_code` is expected for WeChat Native QR and any future QR flow.
+- `redirect` is expected for Alipay PC Page and any hosted checkout redirect.
+- `provider_console` is allowed for PayLab when a hosted developer console or provider payment page should be opened.
+- `manual_confirm` is allowed for PayLab/test-only flows where the tester or test harness must confirm/simulate the payment through PayLab APIs or console.
+
+No pay action can mark an order paid. Only verified callback or reconciliation can do that.
+
+Callback verification rules:
+
+- The HTTP route selects the adapter from the route/configured provider, then passes raw body bytes and headers unchanged.
+- Each adapter owns canonicalization, signature algorithm, timestamp validation, replay window validation, and ack response format.
+- `normalizeCallback` receives `VerifyCallbackResult` so normalized events cannot silently ignore failed verification.
+- `providerAccountRef` is the normalized merchant/app/account identity. PayLab, WeChat Pay, and Alipay may derive it from different provider fields.
+- Platform validation compares `providerAccountRef`, amount, currency, merchant order number, and provider trade ID before any paid transition.
+
+## 6. Fallback Mock Provider Scenario Model
+
+The fallback mock provider should expose scenario controls instead of requiring engineers to edit platform records by hand.
 
 ```ts
 type MockProviderScenario =
@@ -269,9 +505,9 @@ Minimum required behavior:
 | `delayed_notify` | Sends callback after a configured delay. | Platform remains pending until callback; late callback still processes if order is payable. |
 | `unknown` | Query returns unknown or callback uses unknown event type. | Provider event is recorded for manual review; no automatic credit grant. |
 
-## 7. Mock Provider HTTP Surface
+## 7. Fallback Mock Provider HTTP Surface
 
-The exact routes can change during implementation, but any open-source candidate should support these capabilities.
+This section is for a first-party fallback mock provider. PayLab has its own provider-specific API surface and should be accessed only through `PayLabAdapter`. If PayLab satisfies the required scenarios, these routes are optional for P0; if PayLab cannot satisfy a required scenario, the fallback mock should support these capabilities.
 
 ```text
 POST /mock-payments/intents
@@ -283,14 +519,14 @@ POST /mock-payments/intents/:merchantOrderNo/replay-notify
 
 Recommended local flow:
 
-1. Platform calls `POST /mock-payments/intents` through `PaymentProviderAdapter.createPaymentIntent`.
+1. Platform calls `POST /mock-payments/intents` through `PaymentProviderAdapter.createPaymentIntent` only when the active provider is the first-party fallback mock.
 2. Mock provider stores a provider-side payment record keyed by `merchantOrderNo`.
 3. Mock provider returns a QR or redirect action.
 4. Test or local UI chooses a `MockProviderScenario`.
 5. Mock provider sends a signed async callback to the platform `notifyUrl`.
 6. Platform records and processes the callback through the same `processPaymentCallback` path used by real providers.
 
-The mock provider must persist enough local state for query and replay during a local process lifetime. It does not need production-grade durability.
+The fallback mock provider must persist enough local state for query and replay during a local process lifetime. It does not need production-grade durability.
 
 ## 8. Platform Interface Constraints
 
@@ -302,9 +538,10 @@ These rules are non-negotiable for both mock and real providers:
 4. Frontend redirect state, QR page state, or local UI success cannot grant credits.
 5. Provider event deduplication is based on provider event identity.
 6. Provider trade ID reuse must become `payment_risk_events` and manual review, not a rollback that hides evidence.
-7. Amount, currency, merchant ID, merchant order number, and provider trade ID must be validated before marking an order paid.
+7. Amount, currency, provider account identity, merchant order number, and provider trade ID must be validated before marking an order paid.
 8. Refund callbacks are payment facts. They must not delete original payment or credit ledger facts.
 9. Provider raw payloads may be hashed and redacted. Safe metadata can be stored, but secrets and full sensitive payloads should not leak into UI responses.
+10. Provider callback HTTP handlers must preserve raw body bytes and headers until the selected adapter finishes signature verification and normalization.
 
 ## 9. Open-Source Screening Matrix
 
@@ -336,14 +573,14 @@ R&D should use this matrix when looking for open-source projects to embed or ada
 
 ## 10. Open-Source Research Result
 
-Research date: 2026-05-27.
+Research date: 2026-05-29.
 
 First-principles conclusion: our core problem is not "find a payment project." It is "preserve the future production boundary while we simulate an external provider locally." A candidate is valuable only if it helps us exercise provider-like HTTP calls, signed callbacks, async delivery, replay, and failure injection without taking ownership of our order, intent, provider event, risk, outbox, or credit ledger records.
 
-No reviewed open-source project is a perfect local WeChat Pay/Alipay simulator for this project. The long-term recommendation is therefore:
+No reviewed open-source project is a perfect local WeChat Pay/Alipay simulator for this project. PayLab is still the best first provider candidate because it is explicitly a Mock PSP, exposes stateful payment intents, sends webhooks, supports idempotency, and is designed for testing payment flows. The long-term recommendation is therefore:
 
-1. Build a thin first-party local `mock_provider` simulator as the product-facing contract.
-2. Use open-source projects only as implementation aids or adapter references.
+1. Add PayLab as the first external test provider through `PayLabAdapter`.
+2. Keep a first-party thin mock only as fallback or low-level unit-test harness.
 3. Keep official provider SDKs inside future `wechat_pay` and `alipay` adapters.
 4. Reject any candidate that forces a second payment domain model into the platform.
 
@@ -351,7 +588,7 @@ No reviewed open-source project is a perfect local WeChat Pay/Alipay simulator f
 
 | Candidate | Category | Useful for | Fit | Main risk | Verdict |
 | --- | --- | --- | --- | --- | --- |
-| [PayLab Mock PSP API](https://github.com/yilin-sai/paylab-ui) | Payment Service Provider simulator | Payment intents, payments, webhooks, idempotency, configurable webhook delay/repeat. | High conceptual fit. | Very early project: no releases and no community signal at review time. Need self-host/API audit before dependency. | Study or fork-spike only; do not make it the P0 backbone yet. |
+| [PayLab Mock PSP API](https://github.com/yilin-sai/paylab-ui) | Payment Service Provider simulator | Payment intents, payments, webhooks, idempotency, configurable webhook delay/repeat. | High conceptual fit. | Early project: no releases and no community signal at review time. Need hosted/self-host/API audit before relying on it. | Use as first replaceable test provider behind `PayLabAdapter`; do not treat it as production backbone. |
 | [WireMock](https://wiremock.org/) | Generic HTTP/service simulator | Provider-like endpoints, webhooks/callbacks, templating, delays, stateful scenarios, fault simulation. | Strong transport fit. | Java-based; payment signatures and provider-specific payloads still need our code/extensions. | Best generic OSS harness if the team wants an off-the-shelf simulator shell. |
 | [MockServer](https://www.mock-server.com/) | Generic HTTP/HTTPS mock and proxy | Expectations, callbacks, invalid responses, request verification, record/replay. | Medium-high test fit. | Heavier than our P0 need; domain behavior remains custom. | Good CI/test-infra candidate, not the payment mock domain itself. |
 | [Mockoon](https://mockoon.com/) | Local mock API tool | Fast local HTTP mock APIs, CLI-friendly developer workflow. | Medium DX fit. | Async signed callback/replay behavior likely needs custom glue. | Good for demos and local endpoints; weaker for payment lifecycle correctness. |
@@ -366,9 +603,61 @@ No reviewed open-source project is a perfect local WeChat Pay/Alipay simulator f
 
 ### 10.2 Recommended Options
 
-#### Option A: First-party thin local provider simulator
+#### Option A: PayLab-first provider adapter
 
 Recommendation: choose this for P0.
+
+What:
+
+- Add `paylab` as a first-class `PaymentProvider`.
+- Implement `PayLabAdapter` behind `PaymentProviderAdapter`.
+- Use PayLab to create provider-side payment intents, confirm/simulate payments, receive webhooks, and test duplicate/delayed delivery.
+- Keep PayLab payloads and Stripe-like event names inside the adapter.
+
+Why:
+
+- It exercises the external-provider shape before real WeChat/Alipay credentials exist.
+- It tests the async webhook path instead of a fake synchronous success path.
+- It keeps `billing_orders`, `payment_intents`, `payment_provider_events`, `payment_risk_events`, `outbox_events`, and `credit_ledger_entries` platform-owned.
+- It creates a provider seam that WeChat Pay and Alipay can later reuse.
+
+Pros:
+
+- Most realistic test-environment provider candidate.
+- Gives QA and developers a provider console/lifecycle instead of only direct callback injection.
+- Tests idempotent provider calls, stateful provider status, and webhook behavior early.
+- Forces us to design raw callback verification and normalization correctly.
+
+Cons:
+
+- PayLab is early and may change.
+- Its current public examples are Stripe-like, not WeChat/Alipay-like.
+- Hosted API usage may require care around test data and availability.
+- Some edge cases may still require our own fallback mock.
+
+How:
+
+1. Add the `PaymentProviderAdapter` seam first.
+2. Add `paylab` to provider schema constraints, TypeScript types, and API validation.
+3. Implement `PayLabAdapter.createPaymentIntent`, `verifyCallback`, `normalizeCallback`, `buildAckResponse`, and `queryPaymentStatus`.
+4. Register PayLab webhook endpoint as `/api/payment-provider-callbacks/paylab`.
+5. Keep `/api/billing/payment-callback/mock` only as a compatibility route that exercises callback processing, not as the normal test-environment flow.
+
+PayLab admission gate:
+
+- Create provider intent with platform idempotency key and safely retry without duplicate provider payments.
+- Confirm or simulate payment in PayLab.
+- Receive and verify a signed webhook from PayLab.
+- Replay the same webhook and prove platform dedup prevents duplicate outbox/credit grants.
+- Trigger delayed webhook delivery.
+- Query provider status and repair a local `unknown` intent.
+- Run the flow in CI or a documented test environment with isolated test data.
+
+If any gate cannot be passed within a bounded spike, keep the adapter seam and switch the test environment to the first-party fallback mock until PayLab is mature enough.
+
+#### Option B: First-party thin local provider simulator
+
+Recommendation: keep as fallback, not as the primary P0 provider.
 
 What:
 
@@ -376,39 +665,33 @@ What:
 - Exposes the mock HTTP surface from section 7.
 - Stores provider-side intents in memory or a local dev file.
 - Signs callbacks with the same callback secret/config shape used by `Commerce/Payment`.
-- Implements all required scenarios directly: success, failure, closed, refund, amount mismatch, duplicate notify, invalid signature, delayed notify, unknown.
+- Implements required edge scenarios directly when PayLab cannot.
 
 Why:
 
-- It exactly protects the platform boundary we care about.
-- It is easy to delete or keep as a dev-only provider after real WeChat/Alipay adapters exist.
-- It avoids importing a second payment system that fights `billing_orders`, `payment_intents`, `payment_provider_events`, `payment_risk_events`, `outbox_events`, and `credit_ledger_entries`.
-- It keeps the adapter contract platform-owned.
+- It prevents PayLab maturity or availability from blocking development.
+- It gives us exact control over negative cases such as amount mismatch and invalid signature.
 
 Pros:
 
-- Highest confidence against the current codebase.
-- Best TypeScript DX for this repository.
-- Full control over signature, replay, mismatch, and paid-without-credit cases.
-- Small enough to test exhaustively.
+- Highest local determinism.
+- Easy to run in CI with no external dependency.
+- Can target current risk tests precisely.
 
 Cons:
 
-- We own a little simulator code.
-- No ready-made management UI unless we build one.
-- Developers must keep mock semantics aligned when real provider adapters mature.
+- Less realistic than PayLab as a PSP.
+- More custom simulator behavior to maintain.
 
 How:
 
-1. Add the `PaymentProviderAdapter` seam first.
-2. Implement `mock_provider` as the first adapter.
-3. Run the mock provider on a separate local port.
-4. Make platform intent creation call the mock provider instead of fabricating a local `mock_qr` action.
-5. Keep `/api/billing/payment-callback/mock` only as a compatibility route that exercises callback processing, not as the normal local flow.
+1. Implement only if PayLab cannot satisfy a required edge case within a bounded spike.
+2. Keep it behind the same adapter interface.
+3. Never let it write platform tables directly.
 
-#### Option B: WireMock or MockServer as the simulator shell
+#### Option C: WireMock or MockServer as the simulator shell
 
-Recommendation: acceptable only if the team wants a generic mocking engine.
+Recommendation: useful later if we need a generic external-service simulator platform.
 
 What:
 
@@ -417,8 +700,7 @@ What:
 
 Why:
 
-- It can speed up HTTP-level simulation and CI isolation.
-- It is useful if we expect many external-service simulators, not just payment.
+- It can speed up HTTP-level simulation and CI isolation if we later simulate many providers.
 
 Pros:
 
@@ -430,43 +712,13 @@ Cons:
 
 - Extra runtime and configuration surface.
 - Provider-specific signing still requires our code.
-- Less natural for a TypeScript-only contributor workflow than a small local Node service.
+- Less natural for a TypeScript-only payment-domain workflow than PayLab.
 
 How:
 
-1. Spike one scenario: create intent -> delayed signed success callback -> duplicate replay.
-2. If signature and replay require too much extension code, fall back to Option A.
-3. Keep generated payloads in our repository and treat WireMock/MockServer as transport infrastructure only.
-
-#### Option C: PayLab fork/spike
-
-Recommendation: promising research candidate, not yet a dependency.
-
-What:
-
-- PayLab is closest to a generic mock Payment Service Provider: payment intents, payments, webhooks, idempotency, delay, and repeat delivery.
-
-Why:
-
-- Its product direction is aligned with our desired local provider simulator.
-
-Pros:
-
-- Conceptually the closest candidate.
-- TypeScript-heavy codebase.
-- MIT licensed at review time.
-
-Cons:
-
-- Early maturity signal at review time: no stars, no forks, no releases.
-- Need to confirm self-hosting, API stability, callback signing extensibility, and CI usage.
-- It is not WeChat/Alipay-shaped out of the box.
-
-How:
-
-1. Run a bounded spike after the adapter seam exists.
-2. Verify self-host install, custom webhook signing, idempotent intent creation, delayed/repeated callbacks, and local CI.
-3. Fork only if the code is simpler than writing our own thin simulator.
+1. Spike only after PayLabAdapter exists.
+2. Use it as transport infrastructure only.
+3. Do not let it decide payment domain events.
 
 #### Option D: Full payment gateway such as DaxPay
 
@@ -508,7 +760,7 @@ Before any candidate is embedded, it must pass these gates:
 6. Can simulate delayed callback, duplicate callback, invalid signature, amount mismatch, provider query, and provider-side unknown state.
 7. Supports deterministic tests and isolated state reset between tests.
 8. Lets the platform keep `PaymentProviderAdapter` as the only provider-facing boundary.
-9. Has enough maintenance signal for the role it plays. For P0 backbone, require releases, recent commits, and issue responsiveness. For reference-only usage, a weaker signal is acceptable.
+9. Has enough maintenance signal for the role it plays. For a production backbone, require releases, recent commits, and issue responsiveness. For PayLab as a replaceable test provider, require the PayLab admission gate above. For reference-only usage, a weaker signal is acceptable.
 10. Can be removed without changing platform order, payment event, outbox, or credit ledger semantics.
 
 Hard fail: if the candidate's easiest integration path is "mock marks our order paid" or "mock writes our ledger," it is disqualified.
@@ -529,7 +781,7 @@ I do not claim 100% confidence by assuming a third-party project will fit. I rea
 | Open-source project leaks mock-only fields into domain. | Future real adapter becomes harder. | Only `PaymentProviderAdapter` sees provider-specific fields; domain stores normalized event and safe metadata. | Type/API review shows mock-only data is confined to adapter/safe metadata. |
 | Official provider semantics are guessed. | WeChat/Alipay callback and signing details are sharp edges. | Use official SDKs/docs as adapter source of truth; community SDKs are implementation references only. | Real adapter RFC maps every provider field to `NormalizedPaymentEvent`. |
 
-After these repairs, the recommended P0 path is stable: build a first-party thin simulator; optionally borrow OSS transport/webhook ideas; keep real provider details inside adapters.
+After these repairs, the recommended P0 path is stable: use PayLab as the first external test provider, keep a first-party fallback mock for deterministic edge cases, and keep real provider details inside adapters.
 
 ## 11. Provider-Specific Direction
 
@@ -537,7 +789,7 @@ After these repairs, the recommended P0 path is stable: build a first-party thin
 
 Target first product mode: Native QR.
 
-The future WeChat adapter should map platform payment intents to WeChat-style native QR payment creation and async notification processing. The local mock should therefore be able to return a QR-like `codeUrl`, generate provider trade IDs, and send signed callback events.
+The future WeChat adapter should map platform payment intents to WeChat-style native QR payment creation and async notification processing. The PayLab adapter does not need to mimic every WeChat field; it needs to prove that the platform callback, dedup, risk, outbox, and credit-grant chain is provider-agnostic.
 
 Use official APIv3 semantics and official SDK repositories as the source of truth for real adapter design. Node community libraries may be useful as implementation references, but they must not decide our domain model.
 
@@ -545,7 +797,7 @@ Use official APIv3 semantics and official SDK repositories as the source of trut
 
 Target first product modes: PC page pay first, QR code fallback if account/API constraints make QR pre-create more suitable.
 
-The future Alipay adapter should map platform payment intents to Alipay page/QR payment creation and async notification processing. The local mock should therefore support redirect-like actions and callback notification simulation.
+The future Alipay adapter should map platform payment intents to Alipay page/QR payment creation and async notification processing. The PayLab adapter should normalize a redirect/card-like payment action in the same `ProviderPayAction` shape, without leaking PayLab or Stripe-like event names into platform domain code.
 
 Prefer the official Node SDK `alipay-sdk-nodejs-all` for real adapter research. Keep SDK-specific request names and signature handling inside the Alipay adapter.
 
@@ -553,7 +805,7 @@ Prefer the official Node SDK `alipay-sdk-nodejs-all` for real adapter research. 
 
 Before an open-source project is accepted for local integration, the reviewer must answer:
 
-- What part of the desired mock provider does it implement?
+- What part of the desired provider or fallback mock capability does it implement?
 - Does it run outside the platform backend, or can it be wrapped to behave that way?
 - How does it create a provider-like payment action?
 - How does it send async callbacks?
@@ -570,24 +822,34 @@ If any answer requires "the mock directly updates platform records," the candida
 
 The first implementation should be small:
 
-1. Introduce a `PaymentProviderAdapter` interface inside `Commerce/Payment`.
-2. Move current `mock_qr` generation behind a `MockPaymentProviderAdapter`.
-3. Add runtime config for mock provider base URL and callback secret.
-4. Add a minimal independent mock provider script or service.
-5. Keep `/api/billing/payment-callback/mock` only as a compatibility/testing route.
-6. Add HTTP smoke that proves order -> intent -> mock callback -> outbox -> credit consumer.
-7. Add scenario tests for duplicate callback, invalid signature, amount mismatch, payment failure, and paid-without-credit repair visibility.
+1. Introduce `PaymentProviderAdapter` and `PaymentProviderRegistry` inside `Commerce/Payment`.
+2. Add provider `paylab` to schema constraints, TypeScript types, and API validation.
+3. Add runtime config for PayLab base URL, API key, webhook signing secret, and callback URL.
+4. Implement `PayLabAdapter` for create intent, verify callback, normalize callback, ack response, and query status.
+5. Add provider callback route `/api/payment-provider-callbacks/:provider` that passes raw body and headers to the adapter.
+6. Keep `/api/billing/payment-callback/mock` only as a compatibility/testing route.
+7. Add HTTP smoke that proves order -> intent -> PayLab callback -> provider event -> outbox -> credit consumer.
+8. Add scenario tests for duplicate callback, invalid signature, amount mismatch, payment failure, query/reconciliation, and paid-without-credit repair visibility.
+9. Add provider-create failure tests:
+   - provider create timeout or ambiguous response marks intent `unknown`;
+   - retry uses the same `providerIdempotencyKey` and does not create a second provider payment;
+   - provider accepted but local update failed is repaired by `queryPaymentStatus` using `providerIntentId` or the original idempotency key.
 
-Do not integrate a large open-source payment system before this adapter seam exists. The seam is the architecture; the open-source project is only an implementation aid.
+Current implementation status: items 1-6 and the service-level query/reconciliation part of item 8 are implemented. Reconciliation now covers missed success callback recovery, amount mismatch risk routing, and already-paid idempotency. Remaining before real provider launch: HTTP smoke for full browser/test-provider flow, scheduled or ops-triggered reconciliation runner, and a live PayLab admission gate.
+
+Do not integrate PayLab or any other provider before this adapter seam exists. The seam is the architecture; PayLab is the first adapter implementation, not the payment domain.
 
 Recommended spike order:
 
-1. Implement the seam and first-party simulator path.
-2. Spend a bounded spike on PayLab and WireMock only if the team wants to reduce custom simulator code.
-3. Stop the spike if the candidate cannot produce a signed delayed callback and a duplicate replay against our existing callback endpoint within one development day.
+1. Implement the seam and `paylab` provider value end to end.
+2. Run a bounded PayLab spike: create intent -> confirm/simulate payment -> signed webhook -> duplicate/delayed webhook -> provider query.
+3. Stop or fall back to first-party mock if PayLab cannot produce a signed delayed callback and duplicate replay against our callback endpoint within one development day.
 
 ## 14. References For Research
 
+- [PayLab homepage](https://www.paylabo.dev/)
+- [PayLab quick start](https://www.paylabo.dev/docs/quickstart)
+- [PayLab webhook guide](https://www.paylabo.dev/docs/webhook)
 - [PayLab Mock PSP API](https://github.com/yilin-sai/paylab-ui)
 - [WireMock webhooks and callbacks](https://wiremock.org/docs/webhooks-and-callbacks/)
 - [WireMock stateful behavior](https://wiremock.org/docs/stateful-behaviour/)

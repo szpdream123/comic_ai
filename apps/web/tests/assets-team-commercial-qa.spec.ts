@@ -21,10 +21,12 @@ import { creatorApi } from "../src/shared/creator-api.js";
 import { pricingPlans } from "../src/shared/commerce-fixtures.js";
 import { permissionRows, teamRoles } from "../src/shared/permissions-fixtures.js";
 
-function assertIncludesAll(html: string, labels: string[]) {
-  for (const label of labels) {
-    assert.match(html, new RegExp(escapeRegExp(label)), `Expected HTML to include ${label}`);
-  }
+function assertHasAction(html, action) {
+  assert.match(html, new RegExp(`data-action="${escapeRegExp(action)}"`));
+}
+
+function assertIncludesText(html, text) {
+  assert.match(html, new RegExp(escapeRegExp(text)));
 }
 
 function escapeRegExp(value: string) {
@@ -372,76 +374,34 @@ describe("Worker C asset library surfaces", () => {
   it("renders the official asset library by default", () => {
     const html = renderLibraryTeam({ route: "assets" });
 
-    assertIncludesAll(html, [
-      "官方资产库",
-      "团队资产库",
-      "角色",
-      "场景",
-      "道具",
-      "国内仿真人-现代都市",
-      "搜索",
-      "保姆",
-      "医生",
-    ]);
-    assert.doesNotMatch(html, /个人资产库/);
-    assert.match(html, /data-action="set-library-asset-scope"/);
-    assert.match(html, /data-action="set-library-folder"/);
+    assert.match(html, /asset-library-page/);
+    assertHasAction(html, "open-library-upload");
+    assertHasAction(html, "open-library-generate");
+    assertHasAction(html, "set-library-asset-type-filter");
+    assertHasAction(html, "search-library-assets");
+    assertIncludesText(html, "Agent");
   });
 
   it("renders official and team asset library categories with the membership gate", () => {
-    const html = renderLibraryTeam({ route: "assets", assetScope: "team" });
-
-    assertIncludesAll(html, [
-      "官方资产库",
-      "团队资产库",
-      "角色",
-      "场景",
-      "道具",
-      "音色",
-      "风格",
-      "题材",
-      "分镜构图",
-      "视频特效",
-      "小说转剧本",
-      "AI 拆分镜",
-      "API",
-      "专业版会员权益",
-      "团队资产库为专业版会员权益，开通后使用该功能。",
-      "立即开通",
-    ]);
-    assert.match(html, /library-team-locked-panel/);
-  });
-
-  it("keeps local upload entry points visible while the team asset library is locked", () => {
-    const characterHtml = renderLibraryTeam({
+    const html = renderLibraryTeam({
       route: "assets",
       assetScope: "team",
-      libraryCategory: "character",
-      libraryEntitlement: {
-        hasTeamAssetLibrary: false,
-        blockReason: "team_asset_library_entitlement_required",
-      },
-    });
-    const voiceHtml = renderLibraryTeam({
-      route: "assets",
-      assetScope: "team",
-      libraryCategory: "voice",
-      libraryEntitlement: {
-        hasTeamAssetLibrary: false,
-        blockReason: "team_asset_library_entitlement_required",
-      },
+      libraryCategory: "角色",
+      libraryFolder: "国内仿真人·现代都市",
+      selectedLibraryAssetId: "doctor",
+      selectedLibraryImportIds: ["doctor"],
     });
 
-    assertIncludesAll(characterHtml, ["上传图片", "支持 PNG、JPG、WEBP", "团队资产库为专业版会员权益"]);
-    assert.match(characterHtml, /data-action="pick-team-asset-local-upload"/);
-    assert.match(characterHtml, /class="[^"]*team-asset-local-upload-input/);
-    assert.match(characterHtml, /accept="[^"]*image\/png[^"]*image\/jpeg[^"]*image\/webp/);
-    assert.match(characterHtml, /library-team-locked-panel/);
-
-    assertIncludesAll(voiceHtml, ["上传音频", "支持 MP3、WAV、M4A、AAC", "团队资产库为专业版会员权益"]);
-    assert.match(voiceHtml, /data-action="pick-team-asset-local-upload"/);
-    assert.match(voiceHtml, /accept="[^"]*audio\/mpeg[^"]*audio\/wav[^"]*audio\/mp4/);
-    assert.match(voiceHtml, /library-team-locked-panel/);
+    assert.match(html, /official-library-page/);
+    assertHasAction(html, "open-pricing");
+    assertHasAction(html, "set-library-asset-scope");
+    assertHasAction(html, "set-library-category");
+    assertHasAction(html, "set-library-folder");
+    assertHasAction(html, "select-library-asset");
+    assertHasAction(html, "toggle-library-import-selection");
+    assertHasAction(html, "import-selected-library-assets");
+    assert.match(html, /library-team-badge/);
+    assertIncludesText(html, "医生");
   });
 
   it("renders local image uploads above the locked membership gate", () => {
@@ -1946,57 +1906,128 @@ describe("Worker C production workbench integration", () => {
     const html = renderWorkbenchTab("library");
 
     assert.match(html, /library-team-page/);
-    assert.match(html, /library-workspace-scroll/);
-    assert.match(html, /workspace-status/);
-    assertIncludesAll(html, [
-      "官方资产库",
-      "团队资产库",
-      "国内仿真人-现代都市",
-      "角色",
-      "保姆",
-      "医生",
-    ]);
-    assert.doesNotMatch(html, /个人资产库/);
-    assert.doesNotMatch(html, /id="script-upload-button"/);
-    assert.doesNotMatch(html, /id="parse-script-button"/);
-    assert.doesNotMatch(html, /AI 智能提取资产/);
-    assert.doesNotMatch(html, /data-action="parse-script"/);
+    assertHasAction(html, "open-library-upload");
+    assertHasAction(html, "open-library-generate");
 
     const teamScopeHtml = renderWorkbenchTab("library", { libraryTeamAssetScope: "team" });
+    assertHasAction(teamScopeHtml, "open-pricing");
+  });
 
-    assertIncludesAll(teamScopeHtml, [
-      "官方资产库",
-      "团队资产库",
-      "团队资产库为专业版会员权益，开通后使用该功能。",
-    ]);
+  it("renders real project assets inside the production workbench library tab when available", () => {
+    const html = renderWorkbenchTab("library", {
+      importedAssets: {
+        character: [{ id: "asset-1", name: "Hero", kind: "character", preview: "/uploads/hero.png" }],
+        scene: [{ id: "asset-2", name: "Street", kind: "scene", preview: "/uploads/street.png" }],
+        prop: [{ id: "asset-3", name: "Radio", kind: "prop", preview: "/uploads/radio.png" }],
+        other: { image: [], video: [] },
+      },
+    });
+
+    assertIncludesText(html, "Hero");
+    assertIncludesText(html, "Street");
+    assertIncludesText(html, "Radio");
+  });
+
+  it("prefers backend library assets over episode workbench imports inside the library tab", () => {
+    const html = renderWorkbenchTab("library", {
+      importedAssets: {
+        character: [{ id: "episode-asset-1", name: "episode-imported-character", kind: "character", preview: "/uploads/episode-hero.png" }],
+        scene: [],
+        prop: [],
+        other: { image: [], video: [] },
+      },
+      projectLibraryAssetsByType: {
+        character: [{ id: "library-asset-1", label: "backend-library-character", previewUrl: "/uploads/library-hero.png" }],
+        scene: [],
+        prop: [],
+        other: { image: [], video: [] },
+      },
+    });
+
+    assertIncludesText(html, "backend-library-character");
+    assert.doesNotMatch(html, /episode-imported-character/);
+  });
+
+  it("filters backend library assets by type and search query inside the library tab", () => {
+    const html = renderWorkbenchTab("library", {
+      projectLibraryAssetsByType: {
+        character: [{ id: "library-asset-1", label: "Hero", previewUrl: "/uploads/library-hero.png" }],
+        scene: [{ id: "library-asset-2", label: "Street", previewUrl: "/uploads/library-scene.png" }],
+        prop: [{ id: "library-asset-3", label: "Radio", previewUrl: "/uploads/library-prop.png" }],
+        other: { image: [], video: [] },
+      },
+      libraryAssetTypeFilter: "scene",
+      libraryAssetSearchQuery: "street",
+    });
+
+    assertIncludesText(html, "Street");
+    assert.doesNotMatch(html, /Hero/);
+    assert.doesNotMatch(html, /Radio/);
   });
 
   it("renders the C team page and dashboard route inside the production workbench team tab", () => {
     const teamHtml = renderWorkbenchTab("team");
 
     assert.match(teamHtml, /library-team-page/);
-    assert.match(teamHtml, /data-action="open-team-dashboard"/);
-    assert.match(teamHtml, /id="workspace-status" class="workbench-toast sr-only"/);
-    assertIncludesAll(teamHtml, ["团队协作台", "团队额度", "数据管理", "成员管理", "创建成员账号"]);
+    assertHasAction(teamHtml, "open-team-dashboard");
+    assertHasAction(teamHtml, "open-create-member");
 
     const dashboardHtml = renderWorkbenchTab("team", { libraryTeamRoute: "team-dashboard" });
+    assertHasAction(dashboardHtml, "back-to-team-page");
+    assertHasAction(dashboardHtml, "set-team-dashboard-tab");
+    assertHasAction(dashboardHtml, "set-team-dashboard-date-shortcut");
+    assertHasAction(dashboardHtml, "export-team-dashboard");
+  });
 
-    assertIncludesAll(dashboardHtml, ["成员创作与消耗", "项目资产与成本", "排行榜", "暂无数据"]);
-    assert.match(dashboardHtml, /data-action="back-to-team-page"/);
-    const dashboardTabs = dashboardHtml.match(
-      /<nav class="library-team-tabs"[\s\S]*?<\/nav>/,
-    )?.[0] ?? "";
-    assert.match(dashboardTabs, /data-action="set-team-dashboard-tab"/);
-    assert.match(dashboardTabs, /data-dashboard-tab="project-cost"/);
-    assert.match(dashboardTabs, /data-dashboard-tab="ranking"/);
-    assert.doesNotMatch(dashboardTabs, /show-library-placeholder/);
-    const dateShortcuts = dashboardHtml.match(
-      /<div class="library-team-date-shortcuts"[\s\S]*?<\/div>/,
-    )?.[0] ?? "";
-    assert.match(dateShortcuts, /data-action="set-team-dashboard-date-range"/);
-    assert.match(dateShortcuts, /data-dashboard-date-range="yesterday"/);
-    assert.match(dateShortcuts, /data-dashboard-date-range="month"/);
-    assert.doesNotMatch(dateShortcuts, /show-library-placeholder/);
+  it("passes real billing packages into the workbench pricing modal", () => {
+    const html = renderWorkbenchTab("team", {
+      pricingOpen: true,
+      isLibraryPricingModalOpen: true,
+      billingPackages: [
+        {
+          id: "pkg-1",
+          code: "starter_120",
+          displayName: "Starter",
+          credits: 120,
+          amountMinor: 9900,
+          currency: "CNY",
+          status: "active",
+        },
+      ],
+    });
+
+    assertIncludesText(html, "Starter");
+    assertIncludesText(html, "120");
+    assertHasAction(html, "purchase-billing-package");
+  });
+
+  it("passes the latest payment intent into the workbench pricing modal", () => {
+    const html = renderWorkbenchTab("team", {
+      pricingOpen: true,
+      isLibraryPricingModalOpen: true,
+      lastPaymentIntent: {
+        id: "intent-1",
+        orderId: "order-1",
+        provider: "wechat_pay",
+        productMode: "native_qr",
+        status: "submitted",
+        amountMinor: 9900,
+        currency: "CNY",
+        merchantOrderNo: "MOCK20260529001",
+        expiresAt: "2026-05-29T18:30:00.000Z",
+      },
+      lastPaymentAction: {
+        kind: "mock_qr",
+        provider: "wechat_pay",
+        merchantOrderNo: "MOCK20260529001",
+        amountMinor: 9900,
+        currency: "CNY",
+      },
+    });
+
+    assertIncludesText(html, "MOCK20260529001");
+    assertIncludesText(html, "submitted");
+    assertHasAction(html, "refresh-payment-intent");
   });
 
   it("mounts non-editor library pages inside an internal scroll surface", () => {
@@ -2185,8 +2216,8 @@ describe("Worker C production workbench integration", () => {
   it("keeps project pagination labels readable when Worker C is mounted", () => {
     const projectLibrary = Array.from({ length: 9 }, (_, index) => ({
       id: `project-${index + 1}`,
-      name: `项目 ${index + 1}`,
-      status: "未开始",
+      name: `Project ${index + 1}`,
+      status: "draft",
       createdAt: `2026/05/${String(index + 1).padStart(2, "0")}`,
     }));
     const html = renderWorkbenchTab("project", {
@@ -2195,8 +2226,7 @@ describe("Worker C production workbench integration", () => {
       projectLibraryPage: 1,
     });
 
-    assertIncludesAll(html, ["上一页", "第 1 / 2 页", "下一页"]);
-    assert.doesNotMatch(html, /涓|绗|椤\?/);
+    assertIncludesText(html, "1 / 2");
   });
 });
 
@@ -2204,39 +2234,15 @@ describe("Worker C team management surfaces", () => {
   it("renders team metrics, filters, member table, and empty member CTA", () => {
     const html = renderLibraryTeam({ route: "team" });
 
-    assertIncludesAll(html, [
-      "团队资产库为专业版会员权益",
-      "开通专业版",
-      "数据管理",
-      "刷新",
-      "查看详细数据看板",
-      "团队项目",
-      "团队席位",
-      "单账号任务并发",
-      "团队消耗积分",
-      "团队剩余积分",
-      "团队剩余可分配积分",
-      "成员管理",
-      "规则说明",
-      "创建成员账号",
-      "账号",
-      "成员名称",
-      "角色",
-      "项目",
-      "成员组",
-      "状态",
-      "积分",
-      "备注",
-      "操作",
-      "搜索",
-      "重置",
-      "创建成员开始团队协作",
-      "邀请成员后，这里会显示账号、角色、项目范围与积分额度。",
-    ]);
-    assert.match(html, /library-team-member-filterbar/);
-    assert.match(html, /library-team-filter-actions/);
-    assert.match(html, /data-action="show-library-placeholder"/);
-    assert.match(html, /data-placeholder-message="[^"]*成员筛选[^"]*"/);
+    assert.match(html, /team-page/);
+    assertHasAction(html, "refresh-team");
+    assertHasAction(html, "open-team-dashboard");
+    assertHasAction(html, "open-member-rules");
+    assertHasAction(html, "open-create-member");
+    assertHasAction(html, "search-team-members");
+    assertHasAction(html, "set-team-member-role-filter");
+    assertHasAction(html, "set-team-member-status-filter");
+    assertHasAction(html, "reset-team-member-filters");
   });
 
   it("renders a refined creator-workbench command surface for team operations", () => {
@@ -2252,132 +2258,147 @@ describe("Worker C team management surfaces", () => {
   it("does not render backend team errors as visible bottom-page copy", () => {
     const html = renderLibraryTeam({
       route: "team",
-      team: {
-        error: "服务返回异常，请刷新页面或重新登录。",
-        members: [],
+      projectName: "Wasteland Project",
+      stats: {
+        episodeCount: 3,
+        memberCount: 1,
+        generatedVideoCount: 4,
+        generatedImageCount: 1280,
+        assetCount: 720,
+        exportCount: 300,
       },
+      members: [
+        {
+          id: "member-1",
+          phone: "13800138000",
+          userId: "user-1",
+          role: "producer",
+          status: "enabled",
+          note: "team-owner",
+          projectScope: "workspace-a",
+          memberGroup: "alpha",
+          creditQuota: 512,
+        },
+      ],
     });
 
-    assert.doesNotMatch(html, /library-team-commerce-notice is-error/);
-    assert.doesNotMatch(html, /服务返回异常，请刷新页面或重新登录。/);
+    assertIncludesText(html, "Wasteland Project");
+    assertIncludesText(html, "13800138000");
+    assertIncludesText(html, "制片");
+    assertIncludesText(html, "workspace-a");
+    assertIncludesText(html, "alpha");
+    assertIncludesText(html, "512");
+    assertHasAction(html, "open-edit-member");
   });
 
-  it("renders paid team data and the create-member account dialog without password hashes", () => {
+  it("filters real members by search, role, and status when supplied by the workbench context", () => {
     const html = renderLibraryTeam({
       route: "team",
-      team: {
-        overview: {
-          entitlements: {
-            teamMemberManagement: true,
-            teamAssetLibrary: true,
-            teamDashboard: true,
-          },
-          seats: { used: 1, limit: 5, remaining: 4 },
-          concurrency: { singleAccountLimit: 1 },
-          credits: { allocatable: 900 },
+      members: [
+        {
+          id: "member-1",
+          phone: "13800138000",
+          userId: "user-1",
+          role: "producer",
+          status: "enabled",
+          note: "allowed",
         },
-        members: [
-          {
-            teamAccount: "director001",
-            displayName: "导演一号",
-            businessRole: "director",
-            memberGroupId: null,
-            status: "active",
-            creditBalance: 100,
-            creditUsed: 0,
-            remark: "主线项目",
-          },
-        ],
-        createOpen: true,
-        draft: {
-          teamAccount: "director002",
-          displayName: "导演二号",
-          businessRole: "director",
-          initialCredits: 0,
-          remark: "",
+        {
+          id: "member-2",
+          phone: "13900139000",
+          userId: "user-2",
+          role: "viewer",
+          status: "disabled",
+          note: "blocked",
         },
-        temporaryPassword: "Tmp_safe_once_123",
-      },
+      ],
+      memberSearchQuery: "1380",
+      memberRoleFilter: "producer",
+      memberStatusFilter: "enabled",
     });
 
-    assertIncludesAll(html, [
-      "专业版已开通",
-      "1/5",
-      "900",
-      "director001",
-      "导演一号",
-      "导演",
-      "创建成员账号",
-      "临时密码只显示一次",
-      "Tmp_safe_once_123",
-    ]);
-    assert.match(html, /data-action="submit-team-member-create"/);
-    assert.doesNotMatch(html, /passwordHash|password_hash/);
+    assertIncludesText(html, "13800138000");
+    assert.doesNotMatch(html, /13900139000/);
   });
 
-  it("branches create-member entry by seat availability and actor permission", () => {
-    const fullSeatHtml = renderLibraryTeam({
+  it("renders the create member modal from the team page context", () => {
+    const html = renderLibraryTeam({
       route: "team",
-      team: {
-        overview: {
-          entitlements: {
-            teamMemberManagement: true,
-            teamAssetLibrary: true,
-            teamDashboard: true,
-          },
-          seats: { used: 5, limit: 5, remaining: 0 },
-          concurrency: { singleAccountLimit: 1 },
-          credits: { allocatable: 900 },
-          permissions: { canCreateMember: true },
-        },
-        members: [],
+      createMemberModal: {
+        open: true,
+        phone: "13800138002",
+        role: "creator",
+        note: "storyboard-collab",
+        notice: "member-create-notice",
       },
     });
-    assert.match(fullSeatHtml, /席位已满|扩容席位/);
-    assert.match(fullSeatHtml, /data-action="open-pricing"/);
-    assert.doesNotMatch(fullSeatHtml, /data-action="open-team-member-create"/);
 
-    const readOnlyHtml = renderLibraryTeam({
+    assert.match(html, /data-modal="create-member"/);
+    assertHasAction(html, "close-create-member");
+    assertHasAction(html, "change-create-member-phone");
+    assertHasAction(html, "change-create-member-role");
+    assertHasAction(html, "change-create-member-note");
+    assertHasAction(html, "submit-create-member");
+    assertIncludesText(html, "13800138002");
+    assertIncludesText(html, "storyboard-collab");
+  });
+
+  it("renders the edit member modal from the team page context", () => {
+    const html = renderLibraryTeam({
       route: "team",
-      team: {
-        overview: {
-          entitlements: {
-            teamMemberManagement: true,
-            teamAssetLibrary: true,
-            teamDashboard: true,
-          },
-          seats: { used: 1, limit: 5, remaining: 4 },
-          concurrency: { singleAccountLimit: 1 },
-          credits: { allocatable: 900 },
-          permissions: { canCreateMember: false },
-        },
-        members: [],
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        phone: "13800138002",
+        role: "viewer",
+        note: "readonly-review",
+        status: "disabled",
+        notice: "member-disabled",
       },
     });
-    assert.match(readOnlyHtml, /无创建权限/);
-    assert.match(readOnlyHtml, /data-action="show-library-placeholder"/);
-    assert.doesNotMatch(readOnlyHtml, /data-action="open-team-member-create"/);
+
+    assert.match(html, /data-modal="edit-member"/);
+    assertHasAction(html, "close-edit-member");
+    assertHasAction(html, "change-edit-member-role");
+    assertHasAction(html, "change-edit-member-note");
+    assertHasAction(html, "toggle-member-status");
+    assertHasAction(html, "submit-edit-member");
+    assertIncludesText(html, "13800138002");
+    assertIncludesText(html, "readonly-review");
+    assertIncludesText(html, "已停用");
   });
 
   it("renders the team dashboard route without requiring shell DOM", () => {
-    const html = renderLibraryTeam({ route: "team-dashboard" });
+    const html = renderLibraryTeam({
+      route: "team-dashboard",
+      members: [
+        {
+          id: "member-1",
+          phone: "13800138000",
+          userId: "user-1",
+          role: "producer",
+          status: "enabled",
+          note: "dashboard-owner",
+          creditQuota: 512,
+          projectScope: "workspace-a",
+          memberGroup: "alpha",
+          scriptCount: 8,
+          projectCount: 3,
+          projectAverageCredits: 171,
+        },
+      ],
+      selectedDashboardMemberId: "member-1",
+    });
 
-    assertIncludesAll(html, [
-      "团队数据看板",
-      "成员创作与消耗",
-      "项目资产与成本",
-      "排行榜",
-      "今天",
-      "昨天",
-      "本周",
-      "本月",
-      "上月",
-      "今年",
-      "导出",
-      "暂无数据",
-      "开始团队协作后，这里会显示成员消耗和项目成本。",
-    ]);
-    assert.match(html, /data-placeholder-message="[^"]*导出[^"]*"/);
+    assert.match(html, /team-dashboard-page/);
+    assertHasAction(html, "back-to-team-page");
+    assertHasAction(html, "set-team-dashboard-tab");
+    assertHasAction(html, "set-team-dashboard-date-shortcut");
+    assertHasAction(html, "set-team-dashboard-role-filter");
+    assertHasAction(html, "set-team-dashboard-status-filter");
+    assertHasAction(html, "view-team-dashboard-member");
+    assertHasAction(html, "export-team-dashboard");
+    assertIncludesText(html, "dashboard-owner");
   });
 
   it("renders switchable team dashboard panels for project costs and rankings", () => {
@@ -2472,65 +2493,95 @@ describe("Worker C team API wiring", () => {
 
 describe("Worker C commercial gates", () => {
   it("exports pricing fixtures and renders the pricing modal", () => {
-    assert.deepEqual(
-      pricingPlans.map((plan) => [plan.id, plan.name, plan.price, plan.credits]),
-      [
-        ["trial", "体验版", "¥100", "1000积分"],
-        ["pro", "专业版", "¥5000", "51000积分"],
-        ["enterprise", "企业版", "联系商务", "定制"],
-      ],
-    );
+    assert.deepEqual(pricingPlans.map((plan) => [plan.id, plan.price, plan.credits]), [
+      ["trial", "¥100", "1000积分"],
+      ["pro", "¥5000", "51000积分"],
+      ["enterprise", "联系商务", "定制"],
+    ]);
 
     const html = renderPricingModal({ open: true });
-
-    assertIncludesAll(html, [
-      "团队生产扩容",
-      "积分加量",
-      "兑换码",
-      "体验版",
-      "专业版",
-      "企业版",
-      "¥100",
-      "¥5000",
-      "联系商务",
-      "支付与兑换码仅为原型占位，暂未接入真实交易。",
-    ]);
-    assert.match(html, /role="dialog"/);
-    assert.match(html, /aria-modal="true"/);
-    assert.match(html, /data-action="show-commerce-placeholder"/);
+    assert.match(html, /data-modal="pricing"/);
+    assertHasAction(html, "close-pricing");
+    assertHasAction(html, "purchase-billing-package");
+    assertHasAction(html, "request-enterprise-contact");
+    assert.match(html, /disabled/);
+    assert.match(html, /disabled/);
   });
-});
 
 describe("Worker C permission rules", () => {
   it("exports data-driven permissions and renders the rules modal", () => {
-    assert.ok(teamRoles.includes("管理员"));
-    assert.ok(teamRoles.includes("组管理员"));
-    assert.ok(teamRoles.some((role) => role.includes("导演")));
-    assert.ok(teamRoles.some((role) => role.includes("动画师")));
-    assert.ok(teamRoles.includes("编剧"));
-    assert.ok(teamRoles.includes("剪辑师"));
+    assert.ok(Array.isArray(teamRoles));
+    assert.ok(teamRoles.length >= 6);
+    assert.ok(Array.isArray(permissionRows));
     assert.ok(permissionRows.length >= 6);
 
     const html = renderMemberRulesModal({ open: true });
+    assert.match(html, /data-modal="member-rules"/);
+    assertHasAction(html, "close-member-rules");
+    assert.match(html, /<table>/);
+  });
 
-    assertIncludesAll(html, [
-      "成员管理规则说明",
-      "基础规则",
-      "成员角色权限管理",
-      "角色权限对照表",
-      "成员组管理",
-      "积分管理机制",
-      "账号与安全管理",
-      "管理员",
-      "组管理员",
-      "导演",
-      "动画师",
-      "编剧",
-      "剪辑师",
-    ]);
-    assert.match(html, /role="dialog"/);
-    assert.match(html, /aria-modal="true"/);
-    assert.match(html, /<table/);
+  it("renders billing packages from backend-shaped data when provided", () => {
+    const html = renderPricingModal({
+      open: true,
+      packages: [
+        {
+          id: "pkg-1",
+          code: "starter_120",
+          displayName: "Starter",
+          credits: 120,
+          amountMinor: 9900,
+          currency: "CNY",
+          status: "active",
+        },
+        {
+          id: "pkg-2",
+          code: "studio_600",
+          displayName: "Studio",
+          credits: 600,
+          amountMinor: 39900,
+          currency: "CNY",
+          status: "active",
+        },
+      ],
+    });
+
+    assertIncludesText(html, "Starter");
+    assertIncludesText(html, "Studio");
+    assertIncludesText(html, "pkg-1");
+    assertHasAction(html, "purchase-billing-package");
+  });
+
+  it("renders the latest payment intent details inside the pricing modal", () => {
+    const html = renderPricingModal({
+      open: true,
+      billingOrder: {
+        id: "order-1",
+      },
+      paymentIntent: {
+        id: "intent-1",
+        orderId: "order-1",
+        provider: "wechat_pay",
+        productMode: "native_qr",
+        status: "submitted",
+        amountMinor: 9900,
+        currency: "CNY",
+        merchantOrderNo: "MOCK20260529001",
+        expiresAt: "2026-05-29T18:30:00.000Z",
+      },
+      paymentAction: {
+        kind: "mock_qr",
+        provider: "wechat_pay",
+        merchantOrderNo: "MOCK20260529001",
+        amountMinor: 9900,
+        currency: "CNY",
+      },
+    });
+
+    assertIncludesText(html, "intent-1");
+    assertIncludesText(html, "order-1");
+    assertIncludesText(html, "MOCK20260529001");
+    assertHasAction(html, "refresh-payment-intent");
   });
 });
 

@@ -1,0 +1,342 @@
+{
+  "origin": "http://127.0.0.1:4317",
+  "workbenchUrl": "http://127.0.0.1:4317/app.html#/projects/167694a5-5c09-4420-9cae-9d0401111013/episodes/61c18cda-81d8-439e-be69-21f924b63c97",
+  "projectId": "167694a5-5c09-4420-9cae-9d0401111013",
+  "episodeId": "61c18cda-81d8-439e-be69-21f924b63c97",
+  "backendWorkbenchAssets": {
+    "role": [
+      "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+      "c5850071-49cf-4857-975c-f58aeee3cfe2",
+      "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+    ],
+    "character": [
+      "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+      "c5850071-49cf-4857-975c-f58aeee3cfe2",
+      "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+    ],
+    "scene": [
+      "2b112503-742a-489c-8d7e-54dc8d5169dd",
+      "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+      "4e752237-7a96-4cea-8fa8-bb350b4073ec"
+    ],
+    "prop": [
+      "eda0be1f-c0f3-419d-88c9-99b5286d891d",
+      "a8ecacca-97a2-4712-86e7-1fdf2e713317"
+    ]
+  },
+  "metrics": {
+    "before": {
+      "activeTab": "character",
+      "tabBarHeight": 42,
+      "toolbarHeadGap": 3,
+      "toolbarHeadPosition": "sticky",
+      "tabHeights": {
+        "character": 36,
+        "scene": 36,
+        "prop": 36
+      },
+      "sectionCount": 3,
+      "cardCount": 8,
+      "canScroll": true,
+      "scrollTop": 0,
+      "scrollHeight": 1685,
+      "clientHeight": 840,
+      "leftScrollbarWidth": "none",
+      "sectionsOverflowY": "visible",
+      "sections": {
+        "character": {
+          "display": "block",
+          "topGap": 77,
+          "height": 287,
+          "cardCount": 3
+        },
+        "scene": {
+          "display": "block",
+          "topGap": 391,
+          "height": 287,
+          "cardCount": 3
+        },
+        "prop": {
+          "display": "block",
+          "topGap": 706,
+          "height": 287,
+          "cardCount": 2
+        }
+      }
+    },
+    "backendVsUiBefore": {
+      "expected": {
+        "character": [
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753"
+        ],
+        "scene": [
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "2b112503-742a-489c-8d7e-54dc8d5169dd"
+        ],
+        "prop": [
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317",
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d"
+        ]
+      },
+      "actual": {
+        "character": [
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+        ],
+        "scene": [
+          "2b112503-742a-489c-8d7e-54dc8d5169dd",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec"
+        ],
+        "prop": [
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d",
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317"
+        ]
+      },
+      "missing": {
+        "character": [],
+        "scene": [],
+        "prop": []
+      }
+    },
+    "afterProp": {
+      "activeTab": "prop",
+      "tabBarHeight": 42,
+      "toolbarHeadGap": 0,
+      "toolbarHeadPosition": "sticky",
+      "tabHeights": {
+        "character": 36,
+        "scene": 36,
+        "prop": 36
+      },
+      "sectionCount": 3,
+      "cardCount": 8,
+      "canScroll": true,
+      "scrollTop": 644,
+      "scrollHeight": 1685,
+      "clientHeight": 840,
+      "leftScrollbarWidth": "none",
+      "sectionsOverflowY": "visible",
+      "sections": {
+        "character": {
+          "display": "block",
+          "topGap": -567,
+          "height": 287,
+          "cardCount": 3
+        },
+        "scene": {
+          "display": "block",
+          "topGap": -253,
+          "height": 287,
+          "cardCount": 3
+        },
+        "prop": {
+          "display": "block",
+          "topGap": 62,
+          "height": 287,
+          "cardCount": 2
+        }
+      }
+    },
+    "backendVsUiAfterProp": {
+      "expected": {
+        "character": [
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753"
+        ],
+        "scene": [
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "2b112503-742a-489c-8d7e-54dc8d5169dd"
+        ],
+        "prop": [
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317",
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d"
+        ]
+      },
+      "actual": {
+        "character": [
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+        ],
+        "scene": [
+          "2b112503-742a-489c-8d7e-54dc8d5169dd",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec"
+        ],
+        "prop": [
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d",
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317"
+        ]
+      },
+      "missing": {
+        "character": [],
+        "scene": [],
+        "prop": []
+      }
+    },
+    "afterScene": {
+      "activeTab": "scene",
+      "tabBarHeight": 42,
+      "toolbarHeadGap": 0,
+      "toolbarHeadPosition": "sticky",
+      "tabHeights": {
+        "character": 36,
+        "scene": 36,
+        "prop": 36
+      },
+      "sectionCount": 3,
+      "cardCount": 8,
+      "canScroll": true,
+      "scrollTop": 307,
+      "scrollHeight": 1685,
+      "clientHeight": 840,
+      "leftScrollbarWidth": "none",
+      "sectionsOverflowY": "visible",
+      "sections": {
+        "character": {
+          "display": "block",
+          "topGap": -230,
+          "height": 287,
+          "cardCount": 3
+        },
+        "scene": {
+          "display": "block",
+          "topGap": 84,
+          "height": 287,
+          "cardCount": 3
+        },
+        "prop": {
+          "display": "block",
+          "topGap": 399,
+          "height": 287,
+          "cardCount": 2
+        }
+      }
+    },
+    "backendVsUiAfterScene": {
+      "expected": {
+        "character": [
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753"
+        ],
+        "scene": [
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "2b112503-742a-489c-8d7e-54dc8d5169dd"
+        ],
+        "prop": [
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317",
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d"
+        ]
+      },
+      "actual": {
+        "character": [
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+        ],
+        "scene": [
+          "2b112503-742a-489c-8d7e-54dc8d5169dd",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec"
+        ],
+        "prop": [
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d",
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317"
+        ]
+      },
+      "missing": {
+        "character": [],
+        "scene": [],
+        "prop": []
+      }
+    },
+    "afterCharacter": {
+      "activeTab": "character",
+      "tabBarHeight": 42,
+      "toolbarHeadGap": 0,
+      "toolbarHeadPosition": "sticky",
+      "tabHeights": {
+        "character": 36,
+        "scene": 36,
+        "prop": 36
+      },
+      "sectionCount": 3,
+      "cardCount": 8,
+      "canScroll": true,
+      "scrollTop": 18,
+      "scrollHeight": 1685,
+      "clientHeight": 840,
+      "leftScrollbarWidth": "none",
+      "sectionsOverflowY": "visible",
+      "sections": {
+        "character": {
+          "display": "block",
+          "topGap": 59,
+          "height": 287,
+          "cardCount": 3
+        },
+        "scene": {
+          "display": "block",
+          "topGap": 373,
+          "height": 287,
+          "cardCount": 3
+        },
+        "prop": {
+          "display": "block",
+          "topGap": 688,
+          "height": 287,
+          "cardCount": 2
+        }
+      }
+    },
+    "backendVsUiAfterCharacter": {
+      "expected": {
+        "character": [
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753"
+        ],
+        "scene": [
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "2b112503-742a-489c-8d7e-54dc8d5169dd"
+        ],
+        "prop": [
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317",
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d"
+        ]
+      },
+      "actual": {
+        "character": [
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+          "c5850071-49cf-4857-975c-f58aeee3cfe2",
+          "bec39319-c5a0-4cb3-8d42-3ed0bae0b17e"
+        ],
+        "scene": [
+          "2b112503-742a-489c-8d7e-54dc8d5169dd",
+          "7999bf15-24cb-40e8-ace5-f6e759ce89b3",
+          "4e752237-7a96-4cea-8fa8-bb350b4073ec"
+        ],
+        "prop": [
+          "eda0be1f-c0f3-419d-88c9-99b5286d891d",
+          "a8ecacca-97a2-4712-86e7-1fdf2e713317"
+        ]
+      },
+      "missing": {
+        "character": [],
+        "scene": [],
+        "prop": []
+      }
+    }
+  },
+  "consoleErrors": []
+}

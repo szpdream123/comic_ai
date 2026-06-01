@@ -6,16 +6,20 @@ import {
   createEmptyGenerationState,
   createStoryboardList,
   getSelectedStoryboard,
+  insertStoryboardAfter,
   normalizeStoryboardIndices,
   sortStoryboardsByIndex,
 } from "./storyboard-state.js";
 import { EPISODE_WORKBENCH_FALLBACK_ASSET_IDS } from "./episode-workbench-rebuilt.js";
+import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
+import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
 
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
+const FIXED_EPISODE_ASSET_IMAGE_URL = "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/1ee6f1a1-8bb8-4424-9ce3-e1361075b234-d256255d69a702a1f2095159c5aa1b1.png";
 
 export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
@@ -396,10 +400,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     librarySearchComposing: false,
     generationPollTimer: null,
     generationPollStartedAt: null,
+    homeLiquidEther: null,
+    homeLiquidEtherToken: null,
     state: null,
     ui: {
       busy: false,
-      toast: "Connected to local creator API.",
+      toast: "",
       validationMessage: "",
       isCreateModalOpen: false,
       createProjectName: "",
@@ -419,15 +425,32 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       selectedEpisodeCardId: null,
       selectedEpisodeAssetId: null,
       selectedEpisodeAssetIds: [],
+      selectedStoryboardIds: [],
       episodeAssetCreateModal: null,
       episodeWorkbenchAttachments: [],
       episodeWorkbenchSelectedAttachmentIds: [],
       episodeWorkbenchScrollTarget: null,
+      episodeWorkbenchConversationScrollMode: null,
       episodeVoiceModal: null,
       episodeBatchModal: null,
+      exportOptionModal: null,
       projectOtherAssetMediaType: "video",
       projectMembers: [],
       projectStats: null,
+      teamMemberSearchQuery: "",
+      teamMemberRoleFilter: "all",
+      teamMemberStatusFilter: "all",
+      teamDashboardTab: "member-consumption",
+      teamDashboardDateShortcut: "今天",
+      teamDashboardRoleFilter: "all",
+      teamDashboardStatusFilter: "all",
+      selectedDashboardMemberId: null,
+      billingPackages: [],
+      createMemberModal: null,
+      editMemberModal: null,
+      projectLibraryAssetsByType: null,
+      libraryAssetSearchQuery: "",
+      libraryAssetTypeFilter: "all",
       assetSearchQuery: "",
       assetSortOrder: "desc",
       assetFilterMode: "all",
@@ -439,6 +462,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetImportCategory: "domestic-modern-city",
       assetImportDrafts: [],
       assetImportSelection: [],
+      assetImportPage: 1,
+      assetImportPageSize: 10,
+      assetImportPageSizeMenuOpen: false,
       assetLibraryHighlightAssetIds: [],
       assetLibraryHighlightKind: null,
       assetLibraryHighlightMediaType: null,
@@ -457,7 +483,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetGeneratorModal: null,
       assetGeneratorMode: "generate",
       assetGeneratorEditingAsset: null,
-      assetGeneratorName: "闂傚倸鍊烽悞锕傚磿閹惰姤鍋夐柣鎾冲瘨閻掍粙鏌ｅΔ鈧悧婊冣枔娴犲鐓欓悗娑欘焽缁犳壆绱?(1)",
+      assetGeneratorName: "废土角色(1)",
       assetGeneratorPrompt: "",
       assetGeneratorCharacterType: "human",
       assetGeneratorStyleValue: "搴熷湡鍐欏疄椋庢牸",
@@ -512,11 +538,25 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         inspiration: "",
       },
       scriptTab: "script-upload",
+      scriptSearchQuery: "",
+      scriptTypeFilter: "all",
+      scriptSortOrder: "updated-desc",
       scriptSubmitAction: "create-project",
-      scriptSubmitLabel: "鍒涘缓椤圭洰",
+      scriptSubmitLabel: "创建项目",
       uploadNotice: "",
       selectedModelId: "tnb-pro",
       prompt: "",
+      promptMentionMenuOpen: false,
+      promptMentionQuery: "",
+      promptMentionSuggestions: [],
+      promptMentionPreviewOpen: false,
+      promptMentionPreviewAsset: null,
+      lipSyncVoiceId: null,
+      lipSyncVoiceName: "",
+      lipSyncVoiceSource: null,
+      lipSyncAudioItems: [],
+      lipSyncPreviewAudioId: null,
+      assetConversationHistory: {},
       videoDurationSec: "5",
       videoResolution: "1080p",
       videoCount: 1,
@@ -556,26 +596,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       activeNavTab: deriveInitialNavTab(window.location.hash),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
       libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
-      teamDashboardTab: deriveInitialTeamDashboardTab(window.location.hash),
-      teamDashboardDateRange: "today",
-      libraryTeamAssetScope: "official",
-      libraryCategory: "character",
-      libraryFolder: "国内仿真人-现代都市",
-      libraryQuery: "",
-      libraryCategories: [],
-      libraryFolders: [],
-      libraryAssets: [],
-      libraryEntitlement: null,
-      teamAssetLocalUploads: {
-        character: [],
-        scene: [],
-        prop: [],
-        voice: [],
-      },
-      libraryLoading: false,
-      libraryError: "",
-      libraryDetailAssetId: "",
-      libraryDetailView: "turnaround",
+      libraryTeamAssetScope: "personal",
+      libraryCategory: "角色",
+      libraryFolder: "国内仿真人·现代都市",
+      selectedLibraryAssetId: null,
+      selectedLibraryImportIds: [],
       isLibraryPricingModalOpen: false,
       isMemberRulesModalOpen: false,
       isTeamMemberCreateOpen: false,
@@ -587,6 +612,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       teamTemporaryPassword: "",
     },
   };
+  installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("mousedown", (event) => {
     const eventTarget = resolveEventElement(event.target);
     const mouseSelectTarget = eventTarget?.closest?.(
@@ -602,12 +628,32 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     const eventTarget = resolveEventElement(event.target);
     const actionTarget = eventTarget?.closest?.("[data-action]");
     if (!actionTarget) {
+      if (workbench.ui.promptMentionMenuOpen || workbench.ui.promptMentionPreviewOpen) {
+        clearPromptMentionUi(workbench);
+        render(workbench);
+        return;
+      }
       const cardTarget = eventTarget?.closest?.(".episode-replica-asset-card[data-asset-card-id]");
+      const storyboardCardTarget = eventTarget?.closest?.(".episode-replica-shot-card[data-storyboard-id]");
       const blockedInteractiveTarget = eventTarget?.closest?.(
         "textarea, input, button, select, option, label, a, [contenteditable='true']",
       );
+      if (storyboardCardTarget && !blockedInteractiveTarget) {
+        requestEpisodeWorkbenchConversationScroll(workbench);
+        void handleAction(workbench, {
+          dataset: {
+            action: "select-storyboard",
+            storyboardId: storyboardCardTarget.dataset.storyboardId ?? "",
+          },
+        }).catch((error) => {
+          workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+        return;
+      }
       if (cardTarget && !blockedInteractiveTarget) {
-        void handleProductionWorkbenchAction(workbench, {
+        requestEpisodeWorkbenchConversationScroll(workbench);
+        void handleAction(workbench, {
           dataset: {
             action: "set-episode-asset",
             assetId: cardTarget.dataset.assetCardId ?? "",
@@ -656,7 +702,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       dataset: datasetToObject(actionTarget.dataset),
       label: actionTarget.textContent?.trim()?.slice(0, 120) ?? "",
     });
-    void handleProductionWorkbenchAction(workbench, actionTarget).catch((error) => {
+    requestEpisodeWorkbenchConversationScroll(workbench);
+    void handleAction(workbench, actionTarget).catch((error) => {
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     });
@@ -706,6 +753,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.target);
+
+    if (
+      target?.matches?.("#team-member-role-input") ||
+      target?.matches?.("#team-edit-member-role-input")
+    ) {
+      void handleAction(workbench, target).catch((error) => {
+        workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+        render(workbench);
+      });
+      return;
+    }
 
     if (target?.matches?.("[data-model-choice]")) {
       workbench.ui.selectedModelId = target.value;
@@ -806,7 +864,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       const projectId = target.dataset.projectId ?? null;
       target.value = "";
       workbench.ui.projectCardMenuId = null;
-      await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁告濞婇幃妤€鈽夊▍铏灴閹繝鍩€椤掍椒绻嗛柣鎰典簻閳ь剚娲栭敃銏ゅ础閻忕粯妞介獮宥夘敊閼姐倕澧惧┑鐐存尰閸╁啴宕戦幘瀵哥?..", async () => {
+      await runAction(workbench, "正在上传项目封面...", async () => {
         await uploadProjectCoverFile(workbench, file, projectId);
       });
       return;
@@ -961,14 +1019,38 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   root.addEventListener("input", (event) => {
     const target = resolveEventElement(event.target);
 
+    if (
+      target?.matches?.("#team-member-phone-input") ||
+      target?.matches?.("#team-member-note-input") ||
+      target?.matches?.("#team-edit-member-note-input")
+    ) {
+      void handleAction(workbench, target).catch((error) => {
+        workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+        render(workbench);
+      });
+      return;
+    }
+
     if (target?.matches?.("#video-prompt-input")) {
-      workbench.ui.prompt = target.value;
+      const selectionStart = Number(target.selectionStart ?? target.value.length);
+      setCurrentScopePrompt(workbench, target.value);
+      updatePromptMentionState(workbench, target.value, selectionStart);
       collectEpisodeWorkbenchEvent(workbench, "prompt.input", {
         value: target.value,
         length: [...target.value].length,
         mediaMode: workbench.ui.episodeMediaMode ?? "image",
         selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
       });
+      if (workbench.ui.promptMentionMenuOpen) {
+        render(workbench);
+        queueMicrotask(() => {
+          const textarea = workbench.root.querySelector("#video-prompt-input");
+          if (textarea) {
+            textarea.focus();
+            textarea.setSelectionRange(selectionStart, selectionStart);
+          }
+        });
+      }
       return;
     }
 
@@ -1132,6 +1214,65 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.('[data-action="search-scripts"]')) {
+      workbench.ui.scriptSearchQuery = target.value;
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="search-library-assets"]')) {
+      workbench.ui.libraryAssetSearchQuery = target.value;
+      if (workbench.ui.libraryTeamAssetScope === "official" || workbench.ui.libraryTeamAssetScope === "team") {
+        const scopedAssets = getLibraryAssetsForImport({
+          assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色"),
+          folder: workbench.ui.libraryFolder ?? "国内仿真人·现代都市",
+          searchQuery: target.value,
+        });
+        const selectedAssetId = workbench.ui.selectedLibraryAssetId ?? "";
+        if (!scopedAssets.some((asset) => asset.id === selectedAssetId)) {
+          workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
+        }
+      }
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-script-type-filter"]')) {
+      workbench.ui.scriptTypeFilter = target.value || "all";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-script-sort-order"]')) {
+      workbench.ui.scriptSortOrder = target.value || "updated-desc";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="search-team-members"]')) {
+      workbench.ui.teamMemberSearchQuery = target.value;
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-team-member-role-filter"]')) {
+      workbench.ui.teamMemberRoleFilter = target.value || "all";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-team-member-status-filter"]')) {
+      workbench.ui.teamMemberStatusFilter = target.value || "all";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-library-asset-type-filter"]')) {
+      workbench.ui.libraryAssetTypeFilter = target.value || "all";
+      render(workbench);
+      return;
+    }
+
     if (target?.matches?.("#asset-only-main-input")) {
       workbench.ui.assetOnlyMain = Boolean(target.checked);
       render(workbench);
@@ -1201,6 +1342,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.(".episode-replica-shot-desc-input")) {
+      const counter = target.closest(".episode-replica-shot-card")?.querySelector(".count");
+      if (counter) {
+        counter.textContent = `${[...target.value].length} / 3000`;
+      }
+      return;
+    }
+
     if (target?.matches?.('[data-action="search-projects"]')) {
       workbench.ui.projectSearchQuery = target.value;
       workbench.ui.projectLibraryPage = 1;
@@ -1208,18 +1357,105 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
   });
 
-  root.addEventListener("focusout", async (event) => {
+  root.addEventListener("click", (event) => {
     const target = resolveEventElement(event.target);
-    if (!target?.matches?.(".episode-replica-asset-desc-input")) {
+    if (!target?.matches?.("#video-prompt-input")) {
       return;
     }
-    const assetId = target.dataset.assetId ?? "";
-    const assetKind = target.dataset.assetKind ?? "character";
-    await saveEpisodeAssetDescription(workbench, assetKind, assetId, target.value);
+    const selectionStart = Number(target.selectionStart ?? target.value.length);
+    updatePromptMentionState(workbench, target.value, selectionStart);
+    render(workbench);
+    queueMicrotask(() => {
+      const textarea = workbench.root.querySelector("#video-prompt-input");
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(selectionStart, selectionStart);
+      }
+    });
+  });
+
+  root.addEventListener("keyup", (event) => {
+    const target = resolveEventElement(event.target);
+    if (!target?.matches?.("#video-prompt-input")) {
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    const selectionStart = Number(target.selectionStart ?? target.value.length);
+    updatePromptMentionState(workbench, target.value, selectionStart);
+    render(workbench);
+    queueMicrotask(() => {
+      const textarea = workbench.root.querySelector("#video-prompt-input");
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(selectionStart, selectionStart);
+      }
+    });
+  });
+
+  root.addEventListener("focusout", async (event) => {
+    const target = resolveEventElement(event.target);
+    if (target?.matches?.(".episode-replica-asset-desc-input")) {
+      const assetId = target.dataset.assetId ?? "";
+      const assetKind = target.dataset.assetKind ?? "character";
+      await saveEpisodeAssetDescription(workbench, assetKind, assetId, target.value);
+      return;
+    }
+    if (target?.matches?.(".episode-replica-shot-desc-input")) {
+      const storyboardId = target.dataset.storyboardId ?? "";
+      await saveStoryboardDescriptionInline(workbench, storyboardId, target.value);
+      return;
+    }
+    if (target?.matches?.("#video-prompt-input") && workbench.ui.episodeMediaMode === "lip-sync") {
+      await persistLipSyncStoryboardDraft(workbench, { silent: true });
+    }
+    if (target?.matches?.("#video-prompt-input")) {
+      clearPromptMentionUi(workbench);
+      render(workbench);
+    }
   });
 
   await refresh(workbench);
   render(workbench);
+}
+
+function installEpisodeWorkbenchTestHooks(workbench) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.__episodeWorkbenchTestApi = {
+    getPromptMentionState() {
+      const selectedStoryboard = getSelectedStoryboard(
+        getActiveStoryboards(workbench),
+        workbench.ui.selectedStoryboardId,
+      );
+      return {
+        open: Boolean(workbench.ui.promptMentionMenuOpen),
+        query: workbench.ui.promptMentionQuery ?? "",
+        suggestionCount: workbench.ui.promptMentionSuggestions?.length ?? 0,
+        mentionReferenceCount: selectedStoryboard?.generationState?.mentionReferences?.length ?? 0,
+        suggestions: (workbench.ui.promptMentionSuggestions ?? []).map((item) => ({
+          assetId: item.id ?? item.assetId ?? "",
+          assetKind: item.assetKind ?? item.kind ?? "character",
+          name: item.name ?? "",
+        })),
+        prompt: String(workbench.ui.prompt ?? ""),
+      };
+    },
+    selectFirstPromptMention() {
+      const suggestion = workbench.ui.promptMentionSuggestions?.[0] ?? null;
+      if (!suggestion) {
+        return false;
+      }
+      insertEpisodeAssetMention(workbench, suggestion, suggestion.assetKind ?? suggestion.kind ?? "character");
+      workbench.ui.promptMentionMenuOpen = false;
+      workbench.ui.promptMentionQuery = "";
+      workbench.ui.promptMentionSuggestions = [];
+      render(workbench);
+      return true;
+    },
+  };
 }
 
 async function refresh(workbench) {
@@ -1269,8 +1505,19 @@ async function refresh(workbench) {
     }
   }
   syncWorkbenchRouteState(workbench, window.location.hash);
-  if (!(await restoreEpisodeRouteState(workbench, window.location))) {
-    await restoreProjectRouteState(workbench, window.location);
+  const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
+  if (!restoredEpisodeRoute) {
+    const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
+    if (
+      !restoredProjectRoute &&
+      workbench.ui.projectPanelMode === "episode-workbench" &&
+      workbench.ui.selectedEpisodeId
+    ) {
+      await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
+        preserveRoute: true,
+        shouldRender: false,
+      });
+    }
   }
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
   if (workbench.ui.activeNavTab === "team") {
@@ -1316,7 +1563,7 @@ async function loadExportHistory(workbench) {
 }
 
 async function syncProjectInteriorSupplementary(workbench) {
-  const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
+  const projectId = resolveActiveProjectId(workbench);
   if (!projectId) {
     workbench.ui.projectMembers = [];
     workbench.ui.projectStats = null;
@@ -1336,69 +1583,45 @@ async function syncProjectInteriorSupplementary(workbench) {
   }
 }
 
-async function loadTeamSurface(workbench) {
-  try {
-    const [overview, membersPayload] = await Promise.all([
-      workbench.api.getTeamOverview(),
-      workbench.api.getTeamMembers(),
-    ]);
-    workbench.ui.teamOverview = overview;
-    workbench.ui.teamMembers = Array.isArray(membersPayload.members)
-      ? membersPayload.members
-      : [];
-    workbench.ui.teamError = "";
-  } catch (error) {
-    workbench.ui.teamOverview = null;
-    workbench.ui.teamMembers = [];
-    workbench.ui.teamError = friendlyError(error);
-  }
-}
-
-async function submitTeamMemberCreate(workbench) {
-  const draft = workbench.ui.teamMemberDraft ?? createTeamMemberDraft();
-  const teamAccount = String(draft.teamAccount ?? "").trim();
-  const displayName = String(draft.displayName ?? "").trim();
-
-  if (!teamAccount || !displayName) {
-    workbench.ui.teamMemberCreateNotice = "请填写账号和成员名称。";
-    render(workbench);
+async function syncProjectLibraryAssets(workbench) {
+  const projectId = resolveActiveProjectId(workbench);
+  if (!projectId) {
+    workbench.ui.projectLibraryAssetsByType = null;
     return;
   }
 
-  workbench.ui.busy = true;
-  workbench.ui.teamMemberCreateNotice = "";
-  workbench.ui.teamTemporaryPassword = "";
-  workbench.ui.toast = "正在创建成员账号...";
-  render(workbench);
-
   try {
-    const created = await workbench.api.createTeamMember({
-      teamAccount,
-      displayName,
-      businessRole: draft.businessRole ?? "director",
-      projectIds: [],
-      initialCredits: Math.max(0, Math.trunc(Number(draft.initialCredits ?? 0) || 0)),
-      remark: draft.remark ?? "",
-    });
-    workbench.ui.teamTemporaryPassword = created.temporaryPassword ?? "";
-    workbench.ui.teamMemberCreateNotice = `${created.member?.displayName ?? displayName} 已创建，请立即保存临时密码。`;
-    workbench.ui.teamMemberDraft = createTeamMemberDraft();
-    await loadTeamSurface(workbench);
-    workbench.ui.toast = "成员账号已创建。";
+    const payload = await workbench.api.getAssetLibrary();
+    workbench.ui.projectLibraryAssetsByType = groupLibraryAssetsByType(payload?.assets ?? []);
   } catch (error) {
-    const message = friendlyError(error);
-    workbench.ui.teamMemberCreateNotice = message;
-    workbench.ui.toast = `创建成员失败：${message}`;
-  } finally {
-    workbench.ui.busy = false;
-    render(workbench);
+    if (String(error?.errorCode ?? "") === "creator_project_missing") {
+      workbench.ui.projectLibraryAssetsByType = null;
+      return;
+    }
+    throw error;
+  }
+}
+
+function resolveActiveProjectId(workbench) {
+  return (
+    workbench.ui.selectedProjectCardId ??
+    workbench.state?.project?.id ??
+    workbench.ui.projectDetail?.project?.id ??
+    workbench.ui.projectDetail?.id ??
+    null
+  );
+}
+
+async function syncBillingPackages(workbench) {
+  try {
+    const payload = await workbench.api.getBillingPackages();
+    workbench.ui.billingPackages = Array.isArray(payload?.packages) ? payload.packages : [];
+  } catch {
+    workbench.ui.billingPackages = [];
   }
 }
 
 function render(workbench, options = {}) {
-  const libraryScrollState = options.preserveLibraryScroll
-    ? captureLibraryScrollState(workbench.root)
-    : null;
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -1414,7 +1637,7 @@ function render(workbench, options = {}) {
       selectedStoryboard,
     },
   });
-  restoreLibraryScrollState(workbench.root, libraryScrollState);
+  restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }
@@ -1422,71 +1645,40 @@ function render(workbench, options = {}) {
   applyPostRenderEffects(workbench);
 }
 
-function captureLibraryScrollState(root) {
-  const libraryScroll = root.querySelector(".library-workspace-scroll");
-  const pageScroll = document.scrollingElement ?? document.documentElement;
-  return {
-    libraryLeft: libraryScroll?.scrollLeft ?? 0,
-    libraryTop: libraryScroll?.scrollTop ?? 0,
-    pageLeft: pageScroll?.scrollLeft ?? window.scrollX ?? 0,
-    pageTop: pageScroll?.scrollTop ?? window.scrollY ?? 0,
-  };
-}
-
-function restoreLibraryScrollState(root, scrollState) {
-  if (!scrollState) {
+function restoreLibraryScrollState(root, libraryScrollState) {
+  if (!root || !libraryScrollState) {
     return;
   }
-
-  const applyScroll = () => {
-    const libraryScroll = root.querySelector(".library-workspace-scroll");
-    if (libraryScroll) {
-      libraryScroll.scrollLeft = scrollState.libraryLeft;
-      libraryScroll.scrollTop = scrollState.libraryTop;
-    }
-    const pageScroll = document.scrollingElement ?? document.documentElement;
-    if (pageScroll) {
-      pageScroll.scrollLeft = scrollState.pageLeft;
-      pageScroll.scrollTop = scrollState.pageTop;
-    }
-  };
-
-  applyScroll();
-  window.requestAnimationFrame?.(applyScroll);
-}
-
-function scheduleAssetLibrarySearch(workbench) {
-  if (workbench.librarySearchTimer) {
-    clearTimeout(workbench.librarySearchTimer);
+  const scrollTarget = root.querySelector?.(".library-team-shell, .workbench-scroll-surface");
+  if (scrollTarget && Number.isFinite(Number(libraryScrollState.scrollTop))) {
+    scrollTarget.scrollTop = Number(libraryScrollState.scrollTop);
   }
-
-  const requestId = (workbench.librarySearchRequestId ?? 0) + 1;
-  workbench.librarySearchRequestId = requestId;
-  workbench.librarySearchTimer = setTimeout(async () => {
-    workbench.librarySearchTimer = null;
-    await syncAssetLibraryFromApi(workbench, { requestId });
-    if (workbench.librarySearchRequestId === requestId) {
-      render(workbench, { focusLibrarySearch: true });
-    }
-  }, 250);
-}
-
-function cancelAssetLibrarySearch(workbench) {
-  if (workbench.librarySearchTimer) {
-    clearTimeout(workbench.librarySearchTimer);
-    workbench.librarySearchTimer = null;
-  }
-  workbench.librarySearchRequestId = (workbench.librarySearchRequestId ?? 0) + 1;
 }
 
 function restoreLibrarySearchFocus(root) {
-  const input = root.querySelector("[data-library-search-input]");
-  if (!input) {
+  root?.querySelector?.('[data-action="search-library-assets"]')?.focus?.();
+}
+
+function renderPreservingEpisodeAssetScroll(workbench) {
+  const previousScrollTop = workbench.root.querySelector(".episode-replica-left")?.scrollTop ?? null;
+  render(workbench);
+  if (previousScrollTop == null) {
     return;
   }
-  input.focus({ preventScroll: true });
-  const position = input.value.length;
-  input.setSelectionRange?.(position, position);
+  const scrollContainer = workbench.root.querySelector(".episode-replica-left");
+  if (scrollContainer) {
+    scrollContainer.scrollTop = previousScrollTop;
+  }
+}
+
+function requestEpisodeWorkbenchConversationScroll(workbench) {
+  if (workbench.ui.projectPanelMode !== "episode-workbench") {
+    return;
+  }
+  if (workbench.ui.episodeWorkbenchConversationScrollMode === "latest") {
+    return;
+  }
+  workbench.ui.episodeWorkbenchConversationScrollMode = "bottom";
 }
 
 function mergeGenerationState(currentState, nextState) {
@@ -1518,6 +1710,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-delete-storyboard-image-modal",
     "confirm-delete-storyboard-image",
     "close-asset-inspector",
+    "open-episode-batch-actions",
+    "close-episode-batch-modal",
+    "set-episode-media-mode",
+    "preview-export",
+    "episode-fixed-result-action",
   ]);
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
     return;
@@ -1525,7 +1722,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "logout") {
     workbench.ui.busy = true;
-    workbench.ui.toast = "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘帒顭烽弻宥堫檨闁告挾鍠庨悾宄扳枎閹惧瓨鍎柣鐔哥懃鐎氶攱绂掗鈧幃?..";
+    workbench.ui.toast = "正在退出当前账号...";
     render(workbench);
     try {
       await workbench.onLogout?.();
@@ -1539,6 +1736,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-pricing") {
     workbench.ui.isLibraryPricingModalOpen = true;
+    await syncBillingPackages(workbench);
     render(workbench);
     return;
   }
@@ -1555,9 +1753,111 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "request-enterprise-contact") {
+    await runAction(workbench, "正在提交商务联系请求...", async () => {
+      const response = await workbench.api.requestEnterpriseContact({
+        source: "pricing_modal",
+        note: "enterprise_plan_interest",
+      });
+      workbench.ui.toast = `商务联系请求已提交：${response.request?.id ?? "已受理"}。`;
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "purchase-billing-package") {
+    const packageId = target.dataset.packageId ?? "";
+    const provider = target.dataset.provider ?? "wechat_pay";
+    if (!packageId) {
+      workbench.ui.toast = "套餐信息缺失，请刷新后重试。";
+      render(workbench);
+      return;
+    }
+
+    await runAction(workbench, "正在创建支付订单...", async () => {
+      const orderResponse = await workbench.api.createBillingOrder({
+        creditPackageId: packageId,
+      });
+      const intentResponse = await workbench.api.createPaymentIntent({
+        orderId: orderResponse.order.id,
+        provider,
+        productMode: "native_qr",
+      });
+      const amountMinor = Number(intentResponse?.paymentIntent?.amountMinor ?? 0);
+      const amountLabel = amountMinor > 0 ? `¥${Math.round(amountMinor / 100)}` : "当前套餐";
+      workbench.ui.toast = `已创建支付意图：${amountLabel}，订单号 ${intentResponse?.paymentIntent?.merchantOrderNo ?? orderResponse.order.orderNo}。`;
+      workbench.ui.lastBillingOrder = orderResponse.order ?? null;
+      workbench.ui.lastPaymentIntent = intentResponse?.paymentIntent ?? null;
+      workbench.ui.lastPaymentAction = intentResponse?.payAction ?? null;
+    });
+    return;
+  }
+
+  if (action === "refresh-payment-intent") {
+    const paymentIntentId = target.dataset.paymentIntentId ?? workbench.ui.lastPaymentIntent?.id ?? "";
+    const orderId = target.dataset.orderId ?? workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
+    if (!paymentIntentId || !orderId) {
+      workbench.ui.toast = "缺少支付单信息，请重新创建支付意图。";
+      render(workbench);
+      return;
+    }
+
+    await runAction(workbench, "正在刷新支付状态...", async () => {
+      const [orderEnvelope, intentEnvelope] = await Promise.all([
+        workbench.api.getBillingOrder(orderId),
+        workbench.api.getPaymentIntent(paymentIntentId),
+      ]);
+      workbench.ui.lastBillingOrder = orderEnvelope?.order ?? workbench.ui.lastBillingOrder ?? null;
+      workbench.ui.lastPaymentIntent = intentEnvelope?.paymentIntent ?? workbench.ui.lastPaymentIntent ?? null;
+      workbench.ui.lastPaymentAction = intentEnvelope?.payAction ?? workbench.ui.lastPaymentAction ?? null;
+      workbench.ui.toast = `支付状态已刷新：${workbench.ui.lastPaymentIntent?.status ?? "unknown"}。`;
+    });
+    return;
+  }
+
   if (action === "show-library-placeholder") {
-    workbench.ui.toast =
-      target.dataset.placeholderMessage ?? "该资产库能力暂未开放。"
+    const placeholderMessage = target.dataset.placeholderMessage ?? "该资产库能力暂未开放。";
+    workbench.ui.toast = placeholderMessage;
+    render(workbench);
+    return;
+  }
+
+  if (action === "reset-team-member-filters") {
+    workbench.ui.teamMemberSearchQuery = "";
+    workbench.ui.teamMemberRoleFilter = "all";
+    workbench.ui.teamMemberStatusFilter = "all";
+    workbench.ui.toast = "已重置成员筛选条件。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-library-upload") {
+    workbench.ui.activeNavTab = "project";
+    workbench.ui.projectPanelMode = "workspace";
+    workbench.ui.projectInteriorSection = "assets";
+    workbench.ui.projectAssetTab = "character";
+    workbench.ui.assetImportModal = "character";
+    workbench.ui.assetImportModalTab = "local";
+    workbench.ui.assetImportCategory = "domestic-modern-city";
+    workbench.ui.assetImportDrafts = [];
+    workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, "character");
+    workbench.ui.toast = "已进入项目资产页，可直接上传角色素材。";
+    window.location.hash = "project-workspace";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-library-generate") {
+    workbench.ui.activeNavTab = "project";
+    workbench.ui.projectPanelMode = "workspace";
+    workbench.ui.projectInteriorSection = "assets";
+    workbench.ui.projectAssetTab = "character";
+    workbench.ui.assetGeneratorModal = "character";
+    workbench.ui.assetGeneratorMode = "generate";
+    workbench.ui.assetGeneratorEditingAsset = null;
+    workbench.ui.toast = "已进入项目资产页，可直接生成角色资产。";
+    window.location.hash = "project-workspace";
     render(workbench);
     return;
   }
@@ -1576,8 +1876,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryQuery = "";
     workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
-    workbench.ui.libraryDetailAssetId = "";
-    workbench.ui.libraryDetailView = "turnaround";
+    if (workbench.ui.libraryTeamAssetScope === "official" || workbench.ui.libraryTeamAssetScope === "team") {
+      workbench.ui.libraryCategory = workbench.ui.libraryCategory ?? "角色";
+      workbench.ui.libraryFolder = workbench.ui.libraryFolder ?? "国内仿真人·现代都市";
+      const scopedAssets = getLibraryAssetsForImport({
+        assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory),
+        folder: workbench.ui.libraryFolder,
+        searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
+      });
+      workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
+      workbench.ui.selectedLibraryImportIds = workbench.ui.selectedLibraryImportIds ?? [];
+    }
     workbench.ui.toast = `已切换到${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}资产库。`;
     window.location.hash = "library";
     render(workbench);
@@ -1587,14 +1896,86 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-library-category") {
-    cancelAssetLibrarySearch(workbench);
-    workbench.ui.activeNavTab = "library";
-    workbench.ui.libraryCategory = target.dataset.libraryCategory ?? "character";
-    workbench.ui.libraryFolder = "";
-    workbench.ui.libraryQuery = "";
-    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
-    workbench.ui.libraryDetailAssetId = "";
-    workbench.ui.libraryDetailView = "turnaround";
+    const category = target.dataset.category ?? "角色";
+    workbench.ui.libraryCategory = category;
+    const type = getLibraryTypeByCategory(category);
+    if (type !== "character" && type !== "scene" && type !== "prop") {
+      workbench.ui.libraryFolder = "国内仿真人·现代都市";
+    }
+    const scopedAssets = getLibraryAssetsForImport({
+      assetKind: type,
+      folder: workbench.ui.libraryFolder,
+      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
+    });
+    workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
+    workbench.ui.toast = `已切换到${category}素材。`;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-library-folder") {
+    const folder = target.dataset.libraryFolder ?? "";
+    workbench.ui.libraryFolder = folder;
+    const scopedAssets = getLibraryAssetsForImport({
+      assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色"),
+      folder,
+      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
+    });
+    workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-library-asset") {
+    const assetId = target.dataset.libraryAssetId ?? "";
+    workbench.ui.selectedLibraryAssetId = assetId || null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-library-import-selection") {
+    const assetId = target.dataset.libraryAssetId ?? "";
+    workbench.ui.selectedLibraryImportIds = toggleSelection(
+      workbench.ui.selectedLibraryImportIds ?? [],
+      assetId,
+    );
+    if (!workbench.ui.selectedLibraryAssetId) {
+      workbench.ui.selectedLibraryAssetId = assetId || null;
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "import-selected-library-assets") {
+    const selectedIds = [...new Set(workbench.ui.selectedLibraryImportIds ?? [])].filter(Boolean);
+    if (!selectedIds.length) {
+      workbench.ui.toast = "请先选择要导入的资产。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.activeNavTab = "project";
+    workbench.ui.projectPanelMode = "workspace";
+    workbench.ui.projectInteriorSection = "assets";
+    workbench.ui.projectAssetTab = getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色");
+    workbench.ui.assetImportModal = workbench.ui.projectAssetTab;
+    workbench.ui.assetImportModalTab = "official";
+    workbench.ui.assetImportCategory = workbench.ui.libraryFolder ?? "国内仿真人·现代都市";
+    workbench.ui.assetImportDrafts = [];
+    workbench.ui.assetImportSelection = selectedIds;
+    workbench.ui.assetImportOfficialAssets = getLibraryAssetsForImport({
+      assetKind: workbench.ui.projectAssetTab,
+      folder: workbench.ui.assetImportCategory,
+      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
+    });
+    workbench.ui.toast = `已带入 ${selectedIds.length} 项资产，可继续确认导入。`;
+    window.location.hash = "project-workspace";
+    render(workbench);
+    return;
+  }
+
+  if (action === "refresh-team") {
+    await syncProjectInteriorSupplementary(workbench);
+    workbench.ui.toast = "团队数据已刷新。";
     render(workbench);
     await syncAssetLibraryFromApi(workbench);
     render(workbench);
@@ -1726,6 +2107,178 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-create-member") {
+    workbench.ui.createMemberModal = {
+      open: true,
+      phone: "",
+      role: "creator",
+      note: "",
+      notice: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-create-member") {
+    workbench.ui.createMemberModal = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-edit-member") {
+    const memberId = target.dataset.memberId ?? "";
+    const member = (workbench.ui.projectMembers ?? []).find((item) => item.id === memberId);
+    if (!member) {
+      workbench.ui.toast = "未找到要编辑的成员，请刷新后重试。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.editMemberModal = {
+      open: true,
+      id: member.id,
+      phone: member.phone ?? "",
+      role: member.role ?? "creator",
+      note: member.note ?? "",
+      status: member.status ?? "enabled",
+      notice: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-edit-member") {
+    workbench.ui.editMemberModal = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-create-member-phone") {
+    workbench.ui.createMemberModal = {
+      ...(workbench.ui.createMemberModal ?? { open: true, role: "creator", note: "", notice: "" }),
+      phone: target.value,
+      notice: "",
+    };
+    return;
+  }
+
+  if (action === "change-create-member-role") {
+    workbench.ui.createMemberModal = {
+      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", note: "", notice: "" }),
+      role: target.value || "creator",
+      notice: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-create-member-note") {
+    workbench.ui.createMemberModal = {
+      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", role: "creator", notice: "" }),
+      note: target.value,
+      notice: "",
+    };
+    return;
+  }
+
+  if (action === "change-edit-member-role") {
+    workbench.ui.editMemberModal = {
+      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", note: "", status: "enabled", notice: "" }),
+      role: target.value || "creator",
+      notice: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-edit-member-note") {
+    workbench.ui.editMemberModal = {
+      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", role: "creator", status: "enabled", notice: "" }),
+      note: target.value,
+      notice: "",
+    };
+    return;
+  }
+
+  if (action === "submit-create-member") {
+    const projectId = resolveActiveProjectId(workbench) ?? "";
+    const draft = workbench.ui.createMemberModal ?? {};
+    if (!projectId) {
+      workbench.ui.createMemberModal = {
+        ...draft,
+        open: true,
+        notice: "缺少项目上下文，请先进入项目后再创建成员。",
+      };
+      render(workbench);
+      return;
+    }
+
+    await runAction(workbench, "正在创建成员账号...", async () => {
+      const response = await workbench.api.createProjectMember(projectId, {
+        phone: draft.phone ?? "",
+        role: draft.role ?? "creator",
+        note: draft.note ?? "",
+      });
+      workbench.ui.createMemberModal = null;
+      await syncProjectInteriorSupplementary(workbench);
+      workbench.ui.toast = `已创建成员：${response.member?.phone ?? draft.phone ?? ""}`;
+    });
+    return;
+  }
+
+  if (action === "toggle-member-status") {
+    const projectId = resolveActiveProjectId(workbench) ?? "";
+    const draft = workbench.ui.editMemberModal ?? {};
+    if (!projectId || !draft.id) {
+      workbench.ui.toast = "缺少成员上下文，请刷新后重试。";
+      render(workbench);
+      return;
+    }
+
+    const nextStatus = draft.status === "disabled" ? "active" : "disabled";
+    await runAction(workbench, nextStatus === "disabled" ? "正在停用成员..." : "正在恢复成员...", async () => {
+      const response = await workbench.api.updateProjectMember(projectId, draft.id, {
+        status: nextStatus,
+      });
+      workbench.ui.editMemberModal = {
+        ...(workbench.ui.editMemberModal ?? draft),
+        open: true,
+        status: response.member?.status ?? (nextStatus === "disabled" ? "disabled" : "enabled"),
+        notice: nextStatus === "disabled" ? "该成员已停用。" : "该成员已恢复。",
+      };
+      await syncProjectInteriorSupplementary(workbench);
+      workbench.ui.toast = nextStatus === "disabled" ? "成员已停用。" : "成员已恢复。";
+    });
+    return;
+  }
+
+  if (action === "submit-edit-member") {
+    const projectId = resolveActiveProjectId(workbench) ?? "";
+    const draft = workbench.ui.editMemberModal ?? {};
+    if (!projectId || !draft.id) {
+      workbench.ui.toast = "缺少成员上下文，请刷新后重试。";
+      render(workbench);
+      return;
+    }
+
+    await runAction(workbench, "正在保存成员信息...", async () => {
+      const response = await workbench.api.updateProjectMember(projectId, draft.id, {
+        role: draft.role ?? "creator",
+        note: draft.note ?? "",
+      });
+      workbench.ui.editMemberModal = {
+        ...(workbench.ui.editMemberModal ?? draft),
+        open: true,
+        role: response.member?.role ?? draft.role ?? "creator",
+        note: response.member?.note ?? draft.note ?? "",
+        status: response.member?.status ?? draft.status ?? "enabled",
+        notice: "成员信息已更新。",
+      };
+      await syncProjectInteriorSupplementary(workbench);
+      workbench.ui.toast = "成员信息已更新。";
+    });
+    return;
+  }
+
   if (action === "open-team-dashboard") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team-dashboard";
@@ -1733,9 +2286,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.teamDashboardDateRange = "today";
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
-    await loadTeamSurface(workbench);
-    workbench.ui.toast = "已打开团队数据看板。";
-    window.location.hash = teamDashboardHash(workbench.ui.teamDashboardTab);
+    workbench.ui.createMemberModal = null;
+    workbench.ui.editMemberModal = null;
+    workbench.ui.selectedDashboardMemberId = workbench.ui.projectMembers?.[0]?.id ?? null;
+    workbench.ui.toast = "已进入团队概览。";
+    window.location.hash = "team-dashboard";
     render(workbench);
     return;
   }
@@ -1769,6 +2324,64 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await loadTeamSurface(workbench);
     workbench.ui.toast = "已返回团队管理。";
     window.location.hash = "team";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-team-dashboard-tab") {
+    workbench.ui.teamDashboardTab = target.dataset.dashboardTab ?? "member-consumption";
+    workbench.ui.selectedDashboardMemberId = workbench.ui.projectMembers?.[0]?.id ?? null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-team-dashboard-date-shortcut") {
+    workbench.ui.teamDashboardDateShortcut = target.dataset.dashboardDateShortcut ?? "今天";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-team-dashboard-role-filter") {
+    workbench.ui.teamDashboardRoleFilter = target.value || "all";
+    workbench.ui.selectedDashboardMemberId = workbench.ui.projectMembers?.[0]?.id ?? null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-team-dashboard-status-filter") {
+    workbench.ui.teamDashboardStatusFilter = target.value || "all";
+    workbench.ui.selectedDashboardMemberId = workbench.ui.projectMembers?.[0]?.id ?? null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "view-team-dashboard-member") {
+    workbench.ui.selectedDashboardMemberId = target.dataset.memberId ?? null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "export-team-dashboard") {
+    const projectId = resolveActiveProjectId(workbench) ?? "";
+    if (!projectId) {
+      workbench.ui.toast = "缺少项目上下文，无法导出团队看板。";
+      render(workbench);
+      return;
+    }
+    const url = workbench.api.getProjectTeamDashboardExportUrl(projectId, {
+      tab: workbench.ui.teamDashboardTab,
+      dateShortcut: workbench.ui.teamDashboardDateShortcut,
+      role: workbench.ui.teamDashboardRoleFilter,
+      status: workbench.ui.teamDashboardStatusFilter,
+    });
+    triggerBrowserDownload(
+      url,
+      normalizeDownloadName(
+        `team-dashboard-${workbench.ui.teamDashboardTab ?? "member-consumption"}`,
+        ".csv",
+      ),
+    );
+    workbench.ui.toast = "团队看板导出已开始。";
     render(workbench);
     return;
   }
@@ -1850,9 +2463,51 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
 
-    workbench.ui.isOriginalScriptModalOpen = false;
-    workbench.ui.toast = "设定已保存，规划方案生成入口待接入。";
-    render(workbench);
+    await runAction(workbench, statusForAction("create-project"), async () => {
+      const name = draft.fileName.trim();
+      const created = await workbench.api.createProject(buildProjectCreateRequest({
+        name,
+        aspectRatio: "9:16",
+        projectType: "anime",
+        scriptInput: buildOriginalScriptPlanSeed(draft),
+      }));
+      const createdProject =
+        created?.project ??
+        created?.body?.project ??
+        null;
+
+      if (createdProject?.id) {
+        const nextCard = mapProjectRecordToCard(createdProject);
+        const projects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [];
+        const existingIndex = projects.findIndex((candidate) => candidate.id === nextCard.id);
+        workbench.ui.projectLibrary =
+          existingIndex >= 0
+            ? projects.map((candidate, index) => (index === existingIndex ? { ...candidate, ...nextCard } : candidate))
+            : [nextCard, ...projects];
+        workbench.ui.selectedProjectCardId = nextCard.id;
+      } else {
+        await syncProjectLibraryFromApi(workbench);
+      }
+
+      const createdDetail =
+        created?.body?.state?.projectDetail ??
+        created?.state?.projectDetail ??
+        null;
+      if (createdDetail?.project) {
+        applyProjectDetail(workbench, createdDetail);
+      } else if (createdProject?.id) {
+        applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, createdProject.id));
+      }
+
+      workbench.ui.projectLibraryPage = 1;
+      workbench.ui.activeNavTab = "script";
+      workbench.ui.projectPanelMode = "library";
+      workbench.ui.isOriginalScriptModalOpen = false;
+      workbench.ui.isScriptModalOpen = false;
+      workbench.ui.uploadNotice = "";
+      workbench.ui.toast = "AI 原创剧本项目已创建，可继续拆镜或进入剧集工作台。";
+      window.location.hash = "script";
+    });
     return;
   }
 
@@ -1880,8 +2535,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "select-storyboard") {
+    stopLipSyncAudioPreview(workbench);
     workbench.ui.selectedStoryboardId = target.dataset.storyboardId ?? null;
     workbench.ui.isStoryboardDescriptionModalOpen = false;
+    syncPromptFromCurrentScope(workbench);
     render(workbench);
     return;
   }
@@ -1894,7 +2551,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.selectedEpisodeCardId = assetId;
     workbench.ui.selectedEpisodeAssetId = assetId;
-    render(workbench);
+    await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
+    syncPromptFromCurrentScope(workbench);
+    renderPreservingEpisodeAssetScroll(workbench);
     return;
   }
 
@@ -1911,7 +2570,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       current.add(assetId);
     }
     workbench.ui.selectedEpisodeAssetIds = [...current];
-    render(workbench);
+    renderPreservingEpisodeAssetScroll(workbench);
     return;
   }
 
@@ -1931,49 +2590,298 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-storyboard-selection") {
+    const storyboardId = target.dataset.storyboardId ?? "";
+    const current = new Set(workbench.ui.selectedStoryboardIds ?? []);
+    if (current.has(storyboardId)) {
+      current.delete(storyboardId);
+    } else if (storyboardId) {
+      current.add(storyboardId);
+    }
+    workbench.ui.selectedStoryboardIds = [...current];
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-storyboard-select-all") {
+    const storyboardIds = getActiveStoryboards(workbench).map((item) => item.id).filter(Boolean);
+    const isAllSelected =
+      storyboardIds.length > 0 &&
+      storyboardIds.every((id) => (workbench.ui.selectedStoryboardIds ?? []).includes(id));
+    workbench.ui.selectedStoryboardIds = isAllSelected ? [] : [...storyboardIds];
+    render(workbench);
+    return;
+  }
+
   if (action === "open-episode-voice-modal") {
+    const voiceScope = target.dataset.voiceScope ?? "asset";
+    if (voiceScope === "lip-sync") {
+      workbench.ui.episodeVoiceModal = {
+        scope: "lip-sync",
+        assetId: "",
+        assetName: getSelectedStoryboard(
+          getActiveStoryboards(workbench),
+          workbench.ui.selectedStoryboardId,
+        )?.title ?? "当前分镜",
+        assetKind: "character",
+        voiceId: workbench.ui.lipSyncVoiceId ?? null,
+        voiceName: workbench.ui.lipSyncVoiceName ?? "",
+        tab: workbench.ui.lipSyncVoiceSource === "system" ? "system" : "custom",
+        previewVoiceName: "",
+      };
+      render(workbench);
+      return;
+    }
     const assetId = target.dataset.assetId ?? "";
-    const assetName = target.dataset.assetName ?? "鐟欐帟澹婇柊宥夌叾";
+    const currentCharacterAsset = findImportedAsset(workbench.ui.importedAssets, "character", "image", assetId);
+    const assetName = target.dataset.assetName ?? "角色";
+    const inferredVoiceSource = inferEpisodeVoiceSource(currentCharacterAsset);
     workbench.ui.episodeVoiceModal = {
+      scope: "asset",
       assetId,
       assetName,
       assetKind: target.dataset.assetKind ?? "character",
-      voiceName:
-        findImportedAsset(workbench.ui.importedAssets, "character", "image", assetId)?.voiceName ?? "",
-      tab: "custom",
+      voiceId: currentCharacterAsset?.voiceId ?? null,
+      voiceName: currentCharacterAsset?.voiceName ?? "",
+      tab: inferredVoiceSource === "system" ? "system" : "custom",
+      previewVoiceName: "",
     };
     render(workbench);
     return;
   }
 
   if (action === "set-episode-voice-tab") {
+    stopEpisodeVoicePreview(workbench);
     workbench.ui.episodeVoiceModal = {
       ...(workbench.ui.episodeVoiceModal ?? {}),
       tab: target.dataset.tab ?? "custom",
+      previewVoiceName: "",
     };
+    render(workbench);
+    return;
+  }
+
+  if (action === "preview-episode-voice") {
+    const voiceName = target.dataset.voiceName ?? "";
+    if (!voiceName) {
+      return;
+    }
+    if (workbench.ui.episodeVoiceModal?.previewVoiceName === voiceName) {
+      stopEpisodeVoicePreview(workbench);
+      workbench.ui.episodeVoiceModal = {
+        ...(workbench.ui.episodeVoiceModal ?? {}),
+        previewVoiceName: "",
+      };
+      render(workbench);
+      return;
+    }
+    playEpisodeVoicePreview(workbench, voiceName);
+    workbench.ui.episodeVoiceModal = {
+      ...(workbench.ui.episodeVoiceModal ?? {}),
+      previewVoiceName: voiceName,
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "preview-lip-sync-audio") {
+    const audioId = target.dataset.audioId ?? "";
+    if (!audioId) {
+      return;
+    }
+    const item = (workbench.ui.lipSyncAudioItems ?? []).find((candidate) => candidate?.id === audioId);
+    if (!item) {
+      return;
+    }
+    if (workbench.ui.lipSyncPreviewAudioId === audioId) {
+      stopLipSyncAudioPreview(workbench);
+      render(workbench);
+      return;
+    }
+    playLipSyncAudioPreview(workbench, item);
     render(workbench);
     return;
   }
 
   if (action === "select-episode-voice") {
     const modal = workbench.ui.episodeVoiceModal;
+    const voiceId = target.dataset.voiceId ?? null;
     const voiceName = target.dataset.voiceName ?? "";
+    const voiceSource = target.dataset.voiceSource ?? modal?.tab ?? "custom";
     if (!modal?.assetId || !voiceName) {
+      if (modal?.scope !== "lip-sync") {
+        return;
+      }
+    }
+    if (modal?.scope === "lip-sync") {
+      workbench.ui.lipSyncVoiceId = voiceId;
+      workbench.ui.lipSyncVoiceName = voiceName;
+      workbench.ui.lipSyncVoiceSource = voiceSource;
+      stopEpisodeVoicePreview(workbench);
+      workbench.ui.episodeVoiceModal = null;
+      await persistLipSyncStoryboardDraft(workbench, { silent: true });
+      workbench.ui.toast = `已选择对口型音色 ${voiceName}。`;
+      render(workbench);
+      return;
+    }
+    if (
+      isRealEpisodeWorkbench(workbench) &&
+      typeof workbench.api.updateEpisodeAsset === "function" &&
+      isUuidLike(modal.assetId)
+    ) {
+      await runAction(workbench, "正在保存角色音色...", async () => {
+        await workbench.api.updateEpisodeAsset(workbench.ui.selectedEpisodeId, modal.assetId, {
+          voiceId,
+          voiceName,
+          voiceSource,
+        });
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+      });
+      stopEpisodeVoicePreview(workbench);
+      workbench.ui.episodeVoiceModal = null;
+      workbench.ui.selectedEpisodeAssetId = modal.assetId;
+      workbench.ui.toast = `已为 ${modal.assetName ?? "当前角色"} 设置音色 ${voiceName}。`;
+      render(workbench);
       return;
     }
     const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
     nextAssets.character = (nextAssets.character ?? []).map((item) =>
-      item.id === modal.assetId ? { ...item, voiceName } : item,
+      item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource } : item,
     );
     workbench.ui.importedAssets = nextAssets;
+    stopEpisodeVoicePreview(workbench);
     workbench.ui.episodeVoiceModal = null;
-    workbench.ui.toast = `?? ${modal.assetName ?? "??"} ?????${voiceName}`;
+    workbench.ui.toast = `已为 ${modal.assetName ?? "当前角色"} 选择音色 ${voiceName}。`;
     render(workbench);
     return;
   }
 
   if (action === "close-episode-voice-modal") {
+    stopEpisodeVoicePreview(workbench);
     workbench.ui.episodeVoiceModal = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-delete-episode-asset-modal") {
+    const assetId = target.dataset.assetId ?? "";
+    const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const assetName = target.dataset.assetName ?? "";
+    workbench.ui.assetInspector = {
+      ...(workbench.ui.assetInspector ?? {}),
+      episodeDeleteAssetTarget: {
+        assetId,
+        assetKind,
+        assetName,
+      },
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "save-episode-asset-to-library") {
+    const assetId = target.dataset.assetId ?? "";
+    const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const assetLabel = assetKind === "scene" ? "场景" : assetKind === "prop" ? "道具" : "角色";
+    const assetRecord = findEpisodeAssetById(workbench, assetKind, assetId);
+    if (!assetRecord?.preview && !assetRecord?.previewUrl && !assetRecord?.fixedImageFileId) {
+      workbench.ui.toast = "没有图片无法保存在资产库";
+      render(workbench);
+      return;
+    }
+    if (
+      !isRealEpisodeWorkbench(workbench) ||
+      typeof workbench.api.saveEpisodeAssetToLibrary !== "function" ||
+      !isUuidLike(assetId)
+    ) {
+      workbench.ui.toast = "当前剧集资产库保存能力还未接通。";
+      render(workbench);
+      return;
+    }
+    let savedAssetId = null;
+    await runAction(workbench, "正在保存到资产库...", async () => {
+      const result = await workbench.api.saveEpisodeAssetToLibrary(workbench.ui.selectedEpisodeId, assetId);
+      savedAssetId = result?.asset?.id ?? null;
+      if (!savedAssetId) {
+        throw new Error("ASSET_ALREADY_EXISTS");
+      }
+      if (workbench.ui.selectedProjectCardId && typeof workbench.api.getProjectDetail === "function") {
+        applyProjectDetail(
+          workbench,
+          await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
+        );
+      }
+    });
+    workbench.ui.toast = "添加成功";
+    prepareAssetLibraryReturn(workbench, {
+      assetKind,
+      mediaType: "image",
+      assetIds: savedAssetId ? [savedAssetId] : [],
+      count: savedAssetId ? 1 : 0,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-delete-episode-asset-modal") {
+    if (workbench.ui.assetInspector) {
+      workbench.ui.assetInspector = {
+        ...workbench.ui.assetInspector,
+        episodeDeleteAssetTarget: null,
+      };
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-delete-episode-asset") {
+    const draft = workbench.ui.assetInspector?.episodeDeleteAssetTarget;
+    if (!draft?.assetId) {
+      return;
+    }
+    const resolveNextSelection = () => {
+      const nextAssets = workbench.ui.importedAssets ?? {};
+      const candidates = [
+        ...(nextAssets[draft.assetKind] ?? []),
+        ...(nextAssets.character ?? []),
+        ...(nextAssets.scene ?? []),
+        ...(nextAssets.prop ?? []),
+      ].filter((item) => item.id !== draft.assetId);
+      return candidates[0]?.id ?? null;
+    };
+    if (
+      isRealEpisodeWorkbench(workbench) &&
+      typeof workbench.api.deleteEpisodeAsset === "function" &&
+      isUuidLike(draft.assetId)
+    ) {
+      await runAction(workbench, "正在删除剧集素材...", async () => {
+        await workbench.api.deleteEpisodeAsset(workbench.ui.selectedEpisodeId, draft.assetId);
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+      });
+      const nextSelection = resolveNextSelection();
+      workbench.ui.selectedEpisodeAssetId = nextSelection;
+      workbench.ui.selectedEpisodeCardId = nextSelection;
+      workbench.ui.selectedEpisodeAssetIds = (workbench.ui.selectedEpisodeAssetIds ?? []).filter((id) => id !== draft.assetId);
+      workbench.ui.assetInspector = {
+        ...(workbench.ui.assetInspector ?? {}),
+        episodeDeleteAssetTarget: null,
+      };
+      workbench.ui.toast = draft.assetName ? `已删除 ${draft.assetName}。` : "已删除当前素材。";
+      render(workbench);
+      return;
+    }
+    const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+    nextAssets[draft.assetKind] = (nextAssets[draft.assetKind] ?? []).filter((item) => item.id !== draft.assetId);
+    workbench.ui.importedAssets = nextAssets;
+    const nextSelection = resolveNextSelection();
+    workbench.ui.selectedEpisodeAssetId = nextSelection;
+    workbench.ui.selectedEpisodeCardId = nextSelection;
+    workbench.ui.selectedEpisodeAssetIds = (workbench.ui.selectedEpisodeAssetIds ?? []).filter((id) => id !== draft.assetId);
+    workbench.ui.assetInspector = {
+      ...(workbench.ui.assetInspector ?? {}),
+      episodeDeleteAssetTarget: null,
+    };
+    workbench.ui.toast = draft.assetName ? `已删除 ${draft.assetName}。` : "已删除当前素材。";
     render(workbench);
     return;
   }
@@ -2010,13 +2918,44 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!nextType || !nextName) {
       return;
     }
+    const episodeAssetTypeMap = {
+      character: "role",
+      scene: "scene",
+      prop: "prop",
+    };
+    if (
+      isRealEpisodeWorkbench(workbench) &&
+      typeof workbench.api.createEpisodeAsset === "function" &&
+      Object.prototype.hasOwnProperty.call(episodeAssetTypeMap, nextType)
+    ) {
+      let createdAssetId = null;
+      await runAction(workbench, "正在创建剧集素材...", async () => {
+        const created = await workbench.api.createEpisodeAsset(workbench.ui.selectedEpisodeId, {
+          assetType: episodeAssetTypeMap[nextType],
+          name: nextName,
+        });
+        createdAssetId = created?.asset?.assetId ?? null;
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+        applyManualAssetDraftDefaults(workbench, nextType, createdAssetId, nextName);
+      }, { successToast: "" });
+      workbench.ui.projectAssetTab = nextType;
+      workbench.ui.selectedEpisodeAssetId = createdAssetId ?? workbench.ui.selectedEpisodeAssetId;
+      workbench.ui.selectedEpisodeCardId = createdAssetId ?? workbench.ui.selectedEpisodeCardId;
+      workbench.ui.episodeWorkbenchScrollTarget = nextType;
+      workbench.ui.episodeAssetCreateModal = null;
+      workbench.ui.toast = "";
+      render(workbench);
+      return;
+    }
     const nextEntry = {
       id: `manual-${nextType}-${Date.now().toString(36)}`,
       name: nextName,
       preview: "",
-      description: "",
+      description: buildManualAssetDefaultDescription(nextType, nextName),
       kind: nextType,
       source: "manual",
+      voiceName: nextType === "character" ? "" : undefined,
+      voiceSource: nextType === "character" ? "custom" : undefined,
     };
     if (nextType === "other") {
       const currentOther = workbench.ui.importedAssets?.other ?? { image: [], video: [] };
@@ -2035,9 +2974,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.projectAssetTab = nextType;
     workbench.ui.selectedEpisodeAssetId = nextEntry.id;
+    workbench.ui.selectedEpisodeCardId = nextEntry.id;
     workbench.ui.episodeWorkbenchScrollTarget = nextType;
     workbench.ui.episodeAssetCreateModal = null;
-    workbench.ui.toast = `??? ${nextName}?`;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -2097,7 +3037,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       (item) => item.id === targetToDelete?.storyboardId,
     );
     if (isStoryboardVideoProtected(storyboard, targetToDelete?.videoId ?? "")) {
-      workbench.ui.toast = "??????????????????";
+      workbench.ui.toast = "当前视频已设为分镜视频，请先取消后再删除。";
       render(workbench);
       return;
     }
@@ -2145,7 +3085,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nextDescription =
       workbench.ui.storyboardDescriptionDraft.trim() || "Please describe the storyboard content.";
     if (selectedStoryboard.linkedShotId) {
-      await runAction(workbench, "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬潙娅ч梺宕囨嚀缁夌數鎹㈠┑瀣棃婵炴垶鐟Λ銈夋⒑閸︻厽娅曞┑鐐╁亾闂佸搫鏈惄顖炵嵁閹烘绠ｉ柣鎴濇閿涘棝姊绘担鍛婃儓婵☆偅顨婇獮濠傤潨閳ь剟鎮伴鈧獮姗€宕烽鐘虫緫婵犳鍠楅敃鈺呭礈濞戞瑦娅?..", async () => {
+      await runAction(workbench, "正在保存分镜描述...", async () => {
         await workbench.api.updateShot({
           shotId: selectedStoryboard.linkedShotId,
           description: nextDescription,
@@ -2180,7 +3120,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-muse-scope-mode") {
+    stopLipSyncAudioPreview(workbench);
     workbench.ui.museScopeMode = target.dataset.mode ?? "storyboard";
+    if (workbench.ui.museScopeMode === "assets") {
+      await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+      const assetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+      await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
+    }
+    syncPromptFromCurrentScope(workbench);
     render(workbench);
     return;
   }
@@ -2212,10 +3159,49 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "remove-mention-reference") {
+    const selectedStoryboard = getSelectedStoryboard(
+      getActiveStoryboards(workbench),
+      workbench.ui.selectedStoryboardId,
+    );
+    if (!selectedStoryboard) {
+      return;
+    }
+    const referenceId = target.dataset.referenceId ?? "";
+    updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+      ...generationState,
+      mentionReferences: (generationState.mentionReferences ?? []).filter((item) => item.id !== referenceId),
+    }));
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-prompt-mention") {
+    const assetId = target.dataset.assetId ?? "";
+    const assetKind = target.dataset.assetKind ?? "character";
+    const suggestion = findEpisodeAssetById(workbench, assetKind, assetId);
+    if (!suggestion) {
+      workbench.ui.promptMentionMenuOpen = false;
+      workbench.ui.promptMentionSuggestions = [];
+      render(workbench);
+      return;
+    }
+    insertEpisodeAssetMention(workbench, suggestion, assetKind);
+    workbench.ui.promptMentionMenuOpen = false;
+    workbench.ui.promptMentionQuery = "";
+    workbench.ui.promptMentionSuggestions = [];
+    render(workbench);
+    return;
+  }
+
   if (action === "episode-fixed-result-action") {
     const resultAction = target.dataset.resultAction ?? "";
+    const taskId = target.dataset.taskId ?? "";
+    const imageResult = resolveAssetConversationActionResult(workbench, taskId, "image") ?? workbench.ui.imageGenerationResult;
+    if (imageResult) {
+      workbench.ui.imageGenerationResult = imageResult;
+    }
     if (resultAction === "download") {
-      const imageResult = workbench.ui.imageGenerationResult;
       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
       const downloadUrl = firstImage?.url ?? null;
       if (downloadUrl) {
@@ -2229,38 +3215,81 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "delete") {
-      const imageResult = workbench.ui.imageGenerationResult;
       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
-      if (
-        isRealEpisodeWorkbench(workbench) &&
-        typeof workbench.api.deleteFileResource === "function" &&
-        isUuidLike(firstImage?.storageObjectId ?? null)
-      ) {
-        try {
-          workbench.ui.busy = true;
-          render(workbench);
+      const selectedAssetId =
+        imageResult?.selectionContext?.selectedAssetId ??
+        workbench.ui.selectedEpisodeAssetId ??
+        workbench.ui.selectedEpisodeCardId ??
+        null;
+      try {
+        workbench.ui.busy = true;
+        render(workbench);
+        if (
+          isRealEpisodeWorkbench(workbench) &&
+          typeof workbench.api.deleteFileResource === "function" &&
+          isUuidLike(firstImage?.storageObjectId ?? null)
+        ) {
           await workbench.api.deleteFileResource(workbench.ui.selectedEpisodeId, firstImage.storageObjectId, {
             assetVersionId: firstImage.id ?? null,
             storageObjectId: firstImage.storageObjectId,
           });
-          workbench.ui.toast = "已删除当前结果。";
-          await refresh(workbench);
-        } catch (error) {
-          workbench.ui.toast = `删除失败：${friendlyError(error)}`;
-        } finally {
-          workbench.ui.busy = false;
-          render(workbench);
         }
-        return;
+        if (
+          isRealEpisodeWorkbench(workbench) &&
+          typeof workbench.api.deleteAssetConversationTurn === "function" &&
+          selectedAssetId &&
+          String(imageResult?.taskId ?? "").trim()
+        ) {
+          const response = await workbench.api.deleteAssetConversationTurn(
+            workbench.ui.selectedEpisodeId,
+            selectedAssetId,
+            imageResult.taskId,
+            "image",
+          );
+          applyAssetConversationHistoryAfterDelete(
+            workbench,
+            selectedAssetId,
+            imageResult.taskId,
+            "image",
+            Array.isArray(response?.entries) ? response.entries : null,
+          );
+        } else {
+          applyAssetConversationHistoryAfterDelete(
+            workbench,
+            selectedAssetId,
+            imageResult?.taskId ?? null,
+            "image",
+          );
+        }
+        workbench.ui.toast = "已删除当前结果。";
+      } catch (error) {
+        workbench.ui.toast = `删除失败：${friendlyError(error)}`;
+      } finally {
+        workbench.ui.busy = false;
+        render(workbench);
       }
-      workbench.ui.toast = "已移除当前结果。";
-      render(workbench);
       return;
     }
 
     if (resultAction === "edit") {
-      workbench.ui.isStoryboardDescriptionModalOpen = true;
-      workbench.ui.toast = "已回填当前提示词，可继续编辑。";
+      const promptPreview = String(imageResult?.promptPreview ?? "").trim();
+      const quickReferenceItems = Array.isArray(imageResult?.quickReferenceItems)
+        ? hydrateQuickReferencePreviews(workbench, imageResult.quickReferenceItems)
+        : [];
+      setCurrentScopePrompt(workbench, promptPreview);
+      workbench.ui.assetPromptDraft = {
+        ...(workbench.ui.assetPromptDraft ?? {}),
+        scopeMode: "assets",
+        prompt: promptPreview,
+        quickReferenceItems,
+        mentionReferences: [],
+        selectionContext:
+          imageResult?.selectionContext && typeof imageResult.selectionContext === "object"
+            ? imageResult.selectionContext
+            : (workbench.ui.assetPromptDraft?.selectionContext ?? {}),
+      };
+      workbench.ui.isStoryboardDescriptionModalOpen = false;
+      workbench.ui.toast = "已回填上一次发送内容，可继续编辑。";
       render(workbench);
       return;
     }
@@ -2272,11 +3301,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "set-character") {
-      const imageResult = workbench.ui.imageGenerationResult;
       const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
-      const selectedAssetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+      const selectedImageAssetVersionId = firstImage?.assetVersionId ?? null;
+      const selectedAssetId =
+        imageResult?.selectionContext?.selectedAssetId ??
+        workbench.ui.selectedEpisodeAssetId ??
+        workbench.ui.selectedEpisodeCardId ??
+        null;
+      const assetKind = workbench.ui.projectAssetTab ?? "character";
+      const successLabel = assetKind === "scene" ? "已设为场景固定图。" : assetKind === "prop" ? "已设为道具固定图。" : "已设为角色固定图。";
       if (!(firstImage?.url && selectedAssetId)) {
-        workbench.ui.toast = "当前结果还不能设为角色图。";
+        workbench.ui.toast = "当前结果还不能设为固定图。";
         render(workbench);
         return;
       }
@@ -2284,57 +3319,65 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         isRealEpisodeWorkbench(workbench) &&
         typeof workbench.api.setFixedImage === "function" &&
         isUuidLike(selectedAssetId) &&
-        isUuidLike(firstImage.id ?? null)
+        (isUuidLike(selectedImageAssetVersionId) || firstImage.url)
       ) {
-        await runAction(workbench, "正在设置角色固定图...", async () => {
-          const result = await workbench.api.setFixedImage(
-            workbench.ui.selectedEpisodeId,
-            selectedAssetId,
-            {
-              assetVersionId: firstImage.id,
-              storageObjectId: firstImage.storageObjectId ?? null,
-            },
-          );
-          const file = result?.file ?? {};
-          const nextPreviewUrl = file.previewUrl ?? firstImage.url;
-          const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
-          for (const assetKind of ["character", "scene", "prop"]) {
-            nextAssets[assetKind] = (nextAssets[assetKind] ?? []).map((item) =>
-              item.id === selectedAssetId
-                ? {
-                    ...item,
-                    preview: nextPreviewUrl,
-                    previewUrl: nextPreviewUrl,
-                    sourceUrl: nextPreviewUrl,
-                    latestVersion: item.latestVersion
-                      ? {
-                          ...item.latestVersion,
-                          storageObjectId: file.storageObjectId ?? item.latestVersion.storageObjectId ?? null,
-                          previewUrl: nextPreviewUrl,
-                        }
-                      : item.latestVersion,
-                  }
-                : item,
+        await runAction(
+          workbench,
+          "正在设置角色固定图...",
+          async () => {
+            const result = await workbench.api.setFixedImage(
+              workbench.ui.selectedEpisodeId,
+              selectedAssetId,
+              {
+                assetVersionId: isUuidLike(selectedImageAssetVersionId) ? selectedImageAssetVersionId : null,
+                storageObjectId: firstImage.storageObjectId ?? null,
+                ...(!isUuidLike(selectedImageAssetVersionId)
+                  ? {
+                      sourceUrl: firstImage.url,
+                      previewUrl: firstImage.url,
+                    }
+                  : {}),
+              },
             );
-          }
-          workbench.ui.importedAssets = nextAssets;
-          workbench.ui.toast = "已设为角色固定图。";
-        });
+            const file = result?.file ?? {};
+            const persistedAssetVersionId =
+              result?.asset?.fixedImageFileId ??
+              file.assetVersionId ??
+              (isUuidLike(selectedImageAssetVersionId) ? selectedImageAssetVersionId : null);
+            syncEpisodeAssetFixedImageState(workbench, selectedAssetId, {
+              previewUrl: file.previewUrl ?? result?.asset?.fixedImageUrl ?? firstImage.url,
+              sourceUrl: file.sourceUrl ?? firstImage.url,
+              downloadUrl: file.downloadUrl ?? file.sourceUrl ?? firstImage.url,
+              storageObjectId:
+                file.storageObjectId ??
+                result?.asset?.fixedImageStorageObjectId ??
+                firstImage.storageObjectId ??
+                null,
+              assetVersionId: persistedAssetVersionId,
+              fixedImageFileId: persistedAssetVersionId,
+              fixedImageStorageObjectId:
+                result?.asset?.fixedImageStorageObjectId ??
+                file.storageObjectId ??
+                firstImage.storageObjectId ??
+                null,
+              mimeType: file.mimeType ?? result?.file?.mimeType ?? null,
+              updatedAt: result?.asset?.updatedAt ?? null,
+            });
+          },
+          { successToast: successLabel },
+        );
         return;
       }
-      const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
-      nextAssets.character = (nextAssets.character ?? []).map((item) =>
-        item.id === selectedAssetId
-          ? {
-              ...item,
-              preview: firstImage.url,
-              previewUrl: firstImage.url,
-              sourceUrl: firstImage.url,
-            }
-          : item,
-      );
-      workbench.ui.importedAssets = nextAssets;
-      workbench.ui.toast = "已设为角色固定图。";
+      syncEpisodeAssetFixedImageState(workbench, selectedAssetId, {
+        previewUrl: firstImage.url,
+        sourceUrl: firstImage.url,
+        downloadUrl: firstImage.url,
+        storageObjectId: firstImage.storageObjectId ?? null,
+        assetVersionId: selectedImageAssetVersionId,
+        fixedImageFileId: selectedImageAssetVersionId,
+        fixedImageStorageObjectId: firstImage.storageObjectId ?? null,
+      });
+      workbench.ui.toast = successLabel;
       render(workbench);
       return;
     }
@@ -2435,30 +3478,118 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-batch-actions") {
-    const selectedIds = new Set(workbench.ui.selectedEpisodeAssetIds ?? []);
-    const allAssets = [
-      ...(workbench.ui.importedAssets?.character ?? []),
-      ...(workbench.ui.importedAssets?.scene ?? []),
-      ...(workbench.ui.importedAssets?.prop ?? []),
-    ];
-    const fallbackSelected = selectedIds.size
-      ? []
-      : [
-          { id: "mock-character-1", name: "?? 1", kind: "character" },
-          { id: "mock-character-2", name: "角色 2", kind: "character" },
-          { id: "mock-character-3", name: "?? 3", kind: "character" },
-        ];
-    const items = selectedIds.size
-      ? allAssets.filter((item) => selectedIds.has(item.id))
-      : fallbackSelected;
-    workbench.ui.episodeBatchModal = {
-      show: true,
+    const storyboardScope = (workbench.ui.museScopeMode ?? "storyboard") === "storyboard";
+    const mode = storyboardScope
+      ? "video"
+      : (
+          workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync"
+            ? "video"
+            : "image"
+        );
+    let items = [];
+    let scope = "asset";
+    if (storyboardScope) {
+      const selectedIds = new Set(workbench.ui.selectedStoryboardIds ?? []);
+      const storyboards = getActiveStoryboards(workbench);
+      const fallbackSelected = selectedIds.size ? [] : storyboards.slice(0, 2);
+      items = selectedIds.size
+        ? storyboards.filter((item) => selectedIds.has(item.id)).map((item) => ({
+            id: item.id,
+            name: item.displayTitle ?? item.title ?? `分镜 ${item.index ?? ""}`.trim(),
+            kind: "storyboard",
+            references: item.references ?? [],
+          }))
+        : fallbackSelected.map((item) => ({
+            id: item.id,
+            name: item.displayTitle ?? item.title ?? `分镜 ${item.index ?? ""}`.trim(),
+            kind: "storyboard",
+            references: item.references ?? [],
+          }));
+      scope = "storyboard";
+    } else {
+      const selectedIds = new Set(workbench.ui.selectedEpisodeAssetIds ?? []);
+      const allAssets = [
+        ...(workbench.ui.importedAssets?.character ?? []),
+        ...(workbench.ui.importedAssets?.scene ?? []),
+        ...(workbench.ui.importedAssets?.prop ?? []),
+      ];
+      const fallbackSelected = selectedIds.size ? [] : allAssets.slice(0, 3);
+      items = selectedIds.size
+        ? allAssets.filter((item) => selectedIds.has(item.id))
+        : fallbackSelected;
+    }
+    workbench.ui.episodeBatchModal = buildEpisodeBatchModal(workbench, {
+      scope,
+      mode,
       items,
-    };
+    });
     collectEpisodeWorkbenchEvent(workbench, "batch.open", {
-      selectedAssetIds: [...selectedIds],
+      selectedAssetIds: [...(workbench.ui.selectedEpisodeAssetIds ?? [])],
+      selectedStoryboardIds: [...(workbench.ui.selectedStoryboardIds ?? [])],
       itemCount: items.length,
       items,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-episode-batch-menu") {
+    if (!workbench.ui.episodeBatchModal) {
+      return;
+    }
+    const field = target.dataset.field ?? "";
+    workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+      ...workbench.ui.episodeBatchModal,
+      openField: workbench.ui.episodeBatchModal.openField === field ? null : field,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-episode-batch-option") {
+    if (!workbench.ui.episodeBatchModal) {
+      return;
+    }
+    const field = target.dataset.field ?? "";
+    const value = target.dataset.value ?? "";
+    if (!field || value.startsWith("__label__")) {
+      return;
+    }
+    workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+      ...workbench.ui.episodeBatchModal,
+      [field]:
+        field === "videoResolution"
+          ? value.toUpperCase()
+          : field === "size"
+            ? value.toUpperCase()
+            : value,
+      openField: null,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-episode-batch-style-tab") {
+    if (!workbench.ui.episodeBatchModal) {
+      return;
+    }
+    const styleTab = target.dataset.tab === "custom" ? "custom" : "public";
+    workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+      ...workbench.ui.episodeBatchModal,
+      styleTab,
+      selectedStyleId: styleTab === "custom" ? "custom-1" : "public-1",
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-episode-batch-style") {
+    if (!workbench.ui.episodeBatchModal) {
+      return;
+    }
+    workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+      ...workbench.ui.episodeBatchModal,
+      selectedStyleId: target.dataset.styleId ?? workbench.ui.episodeBatchModal.selectedStyleId,
     });
     render(workbench);
     return;
@@ -2470,7 +3601,159 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "submit-episode-batch-modal") {
+    const modal = workbench.ui.episodeBatchModal;
+    const items = Array.isArray(modal?.items) ? modal.items : [];
+    if (!items.length) {
+      workbench.ui.toast = "请先选择需要批量处理的素材。";
+      workbench.ui.episodeBatchModal = null;
+      render(workbench);
+      return;
+    }
+
+    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const mode = modal?.mode ?? "image";
+    const scope = modal?.scope ?? "asset";
+    if (scope === "storyboard") {
+      const activeStoryboards = getActiveStoryboards(workbench);
+      for (const [index, item] of items.entries()) {
+        updateStoryboardById(workbench, item.id, (storyboard) => ({
+          ...storyboard,
+          videoStatus: "ready",
+          selectedUploadedVideoId: `batch-video-${index + 1}`,
+          previewVideo: `https://example.com/storyboard-batch-${index + 1}.mp4`,
+          previewThumbnailUrl: `https://picsum.photos/seed/storyboard-batch-${index + 1}/320/180`,
+          uploadedVideos: [
+            ...((storyboard?.uploadedVideos ?? []).filter((video) => video.id !== `batch-video-${index + 1}`)),
+            {
+              id: `batch-video-${index + 1}`,
+              fileName: `${item.name ?? "storyboard"}.mp4`,
+              src: `https://example.com/storyboard-batch-${index + 1}.mp4`,
+              thumbnailSrc: `https://picsum.photos/seed/storyboard-batch-${index + 1}/320/180`,
+              status: "ready",
+              durationLabel: "00:10",
+            },
+          ],
+          generationState: {
+            ...(storyboard?.generationState ?? {}),
+            lastSubmission: {
+              id: `batch-video-${index + 1}`,
+              mediaKind: "video",
+              promptPreview: storyboard?.description ?? "",
+              createdAt: now,
+              status: "completed",
+            },
+          },
+        }));
+      }
+      workbench.ui.episodeBatchModal = null;
+      workbench.ui.toast = `已为 ${items.length} 条分镜创建视频任务。`;
+      collectEpisodeWorkbenchEvent(workbench, "batch.submit", {
+        mode,
+        scope,
+        itemCount: items.length,
+        items,
+      });
+      render(workbench);
+      return;
+    }
+
+    const imageUrlSeeds = {
+      character: "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=1200&q=80",
+      scene: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80",
+      prop: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80",
+    };
+    const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+    const batchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
+
+    for (const [index, item] of items.entries()) {
+      const assetKind = item.kind || inferEpisodeAssetKind(item.name);
+      const imageUrl = resolveApiUrl(item.previewUrl ?? item.preview ?? item.sourceUrl ?? imageUrlSeeds[assetKind] ?? imageUrlSeeds.character);
+      const selectionContext = {
+        episodeId: workbench.ui.selectedEpisodeId ?? "episode-primary",
+        episodeTitle: null,
+        assetTab: assetKind,
+        selectedAssetId: item.id,
+        selectedAssetName: item.name ?? "素材",
+        selectedAssetDescription: item.description ?? "",
+        selectedAssetPreview: imageUrl,
+      };
+      const result = {
+        mediaKind: "image",
+        promptPreview:
+          item.description?.trim() ||
+          `${resolveEpisodeAssetKindLabel(assetKind)} ${item.name ?? ""} 固定图生成`,
+        quickReferenceItems: [],
+        attachmentItems: [],
+        selectionContext,
+        selectedModelId: mode === "video" ? (modal?.videoModelId ?? "vidu-q3-pro") : (modal?.imageModelId ?? "tnb-pro"),
+        resolution: mode === "video" ? (modal?.videoResolution ?? "720P") : (modal?.size ?? "2K"),
+        aspectRatio: modal?.aspectRatio ?? "16:9",
+        durationSec: mode === "video" ? 10 : null,
+        creditCost: resolveEpisodeBatchUnitCredit(modal),
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        taskId: `batch-${mode}-${index + 1}-${Date.now().toString(36)}`,
+        fixedImages: [
+          {
+            id: `${item.id}-batch-image`,
+            label: assetKind === "scene" ? "场景图片" : assetKind === "prop" ? "道具图片" : "角色图片",
+            url: imageUrl,
+            storageObjectId: null,
+            assetVersionId: null,
+          },
+        ],
+      };
+      batchResults[item.id] = result;
+      appendAssetConversationHistoryEntry(workbench, result);
+      nextAssets[assetKind] = (nextAssets[assetKind] ?? []).map((asset) =>
+        asset.id === item.id
+          ? {
+              ...asset,
+              preview: imageUrl,
+              previewUrl: imageUrl,
+              sourceUrl: imageUrl,
+            }
+          : asset,
+      );
+    }
+
+    workbench.ui.importedAssets = nextAssets;
+    workbench.ui.episodeBatchResults = batchResults;
+    const firstItem = items[0] ?? null;
+    if (firstItem) {
+      workbench.ui.projectAssetTab = firstItem.kind || inferEpisodeAssetKind(firstItem.name);
+      workbench.ui.selectedEpisodeAssetId = firstItem.id;
+      workbench.ui.selectedEpisodeCardId = firstItem.id;
+      if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+        workbench.ui.imageGenerationResult = batchResults[firstItem.id];
+      }
+    }
+    workbench.ui.episodeBatchModal = null;
+    workbench.ui.toast = `已为 ${items.length} 项素材创建各自任务，可逐个切换查看结果。`;
+    collectEpisodeWorkbenchEvent(workbench, "batch.submit", {
+      mode,
+      itemCount: items.length,
+      items,
+      batchConfig: modal,
+    });
+    render(workbench);
+    return;
+  }
+
   if (action === "remove-quick-reference") {
+    const referenceId = target.dataset.referenceId ?? "";
+    if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+      const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
+      workbench.ui.assetPromptDraft = {
+        ...assetPromptDraft,
+        quickReferenceItems: (assetPromptDraft.quickReferenceItems ?? []).filter((item) => item.id !== referenceId),
+        mentionReferences: (assetPromptDraft.mentionReferences ?? []).filter((item) => item.id !== referenceId),
+      };
+      render(workbench);
+      return;
+    }
     const selectedStoryboard = getSelectedStoryboard(
       getActiveStoryboards(workbench),
       workbench.ui.selectedStoryboardId,
@@ -2478,10 +3761,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!selectedStoryboard) {
       return;
     }
-    const referenceId = target.dataset.referenceId ?? "";
     updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
       ...generationState,
       quickReferenceItems: (generationState.quickReferenceItems ?? []).filter((item) => item.id !== referenceId),
+      mentionReferences: (generationState.mentionReferences ?? []).filter((item) => item.id !== referenceId),
     }));
     render(workbench);
     return;
@@ -2517,22 +3800,26 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodeWorkbenchSelectedAttachmentIds = (workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter(
       (item) => item !== attachmentId,
     );
-    workbench.ui.toast = "鐎规瓕灏欎簺闂傚嫨鍊曞顒勬嚀閸愵亞顦遍柡澶嬪姂";
-    render(workbench);
-    return;
-  }
-
-  if (action === "remove-episode-workbench-attachment") {
-    const attachmentId = target.dataset.attachmentId ?? "";
-    workbench.ui.episodeWorkbenchAttachments = (workbench.ui.episodeWorkbenchAttachments ?? []).filter(
-      (item) => item.id !== attachmentId,
+    const selectedStoryboard = getSelectedStoryboard(
+      getActiveStoryboards(workbench),
+      workbench.ui.selectedStoryboardId,
     );
-    workbench.ui.toast = "鐎规瓕灏欎簺闂傚嫨鍊曞顒勬嚀閸愵亞顦遍柡澶嬪姂";
+    if (selectedStoryboard) {
+      updateStoryboardGenerationState(workbench, selectedStoryboard.id, (state) => ({
+        ...state,
+        firstFrame: attachmentId === "first-frame" ? null : state.firstFrame,
+        lastFrame: attachmentId === "last-frame" ? null : state.lastFrame,
+        editSourceVideo: attachmentId === "edit-source-video" ? null : state.editSourceVideo,
+        referenceUploads: (state.referenceUploads ?? []).filter((item) => item.id !== attachmentId),
+      }));
+    }
+    workbench.ui.toast = "已移除当前附件。";
     render(workbench);
     return;
   }
 
   if (action === "set-episode-media-mode") {
+    stopLipSyncAudioPreview(workbench);
     workbench.ui.episodeMediaMode = target.dataset.mode ?? "image";
     if (workbench.ui.episodeMediaMode === "image") {
       workbench.ui.selectedModelId =
@@ -2614,7 +3901,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.projectInteriorSection = "overview";
     workbench.ui.assetGeneratorModal = null;
-    workbench.ui.toast = "濠殿喗绻愮徊钘夛耿椤忓懏浜ゆ繛鎴灻鍐差渻閵堝懏璐℃繛鍙夋緲椤斿繘濡烽妶鍥┾枙闂?..";
+    workbench.ui.toast = "正在打开项目工作台...";
     window.location.hash = "project-workspace";
     render(workbench);
     try {
@@ -2634,7 +3921,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
       await syncProjectInteriorSupplementary(workbench);
       await syncProjectLibraryFromApi(workbench);
-      workbench.ui.toast = "?????????";
+      workbench.ui.toast = "已进入项目工作台。";
     } catch (error) {
       workbench.ui.projectPanelMode = "library";
       workbench.ui.toast = `打开项目失败：${friendlyError(error)}`;
@@ -2646,17 +3933,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-episode-workbench") {
     const episodeId = target.dataset.episodeId ?? "episode-primary";
     await enterEpisodeWorkbench(workbench, episodeId, {
-      toast: "Entered the episode workspace.",
+      toast: "已进入剧集工作台。",
     });
     return;
   }
 
   if (action === "back-to-episode-hub") {
+    stopLipSyncAudioPreview(workbench);
     workbench.ui.selectedEpisodeId = null;
     workbench.ui.projectPanelMode = "workspace";
     workbench.ui.projectInteriorSection = "episodes";
     workbench.ui.episodeCardMenuId = null;
-    workbench.ui.toast = "Returned to the episode list.";
+    workbench.ui.toast = "已返回剧集列表。";
     window.location.hash = "project-workspace";
     render(workbench);
     return;
@@ -2697,7 +3985,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isScriptModalOpen = true;
     workbench.ui.scriptTab = "script-upload";
     workbench.ui.scriptSubmitAction = "confirm-batch-episode";
-    workbench.ui.scriptSubmitLabel = "??????";
+    workbench.ui.scriptSubmitLabel = "确认上传";
     workbench.ui.uploadNotice = "";
     render(workbench);
     return;
@@ -2724,13 +4012,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "confirm-single-episode") {
     const nextScript = workbench.ui.singleEpisodeScript.trim();
     if (!nextScript) {
-      workbench.ui.singleEpisodeNotice = "?????????????????";
+      workbench.ui.singleEpisodeNotice = "请先填写单集内容后再创建。";
       render(workbench);
       return;
     }
     const nextName = buildSingleEpisodeTitle(nextScript, getDetailEpisodes(workbench.state));
     workbench.ui.singleEpisodeName = nextName;
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃绠鹃柟瀵稿剱閻掔晫绱掗幉瀣暤闁哄本鐩獮妯何旈埀顒€煤閿曞倹鍤?..", async () => {
+    await runAction(workbench, "正在创建单集...", async () => {
       await createSingleEpisodeAndEnterWorkbench(workbench, nextName, { skipRunAction: true });
     });
     return;
@@ -2791,7 +4079,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘挸鍊婚埀顒€绠嶉崕閬嶅箠韫囨稑鍚归柟鐑橆殕閻撴洘鎱ㄥ鍡楀鐎涙繃绻濋埛鈧崒婊呯厯濠?..", async () => {
+    await runAction(workbench, "正在重命名剧集...", async () => {
       await workbench.api.updateEpisode({
         episodeId,
         title: nextName,
@@ -2827,7 +4115,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!episodeId) {
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃稒鐓熸俊顖濆亹鐢盯鏌ｅ┑鍫濇灈闁哄本鐩獮妯何旈埀顒€煤閿曞倹鍤?..", async () => {
+    await runAction(workbench, "正在删除剧集...", async () => {
       await workbench.api.deleteEpisode({ episodeId });
       if (workbench.ui.selectedEpisodeId === episodeId) {
         workbench.ui.selectedEpisodeId = null;
@@ -2861,10 +4149,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-project-asset-tab") {
     clearAssetLibraryReturnState(workbench);
     workbench.ui.projectAssetTab = target.dataset.assetTab ?? "character";
-    workbench.ui.episodeWorkbenchScrollTarget =
-      workbench.ui.projectPanelMode === "episode-workbench" ? null : workbench.ui.projectAssetTab;
+    await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+    syncSelectedEpisodeAssetForCurrentTab(workbench);
+    workbench.ui.episodeWorkbenchScrollTarget = workbench.ui.projectAssetTab;
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.assetCardMenuId = null;
+    if (workbench.ui.museScopeMode === "assets") {
+      await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+    }
     render(workbench);
     return;
   }
@@ -2963,7 +4255,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!draft?.assetId) {
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘挸鍊婚埀顒€绠嶉崕閬嶅箠韫囨稑鍚归柟鐑橆殕閻撴洘鎱ㄥ鍡楀閸熷摜绱撴担椋庤窗闁稿鎳愮划?..", async () => {
+    await runAction(workbench, "正在重命名资产...", async () => {
       await workbench.api.updateProjectAsset(draft.assetId, {
         name: normalizedName,
       });
@@ -2995,7 +4287,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         draft.mediaType,
         (item) => (item.id === draft.assetId ? { ...item, name: normalizedName } : item),
       );
-      workbench.ui.toast = `闂佽娴烽幊鎾诲箟閿熺姵鍋傞柨鐔哄Т闂傤垶鏌熼梻瀵割槮鐎瑰憡绻堥弻锕€螣娓氼垱效闂佺锕ら崯鍧楀煡?${normalizedName}`;
+      workbench.ui.toast = `已重命名为 ${normalizedName}。`;
     }
     workbench.ui.renameImportedAsset = null;
     workbench.ui.renameImportedAssetName = "";
@@ -3010,14 +4302,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const mediaType = target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType ?? "video";
     const asset = findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId);
     if (!asset?.preview) {
-      workbench.ui.toast = "???????????";
+      workbench.ui.toast = "当前资源暂无可下载文件。";
       workbench.ui.assetCardMenuId = null;
       render(workbench);
       return;
     }
     triggerAssetDownload(asset.preview, asset.name, mediaType === "video" ? "mp4" : "png");
     workbench.ui.assetCardMenuId = null;
-    workbench.ui.toast = `????? ${asset.name}`;
+    workbench.ui.toast = `已开始下载 ${asset.name}。`;
     render(workbench);
     return;
   }
@@ -3044,7 +4336,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!draft?.assetId) {
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃稒鐓熸俊顖濆亹鐢盯鏌ｅ┑鍫濇灈闁诡喚顢婇ˇ鏌ユ倵濮橀棿绨兼い?..", async () => {
+    await runAction(workbench, "正在删除资产...", async () => {
       await workbench.api.deleteProjectAsset(draft.assetId);
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
@@ -3062,7 +4354,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!draft?.assetId) {
       return;
     }
-    await runAction(workbench, "婵犳鍠楃换鎰緤閽樺鑰挎い蹇撶墕缁€鍡涙煟濡偐甯涢柣婵堝枔缁辨帗娼忛埡浣囷絾绻?..", async () => {
+    await runAction(workbench, "正在删除资产...", async () => {
       await workbench.api.deleteProjectAsset(draft.assetId);
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
@@ -3080,17 +4372,26 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.importedAssets = nextAssets;
       }
       workbench.ui.deleteImportedAsset = null;
-      workbench.ui.toast = draft.name ? `鐎瑰憡褰冮崹褰掓⒔?${draft.name}` : "鐎瑰憡褰冮崹褰掓⒔閵堝洨顦遍柡澶嬪姂";
+      workbench.ui.toast = draft.name ? `已删除 ${draft.name}。` : "已删除当前资产。";
     });
     return;
   }
 
   if (action === "open-asset-import-modal") {
-    workbench.ui.assetImportModal = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
-    workbench.ui.assetImportModalTab = "local";
+    const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    if (isRealEpisodeWorkbench(workbench) && nextAssetKind !== "other") {
+      await syncProjectLibraryAssets(workbench);
+    }
+    workbench.ui.assetImportModal = nextAssetKind;
+    workbench.ui.assetImportModalTab =
+      isRealEpisodeWorkbench(workbench) && nextAssetKind !== "other" ? "official" : "local";
     workbench.ui.assetImportCategory = "domestic-modern-city";
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportPage = 1;
+    workbench.ui.assetImportPageSize = 10;
+    workbench.ui.assetImportPageSizeMenuOpen = false;
+    workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, nextAssetKind);
     render(workbench);
     return;
   }
@@ -3100,18 +4401,68 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.referenceAssetPickerKind = null;
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportPage = 1;
+    workbench.ui.assetImportPageSize = 10;
+    workbench.ui.assetImportPageSizeMenuOpen = false;
     render(workbench);
     return;
   }
 
   if (action === "switch-asset-import-tab") {
     workbench.ui.assetImportModalTab = target.dataset.tab ?? "local";
+    workbench.ui.assetImportPageSizeMenuOpen = false;
+    workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportPage = 1;
+    if (workbench.ui.assetImportModalTab === "official") {
+      const assetKind = workbench.ui.assetImportModal ?? workbench.ui.projectAssetTab ?? "character";
+      workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, assetKind);
+    }
     render(workbench);
     return;
   }
 
   if (action === "select-asset-import-category") {
     workbench.ui.assetImportCategory = target.dataset.category ?? workbench.ui.assetImportCategory;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-asset-import-kind") {
+    const nextAssetKind = target.dataset.assetKind ?? "character";
+    workbench.ui.assetImportModal = nextAssetKind;
+    workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportPage = 1;
+    workbench.ui.assetImportPageSizeMenuOpen = false;
+    workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, nextAssetKind);
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-asset-import-page-size-menu") {
+    workbench.ui.assetImportPageSizeMenuOpen = !workbench.ui.assetImportPageSizeMenuOpen;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-asset-import-page-size") {
+    const nextPageSize = Number(target.dataset.pageSize ?? "10");
+    workbench.ui.assetImportPageSize = [10, 20, 50, 100].includes(nextPageSize) ? nextPageSize : 10;
+    workbench.ui.assetImportPage = 1;
+    workbench.ui.assetImportPageSizeMenuOpen = false;
+    workbench.ui.assetImportSelection = [];
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-asset-import-page") {
+    const nextPage = Number(target.dataset.page ?? workbench.ui.assetImportPage ?? 1);
+    const assetCount = Array.isArray(workbench.ui.assetImportOfficialAssets)
+      ? workbench.ui.assetImportOfficialAssets.length
+      : 0;
+    const totalPages = Math.max(1, Math.ceil(assetCount / Number(workbench.ui.assetImportPageSize ?? 10)));
+    workbench.ui.assetImportPage = Math.min(Math.max(Math.trunc(nextPage) || 1, 1), totalPages);
+    workbench.ui.assetImportSelection = [];
+    workbench.ui.assetImportPageSizeMenuOpen = false;
     render(workbench);
     return;
   }
@@ -3144,15 +4495,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const importedAssetIds = [];
 
     if (workbench.ui.assetImportModalTab === "official") {
-      importRecords.push(...getOfficialAssetRecords(assetKind, workbench.ui.assetImportCategory)
+      importRecords.push(...(workbench.ui.assetImportOfficialAssets ?? [])
         .filter((asset) => selectedIds.has(asset.id))
         .map((asset) => ({
-          source: "official",
-          name: asset.name,
-          previewDataUrl: asset.preview,
-          mimeType: inferMimeTypeFromDataUrl(asset.preview),
-          width: 240,
-          height: 240,
+          ...asset,
+          source: asset.source ?? "official",
         })));
     } else {
       importRecords.push(...(workbench.ui.assetImportDrafts ?? [])
@@ -3175,21 +4522,46 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
 
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾搭棏闁稿鎹囬幃浠嬫濞戞ü绮梻浣告啞閻熴儱螞濞戙垹绠扮憸鏂跨暦閻旂⒈鏁傞柛顐犲灩缁€?..", async () => {
+    await runAction(workbench, "正在导入资产...", async () => {
       for (const record of importRecords) {
         const importPayload =
           record.source === "official"
             ? await buildOfficialAssetImportPayload(workbench, record, assetKind)
-            : record;
-        const imported = await workbench.api.importAsset({
-          kind: importKind,
-          ...importPayload,
-        });
+            : {
+                name: record.name?.trim() || "未命名资产",
+                uploadSessionId: record.uploadSessionId ?? null,
+                storageObjectId: record.storageObjectId ?? null,
+                storageObjectKey: record.storageObjectKey ?? record.previewDataUrl ?? record.preview ?? "",
+                sourceUrl: record.sourceUrl ?? record.previewDataUrl ?? record.preview ?? "",
+                mimeType: record.mimeType ?? inferMimeTypeFromDataUrl(record.previewDataUrl ?? record.preview ?? ""),
+                width: Number(record.width ?? 240),
+                height: Number(record.height ?? 240),
+                source: record.source ?? "import",
+              };
+        const imported =
+          isRealEpisodeWorkbench(workbench) &&
+          typeof workbench.api.importEpisodeAsset === "function"
+            ? await workbench.api.importEpisodeAsset(workbench.ui.selectedEpisodeId, {
+                assetType:
+                  importKind === "character"
+                    ? "role"
+                    : importKind === "scene"
+                      ? "scene"
+                      : "prop",
+                ...importPayload,
+              })
+            : await workbench.api.importAsset({
+                kind: importKind,
+                ...importPayload,
+              });
         if (imported?.asset?.id) {
           importedAssetIds.push(imported.asset.id);
         }
       }
-      if (workbench.ui.selectedProjectCardId) {
+      if (isRealEpisodeWorkbench(workbench) && workbench.ui.selectedEpisodeId) {
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+      }
+      if (!isRealEpisodeWorkbench(workbench) && workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
           workbench,
           await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
@@ -3199,12 +4571,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.assetImportDrafts = [];
       workbench.ui.assetImportSelection = [];
     });
-    prepareAssetLibraryReturn(workbench, {
-      assetKind,
-      mediaType: assetKind === "other" ? importKind : "image",
-      assetIds: importedAssetIds,
-      count: importRecords.length,
-    });
+    if (isRealEpisodeWorkbench(workbench)) {
+      workbench.ui.toast = `已导入 ${importRecords.length} 项${getAssetLibraryKindLabel(assetKind, assetKind === "other" ? importKind : "image")}到当前剧集。`;
+    } else {
+      prepareAssetLibraryReturn(workbench, {
+        assetKind,
+        mediaType: assetKind === "other" ? importKind : "image",
+        assetIds: importedAssetIds,
+        count: importRecords.length,
+      });
+    }
     render(workbench);
     return;
   }
@@ -3214,13 +4590,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorCharacterType = "human";
-    workbench.ui.assetGeneratorStyleValue = "????? / ???";
+    workbench.ui.assetGeneratorStyleValue = "废土写实 / 官方";
     workbench.ui.assetGeneratorStyleCategory = "official";
     workbench.ui.assetGeneratorStyleOption = "none";
     workbench.ui.assetGeneratorMaterialCategory = "official";
     workbench.ui.assetGeneratorMaterialOption = "fantasy-doomsday";
     workbench.ui.assetGeneratorImageType = "main";
-    workbench.ui.assetGeneratorModel = "闂傚倷绀侀幉锟犮€冩径濞炬瀺闁哄洢鍨归悞?.0";
+    workbench.ui.assetGeneratorModel = "Seedream 2.0";
     workbench.ui.assetGeneratorResolution = "2K";
     workbench.ui.assetGeneratorCount = 1;
     render(workbench);
@@ -3244,7 +4620,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     if (workbench.ui.assetGeneratorMode === "edit" && workbench.ui.assetGeneratorEditingAsset?.id) {
-      await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾村櫧闁崇懓绉电换婵嬫濞戞瑯妫ら梺鍦櫕婵炩偓闁诡喚顢婇ˇ鏌ユ倵濮橀棿绨兼い?..", async () => {
+      await runAction(workbench, "正在保存资产...", async () => {
         await workbench.api.updateProjectAsset(workbench.ui.assetGeneratorEditingAsset.id, {
           name: nextName,
           description: workbench.ui.assetGeneratorPrompt.trim(),
@@ -3261,7 +4637,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       });
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁稿鍔戦弻锝夊籍閸屻倗鍔搁梺璇茬箰濞差參骞冪涵鍜佹Щ闁诲孩鍑规禍婵嬨€?..", async () => {
+    await runAction(workbench, "正在生成资产...", async () => {
       await workbench.api.generateAsset({
         kind: assetKind === "other" ? workbench.ui.projectOtherAssetMediaType : assetKind,
         name: nextName,
@@ -3286,7 +4662,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-project-interior-status") {
     const projectId = workbench.ui.selectedProjectCardId;
     const nextStatus = target.dataset.status ?? "In Progress";
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁告濞婇幃妤€鈽夊▍铏灴閹繝鍩€椤掍椒绻嗛柣鎰典簻閳ь剚娲栭敃銏ゅ础閻忚崵鍎ょ€佃偐鈧稒锚娴滃綊姊洪悡搴㈡喐妞わ絼绮欏畷?..", async () => {
+    await runAction(workbench, "正在更新项目状态...", async () => {
       await workbench.api.updateProject({
         projectId,
         phase: projectStatusToPhase(nextStatus),
@@ -3470,9 +4846,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         assetId: asset.id,
         assetKind,
         mediaType,
-        name: asset.name ?? "?????",
+        name: asset.name ?? "未命名资产",
         preview: asset.preview ?? asset.previewUrl ?? "",
-        badge: asset.name ?? "????",
+        badge: asset.name ?? "未命名",
       };
       if (existingIndex >= 0) {
         nextSelections[existingIndex] = nextSelection;
@@ -3507,7 +4883,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       syncReferencePrompt(workbench);
     };
     if (selectedStoryboard?.linkedShotId) {
-      await runAction(workbench, "婵犳鍠楃换鎰緤閽樺鑰挎い蹇撴閻挸鈹戦悩宕囶暡闁绘繄鍠栭弻娑樷枎韫囨挴鍋撴禒瀣劦妞ゆ巻鍋撻柛鐔稿缁牆鐣濋崟顐ら獓?..", async () => {
+      await runAction(workbench, "正在移除分镜引用...", async () => {
         const nextReferences = (selectedStoryboard.references ?? []).filter((item) => item.role !== role);
         await workbench.api.replaceShotReferences(selectedStoryboard.linkedShotId, {
           items: nextReferences.map((item, index) => ({
@@ -3586,7 +4962,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         name: storyboard.uploadedImageName || `${frameTarget}.png`,
         kind: "image",
         status: "ready",
-        summary: frameTarget === "firstFrame" ? "??????????" : "????????????",
+        summary: frameTarget === "firstFrame" ? "已引用分镜首帧" : "已引用分镜尾帧",
         url: storyboard.previewImageUrl,
         cropMode: "cover",
       },
@@ -3712,7 +5088,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const existing = (selectedStoryboard.references ?? []).filter(
       (item) => !(item.role === role && item.assetId === asset.id),
     );
-    await runAction(workbench, "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬惌妫ょ紒鐐劤閵堟悂寮婚悢琛″亾濞戞瑯鐒界紒鐘筹耿閺岋繝宕遍弴鐐茬ギ闂佸搫鏈惄顖炵嵁閹烘绠ｉ柣鎴濇閿涘棝姊绘担鍛婃儓婵☆偅顨婇獮濠囧箛椤戔晪缍侀獮鍥偋閸繀姹楅梻浣瑰劤濞存岸宕戦崱娆戠煓?..", async () => {
+      await runAction(workbench, "正在保存分镜引用...", async () => {
       await workbench.api.replaceShotReferences(selectedStoryboard.linkedShotId, {
         items: [
           ...existing.map((item, index) => ({
@@ -3776,7 +5152,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const videoId = target.dataset.videoId ?? "";
     const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
     if (!storyboardId || !videoId || !(storyboard?.uploadedVideos ?? []).some((item) => item.id === videoId)) {
-      workbench.ui.toast = "?????????";
+      workbench.ui.toast = "未找到要删除的视频。";
       render(workbench);
       return;
     }
@@ -3892,7 +5268,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘挸鍊婚埀顒€绠嶉崕閬嶅箠韫囨稑鍚归柟鐑橆殕閻撴洘鎱ㄥ鍡楀閺佸牓姊洪棃娑欘棞缂佸缍婇獮?..", async () => {
+    await runAction(workbench, "正在重命名项目...", async () => {
       await workbench.api.updateProject({
         projectId,
         name: nextName,
@@ -3919,7 +5295,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "confirm-delete-project-card") {
     const projectId = workbench.ui.deleteProjectId;
-    await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃稒鐓熸俊顖濆亹鐢盯鏌ｅ┑鍫濇瀻妞ゎ亜鍟存俊鍫曞川椤旇法顢呮繝?..", async () => {
+    await runAction(workbench, "正在删除项目...", async () => {
       await workbench.api.deleteProject({ projectId });
       workbench.ui.deleteProjectId = null;
       if (workbench.ui.selectedProjectCardId === projectId) {
@@ -3931,12 +5307,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "add-storyboard") {
+    const anchorStoryboardId = target.dataset.storyboardId ?? null;
     const episodeId =
       workbench.ui.projectPanelMode === "episode-workbench"
         ? workbench.ui.selectedEpisodeId ?? "episode-primary"
         : "episode-primary";
     if (workbench.state?.project?.id) {
-      await runAction(workbench, "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹捐泛顣哄┑鈽嗗亝閿曘垽寮婚埄鍐ㄧ窞閻庯綁娼ч崝宀勬⒑閸濆嫷妲告い顓犲厴瀵鈽夐姀鐘殿唺闂佺懓顕崕鎰涢敃鍌涒拺?..", async () => {
+      await runAction(workbench, "正在创建分镜...", async () => {
         const existing = getEpisodeStoryboards(workbench, episodeId);
         const nextIndex = existing.length + 1;
         const result = await workbench.api.createShot({
@@ -3944,30 +5321,48 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           title: String(nextIndex),
           description: "",
         });
-        const nextStoryboards = addStoryboard(existing);
-        const addedStoryboard = nextStoryboards.at(-1);
+        appendCreatedShotToState(workbench, result.shot);
+        const nextStoryboards = anchorStoryboardId
+          ? insertStoryboardAfter(existing, anchorStoryboardId)
+          : addStoryboard(existing);
+        const addedStoryboard = result.shot?.id
+          ? nextStoryboards.find((item) => item.linkedShotId === result.shot.id) ?? nextStoryboards.find((item) => !item.linkedShotId)
+          : nextStoryboards.find((item) => !item.linkedShotId);
         if (addedStoryboard) {
+          const now = new Date();
+          const displayTitle = [
+            now.getFullYear(),
+            String(now.getMonth() + 1).padStart(2, "0"),
+            String(now.getDate()).padStart(2, "0"),
+          ].join("-") + ` ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
           const nextStoryboard = {
             ...addedStoryboard,
             id: result.shot?.id ? `storyboard-${result.shot.id}` : addedStoryboard.id,
             linkedShotId: result.shot?.id ?? addedStoryboard.linkedShotId ?? null,
+            displayTitle,
           };
-          replaceActiveStoryboards(workbench, [...nextStoryboards.slice(0, -1), nextStoryboard]);
+          replaceActiveStoryboards(
+            workbench,
+            nextStoryboards.map((item) => (item === addedStoryboard ? nextStoryboard : item)),
+          );
           workbench.ui.selectedStoryboardId = nextStoryboard.id;
           persistWorkbenchState(workbench);
         }
-      });
+      }, { successToast: "" });
       return;
     }
-    const nextStoryboards = addStoryboard(getEpisodeStoryboards(workbench, episodeId));
+    const nextStoryboards = anchorStoryboardId
+      ? insertStoryboardAfter(getEpisodeStoryboards(workbench, episodeId), anchorStoryboardId)
+      : addStoryboard(getEpisodeStoryboards(workbench, episodeId));
     workbench.ui.storyboards =
       episodeId === "episode-primary" ? nextStoryboards : workbench.ui.storyboards;
     workbench.ui.episodeStoryboardMap = {
       ...workbench.ui.episodeStoryboardMap,
       [episodeId]: nextStoryboards,
     };
-    workbench.ui.selectedStoryboardId = nextStoryboards.at(-1)?.id ?? null;
-    workbench.ui.toast = "Added a new storyboard.";
+    workbench.ui.selectedStoryboardId =
+      resolveInsertedStoryboardId(nextStoryboards, anchorStoryboardId) ?? nextStoryboards.at(-1)?.id ?? null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -3988,7 +5383,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     await runAction(
       workbench,
-      isSkip ? "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬惌妫￠悗瑙勬礀椤︾敻骞冨Δ鍛嵍妞ゆ挾鍊妷褏纾奸柣妯虹－婢х敻鏌＄仦绯曞亾閹颁礁鎮戞繛杈剧稻瑜板啯绂嶆ィ鍐╃厱闁归偊鍓欑痪褔鏌?.." : "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬惌妫￠梺鍝ュ枑濡炰粙寮诲☉銏犵労闁告劦浜濋崳顓犵磼閹冪稏闁告濞婂濠氬灳閹颁礁鎮戞繛杈剧稻瑜板啯绂嶆ィ鍐╃厱闁归偊鍓欑痪褔鏌?..",
+      isSkip ? "正在跳过校准..." : "正在保存校准设置...",
       async () => {
         workbench.ui.validationMessage = "";
         if (isSkip) {
@@ -4059,6 +5454,179 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "preview-export") {
+    workbench.ui.exportOptionModal = {
+      show: true,
+      status: "idle",
+    };
+    collectEpisodeWorkbenchEvent(workbench, "export.preview", {
+      projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
+      episodeId: workbench.ui.selectedEpisodeId ?? null,
+      storyboardCount: getActiveStoryboards(workbench).length,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-episode-export-modal") {
+    workbench.ui.exportOptionModal = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "start-episode-export") {
+    const exportKind = target.dataset.exportKind ?? "mp4";
+    const runningMessage = exportKind === "mp4" ? "正在导出视频..." : "正在导出剪映工程...";
+    workbench.ui.exportOptionModal = {
+      ...(workbench.ui.exportOptionModal ?? { show: true }),
+      show: true,
+      status: "running",
+      kind: exportKind,
+      message: runningMessage,
+      downloadUrl: "",
+    };
+    workbench.ui.busy = true;
+    workbench.ui.toast = runningMessage;
+    render(workbench);
+    try {
+      workbench.ui.exportPreviewResult = await createEpisodeExportPreviewWithKind(workbench, exportKind);
+      const downloadUrl = resolveExportPreviewDownloadUrl(workbench.ui.exportPreviewResult);
+      const workflowId =
+        workbench.ui.exportPreviewResult?.exportRecord?.workflowId ??
+        workbench.ui.exportPreviewResult?.export?.workflowId ??
+        "";
+      const downloadFileName =
+        exportKind === "jianying"
+          ? normalizeDownloadName("episode-export", ".zip")
+          : normalizeDownloadName("episode-export", ".mp4");
+      workbench.ui.exportOptionModal = {
+        ...(workbench.ui.exportOptionModal ?? { show: true }),
+        show: true,
+        status: "done",
+        kind: exportKind,
+        workflowId,
+        downloadUrl,
+        message: downloadUrl ? "导出包已准备好，可以直接下载。" : "原视频导出链接暂未生成，请稍后刷新重试。",
+      };
+      if (downloadUrl) {
+        triggerBrowserDownload(downloadUrl, downloadFileName);
+      }
+      workbench.ui.toast = "操作已完成。";
+    } catch (error) {
+      workbench.ui.exportOptionModal = {
+        ...(workbench.ui.exportOptionModal ?? { show: true }),
+        show: true,
+        status: "error",
+        kind: exportKind,
+        errorCode: String(error?.code ?? error?.errorCode ?? ""),
+        message: resolveEpisodeExportModalError(error),
+        downloadUrl: "",
+      };
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+    } finally {
+      workbench.ui.busy = false;
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "generate-images") {
+    if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+      const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
+      if (!selectionContext.selectedAsset?.id) {
+        workbench.ui.validationMessage = "请先创建或选中资产后再生成。";
+        workbench.ui.toast = "请先创建或选中资产后再生成。";
+        render(workbench);
+        return;
+      }
+      if (!String(getCurrentScopePrompt(workbench) ?? "").trim()) {
+        workbench.ui.validationMessage = "请输入内容";
+        workbench.ui.toast = "请输入内容";
+        render(workbench);
+        return;
+      }
+      await runAction(workbench, statusForAction(action), async () => {
+        await generateAssetImages(workbench);
+      });
+      return;
+    }
+
+    if (!String(workbench.ui.prompt ?? "").trim()) {
+      workbench.ui.validationMessage = "请输入内容";
+      workbench.ui.toast = "请输入内容";
+      render(workbench);
+      return;
+    }
+
+    workbench.ui.validationMessage = "";
+    workbench.ui.toast = "";
+    render(workbench);
+    try {
+      await generateStoryboardImages(workbench);
+    } catch (error) {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "generate-videos") {
+    if (workbench.ui.episodeMediaMode === "lip-sync") {
+      const lipSyncValidation = validateLipSyncGeneration(workbench);
+      if (!lipSyncValidation.ok) {
+        workbench.ui.validationMessage = lipSyncValidation.message;
+        workbench.ui.toast = lipSyncValidation.message;
+        render(workbench);
+        return;
+      }
+      await persistLipSyncStoryboardDraft(workbench, { silent: false });
+    } else {
+      const validation = validateVideoGeneration({
+        firstFrameUploaded: hasFirstFrame(workbench),
+      });
+      if (!validation.ok) {
+        workbench.ui.validationMessage = validation.message;
+        workbench.ui.toast = validation.message;
+        render(workbench);
+        return;
+      }
+    }
+
+    workbench.ui.validationMessage = "";
+    workbench.ui.toast = "";
+    render(workbench);
+    try {
+      await generateStoryboardVideos(workbench);
+    } catch (error) {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "smart-generate") {
+    const validation = validateVideoGeneration({
+      firstFrameUploaded: hasFirstFrame(workbench),
+    });
+    if (!validation.ok) {
+      workbench.ui.validationMessage = validation.message;
+      workbench.ui.toast = validation.message;
+      render(workbench);
+      return;
+    }
+
+    workbench.ui.validationMessage = "";
+    workbench.ui.toast = "";
+    render(workbench);
+    try {
+      await runSmartGenerate(workbench);
+    } catch (error) {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+      render(workbench);
+    }
+    return;
+  }
+
   await runAction(workbench, statusForAction(action), async () => {
     if (action === "parse-script") {
       await workbench.api.parseScript();
@@ -4079,7 +5647,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (action === "edit-asset") {
-    const nextLabel = window.prompt("?????????", target.dataset.label ?? "");
+    const nextLabel = window.prompt("请输入新的素材名称", target.dataset.label ?? "");
       if (!nextLabel || nextLabel.trim() === target.dataset.label) {
         return;
       }
@@ -4097,51 +5665,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "generate-images") {
-    await generateStoryboardImages(workbench);
-    return;
-  }
-
-    if (action === "generate-videos") {
-      const validation = validateVideoGeneration({
-        firstFrameUploaded: hasFirstFrame(workbench),
-      });
-      if (!validation.ok) {
-        workbench.ui.validationMessage = validation.message;
-        workbench.ui.toast = validation.message;
-        render(workbench);
-        return;
-      }
-      workbench.ui.validationMessage = "";
-      await generateStoryboardVideos(workbench);
-      return;
-    }
-
-    if (action === "smart-generate") {
-      const validation = validateVideoGeneration({
-        firstFrameUploaded: hasFirstFrame(workbench),
-      });
-      if (!validation.ok) {
-        workbench.ui.validationMessage = validation.message;
-        workbench.ui.toast = validation.message;
-        render(workbench);
-        return;
-      }
-      workbench.ui.validationMessage = "";
-      await runSmartGenerate(workbench);
-      return;
-    }
-
-    if (action === "preview-export") {
-      collectEpisodeWorkbenchEvent(workbench, "export.preview", {
-        projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
-        episodeId: workbench.ui.selectedEpisodeId ?? null,
-        storyboardCount: getActiveStoryboards(workbench).length,
-      });
-      workbench.ui.exportPreviewResult = await createEpisodeExportPreview(workbench);
-    }
   });
 }
+
+const handleAction = handleProductionWorkbenchAction;
 
 async function runSmartGenerate(workbench) {
   await ensureGenerationReady(workbench);
@@ -4173,20 +5700,27 @@ async function ensureGenerationReady(workbench) {
   }
 }
 
-async function runAction(workbench, message, action) {
+async function runAction(workbench, message, action, options = {}) {
+  const successToast = Object.prototype.hasOwnProperty.call(options, "successToast")
+    ? options.successToast
+    : "操作已完成。";
   workbench.ui.busy = true;
   workbench.ui.toast = message;
   render(workbench);
 
   try {
     await action();
-    workbench.ui.toast = "操作已完成。";
+    workbench.ui.toast = successToast;
   } catch (error) {
     workbench.ui.toast = `操作失败：${friendlyError(error)}`;
   } finally {
     workbench.ui.busy = false;
     render(workbench);
   }
+}
+
+export async function handleWorkbenchActionForTest(workbench, target) {
+  return handleAction(workbench, target);
 }
 
 function openSingleEpisodeFlow(workbench) {
@@ -4228,7 +5762,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
-      toast: "Entered the episode workspace.",
+      toast: "已进入剧集工作台。",
       shouldRender: false,
     });
   };
@@ -4238,7 +5772,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
     return;
   }
 
-  await runAction(workbench, "Creating episode...", runCreation);
+  await runAction(workbench, "正在创建剧集...", runCreation);
 }
 
 function resetSingleEpisodeModalState(workbench) {
@@ -4255,9 +5789,14 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   const hasRealEpisodes = availableEpisodes.some((episode) => episode?.id && episode.id !== "episode-primary");
   const canUsePrimaryFallback =
     !hasRealEpisodes && availableEpisodes.some((episode) => episode?.id === "episode-primary");
-  const resolvedEpisodeId = episodeId ?? (canUsePrimaryFallback ? "episode-primary" : null);
+  const candidateEpisodeId = episodeId ?? (canUsePrimaryFallback ? "episode-primary" : null);
+  const resolvedEpisodeId =
+    candidateEpisodeId && candidateEpisodeId !== "episode-primary"
+      ? resolvePersistedEpisodeWorkbenchId(workbench, candidateEpisodeId)
+      : candidateEpisodeId;
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
   workbench.ui.episodeWorkbenchError = "";
+  resetEpisodeWorkbenchAssets(workbench);
 
   if (
     resolvedEpisodeId &&
@@ -4266,10 +5805,15 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   ) {
     try {
       const context = await workbench.api.getEpisodeWorkbench(resolvedEpisodeId);
+      const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
       workbench.ui.episodeWorkbenchContext = context;
       workbench.ui.selectedProjectCardId =
-        context?.project?.projectId ?? context?.episode?.projectId ?? workbench.ui.selectedProjectCardId;
-      await loadEpisodeAssetsForWorkbench(workbench, resolvedEpisodeId);
+        resolvedContext?.project?.projectId ??
+        resolvedContext?.episode?.projectId ??
+        context?.project?.projectId ??
+        context?.episode?.projectId ??
+        workbench.ui.selectedProjectCardId;
+      applyEpisodeWorkbenchAssetsFromContext(workbench, context);
       await loadEpisodeGenerationConfig(workbench, resolvedEpisodeId);
       storyboards = await loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId);
     } catch (error) {
@@ -4302,11 +5846,16 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   workbench.ui.projectInteriorStatusMenuOpen = false;
   workbench.ui.episodeCardMenuId = null;
   workbench.ui.selectedStoryboardId = storyboards[0]?.id ?? null;
-  workbench.ui.museScopeMode = options.scopeMode ?? "storyboard";
+  workbench.ui.museScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
+  syncSelectedEpisodeAssetForCurrentTab(workbench);
+  syncPromptFromCurrentScope(workbench);
+  if (workbench.ui.museScopeMode === "assets") {
+    await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+  }
   if (options.toast) {
     workbench.ui.toast = options.toast;
   } else if (workbench.ui.episodeWorkbenchError) {
-    workbench.ui.toast = `鍓ч泦宸ヤ綔鍙板姞杞藉け璐ワ細${workbench.ui.episodeWorkbenchError}`;
+    workbench.ui.toast = `剧集工作台加载失败：${workbench.ui.episodeWorkbenchError}`;
   }
   if (!options.preserveRoute) {
     const projectId =
@@ -4325,6 +5874,112 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   }
 }
 
+function resetEpisodeWorkbenchAssets(workbench) {
+  workbench.ui.importedAssets = {
+    ...(workbench.ui.importedAssets ?? {}),
+    character: [],
+    scene: [],
+    prop: [],
+    other: {
+      image: [...(workbench.ui.importedAssets?.other?.image ?? [])],
+      video: [...(workbench.ui.importedAssets?.other?.video ?? [])],
+    },
+  };
+  workbench.ui.selectedEpisodeCardId = null;
+  workbench.ui.selectedEpisodeAssetId = null;
+  workbench.ui.selectedEpisodeAssetIds = [];
+}
+
+function applyEpisodeWorkbenchAssetsFromContext(workbench, context) {
+  const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
+  const assetsByType =
+    resolvedContext?.assetsByType ??
+    resolvedContext?.assets ??
+    resolvedContext?.episodeAssets ??
+    context?.data?.assetsByType ??
+    context?.data?.assets ??
+    context?.data?.episodeAssets ??
+    context?.assetsByType ??
+    context?.assets ??
+    context?.episodeAssets ??
+    null;
+  if (!assetsByType || typeof assetsByType !== "object") {
+    resetEpisodeWorkbenchAssets(workbench);
+    return workbench.ui.importedAssets;
+  }
+  const characterAssets = resolveEpisodeWorkbenchAssetEntries(assetsByType, "character");
+  const sceneAssets = resolveEpisodeWorkbenchAssetEntries(assetsByType, "scene");
+  const propAssets = resolveEpisodeWorkbenchAssetEntries(assetsByType, "prop");
+  workbench.ui.importedAssets = {
+    ...(workbench.ui.importedAssets ?? {}),
+    character: mapEpisodeAssetContracts(characterAssets, "character"),
+    scene: mapEpisodeAssetContracts(sceneAssets, "scene"),
+    prop: mapEpisodeAssetContracts(propAssets, "prop"),
+    other: {
+      image: [...(workbench.ui.importedAssets?.other?.image ?? [])],
+      video: [...(workbench.ui.importedAssets?.other?.video ?? [])],
+    },
+  };
+  workbench.ui.selectedEpisodeCardId = null;
+  workbench.ui.selectedEpisodeAssetId = null;
+  workbench.ui.selectedEpisodeAssetIds = [];
+  return workbench.ui.importedAssets;
+}
+
+async function ensureEpisodeWorkbenchAssetsHydrated(workbench) {
+  if (
+    !isRealEpisodeWorkbench(workbench) ||
+    !workbench.ui.selectedEpisodeId ||
+    typeof workbench.api.getEpisodeWorkbench !== "function"
+  ) {
+    return workbench.ui.importedAssets;
+  }
+
+  const context = await workbench.api.getEpisodeWorkbench(workbench.ui.selectedEpisodeId);
+  const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
+  workbench.ui.episodeWorkbenchContext = context;
+  workbench.ui.selectedProjectCardId =
+    resolvedContext?.project?.projectId ??
+    resolvedContext?.episode?.projectId ??
+    context?.project?.projectId ??
+    context?.episode?.projectId ??
+    workbench.ui.selectedProjectCardId;
+  return applyEpisodeWorkbenchAssetsFromContext(workbench, context);
+}
+
+function resolveEpisodeWorkbenchContextPayload(context) {
+  if (!context || typeof context !== "object") {
+    return null;
+  }
+  const nestedData = context?.data;
+  if (nestedData && typeof nestedData === "object") {
+    return nestedData;
+  }
+  return context;
+}
+
+function resolveEpisodeWorkbenchAssetEntries(assetsByType, kind) {
+  if (!assetsByType || typeof assetsByType !== "object") {
+    return [];
+  }
+  const keys =
+    kind === "character"
+      ? ["character", "characters", "role", "roles"]
+      : kind === "scene"
+        ? ["scene", "scenes"]
+        : ["prop", "props"];
+  for (const key of keys) {
+    const value = assetsByType?.[key];
+    if (Array.isArray(value) && value.length > 0) {
+      return value;
+    }
+    if (value && typeof value === "object" && Array.isArray(value.items) && value.items.length > 0) {
+      return value.items;
+    }
+  }
+  return [];
+}
+
 async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId) {
   if (typeof workbench.api.listStoryboards !== "function") {
     return ensureEpisodeStoryboards(workbench, episodeId);
@@ -4341,6 +5996,7 @@ async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId) {
 
 async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
   if (typeof workbench.api.listEpisodeAssets !== "function") {
+    resetEpisodeWorkbenchAssets(workbench);
     return workbench.ui.importedAssets;
   }
   const [characterPage, scenePage, propPage] = await Promise.all([
@@ -4374,6 +6030,9 @@ async function loadEpisodeGenerationConfig(workbench, episodeId) {
     ...config,
     uploadLimits: config?.uploadLimits ?? defaultUploadLimits,
   };
+  if (Number.isFinite(Number(config?.creditBalance))) {
+    workbench.ui.creditBalance = Number(config.creditBalance);
+  }
   return workbench.ui.episodeGenerationConfig;
 }
 
@@ -4395,7 +6054,7 @@ function openBatchEpisodeFlow(workbench) {
   workbench.ui.isScriptModalOpen = true;
   workbench.ui.scriptTab = "script-upload";
   workbench.ui.scriptSubmitAction = "confirm-batch-episode";
-  workbench.ui.scriptSubmitLabel = "绾喛顓婚幍褰掑櫤閸掓稑缂撻崚鍡涙肠";
+  workbench.ui.scriptSubmitLabel = "确认上传";
   workbench.ui.singleEpisodeNotice = "";
   workbench.ui.uploadNotice = "";
   render(workbench);
@@ -4564,6 +6223,47 @@ function applyGenerationFieldChange(workbench, field, value) {
   }
 }
 
+function isAssetScope(workbench) {
+  return (workbench.ui.museScopeMode ?? "storyboard") === "assets";
+}
+
+function getCurrentScopePrompt(workbench) {
+  if (isAssetScope(workbench)) {
+    return String(workbench.ui.assetPromptDraft?.prompt ?? workbench.ui.prompt ?? "");
+  }
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  return String(selectedStoryboard?.generationState?.prompt ?? workbench.ui.prompt ?? "");
+}
+
+function setCurrentScopePrompt(workbench, value) {
+  const nextValue = String(value ?? "");
+  if (isAssetScope(workbench)) {
+    workbench.ui.assetPromptDraft = {
+      ...(workbench.ui.assetPromptDraft ?? {}),
+      scopeMode: "assets",
+      prompt: nextValue,
+    };
+    workbench.ui.prompt = nextValue;
+    return;
+  }
+  const storyboardId = workbench.ui.selectedStoryboardId ?? null;
+  if (storyboardId) {
+    updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
+      ...generationState,
+      prompt: nextValue,
+    }));
+  }
+  workbench.ui.prompt = nextValue;
+}
+
+function syncPromptFromCurrentScope(workbench) {
+  workbench.ui.prompt = getCurrentScopePrompt(workbench);
+}
+
+
 function clampCount(value, minimum, maximum) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -4657,7 +6357,7 @@ async function handleGenerationReferenceFiles(workbench, storyboardId, files) {
     return;
   }
 
-  await runAction(workbench, "濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾村櫧闁崇粯鏌ㄩ埞鎴︽偐鏉堫偄鍘￠梺缁樺姇閿曨亪寮诲☉妯锋瀻闊洦鎸撮崑鎾寸鐎ｎ亞鍔﹀銈嗗坊閸嬫捇鏌涢悢绋款棆缂侇喖鐗嗛悾婵嬪礋椤愩倝鐛?..", async () => {
+  await runAction(workbench, "正在上传参考素材...", async () => {
     const createdReferences = [];
     const uploadedDrafts = [];
     for (const file of importableFiles) {
@@ -4735,7 +6435,7 @@ async function handleGenerationAssetUpload(workbench, storyboardId, stateKey, fi
       name: file.name,
       kind: String(file.type || "").startsWith("video/") ? "video" : "image",
       status: "uploading",
-      summary: "濠电偞鍨堕幐鎼佹晝閿濆洦顫曢柤鍝ユ暩閳?..",
+      summary: "正在上传文件...",
       url: state?.[stateKey]?.url ?? "",
     },
   }));
@@ -4765,14 +6465,14 @@ async function handleGenerationAssetUpload(workbench, storyboardId, stateKey, fi
         name: file.name,
         kind: String(file.type || "").startsWith("video/") ? "video" : "image",
         status: "ready",
-        summary: stateKey === "editSourceVideo" ? "??????????????" : "??????????????",
+        summary: stateKey === "editSourceVideo" ? "已上传待编辑视频" : "已上传参考素材",
         url: resolveApiUrl(upload.publicUrl),
         storageObjectKey: upload.storageObjectKey,
         storageObjectId: upload.storageObjectId ?? null,
         uploadSessionId: upload.uploadSessionId ?? null,
       },
     }));
-    workbench.ui.toast = `${file.name} uploaded.`;
+    workbench.ui.toast = `已上传 ${file.name}。`;
   } catch (error) {
     updateStoryboardGenerationState(workbench, storyboardId, (state) => ({
       ...state,
@@ -4797,7 +6497,7 @@ function syncGenerationStateFromStoryboardImage(workbench, storyboardId) {
       name: storyboard.uploadedImageName || "storyboard-image",
       kind: "image",
       status: "ready",
-      summary: "????????????????",
+      summary: "已引用当前分镜图片",
       url: storyboard.previewImageUrl,
     },
   }));
@@ -4819,30 +6519,7 @@ function resolveEpisodeAssetSelectionContext(workbench) {
     assetTab === "other"
       ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
       : workbench.ui.importedAssets?.[assetTab] ?? [];
-  const fallbackAssetEntries =
-    assetTab === "character"
-      ? [
-          { id: "mock-character-1", name: "废土主角", description: "灰白短发，神情警惕，穿破旧风衣与轻甲。" },
-          { id: "mock-character-2", name: "流浪少女", description: "瘦削身形，旧围巾与护目镜，目光倔强。" },
-          { id: "mock-character-3", name: "调查员", description: "深色制服配便携终端，站姿克制，表情冷静。" },
-          { id: "mock-character-4", name: "机械师", description: "工具腰带和机械义肢，衣着厚重耐磨。" },
-          { id: "mock-character-5", name: "守卫", description: "轻型护甲与执勤头盔，动作干练。" },
-          { id: "mock-character-6", name: "商贩", description: "背负旧包与零件箱，衣物层次丰富。" },
-        ]
-      : assetTab === "scene"
-        ? [
-            { id: "mock-scene-1", name: "废墟街区", description: "断墙残楼、尘雾弥漫、远处霓虹残影。" },
-            { id: "mock-scene-2", name: "地下通道", description: "狭长压抑，顶灯闪烁，地面潮湿反光。" },
-            { id: "mock-scene-3", name: "临时据点", description: "金属拼接结构，桌面堆满设备和地图。" },
-            { id: "mock-scene-4", name: "高楼边缘", description: "俯瞰城市废墟，风大，天色阴沉。" },
-          ]
-        : [
-            { id: "mock-prop-1", name: "通行证", description: "磨损明显，边缘发白，带旧芯片槽。" },
-            { id: "mock-prop-2", name: "短刀", description: "刀身轻薄，护手磨损，便于近战。" },
-            { id: "mock-prop-3", name: "能量枪", description: "蓝色指示灯常亮，外壳有使用划痕。" },
-            { id: "mock-prop-4", name: "通讯器", description: "手持式旧设备，屏幕裂纹但仍可点亮。" },
-          ];
-  const assetEntries = importedAssetEntries.length ? importedAssetEntries : fallbackAssetEntries;
+  const assetEntries = importedAssetEntries;
   const selectedAsset =
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeCardId) ??
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeAssetId) ??
@@ -4867,6 +6544,77 @@ function resolveEpisodeAssetSelectionContext(workbench) {
       null,
     selectedAsset,
   };
+}
+
+function hydrateQuickReferencePreviews(workbench, items = []) {
+  return [...items].map((item) => {
+    const existingPreview =
+      item?.fixedImageUrl ??
+      item?.preview ??
+      item?.previewUrl ??
+      item?.publicUrl ??
+      item?.src ??
+      item?.imageUrl ??
+      item?.url ??
+      "";
+    if (existingPreview) {
+      return item;
+    }
+    const asset = findEpisodeAssetForQuickReference(workbench, item);
+    const preview =
+      asset?.fixedImageUrl ??
+      asset?.previewUrl ??
+      asset?.preview ??
+      asset?.publicUrl ??
+      asset?.src ??
+      "";
+    if (!preview) {
+      return item;
+    }
+    return {
+      ...item,
+      preview,
+    };
+  });
+}
+
+function findEpisodeAssetForQuickReference(workbench, item) {
+  const assetId = item?.assetId ?? item?.id ?? null;
+  const kind = item?.kind ?? item?.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+  if (!assetId) {
+    return null;
+  }
+  const candidates = collectEpisodeAssetCandidates(workbench, kind);
+  return candidates.find((asset) => (asset?.id ?? asset?.assetId) === assetId) ?? null;
+}
+
+function collectEpisodeAssetCandidates(workbench, kind) {
+  const importedAssets = workbench.ui.importedAssets ?? {};
+  const direct =
+    kind === "other"
+      ? [
+          ...(importedAssets.other?.image ?? []),
+          ...(importedAssets.other?.video ?? []),
+        ]
+      : (importedAssets[kind] ?? []);
+  const context = workbench.ui.episodeWorkbenchContext ?? {};
+  const contextAssets =
+    context.assetsByType?.[kind] ??
+    context.assets?.[kind] ??
+    context.episodeAssets?.[kind] ??
+    context.data?.assetsByType?.[kind] ??
+    context.data?.assets?.[kind] ??
+    context.data?.episodeAssets?.[kind] ??
+    [];
+  const projectAssets =
+    workbench.ui.projectDetail?.assetsByType?.[kind] ??
+    workbench.state?.projectDetail?.assetsByType?.[kind] ??
+    [];
+  return [
+    ...direct,
+    ...mapEpisodeAssetContracts(Array.isArray(contextAssets) ? contextAssets : [], kind),
+    ...mapProjectDetailAssetRecords(Array.isArray(projectAssets) ? projectAssets : [], kind),
+  ];
 }
 
 function resolveEpisodeAssetSelectionContextFromDom(workbench) {
@@ -4911,7 +6659,7 @@ export function buildImageGenerationPayload(workbench) {
   const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
-    promptOverride: workbench.ui.prompt || selectedStoryboard?.description || null,
+    promptOverride: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
     model: workbench.ui.selectedModelId,
     parameters: {
       mode: workbench.ui.imageGenerationMode,
@@ -4937,45 +6685,61 @@ export function buildVideoGenerationPayload(workbench) {
   const generationState = selectedStoryboard?.generationState ?? createEmptyGenerationState();
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
-    motionPrompt: workbench.ui.prompt || selectedStoryboard?.description || null,
+    motionPrompt: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
     model: workbench.ui.selectedModelId,
     parameters: {
-      mode: workbench.ui.videoGenerationMode,
+      mode: workbench.ui.episodeMediaMode === "lip-sync" ? "lip-sync" : workbench.ui.videoGenerationMode,
       count: clampCount(workbench.ui.videoCount ?? 1, 1, 4),
       resolution: workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p",
       durationSec: Number(workbench.ui.videoDurationSec ?? 5),
       aspectRatio: workbench.state?.project?.aspectRatio ?? "9:16",
       references: selectedStoryboard?.references ?? [],
       quickReferences: generationState.quickReferenceItems ?? [],
+      mentionReferences: generationState.mentionReferences ?? [],
       firstFrame: generationState.firstFrame ?? null,
       lastFrame: generationState.lastFrame ?? null,
       editSourceVideo: generationState.editSourceVideo ?? null,
       referenceUploads: generationState.referenceUploads ?? [],
       imageReference: generationState.imageReference ?? null,
       localReferenceRoles: generationState.localReferenceRoles ?? [],
+      lipSyncConfig:
+        workbench.ui.episodeMediaMode === "lip-sync"
+          ? {
+              text: String(getCurrentScopePrompt(workbench) ?? ""),
+              textLength: [...String(getCurrentScopePrompt(workbench) ?? "").trim()].length,
+              voiceId: workbench.ui.lipSyncVoiceId ?? null,
+              voiceName: workbench.ui.lipSyncVoiceName ?? "",
+              voiceSource: workbench.ui.lipSyncVoiceSource ?? null,
+              estimatedCreditCost: calculateLipSyncCreditCost(getCurrentScopePrompt(workbench) ?? ""),
+            }
+          : null,
     },
-    audioEnabled: Boolean(workbench.ui.videoAudioEnabled),
+    audioEnabled: workbench.ui.episodeMediaMode === "lip-sync" ? true : Boolean(workbench.ui.videoAudioEnabled),
     musicEnabled: Boolean(workbench.ui.videoMusicEnabled),
-    lipSyncEnabled: Boolean(workbench.ui.videoLipSyncEnabled),
+    lipSyncEnabled: workbench.ui.episodeMediaMode === "lip-sync" ? true : Boolean(workbench.ui.videoLipSyncEnabled),
   };
 }
 
-export function appendSelectedEpisodeAssetToPrompt(workbench) {
+export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
+  const storyboardReferenceResult = appendSelectedStoryboardToPrompt(workbench, options);
+  if (storyboardReferenceResult.ok) {
+    return storyboardReferenceResult;
+  }
   const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
   const domSelectionContext = resolveEpisodeAssetSelectionContextFromDom(workbench);
-  const currentAssetKind = domSelectionContext?.assetTab ?? selectionContext.assetTab;
+  const currentAssetKind = selectionContext.assetTab ?? domSelectionContext?.assetTab;
   const selectedAsset = selectionContext.selectedAsset;
-  const selectedAssetId = domSelectionContext?.selectedAssetId ?? selectedAsset?.id ?? null;
+  const selectedAssetId = selectedAsset?.id ?? domSelectionContext?.selectedAssetId ?? null;
   const selectedAssetName =
-    domSelectionContext?.selectedAssetName ?? selectionContext.selectedAssetName ?? selectedAsset?.name ?? null;
+    selectionContext.selectedAssetName ?? domSelectionContext?.selectedAssetName ?? selectedAsset?.name ?? null;
   const selectedAssetDescription =
-    domSelectionContext?.selectedAssetDescription ??
     selectionContext.selectedAssetDescription ??
+    domSelectionContext?.selectedAssetDescription ??
     selectedAsset?.description ??
     null;
   const selectedAssetPreview =
-    domSelectionContext?.selectedAssetPreview ??
     selectionContext.selectedAssetPreview ??
+    domSelectionContext?.selectedAssetPreview ??
     selectedAsset?.previewUrl ??
     selectedAsset?.preview ??
     selectedAsset?.publicUrl ??
@@ -4998,6 +6762,17 @@ export function appendSelectedEpisodeAssetToPrompt(workbench) {
     preview: selectedAssetPreview,
     previewMarkup: domSelectionContext?.selectedAssetPreviewMarkup ?? null,
   };
+  const isMention = Boolean(options?.mention);
+  const mentionToken = `【@${selectedAssetName ?? "素材"}】`;
+  const mentionReference = {
+    id: `mention-ref:${currentAssetKind}:${selectedAssetId ?? Date.now()}`,
+    assetId: selectedAssetId,
+    kind: currentAssetKind,
+    name: selectedAssetName ?? "引用素材",
+    token: mentionToken,
+    description: nextPrompt,
+    preview: selectedAssetPreview,
+  };
   if (selectedStoryboard) {
     updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
       ...generationState,
@@ -5005,6 +6780,12 @@ export function appendSelectedEpisodeAssetToPrompt(workbench) {
         ...(generationState.quickReferenceItems ?? []),
         nextReference,
       ]),
+      mentionReferences: isMention
+        ? dedupeMentionReferenceItems([
+            ...(generationState.mentionReferences ?? []),
+            mentionReference,
+          ])
+        : (generationState.mentionReferences ?? []),
     }));
   } else {
     const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
@@ -5019,18 +6800,143 @@ export function appendSelectedEpisodeAssetToPrompt(workbench) {
         ...(assetPromptDraft.quickReferenceItems ?? []),
         nextReference,
       ]),
+      mentionReferences: isMention
+        ? dedupeMentionReferenceItems([
+            ...(assetPromptDraft.mentionReferences ?? []),
+            mentionReference,
+          ])
+        : (assetPromptDraft.mentionReferences ?? []),
     };
   }
 
-  const promptLine = selectedAssetName ? `${selectedAssetName}: ${nextPrompt}` : nextPrompt;
-  const currentPrompt = String(workbench.ui.prompt ?? "").trim();
-  workbench.ui.prompt = currentPrompt ? `${currentPrompt}\n${promptLine}` : promptLine;
+  const promptLine = isMention
+    ? mentionToken
+    : selectedStoryboard && selectedAssetName
+      ? `${selectedAssetName}: ${nextPrompt}`
+      : nextPrompt;
+  setCurrentScopePrompt(workbench, appendPromptLineOnce(getCurrentScopePrompt(workbench), promptLine));
+  if (!selectedStoryboard && (workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+    workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
+  }
   workbench.ui.musePromptMenu = null;
   return {
     ok: true,
     prompt: workbench.ui.prompt,
-    reference: nextReference,
+    reference: isMention ? mentionReference : nextReference,
   };
+}
+
+function appendSelectedStoryboardToPrompt(workbench, options = {}) {
+  if (options?.mention || (workbench.ui.museScopeMode ?? "storyboard") !== "storyboard") {
+    return { ok: false, reason: "not-storyboard-reference" };
+  }
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  if (!selectedStoryboard) {
+    return { ok: false, reason: "missing-storyboard" };
+  }
+  const promptText = resolveStoryboardQuickReferencePrompt(selectedStoryboard);
+  if (!promptText) {
+    return { ok: false, reason: "missing-storyboard-prompt" };
+  }
+  const reference = buildSelectedStoryboardQuickReference(workbench, selectedStoryboard, promptText);
+  if (!reference) {
+    return { ok: false, reason: "missing-storyboard-media" };
+  }
+  updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+    ...generationState,
+    quickReferenceItems: dedupeQuickReferenceItems([
+      ...(generationState.quickReferenceItems ?? []),
+      reference,
+    ]),
+  }));
+
+  setCurrentScopePrompt(workbench, appendPromptLineOnce(getCurrentScopePrompt(workbench), promptText));
+  workbench.ui.musePromptMenu = null;
+  return { ok: true, prompt: workbench.ui.prompt, reference };
+}
+
+function appendPromptLineOnce(currentPrompt, promptLine) {
+  const nextLine = String(promptLine ?? "").trim();
+  if (!nextLine) {
+    return String(currentPrompt ?? "").trim();
+  }
+  const currentText = String(currentPrompt ?? "").trim();
+  if (!currentText) {
+    return nextLine;
+  }
+  const existingLines = currentText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (existingLines.includes(nextLine)) {
+    return currentText;
+  }
+  return `${currentText}\n${nextLine}`;
+}
+
+function resolveStoryboardQuickReferencePrompt(storyboard) {
+  return String(
+    storyboard?.description ??
+      storyboard?.sceneAnalysis ??
+      storyboard?.plotPreview ??
+      storyboard?.title ??
+      storyboard?.displayTitle ??
+      "",
+  ).trim();
+}
+
+function buildSelectedStoryboardQuickReference(workbench, storyboard, description) {
+  const mediaMode = workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync"
+    ? "video"
+    : "image";
+  if (mediaMode === "video") {
+    const video =
+      (storyboard?.uploadedVideos ?? []).find((item) => item.id === storyboard?.selectedUploadedVideoId && item.src) ??
+      (storyboard?.uploadedVideos ?? []).find((item) => item.status === "ready" && item.src) ??
+      null;
+    const preview = video?.src ?? storyboard?.previewVideo ?? null;
+    if (!preview) {
+      return null;
+    }
+    return {
+      id: `quick-ref:storyboard-video:${storyboard.id}:${video?.id ?? storyboard?.currentVideoAssetVersionId ?? "preview"}`,
+      assetId: storyboard.id,
+      kind: "video",
+      name: `${resolveStoryboardReferenceLabel(storyboard)} 视频`,
+      description,
+      preview,
+      url: preview,
+      thumbnailSrc: video?.thumbnailSrc ?? storyboard?.previewThumbnailUrl ?? null,
+    };
+  }
+  const image =
+    (storyboard?.uploadedImages ?? []).find((item) => item.id === storyboard?.currentImageAssetVersionId && item.src) ??
+    (storyboard?.uploadedImages ?? []).find((item) => item.status === "ready" && item.src) ??
+    null;
+  const preview = image?.src ?? storyboard?.previewImageUrl ?? null;
+  if (!preview) {
+    return null;
+  }
+  return {
+    id: `quick-ref:storyboard-image:${storyboard.id}:${image?.id ?? storyboard?.currentImageAssetVersionId ?? "preview"}`,
+    assetId: storyboard.id,
+    kind: "image",
+    name: `${resolveStoryboardReferenceLabel(storyboard)} 图片`,
+    description,
+    preview,
+    url: preview,
+  };
+}
+
+function resolveStoryboardReferenceLabel(storyboard) {
+  const index = Number(storyboard?.index ?? 0);
+  if (Number.isFinite(index) && index > 0) {
+    return `分镜 ${index}`;
+  }
+  return storyboard?.displayTitle ?? storyboard?.title ?? "分镜";
 }
 
 async function generateStoryboardImages(workbench) {
@@ -5142,7 +7048,11 @@ async function generateStoryboardVideos(workbench) {
     ...submission,
     status: "running",
     quickReferenceItems: submission.quickReferenceItems,
+    generatedAudioItems: submission.generatedAudioItems ?? [],
   };
+  if (workbench.ui.episodeMediaMode === "lip-sync") {
+    workbench.ui.lipSyncAudioItems = submission.generatedAudioItems ?? [];
+  }
   render(workbench);
 
   try {
@@ -5170,7 +7080,12 @@ async function generateStoryboardVideos(workbench) {
       status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
       taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
       quickReferenceItems: submission.quickReferenceItems,
+      generatedAudioItems: result?.generatedAudioItems ?? result?.result?.generatedAudioItems ?? submission.generatedAudioItems ?? [],
     };
+    if (workbench.ui.episodeMediaMode === "lip-sync") {
+      workbench.ui.lipSyncAudioItems =
+        result?.generatedAudioItems ?? result?.result?.generatedAudioItems ?? submission.generatedAudioItems ?? [];
+    }
     if (isRealEpisodeWorkbench(workbench)) {
       applyEpisodeGenerationTaskResult(workbench, result, selectedStoryboard.id, "video");
     } else {
@@ -5202,11 +7117,27 @@ async function generateStoryboardVideos(workbench) {
 function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
   const generationState = storyboard?.generationState ?? createEmptyGenerationState();
   const isVideo = mediaKind === "video";
+  const isLipSync = isVideo && workbench.ui.episodeMediaMode === "lip-sync";
+  const scopePrompt = String(getCurrentScopePrompt(workbench) ?? "");
+  const generatedAudioItems = isLipSync && scopePrompt.trim()
+    ? [{
+        id: `lip-sync-audio-${Date.now()}`,
+        type: "audio",
+        kind: "audio",
+        name: `音频 ${(workbench.ui.lipSyncAudioItems?.length ?? 0) + 1}`,
+        summary: scopePrompt.trim().slice(0, 48),
+        voiceName: workbench.ui.lipSyncVoiceName ?? "",
+        audioUrl: buildEpisodeVoicePreviewDataUrl(
+          `${workbench.ui.lipSyncVoiceName ?? ""}:${scopePrompt.trim().slice(0, 24)}`,
+        ),
+        status: "ready",
+      }]
+    : [];
   return {
     mediaKind,
     storyboardId: storyboard?.id ?? null,
     shotId: storyboard?.linkedShotId ?? null,
-    promptPreview: workbench.ui.prompt || storyboard?.description || "",
+    promptPreview: scopePrompt || storyboard?.description || "",
     quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
     attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
     selectionContext: resolveEpisodeAssetSelectionContext(workbench),
@@ -5218,10 +7149,652 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
       ? workbench.state?.project?.aspectRatio ?? "9:16"
       : workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
     durationSec: isVideo ? Number(workbench.ui.videoDurationSec ?? 5) : null,
-    creditCost: isVideo ? 4500 : 4500,
+    creditCost: isLipSync ? calculateLipSyncCreditCost(scopePrompt) : isVideo ? 4500 : 4500,
+    generatedAudioItems,
     createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     status: "running",
   };
+}
+
+function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, mediaKind = "image") {
+  const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
+  const selectedModelId =
+    mediaKind === "image" ? "jimeng-4-5" : (workbench.ui.selectedModelId ?? null);
+  const scopePrompt = String(getCurrentScopePrompt(workbench) ?? "");
+  return {
+    mediaKind,
+    assetId: asset?.id ?? null,
+    promptPreview: scopePrompt || asset?.description || "",
+    quickReferenceItems: [...(workbench.ui.assetPromptDraft?.quickReferenceItems ?? [])],
+    attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
+    selectionContext: {
+      ...selectionContext,
+      assetTab: assetKind,
+      selectedAssetId: asset?.id ?? selectionContext.selectedAssetId,
+      selectedAssetName: asset?.name ?? selectionContext.selectedAssetName,
+      selectedAssetDescription: asset?.description ?? selectionContext.selectedAssetDescription,
+      selectedAssetPreview:
+        asset?.previewUrl ?? asset?.preview ?? asset?.sourceUrl ?? selectionContext.selectedAssetPreview,
+    },
+    selectedModelId,
+    resolution: workbench.ui.imageResolution ?? "2K",
+    aspectRatio: workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
+    creditCost: mediaKind === "image" ? 50 : 90,
+    createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+    status: "running",
+  };
+}
+
+function buildAssetConversationHistoryKey(assetId, mediaKind = "image") {
+  return `${mediaKind}:${assetId ?? ""}`;
+}
+
+function listAssetConversationHistoryEntries(workbench, assetId, mediaKind = "image") {
+  const key = buildAssetConversationHistoryKey(assetId, mediaKind);
+  const history = workbench.ui.assetConversationHistory ?? {};
+  return Array.isArray(history[key]) ? history[key] : [];
+}
+
+function replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind = "image") {
+  if (!assetId) {
+    return [];
+  }
+  const key = buildAssetConversationHistoryKey(assetId, mediaKind);
+  const nextEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  workbench.ui.assetConversationHistory = {
+    ...(workbench.ui.assetConversationHistory ?? {}),
+    [key]: nextEntries,
+  };
+  return nextEntries;
+}
+
+function appendAssetConversationHistoryEntry(workbench, entry) {
+  const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
+  const assetId = entry?.selectionContext?.selectedAssetId ?? entry?.assetId ?? null;
+  if (!assetId) {
+    return;
+  }
+  const key = buildAssetConversationHistoryKey(assetId, mediaKind);
+  const current = listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  const taskId = String(entry?.taskId ?? "").trim();
+  const nextEntries = taskId
+    ? [...current.filter((item) => String(item?.taskId ?? "").trim() !== taskId), entry]
+    : [...current, entry];
+  workbench.ui.assetConversationHistory = {
+    ...(workbench.ui.assetConversationHistory ?? {}),
+    [key]: nextEntries,
+  };
+}
+
+function resolveLatestAssetConversationResult(workbench, assetId, mediaKind = "image") {
+  const history = listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  return history.at(-1) ?? null;
+}
+
+function resolveAssetConversationTargetKey(mediaKind = "image") {
+  return mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
+}
+
+function resolveAssetConversationFallbackResult(workbench, assetId, mediaKind = "image") {
+  if (mediaKind === "video") {
+    return null;
+  }
+  return assetId && workbench.ui.episodeBatchResults?.[assetId]
+    ? workbench.ui.episodeBatchResults[assetId]
+    : null;
+}
+
+function syncSelectedAssetConversationResult(workbench, assetId, mediaKind = "image") {
+  const targetKey = resolveAssetConversationTargetKey(mediaKind);
+  workbench.ui[targetKey] =
+    resolveLatestAssetConversationResult(workbench, assetId, mediaKind) ??
+    resolveAssetConversationFallbackResult(workbench, assetId, mediaKind) ??
+    null;
+  return workbench.ui[targetKey];
+}
+
+function buildAssetConversationPayload(entry, messageType) {
+  const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
+  const assetId = entry?.selectionContext?.selectedAssetId ?? entry?.assetId ?? null;
+  const payload = {
+    assetId,
+    mediaKind,
+    promptPreview: entry?.promptPreview ?? "",
+    quickReferenceItems: Array.isArray(entry?.quickReferenceItems) ? entry.quickReferenceItems : [],
+    selectionContext:
+      entry?.selectionContext && typeof entry.selectionContext === "object"
+        ? entry.selectionContext
+        : {},
+    selectedModelId: entry?.selectedModelId ?? null,
+    aspectRatio: entry?.aspectRatio ?? null,
+    resolution: entry?.resolution ?? null,
+    creditCost: entry?.creditCost ?? null,
+    createdAt: entry?.createdAt ?? null,
+    taskId: entry?.taskId ?? null,
+    status: entry?.status ?? null,
+  };
+  if (messageType !== "user_request") {
+    payload.fixedImages = Array.isArray(entry?.fixedImages) ? entry.fixedImages : [];
+    payload.fixedVideos = Array.isArray(entry?.fixedVideos) ? entry.fixedVideos : [];
+  }
+  return payload;
+}
+
+function resolveAssetConversationTurnId(entry) {
+  const taskId = String(entry?.taskId ?? "").trim();
+  if (taskId) {
+    return taskId;
+  }
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `asset-conversation-${globalThis.crypto.randomUUID()}`;
+  }
+  return `asset-conversation-${Date.now()}`;
+}
+
+function buildAssetConversationMessages(entry, { includeUserRequest = false } = {}) {
+  const turnId = resolveAssetConversationTurnId(entry);
+  const status = String(entry?.status ?? "running").trim().toLowerCase() || "running";
+  const taskId = String(entry?.taskId ?? "").trim() || null;
+  const messages = [];
+  if (includeUserRequest) {
+    messages.push({
+      turnId,
+      messageKey: `${turnId}:user_request`,
+      messageType: "user_request",
+      payload: buildAssetConversationPayload(entry, "user_request"),
+    });
+  }
+  messages.push({
+    turnId,
+    messageKey: `${turnId}:task_status`,
+    messageType: "task_status",
+    taskId,
+    status,
+    payload: buildAssetConversationPayload(entry, "task_status"),
+  });
+  messages.push({
+    turnId,
+    messageKey: `${turnId}:result`,
+    messageType: "result",
+    taskId,
+    status,
+    payload: buildAssetConversationPayload(entry, "result"),
+  });
+  return messages;
+}
+
+async function persistAssetConversationEntry(workbench, entry, { includeUserRequest = false } = {}) {
+  const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
+  const assetId = entry?.selectionContext?.selectedAssetId ?? entry?.assetId ?? null;
+  if (
+    !assetId ||
+    !isRealEpisodeWorkbench(workbench) ||
+    typeof workbench.api?.saveAssetConversationMessages !== "function"
+  ) {
+    return null;
+  }
+  const response = await workbench.api.saveAssetConversationMessages(
+    workbench.ui.selectedEpisodeId,
+    assetId,
+    {
+      mediaMode: mediaKind,
+      messages: buildAssetConversationMessages(entry, { includeUserRequest }),
+    },
+  );
+  const entries = Array.isArray(response?.entries) ? response.entries : [];
+  replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+  const selectedAssetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+  if (selectedAssetId === assetId) {
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+  }
+  return response;
+}
+
+export async function loadSelectedAssetConversationHistory(workbench, options = {}) {
+  const mediaKind = options.mediaKind === "video" ? "video" : "image";
+  const assetId =
+    options.assetId ??
+    workbench.ui.selectedEpisodeAssetId ??
+    workbench.ui.selectedEpisodeCardId ??
+    null;
+  const targetKey = resolveAssetConversationTargetKey(mediaKind);
+  if (!assetId) {
+    workbench.ui[targetKey] = null;
+    return [];
+  }
+  if (
+    !isRealEpisodeWorkbench(workbench) ||
+    typeof workbench.api?.getAssetConversationHistory !== "function"
+  ) {
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  }
+  try {
+    const response = await workbench.api.getAssetConversationHistory(
+      workbench.ui.selectedEpisodeId,
+      assetId,
+      mediaKind,
+    );
+    const entries = Array.isArray(response?.entries) ? response.entries : [];
+    replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    return entries;
+  } catch {
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  }
+}
+
+function resolveAssetConversationActionResult(workbench, taskId, mediaKind = "image") {
+  const normalizedTaskId = String(taskId ?? "").trim();
+  if (!normalizedTaskId) {
+    return mediaKind === "video" ? workbench.ui.videoGenerationResult ?? null : workbench.ui.imageGenerationResult ?? null;
+  }
+  const assetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+  const history = listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  return history.find((item) => String(item?.taskId ?? "").trim() === normalizedTaskId) ?? null;
+}
+
+function removeAssetConversationHistoryEntry(workbench, assetId, taskId, mediaKind = "image") {
+  if (!assetId || !String(taskId ?? "").trim()) {
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  }
+  const key = buildAssetConversationHistoryKey(assetId, mediaKind);
+  const current = listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  const nextEntries = current.filter((item) => String(item?.taskId ?? "").trim() !== String(taskId).trim());
+  workbench.ui.assetConversationHistory = {
+    ...(workbench.ui.assetConversationHistory ?? {}),
+    [key]: nextEntries,
+  };
+  return nextEntries;
+}
+
+function applyAssetConversationHistoryAfterDelete(
+  workbench,
+  assetId,
+  taskId,
+  mediaKind = "image",
+  nextEntries = null,
+) {
+  const remainingHistory = Array.isArray(nextEntries)
+    ? replaceAssetConversationHistoryEntries(workbench, assetId, nextEntries, mediaKind)
+    : removeAssetConversationHistoryEntry(workbench, assetId, taskId, mediaKind);
+  const latestRemaining = remainingHistory.at(-1) ?? null;
+  const nextBatchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
+  if (assetId) {
+    if (latestRemaining) {
+      nextBatchResults[assetId] = latestRemaining;
+    } else {
+      delete nextBatchResults[assetId];
+    }
+  }
+  workbench.ui.episodeBatchResults = nextBatchResults;
+  if (mediaKind === "video") {
+    workbench.ui.videoGenerationResult = latestRemaining;
+  } else {
+    workbench.ui.imageGenerationResult = latestRemaining;
+  }
+  return remainingHistory;
+}
+
+function resolveEpisodeAssetKindLabel(assetKind = "character") {
+  if (assetKind === "scene") {
+    return "场景";
+  }
+  if (assetKind === "prop") {
+    return "道具";
+  }
+  return "角色";
+}
+
+function inferEpisodeAssetKind(name = "") {
+  const value = String(name ?? "");
+  if (/[街路营地场景夜景废墟]/.test(value)) {
+    return "scene";
+  }
+  if (/[车器刀枪道具]/.test(value)) {
+    return "prop";
+  }
+  return "character";
+}
+
+function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", items = [] } = {}) {
+  const imageResolution = String(workbench.ui.imageResolution ?? "2K").toUpperCase();
+  const aspectRatio = workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9";
+  const nextModal = {
+    show: true,
+    scope,
+    mode,
+    items,
+    openField: null,
+    imageModelId: "tnb-pro",
+    styleTab: "public",
+    selectedStyleId: "public-1",
+    scenePresetId: "scene-wide",
+    rolePresetId: "character-triple",
+    propPresetId: "prop-triple",
+    aspectRatio,
+    size: ["1K", "2K"].includes(imageResolution) ? imageResolution : "2K",
+    videoModelId: workbench.ui.selectedModelId ?? "vidu-q3-pro",
+    videoDurationSec: String(workbench.ui.videoDurationSec ?? "10"),
+    videoResolution: String(workbench.ui.videoResolution ?? "720P").toUpperCase(),
+  };
+  return syncEpisodeBatchModal(nextModal);
+}
+
+function syncEpisodeBatchModal(modal) {
+  return {
+    ...modal,
+    totalCredits: resolveEpisodeBatchTotalCredits(modal),
+  };
+}
+
+function resolveEpisodeBatchTotalCredits(modal) {
+  const count = Array.isArray(modal?.items) ? modal.items.length : 0;
+  return count * resolveEpisodeBatchUnitCredit(modal);
+}
+
+function resolveEpisodeBatchUnitCredit(modal) {
+  const mode = modal?.mode ?? "image";
+  if (mode === "video") {
+    return modal?.videoResolution === "1080P" ? 3600 : 2800;
+  }
+  if (mode === "upscale") {
+    return 30;
+  }
+  const modelId = modal?.imageModelId ?? "tnb-pro";
+  const size = String(modal?.size ?? "2K").toUpperCase();
+  if (modelId === "jimeng-4-5" || modelId === "jimeng-4-5-vip") {
+    return size === "1K" ? 40 : 50;
+  }
+  if (modelId === "tnb-fast") {
+    return size === "1K" ? 60 : 70;
+  }
+  if (modelId === "tnb-ultra") {
+    return size === "1K" ? 110 : 120;
+  }
+  return size === "1K" ? 80 : 90;
+}
+
+export async function generateAssetImages(workbench) {
+  const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
+  const asset = selectionContext.selectedAsset;
+  const assetKind = selectionContext.assetTab ?? workbench.ui.projectAssetTab ?? "character";
+  if (!asset?.id) {
+    workbench.ui.validationMessage = "请先创建或选中资产后再生成。";
+    workbench.ui.toast = "请先创建或选中资产后再生成。";
+    render(workbench);
+    return;
+  }
+  if (!String(getCurrentScopePrompt(workbench) ?? "").trim()) {
+    workbench.ui.validationMessage = "请输入内容";
+    workbench.ui.toast = "请输入内容";
+    render(workbench);
+    return;
+  }
+
+  const submission = createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, "image");
+  if (
+    isRealEpisodeWorkbench(workbench) &&
+    typeof workbench.api.createImageTask === "function"
+  ) {
+    stopGenerationPolling(workbench);
+    workbench.ui.imageGenerationResult = {
+      ...(workbench.ui.imageGenerationResult ?? {}),
+      ...submission,
+      status: "running",
+      quickReferenceItems: submission.quickReferenceItems,
+      attachmentItems: submission.attachmentItems,
+      selectionContext: submission.selectionContext,
+    };
+    render(workbench);
+
+    const result = normalizeEpisodeTaskForLegacyResult(
+      await workbench.api.createImageTask(workbench.ui.selectedEpisodeId, {
+        ...buildImageGenerationPayload(workbench),
+        targetType: "asset",
+        targetId: asset.id,
+        assetId: asset.id,
+        assetType: assetKind,
+        prompt: submission.promptPreview,
+      }),
+      submission,
+      "image",
+    );
+    workbench.ui.imageGenerationResult = {
+      ...result,
+      ...submission,
+      status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
+      taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
+      quickReferenceItems: submission.quickReferenceItems,
+      attachmentItems: submission.attachmentItems,
+      fixedImages: result?.fixedImages ?? [],
+      selectionContext: result?.selectionContext ?? submission.selectionContext,
+    };
+    appendAssetConversationHistoryEntry(workbench, workbench.ui.imageGenerationResult);
+    workbench.ui.episodeBatchResults = {
+      ...(workbench.ui.episodeBatchResults ?? {}),
+      [asset.id]: workbench.ui.imageGenerationResult,
+    };
+    setCurrentScopePrompt(workbench, "");
+    workbench.ui.assetPromptDraft = {
+      ...(workbench.ui.assetPromptDraft ?? {}),
+      scopeMode: "assets",
+      prompt: "",
+      quickReferenceItems: [],
+      mentionReferences: [],
+    };
+    workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
+    if (Number.isFinite(Number(result?.creditBalance))) {
+      workbench.ui.creditBalance = Number(result.creditBalance);
+    }
+    render(workbench);
+    try {
+      await persistAssetConversationEntry(workbench, workbench.ui.imageGenerationResult, { includeUserRequest: true });
+      render(workbench);
+    } catch {
+      // Keep the generated result visible if conversation persistence is temporarily unavailable.
+    }
+    return;
+  }
+
+  const imageUrl = FIXED_EPISODE_ASSET_IMAGE_URL;
+  const result = {
+    ...submission,
+    taskId: `asset-image-${asset.id}-${Date.now().toString(36)}`,
+    status: "running",
+    fixedImages: [
+      {
+        id: `${asset.id}-image-result`,
+        label: assetKind === "scene" ? "场景图片" : assetKind === "prop" ? "道具图片" : "角色图片",
+        url: imageUrl,
+        storageObjectId: null,
+        assetVersionId: null,
+      },
+    ],
+  };
+  workbench.ui.imageGenerationResult = result;
+  appendAssetConversationHistoryEntry(workbench, result);
+  workbench.ui.episodeBatchResults = {
+    ...(workbench.ui.episodeBatchResults ?? {}),
+    [asset.id]: result,
+  };
+  setCurrentScopePrompt(workbench, "");
+  workbench.ui.assetPromptDraft = {
+    ...(workbench.ui.assetPromptDraft ?? {}),
+    scopeMode: "assets",
+    prompt: "",
+    quickReferenceItems: [],
+    mentionReferences: [],
+  };
+  workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
+  render(workbench);
+  try {
+    await persistAssetConversationEntry(workbench, result, { includeUserRequest: true });
+    render(workbench);
+  } catch {
+    // Keep the local conversation visible even if history persistence is temporarily unavailable.
+  }
+}
+
+function validateLipSyncGeneration(workbench) {
+  const text = String(getCurrentScopePrompt(workbench) ?? "").trim();
+  if (!text) {
+    return { ok: false, message: "请输入配音内容后再生成。" };
+  }
+  if (!String(workbench.ui.lipSyncVoiceName ?? "").trim()) {
+    return { ok: false, message: "请先选择配音员后再生成。" };
+  }
+  return { ok: true };
+}
+
+function calculateLipSyncCreditCost(value) {
+  const length = [...String(value ?? "").trim()].length;
+  if (!length) {
+    return 0;
+  }
+  return Math.ceil(length / 10) * 2;
+}
+
+function playEpisodeVoicePreview(workbench, voiceName) {
+  stopEpisodeVoicePreview(workbench);
+  if (typeof Audio === "undefined") {
+    return;
+  }
+  const audio = new Audio(buildEpisodeVoicePreviewDataUrl(voiceName));
+  audio.volume = 0.45;
+  audio.onended = () => {
+    if (workbench.ui.episodeVoiceModal) {
+      workbench.ui.episodeVoiceModal = {
+        ...workbench.ui.episodeVoiceModal,
+        previewVoiceName: "",
+      };
+      render(workbench);
+    }
+  };
+  workbench.voicePreviewAudio = audio;
+  void audio.play().catch(() => {});
+}
+
+function stopEpisodeVoicePreview(workbench) {
+  if (workbench.voicePreviewAudio) {
+    try {
+      workbench.voicePreviewAudio.pause();
+      workbench.voicePreviewAudio.currentTime = 0;
+    } catch {}
+    workbench.voicePreviewAudio = null;
+  }
+}
+
+function playLipSyncAudioPreview(workbench, item) {
+  stopLipSyncAudioPreview(workbench);
+  if (typeof Audio === "undefined") {
+    return;
+  }
+  const seed = `${item?.voiceName ?? ""}:${item?.summary ?? item?.name ?? ""}`;
+  const audio = new Audio(item?.audioUrl ?? buildEpisodeVoicePreviewDataUrl(seed));
+  audio.volume = 0.5;
+  audio.onended = () => {
+    workbench.ui.lipSyncPreviewAudioId = null;
+    workbench.lipSyncPreviewAudio = null;
+    render(workbench);
+  };
+  workbench.ui.lipSyncPreviewAudioId = item?.id ?? null;
+  workbench.lipSyncPreviewAudio = audio;
+  void audio.play().catch(() => {
+    workbench.ui.lipSyncPreviewAudioId = null;
+    workbench.lipSyncPreviewAudio = null;
+    render(workbench);
+  });
+}
+
+function stopLipSyncAudioPreview(workbench) {
+  if (workbench.lipSyncPreviewAudio) {
+    try {
+      workbench.lipSyncPreviewAudio.pause();
+      workbench.lipSyncPreviewAudio.currentTime = 0;
+    } catch {}
+    workbench.lipSyncPreviewAudio = null;
+  }
+  workbench.ui.lipSyncPreviewAudioId = null;
+}
+
+function buildEpisodeVoicePreviewDataUrl(voiceName) {
+  const seed = [...String(voiceName ?? "")].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const sampleRate = 8000;
+  const durationSec = 0.45;
+  const samples = Math.floor(sampleRate * durationSec);
+  const frequency = 300 + (seed % 220);
+  const pcmBytes = new Uint8Array(samples);
+  for (let index = 0; index < samples; index += 1) {
+    const envelope = Math.min(1, index / 600) * Math.min(1, (samples - index) / 600);
+    const sample = Math.sin((2 * Math.PI * frequency * index) / sampleRate) * 0.5 * envelope;
+    pcmBytes[index] = Math.max(0, Math.min(255, Math.round(128 + sample * 127)));
+  }
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const writeString = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes.length, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  writeString(36, "data");
+  view.setUint32(40, pcmBytes.length, true);
+  const wavBytes = new Uint8Array(header.byteLength + pcmBytes.length);
+  wavBytes.set(new Uint8Array(header), 0);
+  wavBytes.set(pcmBytes, header.byteLength);
+  let binary = "";
+  for (const byte of wavBytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+async function persistLipSyncStoryboardDraft(workbench, options = {}) {
+  if (!isRealEpisodeWorkbench(workbench) || typeof workbench.api.saveDraft !== "function") {
+    return null;
+  }
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  const targetId = selectedStoryboard?.linkedShotId ?? selectedStoryboard?.id ?? null;
+  if (!targetId) {
+    return null;
+  }
+  const text = String(workbench.ui.prompt ?? "");
+  const payload = {
+    prompt: text,
+    mode: "lip_sync",
+    payload: {
+      text,
+      textLength: [...text.trim()].length,
+      voiceId: workbench.ui.lipSyncVoiceId ?? null,
+      voiceName: workbench.ui.lipSyncVoiceName ?? "",
+      voiceSource: workbench.ui.lipSyncVoiceSource ?? null,
+      estimatedCreditCost: calculateLipSyncCreditCost(text),
+    },
+  };
+  try {
+    return await workbench.api.saveDraft(workbench.ui.selectedEpisodeId, "storyboard", targetId, payload);
+  } catch (error) {
+    if (!options?.silent) {
+      workbench.ui.toast = `保存对口型草稿失败：${friendlyError(error)}`;
+      render(workbench);
+    }
+    return null;
+  }
 }
 
 function scheduleGenerationPolling(workbench, storyboardId, mediaKind) {
@@ -5302,14 +7875,35 @@ function finishGenerationPolling(workbench, storyboardId, mediaKind) {
 function isRealEpisodeWorkbench(workbench) {
   return (
     workbench.ui.projectPanelMode === "episode-workbench" &&
-    workbench.ui.selectedEpisodeId &&
-    workbench.ui.selectedEpisodeId !== "episode-primary"
+    hasPersistedEpisodeWorkbenchId(workbench)
+  );
+}
+
+function isLipSyncTaskLike(taskOrResult) {
+  const candidate = taskOrResult ?? {};
+  const parameters =
+    candidate.parameters && typeof candidate.parameters === "object"
+      ? candidate.parameters
+      : candidate.result?.parameters && typeof candidate.result.parameters === "object"
+        ? candidate.result.parameters
+        : {};
+  return (
+    candidate.lipSyncEnabled === true ||
+    parameters?.mode === "lip-sync" ||
+    (Array.isArray(candidate.generatedAudioItems) && candidate.generatedAudioItems.length > 0) ||
+    (Array.isArray(candidate.result?.generatedAudioItems) && candidate.result.generatedAudioItems.length > 0)
   );
 }
 
 function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
   const result = task?.result ?? {};
   const mediaUrl = mediaKind === "video" ? result.videoUrl : result.imageUrl;
+  const isLipSync = mediaKind === "video" && isLipSyncTaskLike(task);
+  const generatedAudioItems = Array.isArray(task?.generatedAudioItems)
+    ? task.generatedAudioItems
+    : Array.isArray(result.generatedAudioItems)
+      ? result.generatedAudioItems
+      : submission?.generatedAudioItems ?? [];
   return {
     ...task,
     ...submission,
@@ -5323,36 +7917,73 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
     fixedImages: mediaKind === "image" && mediaUrl
       ? [{
           id: result.assetVersionId ?? result.storageObjectId ?? task?.taskId,
-          label: "鍒嗛暅鍥剧墖",
+          label: "分镜图片",
           url: mediaUrl,
           storageObjectId: result.storageObjectId ?? null,
           assetVersionId: result.assetVersionId ?? null,
         }]
       : [],
-    fixedVideos: mediaKind === "video" && mediaUrl
+    fixedVideos: mediaKind === "video" && mediaUrl && !isLipSync
       ? [{
           id: result.assetVersionId ?? result.storageObjectId ?? task?.taskId,
-          label: "鍒嗛暅瑙嗛",
+          label: "分镜视频",
           src: mediaUrl,
           url: mediaUrl,
           storageObjectId: result.storageObjectId ?? null,
           assetVersionId: result.assetVersionId ?? null,
         }]
       : [],
+    generatedAudioItems,
     result,
     creditBalance: task?.creditBalance ?? null,
   };
 }
 
-function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, mediaKind) {
+export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, mediaKind) {
   if (!task) {
     return;
   }
   const targetKey = mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
   const current = workbench.ui[targetKey] ?? {};
   const normalized = normalizeEpisodeTaskForLegacyResult(task, current, mediaKind);
+  const isAssetScope = (workbench.ui.museScopeMode ?? "storyboard") === "assets";
+  const assetConversationAssetId =
+    normalized?.assetId ??
+    current?.assetId ??
+    (isAssetScope
+      ? normalized?.selectionContext?.selectedAssetId ?? current?.selectionContext?.selectedAssetId ?? null
+      : null);
   workbench.ui[targetKey] = normalized;
-  if (task.status !== "succeeded") {
+  if (assetConversationAssetId) {
+    const assetConversationEntry = {
+      ...normalized,
+      assetId: assetConversationAssetId,
+    };
+    appendAssetConversationHistoryEntry(workbench, assetConversationEntry);
+    if (
+      workbench.ui.projectPanelMode === "episode-workbench" &&
+      isAssetScope
+    ) {
+      workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
+    }
+    void persistAssetConversationEntry(workbench, assetConversationEntry).catch(() => {});
+  }
+  if (mediaKind === "video" && Array.isArray(normalized.generatedAudioItems) && normalized.generatedAudioItems.length > 0) {
+    workbench.ui.lipSyncAudioItems = normalized.generatedAudioItems;
+  }
+  if (Number.isFinite(Number(normalized.creditBalance))) {
+    workbench.ui.creditBalance = Number(normalized.creditBalance);
+  }
+  if (resolveWorkflowStatus(task.status) !== "completed") {
+    return;
+  }
+  if (mediaKind === "video" && isLipSyncTaskLike(task)) {
+    updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
+      ...generationState,
+      lastSubmission: generationState.lastSubmission
+        ? { ...generationState.lastSubmission, status: "completed" }
+        : generationState.lastSubmission,
+    }));
     return;
   }
   const mediaUrl = mediaKind === "video" ? task.result?.videoUrl : task.result?.imageUrl;
@@ -5404,6 +8035,9 @@ function shouldContinueGenerationPolling(workbench, storyboardId, mediaKind) {
     return false;
   }
   if (mediaKind === "video") {
+    if (workbench.ui.episodeMediaMode === "lip-sync") {
+      return false;
+    }
     return !Boolean(storyboard.previewVideo || storyboard.currentVideoAssetVersionId);
   }
   return !Boolean(storyboard.previewImageUrl || storyboard.currentImageAssetVersionId);
@@ -5419,6 +8053,154 @@ function dedupeQuickReferenceItems(items = []) {
     seen.add(key);
     return true;
   });
+}
+
+function dedupeMentionReferenceItems(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item.assetId ?? item.id ?? item.token;
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolvePromptMentionAssetBuckets(workbench) {
+  const importedAssets = workbench.ui.importedAssets ?? {};
+  const importedCount =
+    (importedAssets.character?.length ?? 0) +
+    (importedAssets.scene?.length ?? 0) +
+    (importedAssets.prop?.length ?? 0);
+  if (importedCount > 0) {
+    return importedAssets;
+  }
+  const detailAssets =
+    workbench.ui.projectDetail?.assetsByType ??
+    workbench.state?.projectDetail?.assetsByType ??
+    null;
+  if (!detailAssets) {
+    return importedAssets;
+  }
+  return mapProjectDetailAssets(detailAssets);
+}
+
+export function updatePromptMentionState(workbench, value, selectionStart) {
+  const text = String(value ?? "");
+  const cursor = Math.max(0, Number(selectionStart ?? text.length));
+  const beforeCursor = text.slice(0, cursor);
+  if ((workbench.ui.museScopeMode ?? "storyboard") !== "storyboard") {
+    clearPromptMentionUi(workbench);
+    return;
+  }
+  const completeMentionAsset = resolveCompletePromptMentionAsset(workbench, beforeCursor);
+  if (completeMentionAsset) {
+    workbench.ui.promptMentionMenuOpen = false;
+    workbench.ui.promptMentionQuery = "";
+    workbench.ui.promptMentionSuggestions = [];
+    workbench.ui.promptMentionPreviewOpen = true;
+    workbench.ui.promptMentionPreviewAsset = completeMentionAsset;
+    return;
+  }
+  const mentionMatch = /(?:^|\s)@([^\s【】]*)$/.exec(beforeCursor);
+  if (!mentionMatch) {
+    clearPromptMentionUi(workbench);
+    return;
+  }
+
+  const query = String(mentionMatch[1] ?? "").trim().toLowerCase();
+  const mentionAssetBuckets = resolvePromptMentionAssetBuckets(workbench);
+  const suggestions = [
+    ...(mentionAssetBuckets.character ?? []).map((item) => ({ ...item, assetKind: "character" })),
+    ...(mentionAssetBuckets.scene ?? []).map((item) => ({ ...item, assetKind: "scene" })),
+    ...(mentionAssetBuckets.prop ?? []).map((item) => ({ ...item, assetKind: "prop" })),
+  ]
+    .filter((item) => {
+      if (!query) return true;
+      return [item.name, item.description]
+        .map((entry) => String(entry ?? "").toLowerCase())
+        .some((entry) => entry.includes(query));
+    })
+    .slice(0, 6);
+
+  workbench.ui.promptMentionMenuOpen = suggestions.length > 0;
+  workbench.ui.promptMentionQuery = query;
+  workbench.ui.promptMentionSuggestions = suggestions;
+  workbench.ui.promptMentionPreviewOpen = false;
+  workbench.ui.promptMentionPreviewAsset = null;
+}
+
+function clearPromptMentionUi(workbench) {
+  workbench.ui.promptMentionMenuOpen = false;
+  workbench.ui.promptMentionQuery = "";
+  workbench.ui.promptMentionSuggestions = [];
+  workbench.ui.promptMentionPreviewOpen = false;
+  workbench.ui.promptMentionPreviewAsset = null;
+}
+
+function resolveCompletePromptMentionAsset(workbench, beforeCursor) {
+  const tokenMatch = /(?:【@([^】]+)】|(?:^|[\s【])@([^\s【】,，。；;：:]+))$/.exec(beforeCursor);
+  const mentionName = String(tokenMatch?.[1] ?? tokenMatch?.[2] ?? "").trim();
+  if (!mentionName) {
+    return null;
+  }
+  const mentionAssetBuckets = resolvePromptMentionAssetBuckets(workbench);
+  const assets = [
+    ...(mentionAssetBuckets.character ?? []).map((item) => ({ ...item, assetKind: "character" })),
+    ...(mentionAssetBuckets.scene ?? []).map((item) => ({ ...item, assetKind: "scene" })),
+    ...(mentionAssetBuckets.prop ?? []).map((item) => ({ ...item, assetKind: "prop" })),
+  ];
+  const matched = assets.find((item) => String(item.name ?? item.label ?? "").trim() === mentionName);
+  if (!matched) {
+    return null;
+  }
+  return {
+    ...matched,
+    name: matched.name ?? matched.label ?? mentionName,
+    previewUrl:
+      matched.fixedImageUrl ??
+      matched.previewUrl ??
+      matched.preview ??
+      matched.sourceUrl ??
+      matched.latestVersion?.previewUrl ??
+      matched.latestVersion?.metadata?.previewUrl ??
+      null,
+  };
+}
+
+function insertEpisodeAssetMention(workbench, asset, assetKind) {
+  const textarea = workbench.root.querySelector("#video-prompt-input");
+  const currentPrompt = String(workbench.ui.prompt ?? "");
+  const cursor = Number(textarea?.selectionStart ?? currentPrompt.length);
+  const beforeCursor = currentPrompt.slice(0, cursor);
+  const afterCursor = currentPrompt.slice(cursor);
+  const nextToken = `【@${asset?.name ?? "素材"}】`;
+  const replacedBeforeCursor = beforeCursor.replace(/@([^\s【】]*)$/, nextToken);
+  workbench.ui.prompt = `${replacedBeforeCursor}${afterCursor}`;
+
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  const nextMentionReference = {
+    id: `mention-ref:${assetKind}:${asset?.id ?? Date.now()}`,
+    assetId: asset?.id ?? null,
+    kind: assetKind,
+    name: asset?.name ?? "引用素材",
+    token: nextToken,
+    description: asset?.description ?? "",
+    preview: asset?.previewUrl ?? asset?.preview ?? asset?.sourceUrl ?? null,
+  };
+  if (selectedStoryboard) {
+    updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+      ...generationState,
+      mentionReferences: dedupeMentionReferenceItems([
+        ...(generationState.mentionReferences ?? []),
+        nextMentionReference,
+      ]),
+    }));
+  }
 }
 
 function resolveWorkflowStatus(status) {
@@ -5491,12 +8273,11 @@ function ensureEpisodeStoryboards(workbench, episodeId) {
     return existing;
   }
 
-  const seeded = addStoryboard([]);
   workbench.ui.episodeStoryboardMap = {
     ...workbench.ui.episodeStoryboardMap,
-    [episodeId]: seeded,
+    [episodeId]: [],
   };
-  return seeded;
+  return [];
 }
 
 function replaceActiveStoryboards(workbench, nextStoryboards) {
@@ -5516,6 +8297,34 @@ function replaceActiveStoryboards(workbench, nextStoryboards) {
     ...workbench.ui.episodeStoryboardMap,
     [episodeId]: normalizedStoryboards,
   };
+}
+
+function appendCreatedShotToState(workbench, shot) {
+  if (!shot || !shot.id || !workbench.state) {
+    return;
+  }
+
+  const appendUniqueShot = (shots) => {
+    if (!Array.isArray(shots)) {
+      return [shot];
+    }
+    return shots.some((item) => item?.id === shot.id) ? shots : [...shots, shot];
+  };
+
+  const nextProjectDetail = workbench.state.projectDetail
+    ? {
+        ...workbench.state.projectDetail,
+        shots: appendUniqueShot(workbench.state.projectDetail.shots),
+      }
+    : workbench.state.projectDetail;
+
+  workbench.state = {
+    ...workbench.state,
+    shots: appendUniqueShot(workbench.state.shots),
+    projectDetail: nextProjectDetail,
+  };
+  workbench.ui.projectDetail = nextProjectDetail ?? workbench.ui.projectDetail;
+  workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
 }
 
 function removeDeletedShotFromState(workbench, shotId) {
@@ -5556,25 +8365,27 @@ async function deleteStoryboardCard(workbench, storyboardId) {
     return;
   }
 
+  const removedIndex = storyboards.findIndex((item) => item.id === storyboardId);
   const nextStoryboards = storyboards.filter((item) => item.id !== storyboardId);
+  const fallbackStoryboardId = resolveAdjacentStoryboardId(nextStoryboards, removedIndex);
   const applyLocalRemoval = () => {
     replaceActiveStoryboards(workbench, nextStoryboards);
     workbench.ui.selectedStoryboardId =
       workbench.ui.selectedStoryboardId === storyboardId
-        ? nextStoryboards[0]?.id ?? null
+        ? fallbackStoryboardId
         : workbench.ui.selectedStoryboardId;
   };
 
   if (storyboard.linkedShotId && workbench.state?.project?.id) {
     workbench.ui.busy = true;
-    workbench.ui.toast = "濠殿喗绻愮徊钘夛耿椤忓牆绀嗛柣妯肩帛閻濈喖鏌涢幒鎴烆棦闁?..";
+    workbench.ui.toast = "正在删除当前分镜...";
     render(workbench);
     try {
       await workbench.api.deleteShot({ shotId: storyboard.linkedShotId });
       applyLocalRemoval();
       removeDeletedShotFromState(workbench, storyboard.linkedShotId);
       persistWorkbenchState(workbench);
-      workbench.ui.toast = "??????????";
+      workbench.ui.toast = "已删除当前分镜。";
     } catch (error) {
       workbench.ui.toast = `删除失败：${friendlyError(error)}`;
     } finally {
@@ -5586,8 +8397,29 @@ async function deleteStoryboardCard(workbench, storyboardId) {
 
   applyLocalRemoval();
   persistWorkbenchState(workbench);
-  workbench.ui.toast = "??????????";
+  workbench.ui.toast = "已删除当前分镜。";
   render(workbench);
+}
+
+function resolveInsertedStoryboardId(storyboards, anchorStoryboardId) {
+  if (!Array.isArray(storyboards) || !storyboards.length) {
+    return null;
+  }
+  if (!anchorStoryboardId) {
+    return storyboards.at(-1)?.id ?? null;
+  }
+  const anchorIndex = storyboards.findIndex((storyboard) => storyboard.id === anchorStoryboardId);
+  if (anchorIndex < 0) {
+    return storyboards.at(-1)?.id ?? null;
+  }
+  return storyboards[anchorIndex + 1]?.id ?? storyboards.at(-1)?.id ?? null;
+}
+
+function resolveAdjacentStoryboardId(storyboards, removedIndex) {
+  if (!Array.isArray(storyboards) || !storyboards.length) {
+    return null;
+  }
+  return storyboards[Math.min(removedIndex, storyboards.length - 1)]?.id ?? storyboards.at(-1)?.id ?? null;
 }
 
 function syncSelectedStoryboardId(workbench, storyboards) {
@@ -5616,7 +8448,7 @@ function hydratePersistedWorkbenchState(workbench) {
   if (persisted.episodeStoryboardMap && typeof persisted.episodeStoryboardMap === "object") {
     workbench.ui.episodeStoryboardMap = persisted.episodeStoryboardMap;
   }
-  if (Array.isArray(persisted.customEpisodes)) {
+  if (!getDetailEpisodes(workbench.state).length && Array.isArray(persisted.customEpisodes)) {
     workbench.ui.customEpisodes = persisted.customEpisodes;
   }
   if (typeof persisted.selectedEpisodeId === "string" || persisted.selectedEpisodeId === null) {
@@ -5631,6 +8463,19 @@ function hydratePersistedWorkbenchState(workbench) {
   if (typeof persisted.projectInteriorSection === "string") {
     workbench.ui.projectInteriorSection = persisted.projectInteriorSection;
   }
+  if (typeof persisted.museScopeMode === "string") {
+    workbench.ui.museScopeMode = persisted.museScopeMode;
+  }
+  if (typeof persisted.projectAssetTab === "string") {
+    workbench.ui.projectAssetTab = persisted.projectAssetTab;
+  }
+  if (typeof persisted.selectedEpisodeAssetId === "string" || persisted.selectedEpisodeAssetId === null) {
+    workbench.ui.selectedEpisodeAssetId = persisted.selectedEpisodeAssetId;
+  }
+  if (typeof persisted.selectedEpisodeCardId === "string" || persisted.selectedEpisodeCardId === null) {
+    workbench.ui.selectedEpisodeCardId = persisted.selectedEpisodeCardId;
+  }
+  sanitizeEpisodeWorkbenchSelection(workbench, { persist: true });
 }
 
 function syncWorkbenchRouteState(workbench, hash) {
@@ -5784,21 +8629,49 @@ function getDefaultEpisodeWorkbenchId(workbench) {
   return realEpisode?.id ?? episodes[0]?.id ?? "episode-primary";
 }
 
-function persistWorkbenchState(workbench) {
-  const projectId = workbench.state?.project?.id ?? null;
-  if (!projectId) {
-    return;
+function hasPersistedEpisodeWorkbenchId(workbench, episodeId = workbench?.ui?.selectedEpisodeId ?? null) {
+  if (!episodeId || episodeId === "episode-primary") {
+    return false;
   }
+  const detailEpisodes = getDetailEpisodes(workbench?.state ?? {});
+  return detailEpisodes.some((episode) => episode?.id === episodeId);
+}
 
-  writeWorkbenchState(projectId, {
-    selectedEpisodeId: workbench.ui.selectedEpisodeId ?? null,
-    selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
-    projectPanelMode: workbench.ui.projectPanelMode ?? "library",
-    projectInteriorSection: workbench.ui.projectInteriorSection ?? "overview",
-    storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
-    episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
-    customEpisodes: Array.isArray(workbench.ui.customEpisodes) ? workbench.ui.customEpisodes : [],
-  });
+function resolvePersistedEpisodeWorkbenchId(workbench, episodeId = workbench?.ui?.selectedEpisodeId ?? null) {
+  if (hasPersistedEpisodeWorkbenchId(workbench, episodeId)) {
+    return episodeId;
+  }
+  const fallbackEpisodeId = getDefaultEpisodeWorkbenchId(workbench);
+  return fallbackEpisodeId === "episode-primary" ? null : fallbackEpisodeId;
+}
+
+export function sanitizeEpisodeWorkbenchSelection(workbench, options = {}) {
+  const previousEpisodeId = workbench?.ui?.selectedEpisodeId ?? null;
+  const resolvedEpisodeId = resolvePersistedEpisodeWorkbenchId(workbench, previousEpisodeId);
+  const shouldResetEpisodeSelection =
+    workbench?.ui?.projectPanelMode === "episode-workbench" &&
+    previousEpisodeId &&
+    previousEpisodeId !== "episode-primary" &&
+    !hasPersistedEpisodeWorkbenchId(workbench, previousEpisodeId);
+  if (!shouldResetEpisodeSelection && previousEpisodeId === resolvedEpisodeId) {
+    return false;
+  }
+  workbench.ui.selectedEpisodeId = resolvedEpisodeId;
+  if (shouldResetEpisodeSelection) {
+    workbench.ui.selectedEpisodeAssetId = null;
+    workbench.ui.selectedEpisodeCardId = null;
+    workbench.ui.selectedEpisodeAssetIds = [];
+    workbench.ui.imageGenerationResult = null;
+    workbench.ui.videoGenerationResult = null;
+  }
+  if (options.persist === true) {
+    writeWorkbenchState(workbench.state?.project?.id ?? null, buildPersistedWorkbenchStatePayload(workbench));
+  }
+  return true;
+}
+
+function persistWorkbenchState(workbench) {
+  writeWorkbenchState(workbench.state?.project?.id ?? null, buildPersistedWorkbenchStatePayload(workbench));
 }
 
 function readWorkbenchState(projectId) {
@@ -5815,7 +8688,7 @@ function readWorkbenchState(projectId) {
 }
 
 function writeWorkbenchState(projectId, payload) {
-  if (typeof window === "undefined" || !window.localStorage || !projectId) {
+  if (typeof window === "undefined" || !window.localStorage || !projectId || !payload) {
     return;
   }
 
@@ -5830,102 +8703,48 @@ function getWorkbenchStorageKey(projectId) {
   return `${WORKBENCH_STORAGE_PREFIX}:${projectId}`;
 }
 
-export async function handleTeamAssetLocalUploadFiles(workbench, category, files) {
-  const acceptedFiles = [];
-  let rejectedCount = 0;
-  let rejectMessage = "";
-
-  for (const file of files) {
-    const validation = validateTeamAssetLocalUploadFile(category, file);
-    if (!validation.ok) {
-      rejectedCount += 1;
-      rejectMessage = rejectMessage || validation.message;
-      continue;
-    }
-    acceptedFiles.push({ file, validation });
+function buildPersistedWorkbenchStatePayload(workbench) {
+  const projectId = workbench.state?.project?.id ?? null;
+  if (!projectId) {
+    return null;
   }
-
-  const currentUploads = workbench.ui.teamAssetLocalUploads ?? {};
-  const currentCategoryUploads = Array.isArray(currentUploads[category])
-    ? currentUploads[category]
-    : [];
-  const slotsLeft = Math.max(TEAM_ASSET_LOCAL_UPLOAD_LIMIT - currentCategoryUploads.length, 0);
-  const filesWithinLimit = acceptedFiles.slice(0, slotsLeft);
-  const skippedForLimitCount = Math.max(acceptedFiles.length - filesWithinLimit.length, 0);
-
-  if (!filesWithinLimit.length) {
-    workbench.ui.toast = rejectMessage || "请选择支持格式的文件。";
-    if (acceptedFiles.length && skippedForLimitCount > 0) {
-      workbench.ui.toast = `当前分类本地上传最多保留 ${TEAM_ASSET_LOCAL_UPLOAD_LIMIT} 个文件，${skippedForLimitCount} 个文件已跳过。`;
-    }
-    render(workbench);
-    return;
-  }
-
-  const nextUploads = await Promise.all(
-    filesWithinLimit.map(({ file, validation }) =>
-      buildTeamAssetLocalUploadRecord(category, file, validation),
-    ),
-  );
-
-  workbench.ui.teamAssetLocalUploads = {
-    character: [],
-    scene: [],
-    prop: [],
-    voice: [],
-    ...currentUploads,
-    [category]: [...currentCategoryUploads, ...nextUploads],
-  };
-
-  const label = category === "voice" ? "音频" : "图片";
-  const skippedCount = rejectedCount + skippedForLimitCount;
-  workbench.ui.toast =
-    skippedCount > 0
-      ? `已添加 ${nextUploads.length} 个本地${label}预览，${skippedCount} 个文件已跳过。`
-      : `已添加 ${nextUploads.length} 个本地${label}预览。`;
-  render(workbench, { preserveLibraryScroll: true });
-}
-
-async function buildTeamAssetLocalUploadRecord(category, file, validation) {
-  const mediaType = validation.mediaType;
-  const previewUrl =
-    mediaType === "audio" && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
-      ? URL.createObjectURL(file)
-      : await readFileAsDataUrl(file);
-
+  const detailEpisodes = getDetailEpisodes(workbench.state);
+  const selectedEpisodeId = hasPersistedEpisodeWorkbenchId(workbench)
+    ? (workbench.ui.selectedEpisodeId ?? null)
+    : resolvePersistedEpisodeWorkbenchId(workbench);
   return {
-    id: `team-local-${category}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: file.name,
-    fileName: file.name,
-    category,
-    previewUrl,
-    mimeType: file.type || validation.mimeType || validation.extension?.toUpperCase() || "",
-    extension: validation.extension,
-    sizeLabel: formatFileSizeLabel(file.size),
-    createdAt: Date.now(),
+    selectedEpisodeId,
+    selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
+    selectedEpisodeAssetId: workbench.ui.selectedEpisodeAssetId ?? null,
+    selectedEpisodeCardId: workbench.ui.selectedEpisodeCardId ?? null,
+    projectPanelMode: workbench.ui.projectPanelMode ?? "library",
+    projectInteriorSection: workbench.ui.projectInteriorSection ?? "overview",
+    museScopeMode: workbench.ui.museScopeMode ?? "storyboard",
+    projectAssetTab: workbench.ui.projectAssetTab ?? "character",
+    storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
+    episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
+    customEpisodes: detailEpisodes.length
+      ? detailEpisodes
+      : (Array.isArray(workbench.ui.customEpisodes) ? workbench.ui.customEpisodes : []),
   };
 }
 
-function formatFileSizeLabel(size) {
-  const bytes = Number(size ?? 0);
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "";
-  }
-
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const formatted =
-    unitIndex === 0
-      ? String(Math.round(value))
-      : (value >= 10 ? String(Math.round(value)) : value.toFixed(1)).replace(/\.0$/, "");
-  return `${formatted} ${units[unitIndex]}`;
+function syncSelectedEpisodeAssetForCurrentTab(workbench) {
+  const assetTab = workbench.ui.projectAssetTab ?? "character";
+  const assetEntries =
+    assetTab === "other"
+      ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
+      : workbench.ui.importedAssets?.[assetTab] ?? [];
+  const selectedId =
+    assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeCardId)?.id ??
+    assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeAssetId)?.id ??
+    assetEntries[0]?.id ??
+    null;
+  workbench.ui.selectedEpisodeCardId = selectedId;
+  workbench.ui.selectedEpisodeAssetId = selectedId;
+  const validIds = new Set(assetEntries.map((item) => item.id));
+  workbench.ui.selectedEpisodeAssetIds = (workbench.ui.selectedEpisodeAssetIds ?? []).filter((id) => validIds.has(id));
+  return selectedId;
 }
 
 async function handleAssetImportFiles(workbench, files) {
@@ -6050,7 +8869,7 @@ async function handleLocalStoryboardImageFile(workbench, storyboardId, file) {
   if (storyboard?.linkedShotId) {
     let importedVersionId = null;
     let importSucceeded = false;
-    await runAction(workbench, "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬潙娅ч梺宕囩帛閺屻劑鍩為幋锔藉亹閺夊牜鍋勯崢锟犳⒑缂佹ê濮囬柨鏇ㄤ邯瀵鈽夐姀鐘殿唺闂佺懓顕崕鎰涢敃鍌涒拺闁告繂瀚ˉ婊堟煙閾忣個顏堟偩?..", async () => {
+    await runAction(workbench, "正在同步分镜图片...", async () => {
       const bound = await bindEpisodeUploadIfAvailable(workbench, upload, {
         targetType: "storyboard",
         targetId: activeStoryboardId,
@@ -6124,7 +8943,7 @@ async function handleLocalStoryboardImageFile(workbench, storyboardId, file) {
     };
   });
 
-  workbench.ui.toast = `??? ${file.name} ??????`;
+  workbench.ui.toast = `已上传 ${file.name}，可继续作为分镜图片使用。`;
   render(workbench);
 }
 
@@ -6260,7 +9079,7 @@ async function startStoryboardVideoUpload(workbench, storyboardId, file) {
   hydrateStoryboardVideoPreview(workbench, storyboardId, videoId, resolvedUploadUrl);
 
   if (storyboard?.linkedShotId) {
-    await runAction(workbench, "婵犵數濮甸鏍窗濡ゅ啯宕查柟閭﹀枛缁躲倝鏌﹀Ο渚闁肩増瀵ч妵鍕疀閹炬潙娅ч梺宕囩帛閺屻劑鍩為幋锔藉亹閺夊牜鍋勯崢锟犳⒑缂佹ê濮囬柨鏇ㄤ邯瀵鈽夐姀鐘殿唺闂佺懓顕崕鎰涢敃鍌涒拺闁告繂瀚ˉ婊堟煙閾忣偄濮嶆鐐差樀楠炴﹢顢欓悡搴も偓鍨攽閻愭潙鐏卞瀵割焾閳?..", async () => {
+    await runAction(workbench, "正在同步分镜视频...", async () => {
       const bound = await bindEpisodeUploadIfAvailable(workbench, upload, {
         targetType: "storyboard",
         targetId: storyboardId,
@@ -6432,7 +9251,7 @@ async function selectStoryboardUploadedVideo(workbench, storyboardId, videoId) {
   };
 
   if (storyboard?.linkedShotId) {
-    await runAction(workbench, "姝ｅ湪璁剧疆鍒嗛暅瑙嗛...", async () => {
+    await runAction(workbench, "正在设置分镜视频...", async () => {
       await workbench.api.updateShot({
         shotId: storyboard.linkedShotId,
         currentVideoAssetVersionId: videoId,
@@ -6463,7 +9282,7 @@ async function setStoryboardVideoResult(workbench, storyboardId, videoId) {
     isUuidLike(storyboardId) &&
     isUuidLike(videoId)
   ) {
-    await runAction(workbench, "姝ｅ湪璁剧疆鍒嗛暅瑙嗛...", async () => {
+    await runAction(workbench, "正在设置分镜视频...", async () => {
       const result = await workbench.api.setStoryboardVideo(
         workbench.ui.selectedEpisodeId,
         storyboardId,
@@ -6562,23 +9381,86 @@ async function setStoryboardImageResult(workbench, storyboardId, imageId) {
 }
 
 async function createEpisodeExportPreview(workbench) {
+  return createEpisodeExportPreviewWithKind(workbench, "mp4");
+}
+
+async function createEpisodeExportPreviewWithKind(workbench, exportKind = "mp4") {
+  const fallbackPreview = async () => {
+    const preview = await workbench.api.previewExport();
+    return {
+      ...preview,
+      export: {
+        ...(preview?.export ?? {}),
+        kind: exportKind,
+      },
+    };
+  };
   if (
     isRealEpisodeWorkbench(workbench) &&
     typeof workbench.api.createEpisodeExportTask === "function"
   ) {
     const storyboards = getActiveStoryboards(workbench);
-    const video =
+    const hasIncompleteStoryboard = storyboards.some((storyboard) => {
+      const hasVideo =
+        Boolean(storyboard?.previewVideo) ||
+        Boolean(storyboard?.currentVideoAssetVersionId) ||
+        (storyboard?.uploadedVideos ?? []).some((item) => item?.status === "ready" && item?.src);
+      return !hasVideo;
+    });
+    if (hasIncompleteStoryboard) {
+      const error = new Error("还有分镜未完成，暂时无法导出");
+      error.code = "storyboard_export_blocked";
+      throw error;
+    }
+    const exportableVideos = storyboards.flatMap((storyboard) =>
+      (storyboard.uploadedVideos ?? []).filter(
+        (item) =>
+          item?.status === "ready" &&
+          (item.storageObjectId || item.assetVersionId || isUuidLike(item.id)),
+      ),
+    );
+    const selectedVideo =
       storyboards
-        .flatMap((storyboard) => storyboard.uploadedVideos ?? [])
-        .find((item) => isUuidLike(item.id) && (item.storageObjectId || item.src)) ??
+        .map((storyboard) =>
+          (storyboard.uploadedVideos ?? []).find(
+            (item) =>
+              item?.status === "ready" &&
+              item.id === (storyboard.selectedUploadedVideoId ?? storyboard.currentVideoAssetVersionId) &&
+              (item.storageObjectId || item.assetVersionId || isUuidLike(item.id)),
+            ) ?? null,
+        )
+        .find(Boolean) ?? null;
+    const latestGeneratedVideo =
+      (workbench.ui.videoGenerationResult?.fixedVideos ?? []).find(
+        (item) => item && (item.assetVersionId || item.storageObjectId || isUuidLike(item.id)) && (item.src || item.url),
+      ) ??
+      (workbench.ui.videoGenerationResult?.result?.videoUrl
+        ? {
+            id:
+              workbench.ui.videoGenerationResult?.result?.assetVersionId ??
+              workbench.ui.videoGenerationResult?.result?.storageObjectId ??
+              workbench.ui.videoGenerationResult?.taskId ??
+              null,
+            assetVersionId: workbench.ui.videoGenerationResult?.result?.assetVersionId ?? null,
+            storageObjectId: workbench.ui.videoGenerationResult?.result?.storageObjectId ?? null,
+            src: workbench.ui.videoGenerationResult?.result?.videoUrl ?? null,
+            url: workbench.ui.videoGenerationResult?.result?.videoUrl ?? null,
+          }
+        : null);
+    const exportCandidate =
+      latestGeneratedVideo ??
+      selectedVideo ??
+      exportableVideos.find((item) => item.storageObjectId || item.assetVersionId || isUuidLike(item.id)) ??
       null;
-    if (!video) {
-      workbench.ui.toast = "当前没有可导出的原视频。";
-      return null;
+    if (!exportCandidate) {
+      const error = new Error("还有分镜未完成，暂时无法导出");
+      error.code = "storyboard_export_blocked";
+      throw error;
     }
     const result = await workbench.api.createEpisodeExportTask(workbench.ui.selectedEpisodeId, {
-      assetVersionId: video.id,
-      storageObjectId: video.storageObjectId ?? null,
+      assetVersionId: exportCandidate.assetVersionId ?? exportCandidate.id,
+      storageObjectId: exportCandidate.storageObjectId ?? null,
+      exportType: exportKind,
     });
     return {
       exportRecord: result?.exportTask ?? null,
@@ -6587,10 +9469,28 @@ async function createEpisodeExportPreview(workbench) {
         signedUrl: result?.exportTask?.downloadUrl ?? null,
         sourceUrl: result?.exportTask?.sourceUrl ?? null,
         workflowId: result?.exportTask?.workflowId ?? null,
+        kind: exportKind,
       },
     };
   }
-  return workbench.api.previewExport();
+  return fallbackPreview();
+}
+
+function resolveExportPreviewDownloadUrl(exportPreviewResult) {
+  return (
+    exportPreviewResult?.platform?.signedUrl ??
+    exportPreviewResult?.export?.signedUrl ??
+    exportPreviewResult?.export?.url ??
+    ""
+  );
+}
+
+function resolveEpisodeExportModalError(error) {
+  const code = String(error?.code ?? error?.errorCode ?? "");
+  if (code === "storyboard_export_blocked" || code === "storyboard_media_incomplete") {
+    return "请确保所有分镜都已生成图片或者视频";
+  }
+  return friendlyError(error);
 }
 
 async function clearStoryboardUploadedVideoSelection(workbench, storyboardId) {
@@ -6623,7 +9523,7 @@ async function clearStoryboardUploadedVideoSelection(workbench, storyboardId) {
   };
 
   if (storyboard.linkedShotId) {
-    await runAction(workbench, "姝ｅ湪鍙栨秷鍒嗛暅瑙嗛閫夋嫨...", async () => {
+    await runAction(workbench, "正在取消分镜视频选择...", async () => {
       await workbench.api.updateShot({
         shotId: storyboard.linkedShotId,
         currentVideoAssetVersionId: null,
@@ -6672,34 +9572,53 @@ async function ensureStoryboardShot(workbench, storyboardId) {
   if (workbench.ui.selectedStoryboardId === storyboardId && result.shot?.id) {
     workbench.ui.selectedStoryboardId = `storyboard-${result.shot.id}`;
   }
-  if (result.shot) {
-    workbench.state = {
-      ...(workbench.state ?? {}),
-      shots: [...(workbench.state?.shots ?? []), result.shot],
-    };
-  }
+  appendCreatedShotToState(workbench, result.shot);
   return getActiveStoryboards(workbench).find((item) => item.linkedShotId === result.shot?.id) ?? storyboard;
 }
 
 function applyPostRenderEffects(workbench) {
   const episodeWorkbenchScrollTarget = workbench.ui.episodeWorkbenchScrollTarget ?? null;
+  const episodeWorkbenchConversationScrollMode = workbench.ui.episodeWorkbenchConversationScrollMode ?? null;
   if (
     episodeWorkbenchScrollTarget &&
     workbench.ui.projectPanelMode === "episode-workbench" &&
     (workbench.ui.museScopeMode ?? "assets") === "assets"
   ) {
-    const scrollContainer = workbench.root.querySelector(".episode-replica-asset-sections");
+    const scrollContainer = workbench.root.querySelector(".episode-replica-left");
     const targetSection = workbench.root.querySelector(
       `[data-asset-section="${escapeAttributeSelector(episodeWorkbenchScrollTarget)}"]`,
     );
     if (scrollContainer && targetSection) {
-      const offsetTop = targetSection.offsetTop - scrollContainer.offsetTop;
+      const stickyHead = workbench.root.querySelector(".episode-replica-asset-toolbar-head");
+      const stickyOffset = stickyHead?.getBoundingClientRect().height ?? 0;
+      const offsetTop =
+        targetSection.getBoundingClientRect().top -
+        scrollContainer.getBoundingClientRect().top +
+        scrollContainer.scrollTop -
+        stickyOffset;
       scrollContainer.scrollTo({
         top: Math.max(0, offsetTop),
         behavior: "smooth",
       });
     }
     workbench.ui.episodeWorkbenchScrollTarget = null;
+  }
+
+  if (
+    (episodeWorkbenchConversationScrollMode === "latest" || episodeWorkbenchConversationScrollMode === "bottom") &&
+    workbench.ui.projectPanelMode === "episode-workbench" &&
+    (workbench.ui.museScopeMode ?? "assets") === "assets"
+  ) {
+    const conversationContainer = workbench.root.querySelector(".episode-replica-stage-body");
+    const latestConversationEntry = conversationContainer?.querySelector(
+      ".episode-replica-asset-conversation-entry:last-of-type",
+    );
+    if (episodeWorkbenchConversationScrollMode === "latest" && latestConversationEntry) {
+      latestConversationEntry.scrollIntoView({ block: "end", inline: "nearest", behavior: "smooth" });
+    } else if (conversationContainer) {
+      conversationContainer.scrollTo({ top: conversationContainer.scrollHeight, behavior: "smooth" });
+    }
+    workbench.ui.episodeWorkbenchConversationScrollMode = null;
   }
 
   const pendingIds = workbench.ui.assetLibraryPendingFocusAssetIds ?? [];
@@ -6721,6 +9640,60 @@ function applyPostRenderEffects(workbench) {
   focusTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
   focusTarget.focus({ preventScroll: true });
   workbench.ui.assetLibraryPendingFocusAssetIds = [];
+}
+
+function disposeHomeLiquidEther(workbench) {
+  workbench.homeLiquidEtherToken = Symbol("liquid-ether-disposed");
+  if (!workbench.homeLiquidEther) {
+    return;
+  }
+  workbench.homeLiquidEther.dispose();
+  workbench.homeLiquidEther = null;
+}
+
+function syncHomeLiquidEther(workbench) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const mount = workbench.root.querySelector("[data-liquid-ether-root]");
+  if (!mount) {
+    disposeHomeLiquidEther(workbench);
+    return;
+  }
+
+  const token = Symbol("liquid-ether-mount");
+  workbench.homeLiquidEtherToken = token;
+
+  import("./liquid-ether.js?liquid-ether=3")
+    .then(({ mountLiquidEther }) => {
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        return;
+      }
+      const instance = mountLiquidEther(mount, {
+        colors: ["#5B21B6", "#7C3AED", "#A855F7", "#E879F9", "#67E8F9"],
+        mouseForce: 18,
+        cursorSize: 120,
+        resolution: 0.42,
+        isViscous: false,
+        iterationsPoisson: 28,
+        autoDemo: true,
+        autoSpeed: 0.42,
+        autoIntensity: 2.35,
+        autoResumeDelay: 1200,
+        autoRampDuration: 0.7,
+      });
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        instance.dispose();
+        return;
+      }
+      mount.dataset.liquidEtherState = "ready";
+      workbench.homeLiquidEther = instance;
+    })
+    .catch((error) => {
+      mount.dataset.liquidEtherState = "failed";
+      console.warn("LiquidEther failed to mount", error);
+    });
 }
 
 function updateStoryboardVideoById(workbench, storyboardId, videoId, updater) {
@@ -6917,44 +9890,73 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
   const currentAssets = assetKind === "other"
     ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
     : workbench.ui.importedAssets?.[assetKind] ?? [];
-  const targetAsset = currentAssets.find((item) => item.id === assetId) ?? null;
+  const targetAsset =
+    currentAssets.find((item) => matchesAssetRecordId(item, assetId)) ??
+    collectEpisodeAssetCandidates(workbench, assetKind).find((item) => matchesAssetRecordId(item, assetId)) ??
+    null;
   if (!targetAsset) {
     return;
   }
 
-  const applyLocal = () => {
-    if (assetKind === "other") {
-      const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
-      workbench.ui.importedAssets = {
-        ...(workbench.ui.importedAssets ?? {}),
-        other: {
-          ...(workbench.ui.importedAssets?.other ?? { image: [], video: [] }),
-          [mediaType]: (workbench.ui.importedAssets?.other?.[mediaType] ?? []).map((item) =>
-            item.id === assetId ? { ...item, description } : item,
-          ),
-        },
-      };
-      return;
-    }
-    workbench.ui.importedAssets = {
-      ...(workbench.ui.importedAssets ?? {}),
-      [assetKind]: (workbench.ui.importedAssets?.[assetKind] ?? []).map((item) =>
-        item.id === assetId ? { ...item, description } : item,
-      ),
-    };
-  };
+  syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, description);
 
-  applyLocal();
-
-  if (targetAsset.assetId || isUuidLike(assetId)) {
+  if (
+    isRealEpisodeWorkbench(workbench) &&
+    typeof workbench.api.updateEpisodeAsset === "function" &&
+    workbench.ui.selectedEpisodeId &&
+    (targetAsset.assetId || isUuidLike(assetId))
+  ) {
     try {
-      workbench.ui.toast = "请先选择要上传的附件。";
-      workbench.ui.toast = "请先选择要上传的附件。";
+      await workbench.api.updateEpisodeAsset(
+        workbench.ui.selectedEpisodeId,
+        targetAsset.assetId ?? assetId,
+        { description },
+      );
     } catch (_error) {
-      workbench.ui.toast = "??????????????";
+      workbench.ui.toast = "资产描述保存失败。";
     }
-    workbench.ui.toast = "请先选择要上传的附件。";
-    workbench.ui.toast = "请先选择要上传的附件。";
+  }
+
+  render(workbench);
+}
+
+async function saveStoryboardDescriptionInline(workbench, storyboardId, value) {
+  const description = String(value ?? "").trim();
+  const storyboards = getActiveStoryboards(workbench);
+  const targetStoryboard = storyboards.find((item) => item.id === storyboardId) ?? null;
+  if (!targetStoryboard) {
+    return;
+  }
+  if (String(targetStoryboard.description ?? "").trim() === description) {
+    return;
+  }
+
+  replaceActiveStoryboards(
+    workbench,
+    storyboards.map((storyboard) =>
+      storyboard.id === storyboardId
+        ? {
+            ...storyboard,
+            description,
+          }
+        : storyboard,
+    ),
+  );
+
+  if (
+    isRealEpisodeWorkbench(workbench) &&
+    typeof workbench.api.updateShot === "function" &&
+    targetStoryboard.linkedShotId
+  ) {
+    try {
+      await workbench.api.updateShot({
+        shotId: targetStoryboard.linkedShotId,
+        description,
+      });
+      return;
+    } catch (_error) {
+      workbench.ui.toast = "分镜内容保存失败。";
+    }
   }
 
   render(workbench);
@@ -6963,7 +9965,7 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
 function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files) {
   void runAction(
     workbench,
-    `????${attachmentType === "audio" ? "??" : "??"}??...`,
+    `正在上传${attachmentType === "audio" ? "音频" : "图片"}附件...`,
     async () => {
       const nextItems = [];
       for (const [index, file] of files.entries()) {
@@ -7002,7 +10004,7 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files)
           (id) => !nextItems.some((item) => item.id === id),
         ),
       ];
-      workbench.ui.toast = `??? ${nextItems.length} ?${attachmentType === "audio" ? "??" : "??"}???`;
+      workbench.ui.toast = `已上传 ${nextItems.length} 个${attachmentType === "audio" ? "音频" : "图片"}附件。`;
     },
   );
 }
@@ -7041,13 +10043,13 @@ function prepareAssetLibraryReturn(workbench, { assetKind, mediaType, assetIds, 
   workbench.ui.assetLibraryHighlightMediaType = assetKind === "other" ? mediaType : "image";
   workbench.ui.assetLibraryHighlightMessage =
     count > 0
-      ? `${label}??? ${count} ???????????`
-      : `??? ${label} ????`;
+      ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。`
+      : `已返回${label}库。`;
   workbench.ui.assetLibraryPendingFocusAssetIds = normalizedIds;
   workbench.ui.toast =
     count > 0
-      ? `${label}??? ${count} ???????????`
-      : `??? ${label} ????`;
+      ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。`
+      : `已返回${label}库。`;
 }
 
 function clearAssetLibraryReturnState(workbench) {
@@ -7060,20 +10062,46 @@ function clearAssetLibraryReturnState(workbench) {
 
 function getAssetLibraryKindLabel(assetKind, mediaType = "image") {
   if (assetKind === "other") {
-    return mediaType === "video" ? "????" : "????";
+    return mediaType === "video" ? "视频素材" : "图片素材";
   }
   return (
     {
-      character: "??",
-      scene: "??",
-      prop: "??",
-    }[assetKind] ?? "??"
+      character: "角色",
+      scene: "场景",
+      prop: "道具",
+    }[assetKind] ?? "素材"
   );
+}
+
+function inferEpisodeVoiceSource(asset) {
+  const explicit = String(asset?.voiceSource ?? "").trim();
+  if (explicit === "system" || explicit === "custom") {
+    return explicit;
+  }
+  const voiceId = String(asset?.voiceId ?? "").trim().toLowerCase();
+  if (voiceId.startsWith("system-")) {
+    return "system";
+  }
+  if (voiceId.startsWith("custom-")) {
+    return "custom";
+  }
+  const voiceName = String(asset?.voiceName ?? "").trim();
+  if (voiceName && voiceName.includes("/")) {
+    return "system";
+  }
+  return "custom";
 }
 
 function triggerBrowserDownload(url, fileName) {
   if (typeof document === "undefined" || !url) {
     return;
+  }
+  if (typeof window !== "undefined") {
+    window.__lastDownloadTrigger = {
+      url,
+      fileName: fileName || "",
+      triggeredAt: Date.now(),
+    };
   }
   const link = document.createElement("a");
   link.href = url;
@@ -7087,6 +10115,9 @@ function triggerBrowserDownload(url, fileName) {
 
 function normalizeDownloadName(baseName, url) {
   const normalizedBaseName = String(baseName ?? "").trim() || "generated-asset";
+  if (String(url ?? "").startsWith(".")) {
+    return `${normalizedBaseName}${url}`;
+  }
   const extensionMatch = String(url ?? "").match(/\.([a-z0-9]+)(?:[?#]|$)/i);
   const extension = extensionMatch?.[1] ? `.${extensionMatch[1]}` : "";
   return `${normalizedBaseName}${extension}`;
@@ -7163,6 +10194,219 @@ function triggerAssetDownload(url, fileName, extension) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+function matchesAssetRecordId(record, assetId) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return false;
+  }
+  return [record?.id, record?.assetId].some((value) => String(value ?? "").trim() === normalizedAssetId);
+}
+
+function updateAssetRecordBucket(bucket, assetId, updater) {
+  if (Array.isArray(bucket)) {
+    let changed = false;
+    const nextBucket = bucket.map((item) => {
+      if (!matchesAssetRecordId(item, assetId)) {
+        return item;
+      }
+      changed = true;
+      return updater(item);
+    });
+    return changed ? nextBucket : bucket;
+  }
+  if (bucket && typeof bucket === "object" && Array.isArray(bucket.items)) {
+    const nextItems = updateAssetRecordBucket(bucket.items, assetId, updater);
+    return nextItems === bucket.items ? bucket : { ...bucket, items: nextItems };
+  }
+  return bucket;
+}
+
+export function syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, description) {
+  const applyToAssetRecord = (record) => {
+    const nextLatestVersionMetadata =
+      record?.latestVersion?.metadata && typeof record.latestVersion.metadata === "object"
+        ? { ...record.latestVersion.metadata, description }
+        : record?.latestVersion
+          ? { description }
+          : record?.latestVersion?.metadata;
+    return {
+      ...record,
+      description,
+      latestVersion: record?.latestVersion
+        ? {
+            ...record.latestVersion,
+            metadata: nextLatestVersionMetadata,
+          }
+        : record?.latestVersion,
+    };
+  };
+
+  const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  if (assetKind === "other") {
+    const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
+    nextImportedAssets.other[mediaType] = updateAssetRecordBucket(
+      nextImportedAssets.other[mediaType],
+      assetId,
+      applyToAssetRecord,
+    );
+  } else {
+    nextImportedAssets[assetKind] = updateAssetRecordBucket(
+      nextImportedAssets[assetKind],
+      assetId,
+      applyToAssetRecord,
+    );
+  }
+  workbench.ui.importedAssets = nextImportedAssets;
+
+  const previousContext = workbench.ui.episodeWorkbenchContext;
+  if (previousContext && typeof previousContext === "object") {
+    const nextContext = structuredClone(previousContext);
+    const contextRoots = [nextContext, nextContext?.data].filter((value) => value && typeof value === "object");
+    for (const root of contextRoots) {
+      for (const bucketName of ["assetsByType", "assets", "episodeAssets"]) {
+        const assetsByType = root?.[bucketName];
+        if (!assetsByType || typeof assetsByType !== "object") {
+          continue;
+        }
+        for (const kind of ["character", "characters", "role", "roles", "scene", "scenes", "prop", "props"]) {
+          if (kind in assetsByType) {
+            assetsByType[kind] = updateAssetRecordBucket(assetsByType[kind], assetId, applyToAssetRecord);
+          }
+        }
+      }
+    }
+    workbench.ui.episodeWorkbenchContext = nextContext;
+  }
+
+  const previousProjectDetail = workbench.state?.projectDetail ?? workbench.ui.projectDetail ?? null;
+  if (previousProjectDetail?.assetsByType && typeof previousProjectDetail.assetsByType === "object") {
+    const nextAssetsByType = {
+      ...previousProjectDetail.assetsByType,
+      character: updateAssetRecordBucket(previousProjectDetail.assetsByType.character, assetId, applyToAssetRecord),
+      scene: updateAssetRecordBucket(previousProjectDetail.assetsByType.scene, assetId, applyToAssetRecord),
+      prop: updateAssetRecordBucket(previousProjectDetail.assetsByType.prop, assetId, applyToAssetRecord),
+    };
+    const nextProjectDetail = {
+      ...previousProjectDetail,
+      assetsByType: nextAssetsByType,
+    };
+    workbench.state = {
+      ...(workbench.state ?? {}),
+      projectDetail: nextProjectDetail,
+    };
+    workbench.ui.projectDetail = nextProjectDetail;
+  }
+
+  const draft = workbench.ui.assetPromptDraft;
+  if (draft?.selectionContext?.selectedAssetId && String(draft.selectionContext.selectedAssetId) === String(assetId)) {
+    workbench.ui.assetPromptDraft = {
+      ...draft,
+      selectionContext: {
+        ...draft.selectionContext,
+        selectedAssetDescription: description,
+      },
+      quickReferenceItems: (draft.quickReferenceItems ?? []).map((item) =>
+        matchesAssetRecordId(item, assetId) ? { ...item, description, promptPreview: description } : item,
+      ),
+      mentionReferences: (draft.mentionReferences ?? []).map((item) =>
+        matchesAssetRecordId(item, assetId) ? { ...item, description, promptPreview: description } : item,
+      ),
+    };
+  }
+}
+
+function syncEpisodeAssetFixedImageState(workbench, assetId, payload = {}) {
+  const previewUrl = String(payload.previewUrl ?? "").trim();
+  if (!assetId || !previewUrl) {
+    return;
+  }
+  const sourceUrl = String(payload.sourceUrl ?? previewUrl).trim() || previewUrl;
+  const downloadUrl = String(payload.downloadUrl ?? sourceUrl).trim() || sourceUrl;
+  const fixedImageFileId = payload.fixedImageFileId ?? payload.assetVersionId ?? null;
+  const fixedImageStorageObjectId = payload.fixedImageStorageObjectId ?? payload.storageObjectId ?? null;
+  const mimeType = payload.mimeType ?? null;
+  const updatedAt = payload.updatedAt ?? null;
+  const applyToAssetRecord = (record) => {
+    const nextLatestVersionMetadata =
+      record?.latestVersion?.metadata && typeof record.latestVersion.metadata === "object"
+        ? { ...record.latestVersion.metadata }
+        : {};
+    nextLatestVersionMetadata.previewUrl = previewUrl;
+    nextLatestVersionMetadata.sourceUrl = sourceUrl;
+    nextLatestVersionMetadata.downloadUrl = downloadUrl;
+    nextLatestVersionMetadata.fixedImageUrl = previewUrl;
+    nextLatestVersionMetadata.fixedImageFileId = fixedImageFileId;
+    nextLatestVersionMetadata.fixedImageStorageObjectId = fixedImageStorageObjectId;
+    if (mimeType) {
+      nextLatestVersionMetadata.mimeType = mimeType;
+    }
+    return {
+      ...record,
+      preview: previewUrl,
+      previewUrl,
+      sourceUrl,
+      downloadUrl,
+      updatedAt: updatedAt ?? record?.updatedAt ?? null,
+      fixedImageFileId: fixedImageFileId ?? record?.fixedImageFileId ?? null,
+      fixedImageStorageObjectId: fixedImageStorageObjectId ?? record?.fixedImageStorageObjectId ?? null,
+      fixedImageUrl: previewUrl,
+      latestVersion: record?.latestVersion
+        ? {
+            ...record.latestVersion,
+            storageObjectId: fixedImageStorageObjectId ?? record.latestVersion.storageObjectId ?? null,
+            previewUrl,
+            metadata: nextLatestVersionMetadata,
+          }
+        : record?.latestVersion,
+    };
+  };
+
+  const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  for (const kind of ["character", "scene", "prop"]) {
+    nextImportedAssets[kind] = updateAssetRecordBucket(nextImportedAssets[kind], assetId, applyToAssetRecord);
+  }
+  workbench.ui.importedAssets = nextImportedAssets;
+
+  const previousContext = workbench.ui.episodeWorkbenchContext;
+  if (previousContext && typeof previousContext === "object") {
+    const nextContext = structuredClone(previousContext);
+    const contextRoots = [nextContext, nextContext?.data].filter((value) => value && typeof value === "object");
+    for (const root of contextRoots) {
+      for (const bucketName of ["assetsByType", "assets", "episodeAssets"]) {
+        const assetsByType = root?.[bucketName];
+        if (!assetsByType || typeof assetsByType !== "object") {
+          continue;
+        }
+        for (const kind of ["character", "characters", "role", "roles", "scene", "scenes", "prop", "props"]) {
+          if (kind in assetsByType) {
+            assetsByType[kind] = updateAssetRecordBucket(assetsByType[kind], assetId, applyToAssetRecord);
+          }
+        }
+      }
+    }
+    workbench.ui.episodeWorkbenchContext = nextContext;
+  }
+
+  const previousProjectDetail = workbench.state?.projectDetail ?? workbench.ui.projectDetail ?? null;
+  if (previousProjectDetail?.assetsByType && typeof previousProjectDetail.assetsByType === "object") {
+    const nextAssetsByType = {
+      ...previousProjectDetail.assetsByType,
+      character: updateAssetRecordBucket(previousProjectDetail.assetsByType.character, assetId, applyToAssetRecord),
+      scene: updateAssetRecordBucket(previousProjectDetail.assetsByType.scene, assetId, applyToAssetRecord),
+      prop: updateAssetRecordBucket(previousProjectDetail.assetsByType.prop, assetId, applyToAssetRecord),
+    };
+    const nextProjectDetail = {
+      ...previousProjectDetail,
+      assetsByType: nextAssetsByType,
+    };
+    workbench.state = {
+      ...(workbench.state ?? {}),
+      projectDetail: nextProjectDetail,
+    };
+    workbench.ui.projectDetail = nextProjectDetail;
+  }
 }
 
 function findStoryboardImage(storyboard, imageId = "") {
@@ -7252,7 +10496,7 @@ function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const image = findStoryboardImage(storyboard, imageId);
   if (!image?.src || !image?.id) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "当前分镜没有可下载的图片。";
     return;
   }
 
@@ -7261,14 +10505,14 @@ function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
     stripFileExtension(image.fileName || storyboard?.title || "storyboard-image"),
     inferFileExtension(image.fileName || image.src, "png"),
   );
-  workbench.ui.toast = `????? ${image.fileName || storyboard.uploadedImageName || "????"}?`;
+  workbench.ui.toast = `已开始下载 ${image.fileName || storyboard.uploadedImageName || "分镜图片"}。`;
 }
 
 function legacyDeleteStoryboardImage(workbench, storyboardId, imageId = "") {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const image = findStoryboardImage(storyboard, imageId);
   if (!image?.src || !image?.id) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "当前分镜没有可删除的图片。";
     return;
   }
 
@@ -7289,14 +10533,14 @@ function legacyDeleteStoryboardImage(workbench, storyboardId, imageId = "") {
     imageReference: state.imageReference?.url === removedUrl ? null : state.imageReference,
   }));
   clearStoryboardImageFromState(workbench, storyboard?.linkedShotId ?? null);
-  workbench.ui.toast = "??????????";
+  workbench.ui.toast = "已移除当前分镜图片。";
 }
 
 function downloadStoryboardVideo(workbench, storyboardId, videoId) {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const video = (storyboard?.uploadedVideos ?? []).find((item) => item.id === videoId && item.src);
   if (!video?.src) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "当前分镜没有可下载的视频。";
     return;
   }
 
@@ -7305,7 +10549,7 @@ function downloadStoryboardVideo(workbench, storyboardId, videoId) {
     stripFileExtension(video.fileName || `${storyboard?.title || "storyboard-video"}`),
     inferFileExtension(video.fileName || video.src, "mp4"),
   );
-  workbench.ui.toast = `????? ${video.fileName || "????"}?`;
+  workbench.ui.toast = `已开始下载 ${video.fileName || "分镜视频"}。`;
 }
 
 function legacyDeleteStoryboardVideo(workbench, storyboardId, videoId) {
@@ -7316,13 +10560,13 @@ function legacyDeleteStoryboardVideo(workbench, storyboardId, videoId) {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const video = (storyboard?.uploadedVideos ?? []).find((item) => item.id === videoId);
   if (!video) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "当前分镜没有可删除的视频。";
     return;
   }
 
   cancelStoryboardVideoUpload(workbench, storyboardId, videoId);
   clearStoryboardVideoFromState(workbench, storyboard?.linkedShotId ?? null, videoId);
-  workbench.ui.toast = `??? ${video.fileName || "????"}?`;
+  workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
 }
 
 function clearStoryboardImageFromState(workbench, linkedShotId, imageId, nextSelectedImage = null) {
@@ -7405,14 +10649,14 @@ async function deleteStoryboardVideoStable(workbench, storyboardId, videoId) {
 
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   if (isStoryboardVideoProtected(storyboard, videoId)) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "当前视频正在使用中，无法直接删除。";
     render(workbench);
     return;
   }
 
   const video = (storyboard?.uploadedVideos ?? []).find((item) => item.id === videoId);
   if (!video) {
-    workbench.ui.toast = "?????????????";
+    workbench.ui.toast = "未找到要删除的视频。";
     render(workbench);
     return;
   }
@@ -7447,7 +10691,7 @@ async function deleteStoryboardVideoStable(workbench, storyboardId, videoId) {
 
   if (storyboard.linkedShotId) {
     workbench.ui.busy = true;
-    workbench.ui.toast = "濮濓絽婀崚鐘绘珟閸掑棝鏆呯憴鍡涱暥...";
+    workbench.ui.toast = "正在删除分镜视频...";
     render(workbench);
     try {
       const result = await workbench.api.deleteShotMedia(storyboard.linkedShotId, {
@@ -7457,13 +10701,13 @@ async function deleteStoryboardVideoStable(workbench, storyboardId, videoId) {
       applyLocalRemoval();
       if (result?.missing) {
         persistWorkbenchState(workbench);
-        workbench.ui.toast = "?????????????????????";
+        workbench.ui.toast = "视频记录已不存在，已同步清理本地状态。";
         return;
       }
       await refresh(workbench);
-      workbench.ui.toast = "??????????";
+      workbench.ui.toast = "已删除分镜视频。";
     } catch (error) {
-      workbench.ui.toast = `閸掔娀娅庢径杈Е閿?{friendlyError(error)}`;
+      workbench.ui.toast = `删除分镜视频失败：${friendlyError(error)}`;
     } finally {
       workbench.ui.busy = false;
       render(workbench);
@@ -7473,7 +10717,7 @@ async function deleteStoryboardVideoStable(workbench, storyboardId, videoId) {
 
   applyLocalRemoval();
   persistWorkbenchState(workbench);
-  workbench.ui.toast = `??? ${video.fileName || "????"}?`;
+  workbench.ui.toast = `已删除 ${video.fileName || "当前视频"}。`;
   render(workbench);
 }
 
@@ -7623,7 +10867,7 @@ function getEpisodeTimestamp(episode) {
 
 function getNextEpisodeTitle(episodes) {
   const nextIndex = (Array.isArray(episodes) ? episodes.length : 0) + 1;
-  return nextIndex === 1 ? "? 1 ?" : `? ${nextIndex} ?`;
+  return `第 ${nextIndex} 集`;
 }
 
 function buildSingleEpisodeTitle(scriptText, episodes) {
@@ -7636,7 +10880,7 @@ function buildSingleEpisodeTitle(scriptText, episodes) {
     return getNextEpisodeTitle(episodes);
   }
 
-  const candidate = normalized.replace(/[闂侀潧妫楅崑濠勬閹烘鏅??,闂佹寧绋戦惌澶屾?闂?]+$/g, "").trim();
+  const candidate = normalized.replace(/[，。！？、…,.!? ]+$/g, "").trim();
   if (!candidate) {
     return getNextEpisodeTitle(episodes);
   }
@@ -7724,30 +10968,69 @@ export function friendlyError(error) {
   }
   return (
     {
-      creator_project_missing: "请先上传剧本并创建项目。",
-      creator_shots_missing: "请先拆分分镜。",
-      asset_review_not_ready: "请先确认必需资产。",
-      image_assets_missing: "仍有分镜缺少图片资产。",
-      script_not_ready: "剧本还没准备好，先上传或保存剧本，再执行解析或生成。",
-      script_not_parsed: "剧本还没解析完成，请先完成分镜拆分。",
-      project_not_editable: "当前项目状态还不能继续生成，请先完成前置步骤。",
-      project_not_found: "当前项目不存在或已被删除，请刷新页面后重试。",
+      ASSET_ALREADY_EXISTS: "当前名称在资产库中已存在",
+      creator_project_missing: "Please upload a script and create a project first.",
+      creator_shots_missing: "Please split the storyboard into shots first.",
+      asset_review_not_ready: "Please confirm the required assets first.",
+      image_assets_missing: "Some storyboard shots are still missing image assets.",
+      script_not_ready: "The script is not ready yet. Upload or save it first.",
+      script_not_parsed: "The script has not finished parsing yet.",
+      project_not_editable: "The current project status does not allow generation yet.",
+      project_not_found: "The current project no longer exists. Refresh and try again.",
     }[message] ?? `${message}${requestId}`
   );
 }
 
-function teamErrorMessage(code) {
-  return {
-    team_member_management_required: "需要开通专业版后才能创建成员账号。",
-    team_permission_missing: "当前账号没有团队管理权限。",
-    team_seat_limit_reached: "团队席位已用完，请扩容后再创建成员。",
-    team_account_duplicate: "该成员账号已存在，请换一个账号。",
-    team_member_input_invalid: "账号需为 3-32 位小写字母、数字、下划线或短横线，并填写成员名称。",
-    team_credit_insufficient: "主账号可分配积分不足。",
-    team_group_scope_violation: "只能管理当前成员组内的成员。",
-    team_project_scope_violation: "只能分配当前账号可管理范围内的项目。",
-    team_member_disabled: "该成员已禁用，不能继续操作。",
-  }[code] ?? "";
+function teamErrorMessage(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return "";
+  }
+  if (text.includes("team_member_limit")) {
+    return "团队成员数量已达上限，请升级或调整席位后重试。";
+  }
+  if (text.includes("team_permission_denied")) {
+    return "当前账号没有团队管理权限，请联系管理员。";
+  }
+  if (text.includes("billing_required")) {
+    return "该团队能力需要开通专业版后使用。";
+  }
+  return "";
+}
+
+function buildManualAssetDefaultDescription(kind, name) {
+  if (kind === "scene") {
+    return `这是刚添加的${name}`;
+  }
+  if (kind === "prop") {
+    return `这是刚添加的${name}`;
+  }
+  return "自己的角色描述，随意更改";
+}
+
+function findEpisodeAssetById(workbench, kind, assetId) {
+  const groups = resolvePromptMentionAssetBuckets(workbench);
+  return (groups?.[kind] ?? []).find((item) => item.id === assetId || item.assetId === assetId) ?? null;
+}
+
+function applyManualAssetDraftDefaults(workbench, kind, assetId, name) {
+  if (!assetId) {
+    return;
+  }
+  const description = buildManualAssetDefaultDescription(kind, name);
+  const groups = cloneImportedAssets(workbench.ui.importedAssets);
+  groups[kind] = (groups[kind] ?? []).map((item) => {
+    if (item.id !== assetId && item.assetId !== assetId) {
+      return item;
+    }
+    return {
+      ...item,
+      description: item.description || description,
+      voiceName: kind === "character" ? (item.voiceName ?? "") : item.voiceName,
+      voiceSource: kind === "character" ? (item.voiceSource ?? "custom") : item.voiceSource,
+    };
+  });
+  workbench.ui.importedAssets = groups;
 }
 
 function resolveEventElement(target) {
@@ -7929,11 +11212,37 @@ Project type: ${typeLabel}
 Episode 1: Generate an initial story outline that can be expanded into storyboard shots.`;
 }
 
-function applyProjectDetail(workbench, detail) {
+function buildOriginalScriptPlanSeed(draft = {}) {
+  const name = String(draft.fileName ?? "").trim() || "未命名原创项目";
+  const audience = String(draft.audience ?? "女频").trim();
+  const genre = String(draft.genre ?? "逆袭虐感").trim();
+  const episodeCount = String(draft.episodeCount ?? "").trim();
+  const cardSetting = String(draft.cardSetting ?? "自动分卡").trim();
+  const episodeLength = String(draft.episodeLength ?? "约 1 分钟").trim();
+  const inspiration = String(draft.inspiration ?? "").trim();
+
+  return `${name}
+
+项目模式：AI 原创剧本
+目标受众：${audience}
+题材看点：${genre}
+拆分集数：${episodeCount}
+分卡设置：${cardSetting}
+每集长度：${episodeLength}
+
+创作灵感：
+${inspiration}`;
+}
+
+export function applyProjectDetail(workbench, detail) {
   const normalizedDetail = normalizeProjectDetailContract(detail);
   if (!normalizedDetail?.project) {
     return;
   }
+  const previousEpisodeId = workbench?.ui?.selectedEpisodeId ?? null;
+  const shouldPreserveEpisodeAssets =
+    workbench?.ui?.projectPanelMode === "episode-workbench" &&
+    hasPersistedEpisodeWorkbenchId(workbench, previousEpisodeId);
   workbench.state = {
     ...(workbench.state ?? {}),
     project: normalizedDetail.project,
@@ -7943,8 +11252,23 @@ function applyProjectDetail(workbench, detail) {
   };
   workbench.ui.projectDetail = normalizedDetail;
   workbench.ui.exportHistory = normalizedDetail.exportHistory ?? workbench.ui.exportHistory ?? [];
-  workbench.ui.importedAssets = mapProjectDetailAssets(normalizedDetail.assetsByType);
+  if (!shouldPreserveEpisodeAssets) {
+    workbench.ui.importedAssets = mapProjectDetailAssets(normalizedDetail.assetsByType);
+  }
   workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
+  if (
+    workbench?.ui?.projectPanelMode === "episode-workbench" &&
+    previousEpisodeId &&
+    previousEpisodeId !== "episode-primary" &&
+    !hasPersistedEpisodeWorkbenchId(workbench, previousEpisodeId)
+  ) {
+    workbench.ui.selectedEpisodeId = resolvePersistedEpisodeWorkbenchId(workbench, previousEpisodeId);
+    workbench.ui.selectedEpisodeAssetId = null;
+    workbench.ui.selectedEpisodeCardId = null;
+    workbench.ui.selectedEpisodeAssetIds = [];
+    workbench.ui.imageGenerationResult = null;
+    workbench.ui.videoGenerationResult = null;
+  }
 }
 
 function normalizeProjectDetailContract(detail) {
@@ -8029,8 +11353,13 @@ function mapEpisodeAssetContracts(assets = [], kind) {
     source: "episode",
     assetSource: "episode",
     voiceId: asset?.voiceId ?? null,
+    voiceName: asset?.voiceName ?? "",
+    voiceSource: asset?.voiceSource ?? inferEpisodeVoiceSource(asset),
+    dubbingConfig: asset?.dubbingConfig ?? null,
     updatedAt: asset?.updatedAt ?? null,
     fixedImageFileId: asset?.fixedImageFileId ?? null,
+    fixedImageUrl: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
   }));
 }
 
@@ -8059,6 +11388,37 @@ function mapProjectDetailAssetRecords(assets = [], kind) {
     latestVersion: asset.latestVersion ?? null,
     source: asset.latestVersion?.metadata?.source ?? "import",
   }));
+}
+
+function resolveAssetImportLibraryRecords(workbench, assetKind) {
+  const libraryAssets = assetKind === "character"
+    ? workbench.ui.projectLibraryAssetsByType?.character ?? []
+    : assetKind === "scene"
+      ? workbench.ui.projectLibraryAssetsByType?.scene ?? []
+      : assetKind === "prop"
+        ? workbench.ui.projectLibraryAssetsByType?.prop ?? []
+        : [];
+  if (libraryAssets.length) {
+    return libraryAssets.map((asset) => ({
+      id: asset.id,
+      name: asset.label ?? asset.assetKey ?? "未命名资产",
+      preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+      previewDataUrl: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+      mimeType: asset.latestVersion?.metadata?.mimeType ?? "image/png",
+      width: Number(asset.latestVersion?.metadata?.width ?? 240),
+      height: Number(asset.latestVersion?.metadata?.height ?? 240),
+      storageObjectId: asset.latestVersion?.storageObjectId ?? null,
+      storageObjectKey: asset.latestVersion?.storageObjectKey ?? "",
+      sourceUrl:
+        asset.latestVersion?.metadata?.sourceUrl ??
+        asset.latestVersion?.previewUrl ??
+        asset.previewUrl ??
+        "",
+      sourceAssetId: asset.id,
+      source: "library",
+    }));
+  }
+  return getOfficialAssetRecords(assetKind, workbench.ui.assetImportCategory);
 }
 
 function mapBackendAssets(assets = [], kind) {
@@ -8175,6 +11535,7 @@ async function syncProjectLibraryFromApi(workbench) {
     : [];
   workbench.ui.projectLibrary = projects;
   syncSelectedProjectCard(workbench, projects);
+  await syncProjectLibraryAssets(workbench);
 }
 
 async function syncAssetLibraryFromApi(workbench, options = {}) {
@@ -8257,6 +11618,38 @@ function syncSelectedProjectCard(workbench, projects) {
   workbench.ui.selectedProjectCardId = projects[0]?.id ?? null;
 }
 
+function groupLibraryAssetsByType(assets = []) {
+  const grouped = {
+    character: [],
+    scene: [],
+    prop: [],
+    other: {
+      image: [],
+      video: [],
+    },
+  };
+
+  for (const asset of Array.isArray(assets) ? assets : []) {
+    const normalized = {
+      ...asset,
+      previewUrl: asset?.previewUrl ?? asset?.latestVersion?.previewUrl ?? "",
+    };
+    if (asset?.assetType === "character_sheet") {
+      grouped.character.push(normalized);
+    } else if (asset?.assetType === "scene_reference") {
+      grouped.scene.push(normalized);
+    } else if (asset?.assetType === "prop_reference") {
+      grouped.prop.push(normalized);
+    } else if (asset?.assetType === "shot_video") {
+      grouped.other.video.push(normalized);
+    } else {
+      grouped.other.image.push(normalized);
+    }
+  }
+
+  return grouped;
+}
+
 function mapProjectRecordToCard(project) {
   const createdAtValue = project.createdAt ? new Date(project.createdAt) : new Date();
   const createdAtTimestamp = Number.isFinite(createdAtValue.getTime())
@@ -8334,7 +11727,7 @@ function setImageReferenceFromStoryboard(workbench, storyboardId, cropMode = "co
       name: storyboard.uploadedImageName || "storyboard-image",
       kind: "image",
       status: "ready",
-      summary: "????????????????",
+      summary: "已引用当前分镜图片",
       url: storyboard.previewImageUrl,
       cropMode,
     },
@@ -8358,7 +11751,7 @@ function setEditSourceVideoFromStoryboard(workbench, storyboardId, videoId = "")
       name: candidate.fileName || "storyboard-video",
       kind: "video",
       status: "ready",
-      summary: "??????????",
+      summary: "已选择当前分镜视频",
       url: candidate.src,
     },
   }));
@@ -8537,7 +11930,7 @@ async function deleteStoryboardImage(workbench, storyboardId, imageId = "") {
 
   if (storyboard.linkedShotId) {
     workbench.ui.busy = true;
-    workbench.ui.toast = "姝ｅ湪鍒犻櫎鍒嗛暅鍥剧墖...";
+    workbench.ui.toast = "正在删除分镜图片...";
     render(workbench);
     try {
       const result = await deleteEpisodeFileResourceIfAvailable(workbench, {

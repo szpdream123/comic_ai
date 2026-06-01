@@ -7,6 +7,11 @@ import {
   createCommercePaymentService,
   signPaymentCallback,
 } from "../commerce-payment.service.ts";
+import {
+  createStaticPaymentProviderRegistry,
+  PaymentProviderError,
+  type PaymentProviderAdapter,
+} from "../payment-provider-adapter.ts";
 import { consumePaymentSucceededCreditGrant } from "../../credit-billing/payment-succeeded-credit-consumer.service.ts";
 
 const organizationId = "10000000-0000-4000-8000-000000000001";
@@ -201,6 +206,699 @@ describe("commerce payment service", { concurrency: false }, () => {
     }
   });
 
+  it("creates a PayLab payment intent through the provider adapter and replays idempotently", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const providerCalls: Parameters<PaymentProviderAdapter["createPaymentIntent"]>[0][] = [];
+      const paylabAdapter = createFakePaymentProviderAdapter({
+        provider: "paylab",
+        createPaymentIntent: async (input) => {
+          providerCalls.push(input);
+          return {
+            kind: "submitted",
+            providerIntentId: "pi_paylab_accepted",
+            providerPaymentId: "pay_paylab_accepted",
+            providerPayloadHash: "paylab-create-hash",
+            providerSafeMetadata: {
+              providerIntentId: "pi_paylab_accepted",
+              providerPaymentId: "pay_paylab_accepted",
+            },
+            payAction: {
+              kind: "provider_console",
+              provider: "paylab",
+              merchantOrderNo: input.merchantOrderNo,
+              amountMinor: input.amountMinor,
+              currency: input.currency,
+              url: "https://paylab.test/payments/pi_paylab_accepted",
+            },
+          };
+        },
+      });
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: paylabAdapter,
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-adapter",
+        now: new Date("2026-05-21T09:00:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-adapter",
+        now: new Date("2026-05-21T09:01:00.000Z"),
+      });
+      const replayResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-adapter",
+        now: new Date("2026-05-21T09:01:30.000Z"),
+      });
+      const intentRows = await db.query<{
+        status: string;
+        provider_payload_hash: string;
+        provider_safe_metadata_json: Record<string, unknown>;
+        submitted_at: Date | null;
+      }>("SELECT status, provider_payload_hash, provider_safe_metadata_json, submitted_at FROM payment_intents WHERE id = $1", [
+        intentResponse.body.paymentIntent.id,
+      ]);
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(intentResponse.body.paymentIntent.provider, "paylab");
+      assert.equal(intentResponse.body.paymentIntent.status, "submitted");
+      assert.equal(intentResponse.body.payAction.kind, "provider_console");
+      assert.equal(replayResponse.status, 200);
+      assert.equal(replayResponse.body.paymentIntent.id, intentResponse.body.paymentIntent.id);
+      assert.equal(providerCalls.length, 1);
+      assert.equal(providerCalls[0]?.provider, "paylab");
+      assert.equal(providerCalls[0]?.productMode, "paylab_redirect");
+      assert.equal(providerCalls[0]?.providerIdempotencyKey, `payment_intent:${intentResponse.body.paymentIntent.id}`);
+      assert.equal(intentRows.rows[0]?.status, "submitted");
+      assert.equal(intentRows.rows[0]?.provider_payload_hash, "paylab-create-hash");
+      assert.equal(intentRows.rows[0]?.provider_safe_metadata_json.providerIntentId, "pi_paylab_accepted");
+      assert.ok(intentRows.rows[0]?.submitted_at);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("marks a PayLab intent unknown when provider creation is ambiguous", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            createPaymentIntent: async () => ({
+              kind: "unknown",
+              providerPayloadHash: "paylab-timeout-hash",
+              providerSafeMetadata: {
+                failureCode: "provider_timeout",
+              },
+              failureCode: "provider_timeout",
+            }),
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-unknown",
+        now: new Date("2026-05-21T09:10:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-unknown",
+        now: new Date("2026-05-21T09:11:00.000Z"),
+      });
+      const intentRows = await db.query<{
+        status: string;
+        provider_payload_hash: string;
+        provider_safe_metadata_json: Record<string, unknown>;
+        submitted_at: Date | null;
+      }>("SELECT status, provider_payload_hash, provider_safe_metadata_json, submitted_at FROM payment_intents WHERE id = $1", [
+        intentResponse.body.paymentIntent.id,
+      ]);
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(intentResponse.body.paymentIntent.provider, "paylab");
+      assert.equal(intentResponse.body.paymentIntent.status, "unknown");
+      assert.equal(intentResponse.body.payAction.kind, "manual_confirm");
+      assert.equal(intentRows.rows[0]?.status, "unknown");
+      assert.equal(intentRows.rows[0]?.provider_payload_hash, "paylab-timeout-hash");
+      assert.equal(intentRows.rows[0]?.provider_safe_metadata_json.failureCode, "provider_timeout");
+      assert.equal(intentRows.rows[0]?.submitted_at, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("marks a PayLab intent unknown and replayable when provider creation is rejected", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      let providerCalls = 0;
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            createPaymentIntent: async () => {
+              providerCalls += 1;
+              throw new PaymentProviderError("provider_create_failed");
+            },
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-rejected",
+        now: new Date("2026-05-21T09:15:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-rejected",
+        now: new Date("2026-05-21T09:16:00.000Z"),
+      });
+      const replayResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-rejected",
+        now: new Date("2026-05-21T09:16:30.000Z"),
+      });
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(intentResponse.body.paymentIntent.status, "unknown");
+      assert.equal(intentResponse.body.payAction.failureCode, "provider_create_failed");
+      assert.equal(replayResponse.status, 200);
+      assert.equal(replayResponse.body.paymentIntent.id, intentResponse.body.paymentIntent.id);
+      assert.equal(replayResponse.body.paymentIntent.status, "unknown");
+      assert.equal(providerCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("processes a verified PayLab success callback through provider events and outbox", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({ provider: "paylab" }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-callback",
+        now: new Date("2026-05-21T09:20:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-callback",
+        now: new Date("2026-05-21T09:21:00.000Z"),
+      });
+      const callbackBody = {
+        provider: "paylab" as const,
+        providerEventDedupKey: "paylab-notify-success",
+        merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
+        providerTradeId: "paylab-trade-success",
+        eventType: "payment_succeeded" as const,
+        amountMinor: 9900,
+        currency: "CNY",
+        merchantId,
+      };
+      const callbackResponse = await service.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, callbackSecret),
+        },
+        now: new Date("2026-05-21T09:22:00.000Z"),
+      });
+      const outbox = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'payment.succeeded'",
+      );
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.body.providerEvent.provider, "paylab");
+      assert.equal(callbackResponse.body.providerEvent.processingStatus, "processed");
+      assert.equal(callbackResponse.body.order?.status, "paid");
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("normalizes a raw PayLab provider callback through the adapter before processing", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            normalizeCallback: async () => ({
+              provider: "paylab",
+              merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
+              providerTradeId: "paylab-raw-trade-success",
+              eventType: "payment_succeeded",
+              amountMinor: 9900,
+              currency: "CNY",
+              providerEventDedupKey: "paylab-raw-event-success",
+              rawPayloadHash: "raw-paylab-event-hash",
+              signatureStatus: "verified",
+              safeMetadata: {},
+            }),
+            verifyCallback: async () => ({
+              signatureStatus: "verified",
+              signatureAlgorithm: "test-hmac",
+              replayWindowStatus: "within_window",
+            }),
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-raw-callback",
+        now: new Date("2026-05-21T09:30:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-raw-callback",
+        now: new Date("2026-05-21T09:31:00.000Z"),
+      });
+      const callbackResponse = await service.processProviderCallback({
+        provider: "paylab",
+        rawBody: JSON.stringify({ id: "evt_paylab_raw_success" }),
+        headers: { "stripe-signature": "test" },
+        now: new Date("2026-05-21T09:32:00.000Z"),
+      });
+      const providerEventRows = await db.query<{ raw_payload_hash: string }>(
+        "SELECT raw_payload_hash FROM payment_provider_events WHERE provider_event_dedup_key = $1",
+        ["paylab-raw-event-success"],
+      );
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.body.providerEvent.provider, "paylab");
+      assert.equal(callbackResponse.body.providerEvent.processingStatus, "processed");
+      assert.equal(callbackResponse.body.order?.status, "paid");
+      assert.equal(providerEventRows.rows[0]?.raw_payload_hash, "raw-paylab-event-hash");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("reconciles a provider-paid PayLab intent when the webhook is missing", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const providerQueries: Parameters<PaymentProviderAdapter["queryPaymentStatus"]>[0][] = [];
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            queryPaymentStatus: async (input) => {
+              providerQueries.push(input);
+              return {
+                status: "succeeded",
+                providerPayloadHash: "paylab-query-success-hash",
+                providerTradeId: "paylab-query-trade-success",
+                amountMinor: 9900,
+                currency: "CNY",
+                providerSafeMetadata: {
+                  providerIntentId: input.providerIntentId,
+                  providerStatus: "succeeded",
+                },
+              };
+            },
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-reconcile-success",
+        now: new Date("2026-05-21T09:40:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-reconcile-success",
+        now: new Date("2026-05-21T09:41:00.000Z"),
+      });
+
+      const reconciliation = await service.reconcilePaymentIntent({
+        paymentIntentId: intentResponse.body.paymentIntent.id,
+        now: new Date("2026-05-21T09:45:00.000Z"),
+      });
+      const duplicateReconciliation = await service.reconcilePaymentIntent({
+        paymentIntentId: intentResponse.body.paymentIntent.id,
+        now: new Date("2026-05-21T09:46:00.000Z"),
+      });
+      const intentRows = await db.query<{
+        status: string;
+        provider_trade_id: string | null;
+      }>("SELECT status, provider_trade_id FROM payment_intents WHERE id = $1", [
+        intentResponse.body.paymentIntent.id,
+      ]);
+      const orderRows = await db.query<{ status: string }>(
+        "SELECT status FROM billing_orders WHERE id = $1",
+        [orderResponse.body.order.id],
+      );
+      const providerEvents = await db.query<{
+        event_type: string;
+        signature_status: string;
+        processing_status: string;
+        raw_payload_hash: string;
+      }>(
+        `
+          SELECT event_type, signature_status, processing_status, raw_payload_hash
+          FROM payment_provider_events
+          WHERE payment_intent_id = $1
+        `,
+        [intentResponse.body.paymentIntent.id],
+      );
+      const outbox = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'payment.succeeded'",
+      );
+      const reconciliationItems = await db.query<{
+        issue_type: string;
+        status: string;
+        resolution_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT issue_type, status, resolution_json
+          FROM payment_reconciliation_items
+          WHERE payment_intent_id = $1
+          ORDER BY created_at ASC
+        `,
+        [intentResponse.body.paymentIntent.id],
+      );
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(reconciliation.status, 200);
+      assert.equal(reconciliation.body.reconciliation.status, "resolved");
+      assert.equal(reconciliation.body.reconciliation.providerStatus, "succeeded");
+      assert.equal(duplicateReconciliation.status, 200);
+      assert.equal(providerQueries[0]?.providerIntentId, `fake-paylab-${intentResponse.body.paymentIntent.merchantOrderNo}`);
+      assert.equal(intentRows.rows[0]?.status, "succeeded");
+      assert.equal(intentRows.rows[0]?.provider_trade_id, "paylab-query-trade-success");
+      assert.equal(orderRows.rows[0]?.status, "paid");
+      assert.deepEqual(providerEvents.rows, [
+        {
+          event_type: "payment_succeeded",
+          signature_status: "unverified",
+          processing_status: "processed",
+          raw_payload_hash: "paylab-query-success-hash",
+        },
+      ]);
+      assert.equal(outbox.rows[0]?.count, 1);
+      assert.deepEqual(
+        reconciliationItems.rows.map((row) => ({
+          issue_type: row.issue_type,
+          status: row.status,
+        })),
+        [
+          { issue_type: "provider_paid_platform_unpaid", status: "resolved" },
+          { issue_type: "provider_paid_platform_unpaid", status: "resolved" },
+        ],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps a reconciled PayLab success in manual review when the provider amount mismatches", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            queryPaymentStatus: async () => ({
+              status: "succeeded",
+              providerPayloadHash: "paylab-query-amount-mismatch-hash",
+              providerTradeId: "paylab-query-trade-mismatch",
+              amountMinor: 100,
+              currency: "CNY",
+              providerSafeMetadata: {
+                providerStatus: "succeeded",
+              },
+            }),
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-reconcile-mismatch",
+        now: new Date("2026-05-21T09:50:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-reconcile-mismatch",
+        now: new Date("2026-05-21T09:51:00.000Z"),
+      });
+
+      const reconciliation = await service.reconcilePaymentIntent({
+        paymentIntentId: intentResponse.body.paymentIntent.id,
+        now: new Date("2026-05-21T09:55:00.000Z"),
+      });
+      const orderRows = await db.query<{ status: string }>(
+        "SELECT status FROM billing_orders WHERE id = $1",
+        [orderResponse.body.order.id],
+      );
+      const outbox = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'payment.succeeded'",
+      );
+      const providerEvents = await db.query<{
+        processing_status: string;
+        failure_code: string | null;
+      }>(
+        `
+          SELECT processing_status, failure_code
+          FROM payment_provider_events
+          WHERE payment_intent_id = $1
+        `,
+        [intentResponse.body.paymentIntent.id],
+      );
+      const risks = await db.query<{ risk_type: string }>(
+        "SELECT risk_type FROM payment_risk_events WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+      const reconciliationItems = await db.query<{
+        issue_type: string;
+        status: string;
+      }>(
+        "SELECT issue_type, status FROM payment_reconciliation_items WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(reconciliation.status, 200);
+      assert.equal(reconciliation.body.reconciliation.status, "manual_review_required");
+      assert.equal(reconciliation.body.riskEvent?.riskType, "amount_mismatch");
+      assert.equal(orderRows.rows[0]?.status, "pending_payment");
+      assert.equal(outbox.rows[0]?.count, 0);
+      assert.deepEqual(providerEvents.rows, [
+        { processing_status: "manual_review_required", failure_code: "amount_mismatch" },
+      ]);
+      assert.deepEqual(risks.rows, [{ risk_type: "amount_mismatch" }]);
+      assert.deepEqual(reconciliationItems.rows, [
+        { issue_type: "amount_mismatch", status: "manual_review_required" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("treats reconciliation as resolved when a matching webhook already paid the PayLab intent", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+        providerRegistry: createStaticPaymentProviderRegistry({
+          paylab: createFakePaymentProviderAdapter({
+            provider: "paylab",
+            queryPaymentStatus: async () => ({
+              status: "succeeded",
+              providerPayloadHash: "paylab-query-already-paid-hash",
+              providerTradeId: "paylab-webhook-trade-paid",
+              amountMinor: 9900,
+              currency: "CNY",
+              providerSafeMetadata: {
+                providerStatus: "succeeded",
+              },
+            }),
+          }),
+        }),
+      });
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-paylab-already-paid",
+        now: new Date("2026-05-21T09:56:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "paylab",
+          productMode: "paylab_redirect",
+        },
+        idempotencyKey: "intent-key-paylab-already-paid",
+        now: new Date("2026-05-21T09:57:00.000Z"),
+      });
+      const callbackBody = {
+        provider: "paylab" as const,
+        providerEventDedupKey: "paylab-webhook-already-paid",
+        merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
+        providerTradeId: "paylab-webhook-trade-paid",
+        eventType: "payment_succeeded" as const,
+        amountMinor: 9900,
+        currency: "CNY",
+        merchantId,
+      };
+      const callbackResponse = await service.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, callbackSecret),
+        },
+        now: new Date("2026-05-21T09:58:00.000Z"),
+      });
+
+      const reconciliation = await service.reconcilePaymentIntent({
+        paymentIntentId: intentResponse.body.paymentIntent.id,
+        now: new Date("2026-05-21T10:00:00.000Z"),
+      });
+      const providerEvents = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM payment_provider_events WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+      const risks = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM payment_risk_events WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+      const outbox = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'payment.succeeded'",
+      );
+      const reconciliationItems = await db.query<{
+        status: string;
+        resolution_json: Record<string, unknown>;
+      }>(
+        "SELECT status, resolution_json FROM payment_reconciliation_items WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+
+      assert.equal(intentResponse.status, 200);
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.body.order?.status, "paid");
+      assert.equal(reconciliation.status, 200);
+      assert.equal(reconciliation.body.reconciliation.status, "resolved");
+      assert.equal(reconciliationItems.rows[0]?.resolution_json.alreadySettled, true);
+      assert.equal(providerEvents.rows[0]?.count, 1);
+      assert.equal(risks.rows[0]?.count, 0);
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("returns duplicate when the provider event dedup lookup races with an existing event", async () => {
     const db = await createMigratedTestDb();
 
@@ -272,6 +970,48 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(response.status, 200);
       assert.equal(response.body.duplicate, true);
       assert.equal(providerEvents.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("records an enterprise contact request as a real backend intake event", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const response = await service.requestEnterpriseContact({
+        user: { sessionToken: ownerSession.token },
+        body: { source: "pricing_modal", note: "enterprise_plan_interest" },
+        idempotencyKey: "enterprise-contact-key-1",
+        now: new Date("2026-05-21T08:20:00.000Z"),
+      });
+      const audit = await db.query<{
+        event_type: string;
+        target_type: string;
+        reason: string | null;
+      }>(
+        `
+          SELECT event_type, target_type, reason
+          FROM audit_events
+          WHERE event_type = 'billing.enterprise_contact_requested'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.request.status, "submitted");
+      assert.equal(audit.rows[0]?.event_type, "billing.enterprise_contact_requested");
+      assert.equal(audit.rows[0]?.target_type, "enterprise_contact_request");
+      assert.equal(audit.rows[0]?.reason, "enterprise_pricing_request");
     } finally {
       await db.close();
     }
@@ -1282,6 +2022,57 @@ async function createOrderAndIntent(
   assert.equal(intent.status, 200);
 
   return { order: order.body, intent: intent.body };
+}
+
+function createFakePaymentProviderAdapter(
+  input: Partial<PaymentProviderAdapter> & Pick<PaymentProviderAdapter, "provider">,
+): PaymentProviderAdapter {
+  return {
+    provider: input.provider,
+    createPaymentIntent:
+      input.createPaymentIntent ??
+      (async (intentInput) => ({
+        kind: "submitted",
+        providerIntentId: `fake-${intentInput.provider}-${intentInput.merchantOrderNo}`,
+        providerPayloadHash: `fake-hash-${intentInput.provider}-${intentInput.merchantOrderNo}`,
+        providerSafeMetadata: {
+          providerIntentId: `fake-${intentInput.provider}-${intentInput.merchantOrderNo}`,
+        },
+        payAction: {
+          kind: "provider_console",
+          provider: intentInput.provider,
+          merchantOrderNo: intentInput.merchantOrderNo,
+          amountMinor: intentInput.amountMinor,
+          currency: intentInput.currency,
+          url: `https://paylab.test/payments/${intentInput.merchantOrderNo}`,
+        },
+      })),
+    verifyCallback:
+      input.verifyCallback ??
+      (async () => ({
+        signatureStatus: "unverified",
+        signatureAlgorithm: "test",
+        replayWindowStatus: "not_checked",
+      })),
+    normalizeCallback:
+      input.normalizeCallback ??
+      (async () => {
+        throw new Error("fake_adapter_callback_not_implemented");
+      }),
+    buildAckResponse:
+      input.buildAckResponse ??
+      (() => ({
+        status: 200,
+        body: { received: true },
+      })),
+    queryPaymentStatus:
+      input.queryPaymentStatus ??
+      (async () => ({
+        status: "unknown",
+        providerPayloadHash: "fake-query-hash",
+        providerSafeMetadata: {},
+      })),
+  };
 }
 
 async function seedCommerceFixture(

@@ -1,0 +1,50 @@
+{
+  "origin": "http://127.0.0.1:4315",
+  "projectId": "5274c69f-df2c-4ad5-8208-bf464f98dbc4",
+  "episodeId": "e0e22cab-c3d8-43e7-80d1-065c22bbb4fc",
+  "workbenchUrl": "http://127.0.0.1:4315/app.html#/projects/5274c69f-df2c-4ad5-8208-bf464f98dbc4/episodes/e0e22cab-c3d8-43e7-80d1-065c22bbb4fc",
+  "screenshots": {
+    "emptyAsset": "artifacts/episode-workbench-empty-asset-qa/step-01a-role-scene-empty-state.png",
+    "firstAsset": "artifacts/episode-workbench-empty-asset-qa/step-01b-first-role-selected-clean-panel.png",
+    "emptyPromptToast": "artifacts/episode-workbench-empty-asset-qa/step-01c-role-empty-generate-toast-autosave.png"
+  },
+  "metrics": {
+    "emptyAsset": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n角色场景空态集 · e0e22cab\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n下一步：分镜制作\n角色\n场景\n道具\n手动添加\n资产库选取\n暂无角色资产\n暂无场景资产\n暂无道具资产\n做图片\n做视频\n对口型\n\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\ngpt image 2（链路G）\n16:9\n2K\n50 生成\n\n资产快捷栏\n⌕",
+      "promptLength": 0,
+      "hasAssetMode": true,
+      "hasBlankAssetCanvas": true,
+      "hasQuickLaneEmptyMessage": false,
+      "selectedAssetName": "",
+      "stageTitle": "",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": false,
+      "hasResultAction": false
+    },
+    "firstAsset": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n角色场景空态集 · e0e22cab\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n下一步：分镜制作\n角色\n场景\n道具\n手动添加\n资产库选取\n测试\n编辑角色\n+\n×\n角色固定\n角色描述\n测试\n+ 配音员\n12 / 800\n暂无场景资产\n暂无道具资产\n做图片\n做视频\n对口型\n\n角色测试：自己的角色描述，随意更改\n\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\ngpt image 2（链路G）\n16:9\n2K\n50 生成\n\n资产快捷栏\n⌕\n测试\n测试\n角色",
+      "promptLength": 0,
+      "hasAssetMode": true,
+      "hasBlankAssetCanvas": true,
+      "hasQuickLaneEmptyMessage": false,
+      "selectedAssetName": "测试",
+      "stageTitle": "角色测试：自己的角色描述，随意更改",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": false,
+      "hasResultAction": false
+    },
+    "emptyPromptToast": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n角色场景空态集 · e0e22cab\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n下一步：分镜制作\n角色\n场景\n道具\n手动添加\n资产库选取\n测试\n编辑角色\n+\n×\n角色固定\n角色描述\n测试\n+ 配音员\n12 / 800\n暂无场景资产\n暂无道具资产\n做图片\n做视频\n对口型\n\n角色测试：自己的角色描述，随意更改\n\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\ngpt image 2（链路G）\n16:9\n2K\n50 生成\n\n请输入内容\n\n资产快捷栏\n⌕\n测试\n测试\n角色\n\n请输入内容",
+      "promptLength": 0,
+      "hasAssetMode": true,
+      "hasBlankAssetCanvas": true,
+      "hasQuickLaneEmptyMessage": false,
+      "selectedAssetName": "测试",
+      "stageTitle": "角色测试：自己的角色描述，随意更改",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": true,
+      "hasResultAction": false
+    }
+  },
+  "consoleErrors": []
+}

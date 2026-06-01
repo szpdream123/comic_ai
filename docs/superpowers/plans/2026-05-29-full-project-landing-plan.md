@@ -232,3 +232,113 @@ The project is only fully landed when all of the following are true:
 2. Add browser QA coverage for `library-team`.
 3. Audit `script` and `home` surfaces using the same evidence standard.
 4. Classify remaining placeholder-only product actions before claiming whole-project completion.
+
+## Actionable Execution Waves
+
+This is the current real development order for the repo as it exists now. It is
+meant to be executed, not treated as a speculative wishlist.
+
+### Wave A - Finish the project shell around the landed episode slice
+
+Goal:
+
+- Keep `project detail -> episodes tab -> episode workbench` stable.
+- Remove remaining shell-only gaps that stop the project from feeling whole.
+
+Tasks:
+
+1. Keep the current episode route, upload, task, credit, and export tests green.
+2. Continue visual parity work on:
+   - project episodes tab
+   - episode workbench desktop
+   - episode workbench mobile
+3. Replace obvious shell placeholders that sit adjacent to the shipped episode flow.
+4. Keep browser screenshot evidence updated whenever layout changes.
+
+Acceptance:
+
+- Existing episode HTTP/frontend tests remain green.
+- Browser evidence continues to show project episodes + workbench desktop/mobile working.
+
+### Wave B - Make `library-team` consume real project context
+
+Goal:
+
+- Stop treating the library/team area as a fixture-only annex.
+- Use current project assets, members, and stats wherever the backend already provides them.
+
+Tasks:
+
+1. Feed real project assets into the personal asset library surface.
+2. Feed real members/stats into the team page and dashboard.
+3. Keep official/team asset scopes clearly separated from still-deferred backend capabilities.
+4. Add route-level browser QA for:
+   - personal asset library
+   - official asset library
+   - team page
+   - team dashboard
+
+Acceptance:
+
+- Unit tests prove real project context renders in library/team pages.
+- Browser QA produces screenshots/evidence instead of only HTML string checks.
+
+### Wave C - Migrate the front-door script and project-shell flows off creator-session assumptions
+
+Goal:
+
+- The user must be able to enter from login/home/script/project creation and recover state after refresh.
+
+Tasks:
+
+1. Promote project create/update/delete/cover to durable project-scoped APIs.
+2. Audit script page persistence and parsing flow.
+3. Reduce dependence on opaque creator-session-only hydration for project shell pages.
+4. Make deep-link entry and refresh behavior reliable outside the episode page.
+
+Acceptance:
+
+- Create/open/refresh project detail works from real persisted data.
+- Script planning/parsing state survives refresh or has explicit persisted recovery.
+
+### Wave D - Replace remaining placeholder-only actions with real contracts or explicit deferral
+
+Goal:
+
+- Every visible action must either be real or be clearly marked as deferred.
+
+Tasks:
+
+1. Audit all `show-library-placeholder` and `show-commerce-placeholder` paths.
+2. For each action:
+   - wire it to a real backend flow, or
+   - keep it visibly deferred and exclude it from landed claims.
+3. Prioritize:
+   - member management actions
+   - asset-library filtering/import behavior
+   - project/team data export actions
+   - tooling surfaces currently presented as production features
+
+Acceptance:
+
+- No major visible action silently pretends to be shipped while remaining purely fake.
+
+### Wave E - Whole-product completion audit
+
+Goal:
+
+- Prove the repo is actually landed end to end, page by page.
+
+Tasks:
+
+1. Run requirement-by-requirement verification across frontend, backend, persistence, and browser behavior.
+2. Confirm all main surfaces have:
+   - route evidence
+   - persistence evidence
+   - test evidence
+   - browser/runtime evidence
+3. Keep deferred areas explicitly outside the completion claim until they are real.
+
+Acceptance:
+
+- The full-project completion claim can be defended from the current worktree alone.

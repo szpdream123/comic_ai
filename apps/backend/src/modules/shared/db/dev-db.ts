@@ -82,6 +82,7 @@ async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!tableCheck.rows[0]?.exists) {
     await applySqlMigrations(db);
+    await ensurePaymentProviderConstraints(db);
     return;
   }
 
@@ -111,5 +112,19 @@ async function ensureFoundationSchema(db: SqlDatabase) {
   );
   if (!hardeningTableCheck.rows[0]?.exists) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+  }
+
+  const assetConversationTableCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'episode_asset_conversation_threads'
+      ) AS exists
+    `,
+  );
+  if (!assetConversationTableCheck.rows[0]?.exists) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0005_episode_asset_conversations.sql" });
   }
 }

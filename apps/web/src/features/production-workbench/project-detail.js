@@ -1,6 +1,7 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js";
 import { renderExportPanel } from "./export-panel.js";
+import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import {
   renderOriginalScriptModal,
@@ -9,6 +10,7 @@ import {
 import { getProjectDetailState } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam } from "../library-team/index.js";
+import { resolveApiUrl } from "../../shared/creator-api.js";
 
 const PROJECT_STATUS_OPTIONS = ["未开始", "制作中", "一稿交付", "完结"];
 
@@ -111,13 +113,14 @@ export function renderProjectDetail(context = {}) {
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
+  const creditBalance = resolveDisplayedCreditBalance(ui);
 
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance })}
           ${renderProjectInteriorShell({ state, ui, detailState })}
         </section>
       </section>
@@ -174,7 +177,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}">
-        ${renderGlobalStatusbar(session)}
+        ${renderGlobalStatusbar(session, { creditBalance })}
         ${renderMainPanel({ state, ui, session, detailState, progress, activeNavTab })}
       </section>
     </section>
@@ -215,6 +218,31 @@ export function renderProjectDetail(context = {}) {
   `;
 }
 
+function renderWorkspaceStatusToast(message, extraClassName = "") {
+  const normalizedMessage = String(message ?? "").trim();
+  if (!normalizedMessage) {
+    return "";
+  }
+  const className = extraClassName ? `workbench-toast ${extraClassName}` : "workbench-toast";
+  return `<p id="workspace-status" class="${className}" role="status">${escapeHtml(normalizedMessage)}</p>`;
+}
+
+function resolveDisplayedCreditBalance(ui) {
+  const candidates = [
+    ui.creditBalance,
+    ui.episodeGenerationConfig?.creditBalance,
+    ui.episodeWorkbenchContext?.creditBalance,
+    ui.lastPaymentIntent?.creditBalance,
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+  return 0;
+}
+
 function renderWorkbenchRail(activeNavTab) {
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
@@ -249,39 +277,31 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
     ui.selectedStoryboard ??
     activeStoryboards[0] ??
     null;
+  const workbenchPrompt = resolveEpisodeWorkbenchPrompt(ui, activeStoryboards);
   const episodeTitle = activeEpisode?.title ?? "Episode 1";
   const episodeStatus = activeEpisode?.status ?? "Draft";
   const storyboardCount = activeEpisode?.storyboardCount ?? activeStoryboards.length ?? 0;
+  const episodeWorkbenchAssetLibrary = resolveEpisodeWorkbenchAssetLibrary(ui);
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
-      <header class="episode-workbench-titlebar">
-        <div>
-          <span>当前剧集</span>
-          <strong>${escapeHtml(episodeTitle)}</strong>
-        </div>
-        <em>${escapeHtml(episodeStatus)} · ${storyboardCount} 个分镜</em>
-      </header>
       ${renderEpisodeWorkbench({
         session,
         episodeId: activeEpisode?.id ?? "",
         episodeTitle: activeEpisode?.title ?? "",
         storyboards: activeStoryboards,
         selectedStoryboard,
-        assetLibrary: {
-          character: getImportedAssetEntries(state, ui, "character", "image"),
-          scene: getImportedAssetEntries(state, ui, "scene", "image"),
-          prop: getImportedAssetEntries(state, ui, "prop", "image"),
-        },
+        assetLibrary: episodeWorkbenchAssetLibrary,
         activeAssetTab: ui.projectAssetTab ?? "character",
         selectedEpisodeCardId: ui.selectedEpisodeCardId ?? null,
         selectedEpisodeAssetId: ui.selectedEpisodeAssetId ?? null,
         selectedEpisodeAssetIds: ui.selectedEpisodeAssetIds ?? [],
+        selectedStoryboardIds: ui.selectedStoryboardIds ?? [],
         episodeWorkbenchSelectedAttachmentIds: ui.episodeWorkbenchSelectedAttachmentIds ?? [],
         isStoryboardDescriptionModalOpen: Boolean(ui.isStoryboardDescriptionModalOpen),
         storyboardDescriptionDraft: ui.storyboardDescriptionDraft ?? "",
         selectedModelId: ui.selectedModelId,
-        prompt: ui.prompt,
+        prompt: workbenchPrompt,
         busy: ui.busy,
         canParse: Boolean(state.project),
         canCalibrate: Boolean(state.assetReview?.readyForGeneration && activeStoryboards.length),
@@ -323,6 +343,18 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           museBoardMode: ui.museBoardMode ?? "operation",
           museScopeMode: ui.museScopeMode ?? "storyboard",
           musePromptMenu: ui.musePromptMenu ?? null,
+          promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
+          promptMentionQuery: ui.promptMentionQuery ?? "",
+          promptMentionSuggestions: ui.promptMentionSuggestions ?? [],
+          promptMentionPreviewOpen: Boolean(ui.promptMentionPreviewOpen),
+          promptMentionPreviewAsset: ui.promptMentionPreviewAsset ?? null,
+          referencePromptPreset: ui.referencePromptPreset ?? "none",
+          assetPromptDraft: ui.assetPromptDraft ?? null,
+          assetConversationHistory: ui.assetConversationHistory ?? {},
+          lipSyncVoiceId: ui.lipSyncVoiceId ?? null,
+          lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
+          lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
+          lipSyncAudioItems: ui.lipSyncAudioItems ?? [],
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
@@ -336,11 +368,117 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         videoGenerationResult: ui.videoGenerationResult ?? null,
         assetSearchQuery: ui.assetSearchQuery ?? "",
         exportPreviewResult: ui.exportPreviewResult ?? null,
+        exportOptionModal: ui.exportOptionModal ?? null,
         episodeBatchModal: ui.episodeBatchModal ?? null,
+        assetImportModal: ui.assetImportModal ?? null,
+        assetImportModalTab: ui.assetImportModalTab ?? "local",
+        assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
+        assetImportDrafts: ui.assetImportDrafts ?? [],
+        assetImportSelection: ui.assetImportSelection ?? [],
+        assetImportPage: ui.assetImportPage ?? 1,
+        assetImportPageSize: ui.assetImportPageSize ?? 10,
+        assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
+        assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
+        projectLibraryAssetsByType: ui.projectLibraryAssetsByType ?? null,
+        projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
+        projectDetail: ui.projectDetail ?? null,
       })}
-      <p id="workspace-status" class="workbench-toast interior-toast" role="status">${escapeHtml(ui.toast ?? "")}</p>
+      ${renderWorkspaceStatusToast(ui.toast, "interior-toast")}
     </section>
   `;
+}
+
+function resolveEpisodeWorkbenchAssetLibrary(ui) {
+  const importedAssets = ui.importedAssets ?? {};
+  const resolvedContext = resolveEpisodeWorkbenchContextPayload(ui.episodeWorkbenchContext);
+  const contextAssets =
+    resolvedContext?.assetsByType ??
+    resolvedContext?.assets ??
+    resolvedContext?.episodeAssets ??
+    ui.episodeWorkbenchContext?.data?.assetsByType ??
+    ui.episodeWorkbenchContext?.data?.assets ??
+    ui.episodeWorkbenchContext?.data?.episodeAssets ??
+    ui.episodeWorkbenchContext?.assetsByType ??
+    ui.episodeWorkbenchContext?.assets ??
+    ui.episodeWorkbenchContext?.episodeAssets ??
+    null;
+  if (contextAssets && typeof contextAssets === "object") {
+    return {
+      character: mapEpisodeWorkbenchContextAssets(
+        resolveEpisodeWorkbenchAssetEntries(contextAssets, "character"),
+        "character",
+      ),
+      scene: mapEpisodeWorkbenchContextAssets(
+        resolveEpisodeWorkbenchAssetEntries(contextAssets, "scene"),
+        "scene",
+      ),
+      prop: mapEpisodeWorkbenchContextAssets(
+        resolveEpisodeWorkbenchAssetEntries(contextAssets, "prop"),
+        "prop",
+      ),
+    };
+  }
+
+  return {
+    character: importedAssets.character ?? [],
+    scene: importedAssets.scene ?? [],
+    prop: importedAssets.prop ?? [],
+  };
+}
+
+function resolveEpisodeWorkbenchContextPayload(context) {
+  if (!context || typeof context !== "object") {
+    return null;
+  }
+  const nestedData = context?.data;
+  if (nestedData && typeof nestedData === "object") {
+    return nestedData;
+  }
+  return context;
+}
+
+function resolveEpisodeWorkbenchAssetEntries(assetsByType, kind) {
+  if (!assetsByType || typeof assetsByType !== "object") {
+    return [];
+  }
+  const keys =
+    kind === "character"
+      ? ["character", "characters", "role", "roles"]
+      : kind === "scene"
+        ? ["scene", "scenes"]
+        : ["prop", "props"];
+  for (const key of keys) {
+    const value = assetsByType?.[key];
+    if (Array.isArray(value) && value.length > 0) {
+      return value;
+    }
+    if (value && typeof value === "object" && Array.isArray(value.items) && value.items.length > 0) {
+      return value.items;
+    }
+  }
+  return [];
+}
+
+function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
+  return (Array.isArray(assets) ? assets : []).map((asset) => ({
+    id: asset?.assetId ?? asset?.id ?? "",
+    assetId: asset?.assetId ?? asset?.id ?? null,
+    name: asset?.name ?? asset?.label ?? "未命名资产",
+    preview: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    previewUrl: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    description: asset?.description ?? "",
+    kind,
+    source: "episode",
+    assetSource: "episode",
+    voiceId: asset?.voiceId ?? null,
+    voiceName: asset?.voiceName ?? "",
+    voiceSource: asset?.voiceSource ?? "custom",
+    dubbingConfig: asset?.dubbingConfig ?? null,
+    updatedAt: asset?.updatedAt ?? null,
+    fixedImageFileId: asset?.fixedImageFileId ?? null,
+    fixedImageUrl: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
+  }));
 }
 
 function renderProjectInteriorShell({ state, ui, detailState }) {
@@ -402,7 +540,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
                 episodeCount,
               })
         }
-        <p id="workspace-status" class="workbench-toast interior-toast" role="status">${escapeHtml(ui.toast ?? "已进入项目工作台。")}</p>
+        ${renderWorkspaceStatusToast(ui.toast, "interior-toast")}
       </main>
       <button class="interior-help-button" type="button" aria-label="智能助手">✦</button>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
@@ -1202,7 +1340,7 @@ function renderImportedAssetCard(asset, ui) {
       tabindex="-1"
     >
       <div class="imported-asset-preview">
-        ${preview ? `<img src="${escapeHtml(preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
       </div>
       <div class="imported-asset-meta asset-card-meta-row">
         <div class="asset-card-copy">
@@ -1236,7 +1374,7 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
       tabindex="-1"
     >
       <div class="other-imported-preview">
-        ${preview ? `<img src="${escapeHtml(preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
         ${mediaType === "video" ? '<span class="other-imported-play" aria-hidden="true">▶</span>' : ""}
         <span class="other-imported-badge">审核中</span>
       </div>
@@ -1271,10 +1409,16 @@ function renderImportedAssetMenu(asset, assetKind, mediaType) {
   `;
 }
 
-function renderAssetImportModal(ui) {
+export function renderAssetImportModal(ui) {
   const activeTab = ui.assetImportModalTab ?? "local";
   const assetKind = ui.assetImportModal ?? "character";
   const assetLabel = getAssetModalLabel(assetKind, ui.projectOtherAssetMediaType ?? "video");
+  const isEpisodeWorkbenchLibraryModal =
+    ui.projectPanelMode === "episode-workbench" && assetKind !== "other";
+
+  if (isEpisodeWorkbenchLibraryModal) {
+    return renderEpisodeWorkbenchAssetImportModal(ui, assetKind);
+  }
 
   return `
     <section class="asset-import-backdrop modal-backdrop" role="dialog" aria-modal="true" aria-label="import-asset-dialog">
@@ -1292,6 +1436,190 @@ function renderAssetImportModal(ui) {
       </div>
     </section>
   `;
+}
+
+function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
+  const tabs = [
+    { id: "character", label: "角色" },
+    { id: "scene", label: "场景" },
+    { id: "prop", label: "道具" },
+  ];
+  const projectLibraryBackedAssets =
+    assetKind === "character"
+      ? (ui.projectLibraryAssetsByType?.character ?? []).map((asset) => ({
+          id: asset.id,
+          name: asset.label ?? asset.assetKey ?? "未命名资产",
+          preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+        }))
+      : assetKind === "scene"
+        ? (ui.projectLibraryAssetsByType?.scene ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+          }))
+        : (ui.projectLibraryAssetsByType?.prop ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+          }));
+  const projectBackedAssets =
+    assetKind === "character"
+      ? (ui.projectDetail?.assetsByType?.character ?? []).map((asset) => ({
+          id: asset.id,
+          name: asset.label ?? asset.assetKey ?? "未命名资产",
+          preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+        }))
+      : assetKind === "scene"
+        ? (ui.projectDetail?.assetsByType?.scene ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+          }))
+        : (ui.projectDetail?.assetsByType?.prop ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+          }));
+  const assets = normalizeEpisodeWorkbenchImportAssets(
+    projectLibraryBackedAssets.length
+      ? projectLibraryBackedAssets
+      : projectBackedAssets.length
+        ? projectBackedAssets
+        : (ui.assetImportOfficialAssets ?? []),
+  );
+  const pageSize = normalizeAssetImportPageSize(ui.assetImportPageSize);
+  const totalPages = Math.max(1, Math.ceil(assets.length / pageSize));
+  const currentPage = clampAssetImportPage(ui.assetImportPage ?? 1, totalPages);
+  const start = (currentPage - 1) * pageSize;
+  const visibleAssets = assets.slice(start, start + pageSize);
+  const selection = ui.assetImportSelection ?? [];
+  const pageSizes = [10, 20, 50, 100];
+  const hasAssets = assets.length > 0;
+
+  return `
+    <section class="asset-import-backdrop modal-backdrop" role="dialog" aria-modal="true" aria-label="from-library-dialog">
+      <div class="episode-asset-library-modal">
+        <button class="asset-modal-close" type="button" data-action="close-asset-import-modal" aria-label="关闭">×</button>
+        <header class="episode-asset-library-head">
+          <h2>从资产库添加</h2>
+          <nav class="episode-asset-library-tabs" aria-label="资产类型">
+            ${tabs
+              .map(
+                (tab) => `
+                  <button
+                    class="${tab.id === assetKind ? "active" : ""}"
+                    type="button"
+                    data-action="set-asset-import-kind"
+                    data-asset-kind="${escapeAttr(tab.id)}"
+                  >
+                    ${escapeHtml(tab.label)}
+                  </button>
+                `,
+              )
+              .join("")}
+          </nav>
+        </header>
+        <div class="episode-asset-library-body ${hasAssets ? "" : "empty"}">
+          ${
+            hasAssets
+              ? `
+                <div class="episode-asset-library-grid" data-asset-import-kind="${escapeAttr(assetKind)}">
+                  ${visibleAssets
+                    .map(
+                      (asset) => `
+                        <button
+                          type="button"
+                          class="episode-asset-library-card ${selection.includes(asset.id) ? "selected" : ""}"
+                          data-action="toggle-official-asset-import"
+                          data-asset-id="${escapeAttr(asset.id)}"
+                        >
+                          <span class="episode-asset-library-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true"></span>
+                          <span class="episode-asset-library-thumb" aria-hidden="true">
+                            ${asset.preview ? `<img src="${escapeHtml(asset.preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+                          </span>
+                          <strong>${escapeHtml(asset.name)}</strong>
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>
+                <footer class="episode-asset-library-footer">
+                  <div class="episode-asset-library-pagination">
+                    <span>共 ${assets.length} 条</span>
+                    <div class="episode-asset-library-page-size-wrap">
+                      <button
+                        class="episode-asset-library-page-size"
+                        type="button"
+                        data-action="toggle-asset-import-page-size-menu"
+                        aria-expanded="${ui.assetImportPageSizeMenuOpen ? "true" : "false"}"
+                      >
+                        ${pageSize}条/页
+                      </button>
+                      ${
+                        ui.assetImportPageSizeMenuOpen
+                          ? `
+                            <div class="episode-asset-library-page-size-menu">
+                              ${pageSizes
+                                .map(
+                                  (size) => `
+                                    <button type="button" data-action="set-asset-import-page-size" data-page-size="${size}">
+                                      ${size}条/页
+                                    </button>
+                                  `,
+                                )
+                                .join("")}
+                            </div>
+                          `
+                          : ""
+                      }
+                    </div>
+                    <div class="episode-asset-library-page-controls">
+                      <button type="button" data-action="change-asset-import-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)}>上一页</button>
+                      <em>${currentPage}</em>
+                      <button type="button" data-action="change-asset-import-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)}>下一页</button>
+                    </div>
+                  </div>
+                  <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" ${disabled(!selection.length)}>确认</button>
+                </footer>
+              `
+              : `
+                <div class="episode-asset-library-empty">
+                  <span class="asset-import-lock" aria-hidden="true">✦</span>
+                  <strong>暂无数据</strong>
+                </div>
+                <footer class="episode-asset-library-footer empty">
+                  <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" disabled>确认</button>
+                </footer>
+              `
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function normalizeEpisodeWorkbenchImportAssets(assets = []) {
+  return assets.map((asset) => ({
+    id: asset.id,
+    name: asset.name ?? asset.label ?? "未命名资产",
+    preview: asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? "",
+  }));
+}
+
+function normalizeAssetImportPageSize(value) {
+  const pageSize = Number(value);
+  if ([10, 20, 50, 100].includes(pageSize)) {
+    return pageSize;
+  }
+  return 10;
+}
+
+function clampAssetImportPage(value, totalPages) {
+  const page = Number(value);
+  if (!Number.isFinite(page)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(page), 1), totalPages);
 }
 
 function renderAssetImportTab(activeTab, tab, label) {
@@ -1322,7 +1650,30 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
       ["two-d-modern", "2D · 现代都市"],
       ["two-d-fantasy", "2D · 东方幻想"],
     ];
-    const officialAssets = ui.assetImportOfficialAssets ?? [];
+    const projectBackedAssets =
+      assetKind === "character"
+        ? (ui.projectDetail?.assetsByType?.character ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+          }))
+        : assetKind === "scene"
+          ? (ui.projectDetail?.assetsByType?.scene ?? []).map((asset) => ({
+              id: asset.id,
+              name: asset.label ?? asset.assetKey ?? "未命名资产",
+              preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+            }))
+          : assetKind === "prop"
+            ? (ui.projectDetail?.assetsByType?.prop ?? []).map((asset) => ({
+                id: asset.id,
+                name: asset.label ?? asset.assetKey ?? "未命名资产",
+                preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+              }))
+            : [];
+    const officialAssets =
+      projectBackedAssets.length > 0
+        ? projectBackedAssets
+        : (ui.assetImportOfficialAssets ?? []);
     const selection = ui.assetImportSelection ?? [];
 
     return `
@@ -1494,15 +1845,9 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "video") {
   const preferWorkbenchAssets = ui.projectPanelMode === "episode-workbench";
   if (preferWorkbenchAssets) {
     if (assetKind === "other") {
-      const workbenchOther = ui.importedAssets?.other?.[mediaType] ?? [];
-      if (workbenchOther.length) {
-        return workbenchOther;
-      }
+      return ui.importedAssets?.other?.[mediaType] ?? [];
     } else {
-      const workbenchAssets = ui.importedAssets?.[assetKind] ?? [];
-      if (workbenchAssets.length) {
-        return workbenchAssets;
-      }
+      return ui.importedAssets?.[assetKind] ?? [];
     }
   }
   const detailAssets = state?.projectDetail?.assetsByType;
@@ -1883,7 +2228,7 @@ function renderAssetGeneratorPreviewCard(asset) {
   return `
     <article class="asset-generator-preview-card">
       <div class="asset-generator-preview-media">
-        <img src="${escapeHtml(asset.preview || asset.previewUrl || "")}" alt="${escapeHtml(asset.name || "素材预览")}" />
+        <img src="${escapeHtml(resolveApiUrl(asset.preview || asset.previewUrl || ""))}" alt="${escapeHtml(asset.name || "素材预览")}" />
       </div>
     </article>
   `;
@@ -2058,7 +2403,7 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
           ? `<span class="asset-card-preview-stack" aria-hidden="true">
               ${previews
                 .slice(0, 3)
-                .map((preview) => `<img src="${escapeHtml(preview)}" alt="" />`)
+                .map((preview) => `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="" />`)
                 .join("")}
             </span>`
           : `<span class="comic-art ${kind}" aria-hidden="true"></span>`
@@ -2074,7 +2419,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return `
-      ${renderScriptManagementPage({ ui })}
+      ${renderScriptManagementPage({ state, ui })}
     `;
   }
 
@@ -2097,21 +2442,30 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         libraryDetailAssetId: ui.libraryDetailAssetId,
         libraryDetailView: ui.libraryDetailView,
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        billingPackages: ui.billingPackages ?? [],
+        billingOrder: ui.lastBillingOrder ?? null,
+        paymentIntent: ui.lastPaymentIntent ?? null,
+        paymentAction: ui.lastPaymentAction ?? null,
         projectName: detailState.project.name,
+        assetsByType: ui.projectLibraryAssetsByType ?? ui.importedAssets ?? null,
+        searchQuery: ui.libraryAssetSearchQuery ?? "",
+        typeFilter: ui.libraryAssetTypeFilter ?? "all",
+        libraryCategory: ui.libraryCategory ?? "角色",
+        libraryFolder: ui.libraryFolder ?? "国内仿真人·现代都市",
+        selectedLibraryAssetId: ui.selectedLibraryAssetId ?? null,
+        selectedLibraryImportIds: ui.selectedLibraryImportIds ?? [],
+        members: ui.projectMembers ?? [],
+        stats: ui.projectStats ?? null,
       })}
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已进入资产库。")}</p>
+      ${renderWorkspaceStatusToast(ui.toast)}
     `);
   }
 
   if (activeNavTab === "tools") {
     return `
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      <section class="placeholder-panel">
-        <p class="section-kicker">工具箱</p>
-        <h2>生产辅助工具</h2>
-        <p>这里预留给批量任务、提示词模板、镜头校验和导出诊断。现在仍可通过项目页完成主要生产动作。</p>
-      </section>
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      ${renderToolsPanel({ state, ui })}
+      ${renderWorkspaceStatusToast(ui.toast)}
     `;
   }
 
@@ -2121,20 +2475,26 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        billingPackages: ui.billingPackages ?? [],
+        billingOrder: ui.lastBillingOrder ?? null,
+        paymentIntent: ui.lastPaymentIntent ?? null,
+        paymentAction: ui.lastPaymentAction ?? null,
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
-        team: {
-          overview: ui.teamOverview,
-          members: ui.teamMembers,
-          dashboardTab: ui.teamDashboardTab,
-          dashboardDateRange: ui.teamDashboardDateRange,
-          error: ui.teamError,
-          createOpen: Boolean(ui.isTeamMemberCreateOpen),
-          draft: ui.teamMemberDraft,
-          createNotice: ui.teamMemberCreateNotice,
-          temporaryPassword: ui.teamTemporaryPassword,
-        },
+        createMemberModal: ui.createMemberModal ?? null,
+        editMemberModal: ui.editMemberModal ?? null,
+        dashboardTab: ui.teamDashboardTab ?? "member-consumption",
+        dashboardDateShortcut: ui.teamDashboardDateShortcut ?? "今天",
+        dashboardRoleFilter: ui.teamDashboardRoleFilter ?? "all",
+        dashboardStatusFilter: ui.teamDashboardStatusFilter ?? "all",
+        selectedDashboardMemberId: ui.selectedDashboardMemberId ?? null,
+        projectName: detailState.project.name,
+        members: ui.projectMembers ?? [],
+        stats: ui.projectStats ?? null,
+        memberSearchQuery: ui.teamMemberSearchQuery ?? "",
+        memberRoleFilter: ui.teamMemberRoleFilter ?? "all",
+        memberStatusFilter: ui.teamMemberStatusFilter ?? "all",
       })}
-      <p id="workspace-status" class="workbench-toast sr-only" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      ${renderWorkspaceStatusToast(ui.toast)}
     `);
   }
 
@@ -2180,10 +2540,11 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     ${renderEpisodeWorkbench({
       storyboards: ui.storyboards ?? [],
       selectedStoryboard: ui.selectedStoryboard,
+      selectedStoryboardIds: ui.selectedStoryboardIds ?? [],
       isStoryboardDescriptionModalOpen: Boolean(ui.isStoryboardDescriptionModalOpen),
       storyboardDescriptionDraft: ui.storyboardDescriptionDraft ?? "",
       selectedModelId: ui.selectedModelId,
-      prompt: ui.prompt,
+      prompt: resolveEpisodeWorkbenchPrompt(ui, ui.storyboards ?? []),
       busy: ui.busy,
       canParse: Boolean(state.project),
       canCalibrate: Boolean(state.assetReview?.readyForGeneration && state.shots?.length),
@@ -2197,6 +2558,17 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       calibrationOverrideReason: ui.calibrationOverrideReason ?? "",
       imageGenerationResult: ui.imageGenerationResult ?? null,
       videoGenerationResult: ui.videoGenerationResult ?? null,
+      assetImportModal: ui.assetImportModal ?? null,
+      assetImportModalTab: ui.assetImportModalTab ?? "local",
+      assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
+      assetImportDrafts: ui.assetImportDrafts ?? [],
+      assetImportSelection: ui.assetImportSelection ?? [],
+      assetImportPage: ui.assetImportPage ?? 1,
+      assetImportPageSize: ui.assetImportPageSize ?? 10,
+      assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
+      assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
+      projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
+      projectDetail: ui.projectDetail ?? null,
       mediaMode: ui.episodeMediaMode ?? "image",
       videoMode: ui.videoGenerationMode ?? "first-frame",
       imageMode: ui.imageGenerationMode ?? "single-image",
@@ -2218,6 +2590,14 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
         activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
         isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+        promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
+        promptMentionQuery: ui.promptMentionQuery ?? "",
+        promptMentionSuggestions: ui.promptMentionSuggestions ?? [],
+        promptMentionPreviewOpen: Boolean(ui.promptMentionPreviewOpen),
+        promptMentionPreviewAsset: ui.promptMentionPreviewAsset ?? null,
+        lipSyncVoiceId: ui.lipSyncVoiceId ?? null,
+        lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
+        lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
@@ -2231,7 +2611,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       busy: ui.busy,
       canPreview: Boolean(state.shots?.length),
     })}
-    <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+    ${renderWorkspaceStatusToast(ui.toast)}
   `;
 }
 
@@ -2249,8 +2629,124 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
+function renderToolsPanel({ state, ui }) {
+  const uploadLimits = ui.episodeGenerationConfig?.uploadLimits ?? {};
+  const image = uploadLimits.image ?? {};
+  const video = uploadLimits.video ?? {};
+  const audio = uploadLimits.audio ?? {};
+  const blockedExtensions = Array.isArray(uploadLimits.blockedExtensions) ? uploadLimits.blockedExtensions : [];
+  const exportHistory = Array.isArray(ui.exportHistory) ? ui.exportHistory : [];
+  const latestExport = exportHistory[0] ?? null;
+  const hasReadyStoryboardVideo = (ui.storyboards ?? []).some(
+    (storyboard) =>
+      storyboard?.selectedVideoStatus === "ready" ||
+      storyboard?.currentVideoStatus === "ready" ||
+      storyboard?.videoStatus === "ready",
+  );
+  const timeoutMinutes = 15;
+  const pollSeconds = 15;
+
+  return `
+    <section class="overview-strip" aria-label="工具箱总览">
+      ${renderMetric("轮询频率", `${pollSeconds} 秒`)}
+      ${renderMetric("超时判定", `${timeoutMinutes} 分钟`)}
+      ${renderMetric("当前积分", resolveDisplayedCreditBalance(ui))}
+      ${renderMetric("导出状态", hasReadyStoryboardVideo ? "可导出原视频" : "等待分镜视频就绪")}
+    </section>
+    <section class="episode-overview" aria-label="工具箱工作台">
+      <article class="episode-launch-card">
+        <p class="section-kicker">上传约束</p>
+        <h2>直传云存储前的本地校验</h2>
+        <p>浏览器先按后端返回的限制校验文件，再直传对象存储；业务后端仅负责准备上传会话、校验完成状态和绑定资源。</p>
+        <ul class="project-empty-points">
+          <li>图片：${renderUploadLimitLine(image, true)}</li>
+          <li>视频：${renderUploadLimitLine(video, false)}</li>
+          <li>音频：${renderUploadLimitLine(audio, false)}</li>
+          <li>禁止上传：${blockedExtensions.length ? blockedExtensions.join("、") : "以后端策略为准"}</li>
+        </ul>
+      </article>
+      <article class="episode-list-card">
+        <div class="episode-list-header">
+          <div>
+            <p class="section-kicker">任务规则</p>
+            <h2>生成、扣费与超时处理</h2>
+          </div>
+        </div>
+        <div class="asset-library-empty">
+          <h3>当前链路按真实规则运行</h3>
+          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 15 秒轮询一次，超过 15 分钟标记失败。</p>
+          <ul class="project-empty-points">
+            <li>图片默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultImageModelCode ?? "nano_banana_2")}</li>
+            <li>视频默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultVideoModelCode ?? "video_mock_1")}</li>
+            <li>跨域拦截：非白名单来源返回 403，并使用统一错误信封</li>
+            <li>固定回写：当前阶段图片与视频结果仍走真实任务写回，只是素材来源固定</li>
+          </ul>
+        </div>
+      </article>
+    </section>
+    <section class="episode-overview" aria-label="导出与诊断">
+      <article class="episode-list-card">
+        <div class="episode-list-header">
+          <div>
+            <p class="section-kicker">导出诊断</p>
+            <h2>原视频导出</h2>
+          </div>
+        </div>
+        <div class="asset-library-empty">
+          <h3>${hasReadyStoryboardVideo ? "已满足导出前提" : "尚未满足导出前提"}</h3>
+          <p>${hasReadyStoryboardVideo ? "导出直接导出原视频，不做额外画质限制。" : "至少需要一个已就绪的分镜视频，导出预览才会展示真实下载入口。"}</p>
+          <ul class="project-empty-points">
+            <li>最近导出任务：${escapeHtml(latestExport?.statusLabel ?? latestExport?.status ?? "暂无记录")}</li>
+            <li>最近导出格式：${escapeHtml(latestExport?.formatLabel ?? latestExport?.format ?? "原视频")}</li>
+            <li>最近导出时间：${escapeHtml(latestExport?.createdAtLabel ?? latestExport?.createdAt ?? "暂无记录")}</li>
+            <li>批量能力：当前仅保留入口，不真正提交批量任务</li>
+          </ul>
+        </div>
+      </article>
+      <article class="episode-launch-card">
+        <p class="section-kicker">后续接入位</p>
+        <h2>保留可替换接口，不伪装成功能</h2>
+        <p>真实生成服务接入后，只替换任务执行与结果来源；前端调用、任务状态、写库与资源绑定契约保持不变。</p>
+      </article>
+    </section>
+  `;
+}
+
+function renderUploadLimitLine(rule = {}, includeReferenceLimit = false) {
+  const parts = [];
+  if (rule.maxBytes) {
+    parts.push(formatBytes(rule.maxBytes));
+  }
+  if (includeReferenceLimit && rule.maxReferencesPerTask) {
+    parts.push(`单任务最多 ${rule.maxReferencesPerTask} 张参考图`);
+  }
+  if (rule.recommendedMaxDurationSeconds) {
+    parts.push(`建议时长不超过 ${Math.round(rule.recommendedMaxDurationSeconds / 60)} 分钟`);
+  }
+  if (Array.isArray(rule.extensions) && rule.extensions.length) {
+    parts.push(rule.extensions.join(" / "));
+  }
+  return parts.length ? parts.join("，") : "以后端策略为准";
+}
+
+function formatBytes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = numeric;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 10 || unitIndex === 0 ? Math.round(size) : Math.round(size * 10) / 10;
+  return `${rounded} ${units[unitIndex]}`;
+}
+
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false } = options;
+  const { hideBrand = false, creditBalance = 0 } = options;
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -2273,7 +2769,7 @@ function renderGlobalStatusbar(session, options = {}) {
         <span class="statusbar-seedance">限时特惠 免费排队 <b>SEEDANCE 2.0</b></span>
         <button class="statusbar-pill" type="button">创作手册</button>
         <button class="statusbar-pill" type="button">商务合作</button>
-        <button class="statusbar-credit" type="button"><span>✦</span> 0 <span aria-hidden="true">⌄</span></button>
+        <button class="statusbar-credit" type="button" aria-label="积分余额"><span>✦</span> ${escapeHtml(String(creditBalance))} <span aria-hidden="true">⌄</span></button>
         <button class="statusbar-icon" type="button" aria-label="消息通知">✉</button>
         <div class="statusbar-popover-wrap">
           <button class="statusbar-icon" type="button" aria-haspopup="menu" aria-label="客服支持">◎</button>
@@ -2312,6 +2808,7 @@ function renderGlobalStatusbar(session, options = {}) {
 function renderHomeHero({ detailState }) {
   return `
     <section class="home-hero" aria-label="首页">
+      <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
         <div class="hero-brand-lockup">
@@ -2395,7 +2892,7 @@ function renderProjectGallery({ ui }) {
         }
       </section>
       ${filteredProjects.length > pageSize ? renderProjectPagination({ currentPage, totalPages }) : ""}
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已连接到本地 creator API。")}</p>
+      ${renderWorkspaceStatusToast(ui.toast)}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>

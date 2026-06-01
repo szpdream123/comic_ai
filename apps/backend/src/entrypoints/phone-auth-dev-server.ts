@@ -11,6 +11,14 @@ import {
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import {
+  createDefaultPaymentProviderRegistry,
+  createLocalPaymentProviderAdapter,
+  createPayLabAdapter,
+  createStaticPaymentProviderRegistry,
+  isPaymentProvider,
+  type PaymentProvider,
+} from "../modules/commerce-payment/payment-provider-adapter.ts";
+import {
   createPersistentLoginChallenge,
   findPersistentAuthSessionByToken,
   revokePersistentAuthSession,
@@ -38,6 +46,17 @@ import {
   type UploadSessionRuntime,
 } from "../modules/storage/upload-session.service.ts";
 import { createAssetVersionSnapshot } from "../modules/project/asset-version-record.service.ts";
+import {
+  buildAssetConversationEntries,
+  deleteAssetConversationTurn,
+  findAssetConversationThread,
+  listAssetConversationMessages,
+  upsertAssetConversationMessages,
+  upsertAssetConversationThread,
+  type AssetConversationMediaMode,
+  type AssetConversationMessageType,
+  type AssetConversationStatus,
+} from "../modules/project/asset-conversation-record.service.ts";
 import type { AssetType } from "../modules/project/asset.service.ts";
 import { createExportRecord } from "../modules/project/export-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
@@ -52,12 +71,14 @@ import { capabilities } from "../../../../packages/contracts/domain/capabilities
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
+const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
+const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const devInitialCreditBalance = 10000;
 const generationTaskTimeoutMs = 15 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -122,6 +143,24 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
+function createDevPaymentProviderRegistry() {
+  const paylabBaseUrl = process.env.PAYLAB_BASE_URL?.trim();
+  if (!paylabBaseUrl) {
+    return createDefaultPaymentProviderRegistry();
+  }
+
+  return createStaticPaymentProviderRegistry({
+    paylab: createPayLabAdapter({
+      baseUrl: paylabBaseUrl,
+      apiKey: process.env.PAYLAB_API_KEY?.trim(),
+      webhookSigningSecret: process.env.PAYLAB_WEBHOOK_SIGNING_SECRET?.trim(),
+      dashboardBaseUrl: process.env.PAYLAB_DASHBOARD_BASE_URL?.trim(),
+    }),
+    wechat_pay: createLocalPaymentProviderAdapter("wechat_pay"),
+    alipay: createLocalPaymentProviderAdapter("alipay"),
+  });
+}
+
 interface AuthHttpResponse<T> {
   status: number;
   body: T;
@@ -165,13 +204,18 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<unknown> {
+  const body = await readTextBody(request);
+  return body ? JSON.parse(body) : {};
+}
+
+async function readTextBody(request: AsyncIterable<Buffer | string>): Promise<string> {
   let body = "";
 
   for await (const chunk of request) {
     body += String(chunk);
   }
 
-  return body ? JSON.parse(body) : {};
+  return body;
 }
 
 async function readMultipartFormData(
@@ -212,6 +256,17 @@ function writeIdempotencyKeyRequired(response: ServerResponse) {
   });
 }
 
+function singleValueHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).flatMap(([key, value]) => {
+      const first = Array.isArray(value) ? value[0] : value;
+      return first ? [[key, first]] : [];
+    }),
+  );
+}
+
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
   if (error instanceof SyntaxError) {
     writeJson(response, {
@@ -242,7 +297,7 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
       status === 401
         ? "登录已过期，请重新登录"
         : status === 404
-          ? "资源不存在或无权访问"
+          ? "资源不存在或无权限访问"
           : "没有权限执行该操作，请确认项目成员角色";
     writeJson(response, envelopedError(status, errorCode, message, { reason: error.code }));
     return true;
@@ -260,6 +315,23 @@ function writeJson(response: ServerResponse, payload: AuthHttpResponse<unknown>)
   }
 
   response.end(JSON.stringify(payload.body));
+}
+
+function writeText(
+  response: ServerResponse,
+  input: {
+    status: number;
+    contentType: string;
+    body: string;
+    fileName?: string | null;
+  },
+) {
+  response.statusCode = input.status;
+  response.setHeader("content-type", input.contentType);
+  if (input.fileName) {
+    response.setHeader("content-disposition", `attachment; filename="${input.fileName}"`);
+  }
+  response.end(input.body);
 }
 
 function requestId() {
@@ -436,7 +508,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_mime_not_allowed",
-      message: `${rule.label} MIME 类型不在允许列表中`,
+      message: `${rule.label} MIME 类型不在允许列表中`, 
     };
   }
   const sizeBytes = Number(input.sizeBytes ?? 0);
@@ -485,38 +557,72 @@ function normalizeGenerationKind(kind: "image" | "video") {
       };
 }
 
-async function readMockGenerationMedia(config: ReturnType<typeof normalizeGenerationKind>) {
-  if (config.sourcePath) {
-    try {
-      return {
-        bytes: await readFile(config.sourcePath),
-        contentType: config.contentType,
-        fileExtension: config.fileExtension,
-        usedFallback: false,
-      };
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error
-        ? (error as { code?: unknown }).code
-        : null;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
+function resolveEpisodeGenerationAssetType(input: {
+  kind: "image" | "video";
+  targetType?: unknown;
+  assetType?: unknown;
+}) {
+  if (input.kind === "video") {
+    return "shot_video" as const;
   }
+  if (String(input.targetType ?? "") === "asset") {
+    return normalizeEpisodeAssetType(String(input.assetType ?? "role")).assetType;
+  }
+  return "shot_image" as const;
+}
 
-  return config.mediaKind === "image"
-    ? {
-        bytes: fallbackMockImageBytes,
-        contentType: "image/png",
-        fileExtension: "png",
-        usedFallback: true,
-      }
-    : {
-        bytes: fallbackMockVideoBytes,
-        contentType: "video/mp4",
-        fileExtension: "mp4",
-        usedFallback: true,
-      };
+async function resolveEpisodeGenerationTargetAsset(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+    targetType: string;
+    targetId: string;
+    assetType: AssetType;
+  },
+) {
+  if (input.targetType !== "asset" || !isUuid(input.targetId)) {
+    return null;
+  }
+  const row = await queryOne<{
+    asset_key: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT a.asset_key, v.metadata_json
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT metadata_json
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+        AND a.asset_type = $4
+      LIMIT 1
+    `,
+    [input.organizationId, input.projectId, input.targetId, input.assetType],
+  );
+  if (!row) {
+    return null;
+  }
+  const metadata =
+    typeof row.metadata_json === "string"
+      ? JSON.parse(row.metadata_json) as Record<string, unknown>
+      : row.metadata_json ?? {};
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  return {
+    assetKey: row.asset_key,
+    metadata,
+  };
 }
 
 function normalizeProjectDetailForEpisodeContract(detail: Record<string, unknown>) {
@@ -866,6 +972,32 @@ async function mapGenerationTaskResponse(
       now: input.now,
     });
   }
+  const lipSyncConfig =
+    snapshot.parameters &&
+    typeof snapshot.parameters === "object" &&
+    (snapshot.parameters as Record<string, unknown>).lipSyncConfig &&
+    typeof (snapshot.parameters as Record<string, unknown>).lipSyncConfig === "object"
+      ? (snapshot.parameters as Record<string, unknown>).lipSyncConfig as Record<string, unknown>
+      : null;
+  const generatedAudioItems =
+    kind === "video" &&
+    (snapshot.lipSyncEnabled === true || String((snapshot.parameters as Record<string, unknown> | undefined)?.mode ?? "") === "lip-sync") &&
+    lipSyncConfig
+      ? [{
+          id: `${row.task_id}-audio-1`,
+          type: "audio",
+          kind: "audio",
+          name: "闊抽 1",
+          summary: String(lipSyncConfig.text ?? snapshot.prompt ?? "").trim().slice(0, 48),
+          voiceId: lipSyncConfig.voiceId ?? null,
+          voiceName: String(lipSyncConfig.voiceName ?? "").trim(),
+          voiceSource: lipSyncConfig.voiceSource ?? null,
+          audioUrl: buildMockVoicePreviewDataUrl(
+            `${String(lipSyncConfig.voiceName ?? "").trim()}:${String(lipSyncConfig.text ?? snapshot.prompt ?? "").trim().slice(0, 24)}`,
+          ),
+          status: "ready",
+        }]
+      : [];
 
   const result =
     row.asset_version_id && urls
@@ -883,6 +1015,7 @@ async function mapGenerationTaskResponse(
           sourceUrl: urls.sourceUrl,
           downloadUrl: urls.downloadUrl,
           expiresAt: urls.expiresAt,
+          generatedAudioItems,
         }
       : null;
 
@@ -911,10 +1044,49 @@ async function mapGenerationTaskResponse(
         }
       : null,
     creditBalance: Number(row.credit_balance_cached ?? 0),
+    generatedAudioItems,
     result,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+function buildMockVoicePreviewDataUrl(seedValue: string) {
+  const seed = [...String(seedValue ?? "")].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const sampleRate = 8000;
+  const durationSec = 0.45;
+  const samples = Math.floor(sampleRate * durationSec);
+  const frequency = 300 + (seed % 220);
+  const pcmBytes = new Uint8Array(samples);
+  for (let index = 0; index < samples; index += 1) {
+    const envelope = Math.min(1, index / 600) * Math.min(1, (samples - index) / 600);
+    const sample = Math.sin((2 * Math.PI * frequency * index) / sampleRate) * 0.5 * envelope;
+    pcmBytes[index] = Math.max(0, Math.min(255, Math.round(128 + sample * 127)));
+  }
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes.length, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  writeString(36, "data");
+  view.setUint32(40, pcmBytes.length, true);
+  const wavBytes = new Uint8Array(header.byteLength + pcmBytes.length);
+  wavBytes.set(new Uint8Array(header), 0);
+  wavBytes.set(pcmBytes, header.byteLength);
+  return `data:audio/wav;base64,${Buffer.from(wavBytes).toString("base64")}`;
 }
 
 async function settleTimedOutEpisodeGenerationTask(
@@ -1063,7 +1235,7 @@ async function runCreatorRepairMaintenance(
   },
 ) {
   const storage = await runStorageRepairJob(db, {
-    adapter: input.runtime.adapter,
+    runtime: input.runtime,
     now: input.now,
   });
   const episodeGeneration = await repairTimedOutEpisodeGenerationTasks(db, {
@@ -1111,6 +1283,9 @@ async function createEpisodeGenerationTask(
     parameters: input.body.parameters && typeof input.body.parameters === "object"
       ? input.body.parameters as Record<string, unknown>
       : {},
+    audioEnabled: Boolean(input.body.audioEnabled),
+    musicEnabled: Boolean(input.body.musicEnabled),
+    lipSyncEnabled: Boolean(input.body.lipSyncEnabled),
   };
   const store = new SqlIdempotencyRecordStore(db);
   const started = await beginOrReplayCommand(store, {
@@ -1239,21 +1414,41 @@ async function createEpisodeGenerationTask(
     now: input.now,
   });
 
+  const resultAssetType = resolveEpisodeGenerationAssetType({
+    kind: input.kind,
+    targetType: requestSnapshot.targetType,
+    assetType: input.body.assetType,
+  });
+  const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    targetType: requestSnapshot.targetType,
+    targetId: requestSnapshot.targetId,
+    assetType: resultAssetType,
+  });
+  const targetMetadata = targetAsset?.metadata ?? {};
   await createAssetVersionSnapshot(db, {
     organizationId: context.actor.organizationId,
     projectId: context.project.id,
-    assetType: input.kind === "video" ? "shot_video" : "shot_image",
-    assetKey: `${input.kind}:${input.episodeId}:${task.id}`,
+    assetType: resultAssetType,
+    assetKey: targetAsset?.assetKey ?? `${input.kind}:${input.episodeId}:${task.id}`,
     createdByUserId: context.userId,
     storageObjectId: storageObject.id,
     storageObjectKey: storageObject.object_key,
     metadata: {
+      ...targetMetadata,
       mimeType: config.contentType,
       width: input.kind === "video" ? 1280 : 1024,
       height: input.kind === "video" ? 720 : 1024,
-      label: input.kind === "video" ? "Mock episode video" : "Mock episode image",
+      label:
+        typeof targetMetadata.label === "string" && targetMetadata.label.trim()
+          ? targetMetadata.label
+          : input.kind === "video" ? "Mock episode video" : "Mock episode image",
       episodeId: input.episodeId,
       taskId: task.id,
+      targetType: requestSnapshot.targetType,
+      targetId: requestSnapshot.targetId,
       previewUrl: urls.previewUrl,
       sourceUrl: urls.sourceUrl,
       downloadUrl: urls.downloadUrl,
@@ -1376,7 +1571,7 @@ async function resolveEpisodeAssetVersion(
     typeof row.metadata_json === "string"
       ? JSON.parse(row.metadata_json) as Record<string, unknown>
       : row.metadata_json;
-  if (typeof metadata.episodeId === "string" && metadata.episodeId !== input.episodeId) {
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
     return null;
   }
   return {
@@ -1432,9 +1627,735 @@ async function signedAssetVersionFragment(
     fileId: input.version.storageObjectId,
     storageObjectKey: input.version.storageObjectKey,
     contentType: input.version.contentType,
-    previewUrl: urls?.previewUrl ?? input.version.metadata.previewUrl ?? null,
-    sourceUrl: urls?.sourceUrl ?? input.version.metadata.sourceUrl ?? null,
-    downloadUrl: urls?.downloadUrl ?? input.version.metadata.downloadUrl ?? null,
+    previewUrl:
+      urls?.previewUrl ??
+      input.version.metadata.previewUrl ??
+      input.version.metadata.imageUrl ??
+      input.version.metadata.fixedImageUrl ??
+      null,
+    sourceUrl:
+      urls?.sourceUrl ??
+      input.version.metadata.sourceUrl ??
+      input.version.metadata.imageUrl ??
+      input.version.metadata.previewUrl ??
+      null,
+    downloadUrl:
+      urls?.downloadUrl ??
+      input.version.metadata.downloadUrl ??
+      input.version.metadata.sourceUrl ??
+      input.version.metadata.imageUrl ??
+      input.version.metadata.previewUrl ??
+      null,
+  };
+}
+
+function normalizeEpisodeAssetType(value: string) {
+  if (value === "role" || value === "character") {
+    return { assetType: "character_sheet" as const, kind: "role" as const };
+  }
+  if (value === "scene") {
+    return { assetType: "scene_reference" as const, kind: "scene" as const };
+  }
+  return { assetType: "prop_reference" as const, kind: "prop" as const };
+}
+
+function defaultEpisodeAssetDescription(kind: "role" | "scene" | "prop") {
+  if (kind === "role") {
+    return "自己的角色描述，随意更改";
+  }
+  if (kind === "scene") {
+    return "这是刚添加的场景选项";
+  }
+  return "这是刚添加的道具选项";
+}
+
+function matchesEpisodeScopedAsset(
+  metadata: Record<string, unknown> | null | undefined,
+  episodeId: string,
+) {
+  return typeof metadata?.episodeId === "string" && metadata.episodeId === episodeId;
+}
+
+async function listEpisodeAssetsFromDb(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetType: "role" | "scene" | "prop";
+    sessionToken: string;
+    userId: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    capability?: (typeof capabilities)[keyof typeof capabilities] | null;
+  },
+) {
+  const normalized = normalizeEpisodeAssetType(input.assetType);
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.sessionToken,
+    userId: input.userId,
+    capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const rows = await db.query<{
+    asset_id: string;
+    asset_key: string;
+    asset_type: string;
+    asset_created_at: Date | string;
+    asset_updated_at: Date | string;
+    version_id: string | null;
+    storage_object_id: string | null;
+    storage_object_key: string | null;
+    metadata_json: Record<string, unknown> | string | null;
+    version_created_at: Date | string | null;
+  }>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_key,
+        a.asset_type,
+        a.created_at AS asset_created_at,
+        a.updated_at AS asset_updated_at,
+        v.id AS version_id,
+        v.storage_object_id,
+        v.storage_object_key,
+        v.metadata_json,
+        v.created_at AS version_created_at
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT *
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.asset_type = $3
+      ORDER BY a.updated_at DESC, a.id DESC
+    `,
+    [context.actor.organizationId, context.project.id, normalized.assetType],
+  );
+  const items = await Promise.all(
+    rows.rows
+      .map(async (row) => {
+        const metadata =
+          typeof row.metadata_json === "string"
+            ? JSON.parse(row.metadata_json) as Record<string, unknown>
+            : row.metadata_json ?? {};
+        if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+          return null;
+        }
+        const fixedImageFileId = typeof metadata.fixedImageFileId === "string" ? metadata.fixedImageFileId : null;
+        const fixedImageStorageObjectId =
+          typeof metadata.fixedImageStorageObjectId === "string" ? metadata.fixedImageStorageObjectId : null;
+        const fixedImageVersion =
+          fixedImageFileId || fixedImageStorageObjectId
+            ? await resolveEpisodeAssetVersion(db, {
+                episodeId: input.episodeId,
+                assetVersionId: fixedImageFileId,
+                storageObjectId: fixedImageStorageObjectId,
+                sessionToken: input.sessionToken,
+                userId: input.userId,
+                capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
+                now: input.now,
+              })
+            : null;
+        const fixedImageStorageObjectIdForUrls =
+          fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id;
+        const urls = fixedImageStorageObjectIdForUrls
+          ? await signedUrlsForStorageObject(db, {
+              sessionToken: input.sessionToken,
+              storageObjectId: fixedImageStorageObjectIdForUrls,
+              runtime: input.runtime,
+              signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+              now: input.now,
+            })
+          : null;
+        return {
+          assetId: row.asset_id,
+          assetType: normalized.kind,
+          name: String(metadata.label ?? row.asset_key ?? "未命名资产"),
+          description: String(metadata.description ?? ""),
+          fixedImageFileId: fixedImageVersion?.assetVersion.versionId ?? fixedImageFileId ?? row.version_id,
+          fixedImageStorageObjectId:
+            fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id,
+          fixedImageUrl: urls?.previewUrl ?? String(metadata.fixedImageUrl ?? metadata.previewUrl ?? ""),
+          voiceId: typeof metadata.voiceId === "string" ? metadata.voiceId : null,
+          voiceName: typeof metadata.voiceName === "string" ? metadata.voiceName : null,
+          dubbingConfig:
+            metadata.dubbingConfig && typeof metadata.dubbingConfig === "object"
+              ? metadata.dubbingConfig
+              : null,
+          sortOrder: Number(metadata.sortOrder ?? 0),
+          updatedAt: new Date(row.asset_updated_at).toISOString(),
+          createdAt: new Date(row.asset_created_at).toISOString(),
+        };
+      }),
+  );
+  return items.filter(Boolean);
+}
+
+async function createEpisodeAssetRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const typeValue = String(input.body.assetType ?? input.body.type ?? "role").trim();
+  const name = String(input.body.name ?? "").trim();
+  if (!name) {
+    return { error: "asset_name_required" as const };
+  }
+  const normalized = normalizeEpisodeAssetType(typeValue);
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const assetKey = `episode-${normalized.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
+  const description = String(input.body.description ?? defaultEpisodeAssetDescription(normalized.kind)).trim();
+  const snapshot = await createAssetVersionSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    assetType: normalized.assetType,
+    assetKey,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId: null,
+    storageObjectKey: `episodes/${input.episodeId}/assets/${normalized.kind}/${assetKey}`,
+    metadata: {
+      mimeType: "application/json",
+      width: 1,
+      height: 1,
+      episodeId: input.episodeId,
+      label: name,
+      description,
+      source: "manual",
+      voiceId: null,
+      voiceName: null,
+    },
+    sourceTaskId: null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  return {
+    asset: {
+      assetId: snapshot.asset.id,
+      assetType: normalized.kind,
+      name,
+      description,
+      fixedImageFileId: null,
+      fixedImageStorageObjectId: null,
+      fixedImageUrl: null,
+      voiceId: null,
+      voiceName: null,
+      dubbingConfig: null,
+      sortOrder: 0,
+      updatedAt: snapshot.asset.updatedAt.toISOString(),
+      createdAt: snapshot.asset.createdAt.toISOString(),
+    },
+  };
+}
+
+async function importEpisodeAssetRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const typeValue = String(input.body.assetType ?? input.body.type ?? "role").trim();
+  const name = String(input.body.name ?? "").trim();
+  if (!name) {
+    return { error: "asset_name_required" as const };
+  }
+  const normalized = normalizeEpisodeAssetType(typeValue);
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const sourceUrl = String(input.body.sourceUrl ?? input.body.previewUrl ?? "").trim() || null;
+  const storageObjectId = String(input.body.storageObjectId ?? "").trim();
+  const storageObjectKey = String(input.body.storageObjectKey ?? "").trim();
+  const uploadSessionId = String(input.body.uploadSessionId ?? "").trim() || null;
+  const mimeType = String(input.body.mimeType ?? "image/png").trim() || "image/png";
+  const width = Number(input.body.width ?? 0);
+  const height = Number(input.body.height ?? 0);
+  if (!storageObjectId && !sourceUrl) {
+    return { error: "asset_preview_required" as const };
+  }
+  if (storageObjectId && !isUuid(storageObjectId)) {
+    return { error: "storage_object_not_found" as const };
+  }
+  const description = String(input.body.description ?? defaultEpisodeAssetDescription(normalized.kind)).trim();
+  const assetKey = `episode-${normalized.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
+  let resolvedStorageObjectKey = storageObjectKey;
+  let resolvedSourceUrl = sourceUrl;
+  if (storageObjectId) {
+    const objectRow = await queryOne<{
+      id: string;
+      object_key: string;
+      status: string;
+      content_type: string;
+    }>(
+      db,
+      `
+        SELECT id, object_key, status, content_type
+        FROM storage_objects
+        WHERE organization_id = $1
+          AND id = $2
+      `,
+      [context.actor.organizationId, storageObjectId],
+    );
+    if (!objectRow) {
+      return { error: "storage_object_not_found" as const };
+    }
+    if (objectRow.status !== "available") {
+      return { error: "storage_object_not_available" as const };
+    }
+    resolvedStorageObjectKey = objectRow.object_key;
+    const urls = await signedUrlsForStorageObject(db, {
+      sessionToken: input.authenticated.sessionToken,
+      storageObjectId,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      now: input.now,
+    });
+    resolvedSourceUrl = urls.previewUrl ?? urls.sourceUrl ?? resolvedSourceUrl;
+  }
+  const snapshot = await createAssetVersionSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    assetType: normalized.assetType,
+    assetKey,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId: storageObjectId || null,
+    storageObjectKey:
+      resolvedStorageObjectKey || `episodes/${input.episodeId}/assets/${normalized.kind}/${assetKey}`,
+    metadata: {
+      mimeType,
+      width: Number.isFinite(width) ? width : 0,
+      height: Number.isFinite(height) ? height : 0,
+      episodeId: input.episodeId,
+      label: name,
+      description,
+      source: String(input.body.source ?? "import"),
+      sourceUrl: resolvedSourceUrl,
+      previewUrl: resolvedSourceUrl,
+      uploadSessionId,
+      voiceId: null,
+      voiceName: null,
+    },
+    sourceTaskId: null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  const assets = await listEpisodeAssetsFromDb(db, {
+    episodeId: input.episodeId,
+    assetType: normalized.kind,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  return {
+    asset: assets?.find((item) => item.assetId === snapshot.asset.id) ?? null,
+  };
+}
+
+async function updateEpisodeAssetRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const latestVersion = await queryOne<{
+    version_id: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT v.id AS version_id, v.metadata_json
+      FROM assets a
+      JOIN asset_versions v
+        ON v.organization_id = a.organization_id
+       AND v.asset_id = a.id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+      ORDER BY v.version_number DESC
+      LIMIT 1
+    `,
+    [context.actor.organizationId, context.project.id, input.assetId],
+  );
+  if (!latestVersion) {
+    return null;
+  }
+  const metadata =
+    typeof latestVersion.metadata_json === "string"
+      ? JSON.parse(latestVersion.metadata_json) as Record<string, unknown>
+      : { ...(latestVersion.metadata_json ?? {}) };
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  if (input.body.name != null) {
+    metadata.label = String(input.body.name).trim();
+  }
+  if (input.body.description != null) {
+    metadata.description = String(input.body.description).trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(input.body, "voiceId")) {
+    metadata.voiceId = input.body.voiceId == null ? null : String(input.body.voiceId);
+  }
+  if (Object.prototype.hasOwnProperty.call(input.body, "voiceName")) {
+    metadata.voiceName = input.body.voiceName == null ? null : String(input.body.voiceName);
+  }
+  if (Object.prototype.hasOwnProperty.call(input.body, "dubbingConfig")) {
+    metadata.dubbingConfig =
+      input.body.dubbingConfig && typeof input.body.dubbingConfig === "object"
+        ? input.body.dubbingConfig
+        : null;
+  }
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3::jsonb
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [context.actor.organizationId, latestVersion.version_id, JSON.stringify(metadata)],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [context.actor.organizationId, input.assetId, input.now],
+  );
+  const assetType = await queryOne<{ asset_type: string }>(
+    db,
+    `
+      SELECT asset_type
+      FROM assets
+      WHERE organization_id = $1
+        AND id = $2
+        AND project_id = $3
+    `,
+    [context.actor.organizationId, input.assetId, context.project.id],
+  );
+  const kind = normalizeEpisodeAssetType(
+    assetType?.asset_type === "character_sheet"
+      ? "role"
+      : assetType?.asset_type === "scene_reference"
+        ? "scene"
+        : "prop",
+  ).kind;
+  const updatedItems = await listEpisodeAssetsFromDb(db, {
+    episodeId: input.episodeId,
+    assetType: kind,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  const updated = updatedItems?.find((item) => item.assetId === input.assetId) ?? null;
+  return { asset: updated ?? null };
+}
+
+async function deleteEpisodeAssetRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const latestVersion = await queryOne<{
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT v.metadata_json
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT metadata_json
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+    `,
+    [context.actor.organizationId, context.project.id, input.assetId],
+  );
+  if (!latestVersion) {
+    return null;
+  }
+  const metadata =
+    typeof latestVersion.metadata_json === "string"
+      ? JSON.parse(latestVersion.metadata_json) as Record<string, unknown>
+      : latestVersion.metadata_json ?? {};
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  await db.query(
+    `
+      DELETE FROM asset_versions
+      WHERE organization_id = $1
+        AND asset_id = $2
+    `,
+    [context.actor.organizationId, input.assetId],
+  );
+  await db.query(
+    `
+      DELETE FROM assets
+      WHERE organization_id = $1
+        AND id = $2
+        AND project_id = $3
+    `,
+    [context.actor.organizationId, input.assetId, context.project.id],
+  );
+  return { deleted: true };
+}
+
+async function saveEpisodeAssetToProjectLibrary(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const asset = await queryOne<{
+    asset_id: string;
+    asset_type: string;
+    asset_key: string;
+    latest_version_id: string | null;
+    latest_storage_object_id: string | null;
+    latest_storage_object_key: string | null;
+    latest_metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_key,
+        a.asset_type,
+        v.id AS latest_version_id,
+        v.storage_object_id AS latest_storage_object_id,
+        v.storage_object_key AS latest_storage_object_key,
+        v.metadata_json AS latest_metadata_json
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT id, storage_object_id, storage_object_key, metadata_json
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+    `,
+    [context.actor.organizationId, context.project.id, input.assetId],
+  );
+  if (!asset) {
+    return null;
+  }
+  const metadata =
+    typeof asset.latest_metadata_json === "string"
+      ? JSON.parse(asset.latest_metadata_json) as Record<string, unknown>
+      : { ...(asset.latest_metadata_json ?? {}) };
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  const fixedVersionId = typeof metadata.fixedImageFileId === "string" ? metadata.fixedImageFileId : null;
+  const fixedStorageObjectId =
+    typeof metadata.fixedImageStorageObjectId === "string" ? metadata.fixedImageStorageObjectId : null;
+  const resolvedLibraryMedia = fixedVersionId || fixedStorageObjectId
+    ? await resolveEpisodeAssetVersion(db, {
+        episodeId: input.episodeId,
+        assetVersionId: fixedVersionId,
+        storageObjectId: fixedStorageObjectId,
+        sessionToken: input.authenticated.sessionToken,
+        userId: input.authenticated.user.id,
+        capability: capabilities.generationStart,
+        now: input.now,
+      })
+    : null;
+  const sourceVersion = resolvedLibraryMedia?.assetVersion ?? null;
+  const name = String(metadata.label ?? asset.asset_key ?? "").trim();
+  if (!name) {
+    return { error: "asset_name_required" as const };
+  }
+  const libraryStorageObjectId = sourceVersion?.storageObjectId ?? asset.latest_storage_object_id;
+  const libraryStorageObjectKey = sourceVersion?.storageObjectKey ?? asset.latest_storage_object_key;
+  const libraryPreviewUrl =
+    String(sourceVersion?.metadata?.previewUrl ?? metadata.previewUrl ?? "").trim() || null;
+  const librarySourceUrl =
+    String(sourceVersion?.metadata?.sourceUrl ?? metadata.sourceUrl ?? "").trim() || null;
+  const libraryContentType =
+    String(sourceVersion?.contentType ?? metadata.mimeType ?? "image/png").trim() || "image/png";
+  if (!libraryStorageObjectId && !libraryPreviewUrl) {
+    return { error: "asset_preview_required" as const };
+  }
+  const libraryAssets = await listEpisodeAssetsFromDb(db, {
+    episodeId: input.episodeId,
+    assetType:
+      asset.asset_type === "character_sheet"
+        ? "role"
+        : asset.asset_type === "scene_reference"
+          ? "scene"
+          : "prop",
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  void libraryAssets;
+  const duplicate = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT a.id
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT metadata_json
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.asset_type = $3
+        AND COALESCE((v.metadata_json->>'episodeId'), '') = ''
+        AND COALESCE((v.metadata_json->>'label'), a.asset_key) = $4
+      LIMIT 1
+    `,
+    [context.actor.organizationId, context.project.id, asset.asset_type, name],
+  );
+  if (duplicate) {
+    return { error: "asset_library_duplicate" as const };
+  }
+  const libraryKey = `library-${asset.asset_type}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
+  const libraryMetadata = {
+    ...metadata,
+    label: name,
+    description: String(metadata.description ?? "").trim() || null,
+    mimeType: libraryContentType,
+    previewUrl: libraryPreviewUrl,
+    sourceUrl: librarySourceUrl,
+  };
+  delete libraryMetadata.episodeId;
+  const snapshot = await createAssetVersionSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    assetType: asset.asset_type as AssetType,
+    assetKey: libraryKey,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId: libraryStorageObjectId,
+    storageObjectKey:
+      libraryStorageObjectKey ??
+      `library/${context.project.id}/${asset.asset_type}/${libraryKey}`,
+    metadata: libraryMetadata,
+    sourceTaskId: null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  const savedUrls = libraryStorageObjectId
+    ? await signedUrlsForStorageObject(db, {
+        sessionToken: input.authenticated.sessionToken,
+        storageObjectId: libraryStorageObjectId,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      })
+    : null;
+  return {
+    asset: {
+      id: snapshot.asset.id,
+      label: String(libraryMetadata.label ?? name),
+      assetType: snapshot.asset.assetType,
+      latestVersion: {
+        id: snapshot.version.id,
+        storageObjectId: snapshot.version.storageObjectId,
+        previewUrl: savedUrls?.previewUrl ?? libraryPreviewUrl ?? "",
+        metadata: libraryMetadata,
+      },
+      previewUrl: savedUrls?.previewUrl ?? libraryPreviewUrl ?? "",
+    },
   };
 }
 
@@ -1627,6 +2548,16 @@ async function setEpisodeAssetFixedImage(
     now: Date;
   },
 ) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
   const resolved = await resolveEpisodeAssetVersion(db, {
     episodeId: input.episodeId,
     assetVersionId: String(input.body.assetVersionId ?? input.body.fileId ?? ""),
@@ -1636,31 +2567,97 @@ async function setEpisodeAssetFixedImage(
     capability: capabilities.generationStart,
     now: input.now,
   });
-  if (!resolved) {
-    return null;
-  }
-  if (!["character_sheet", "scene_reference", "prop_reference", "shot_image"].includes(resolved.assetVersion.assetType)) {
+  const sourceUrl = String(input.body.sourceUrl ?? input.body.previewUrl ?? "").trim();
+  const resolvedIsImage =
+    resolved &&
+    ["character_sheet", "scene_reference", "prop_reference", "shot_image"].includes(resolved.assetVersion.assetType) &&
+    resolved.assetVersion.contentType.startsWith("image/");
+  const fallbackResolved = !resolvedIsImage && sourceUrl
+    ? await createEpisodeAssetFixedImageVersionFromUrl(db, {
+        context,
+        episodeId: input.episodeId,
+        assetId: input.assetId,
+        sourceUrl,
+        authenticated: input.authenticated,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      })
+    : null;
+  const fixedResolved = resolvedIsImage ? resolved : fallbackResolved;
+  if (!fixedResolved) {
     return { error: "invalid_media_type" as const };
   }
-  if (!resolved.assetVersion.contentType.startsWith("image/")) {
-    return { error: "invalid_media_type" as const };
-  }
-  if (resolved.assetVersion.objectStatus && resolved.assetVersion.objectStatus !== "available") {
+  if (fixedResolved.assetVersion.objectStatus && fixedResolved.assetVersion.objectStatus !== "available") {
     return { error: "storage_object_not_available" as const };
   }
   const file = await signedAssetVersionFragment(db, {
-    version: resolved.assetVersion,
+    version: fixedResolved.assetVersion,
     sessionToken: input.authenticated.sessionToken,
     runtime: input.runtime,
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
     now: input.now,
   });
+  const latestVersion = await queryOne<{
+    version_id: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT v.id AS version_id, v.metadata_json
+      FROM assets a
+      JOIN asset_versions v
+        ON v.organization_id = a.organization_id
+       AND v.asset_id = a.id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+      ORDER BY v.version_number DESC
+      LIMIT 1
+    `,
+    [context.actor.organizationId, context.project.id, input.assetId],
+  );
+  if (!latestVersion) {
+    return null;
+  }
+  const metadata =
+    typeof latestVersion.metadata_json === "string"
+      ? JSON.parse(latestVersion.metadata_json) as Record<string, unknown>
+      : { ...(latestVersion.metadata_json ?? {}) };
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  metadata.fixedImageFileId = fixedResolved.assetVersion.versionId;
+  metadata.fixedImageStorageObjectId = fixedResolved.assetVersion.storageObjectId;
+  metadata.fixedImageUrl = file.previewUrl;
+  metadata.previewUrl = file.previewUrl;
+  metadata.sourceUrl = file.sourceUrl;
+  metadata.downloadUrl = file.downloadUrl;
+  metadata.mimeType = fixedResolved.assetVersion.contentType;
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3::jsonb
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [context.actor.organizationId, latestVersion.version_id, JSON.stringify(metadata)],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [context.actor.organizationId, input.assetId, input.now],
+  );
   return {
     asset: {
       assetId: input.assetId,
       episodeId: input.episodeId,
-      fixedImageFileId: resolved.assetVersion.versionId,
-      fixedImageStorageObjectId: resolved.assetVersion.storageObjectId,
+      fixedImageFileId: fixedResolved.assetVersion.versionId,
+      fixedImageStorageObjectId: fixedResolved.assetVersion.storageObjectId,
       fixedImageUrl: file.previewUrl,
       status: "ready",
       isPinned: true,
@@ -1668,6 +2665,108 @@ async function setEpisodeAssetFixedImage(
     },
     file,
   };
+}
+
+async function createEpisodeAssetFixedImageVersionFromUrl(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    context: Awaited<ReturnType<typeof getEpisodeContext>>;
+    episodeId: string;
+    assetId: string;
+    sourceUrl: string;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  if (!input.context) {
+    return null;
+  }
+  const assetRow = await queryOne<{
+    asset_id: string;
+    asset_key: string;
+    asset_type: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT a.id AS asset_id, a.asset_key, a.asset_type, v.metadata_json
+      FROM assets a
+      JOIN asset_versions v
+        ON v.organization_id = a.organization_id
+       AND v.asset_id = a.id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.id = $3
+      ORDER BY v.version_number DESC
+      LIMIT 1
+    `,
+    [input.context.actor.organizationId, input.context.project.id, input.assetId],
+  );
+  if (!assetRow) {
+    return null;
+  }
+  const metadata =
+    typeof assetRow.metadata_json === "string"
+      ? JSON.parse(assetRow.metadata_json) as Record<string, unknown>
+      : assetRow.metadata_json ?? {};
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  const contentType = inferImageContentTypeFromUrl(input.sourceUrl);
+  const snapshot = await createAssetVersionSnapshot(db, {
+    organizationId: input.context.actor.organizationId,
+    projectId: input.context.project.id,
+    assetType: assetRow.asset_type as AssetType,
+    assetKey: assetRow.asset_key,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId: null,
+    storageObjectKey: `episodes/${input.episodeId}/assets/fixed-image/${randomUUID()}`,
+    metadata: {
+      ...metadata,
+      mimeType: contentType,
+      episodeId: input.episodeId,
+      source: "legacy-generated-url",
+      sourceUrl: input.sourceUrl,
+      previewUrl: input.sourceUrl,
+      downloadUrl: input.sourceUrl,
+    },
+    sourceTaskId: null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  return {
+    context: input.context,
+    assetVersion: {
+      assetId: snapshot.asset.id,
+      assetType: snapshot.asset.assetType,
+      assetKey: snapshot.asset.assetKey,
+      versionId: snapshot.version.id,
+      storageObjectId: snapshot.version.storageObjectId,
+      storageObjectKey: snapshot.version.storageObjectKey,
+      metadata: snapshot.version.metadata,
+      contentType,
+      objectStatus: null,
+    },
+  };
+}
+
+function inferImageContentTypeFromUrl(value: string) {
+  const path = value.split("?")[0]?.toLowerCase() ?? "";
+  if (path.endsWith(".avif")) {
+    return "image/avif";
+  }
+  if (path.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (path.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+  return "image/png";
 }
 
 async function deleteEpisodeFileResource(
@@ -2026,6 +3125,222 @@ async function saveEpisodeGenerationDraftRoute(
   };
 }
 
+async function saveEpisodeAssetConversationMessagesRoute(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const mediaModeRaw = String(input.body.mediaMode ?? "image").trim().toLowerCase();
+  const mediaMode: AssetConversationMediaMode = mediaModeRaw === "video" ? "video" : "image";
+  const inputMessages = Array.isArray(input.body.messages) ? input.body.messages : [];
+  const normalizedMessages = inputMessages
+    .map((item, index) => normalizeAssetConversationMessageInput(item, index))
+    .filter(Boolean) as Array<{
+      turnId: string;
+      messageKey: string;
+      messageType: AssetConversationMessageType;
+      status: AssetConversationStatus;
+      taskId: string | null;
+      payload: Record<string, unknown>;
+    }>;
+  if (!normalizedMessages.length) {
+    return {
+      thread: null,
+      messages: [],
+      entries: [],
+    };
+  }
+
+  const thread = await upsertAssetConversationThread(db, {
+    organizationId: context.actor.organizationId,
+    workspaceId: context.actor.workspaceId!,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    assetId: input.assetId,
+    mediaMode,
+    createdByUserId: input.authenticated.user.id,
+    latestMessageAt: input.now,
+    now: input.now,
+  });
+  const messages = await upsertAssetConversationMessages(db, {
+    threadId: thread.threadId,
+    createdByUserId: input.authenticated.user.id,
+    now: input.now,
+    messages: normalizedMessages,
+  });
+  const allMessages = await listAssetConversationMessages(db, {
+    threadId: thread.threadId,
+  });
+  return {
+    thread,
+    messages,
+    entries: buildAssetConversationEntries(thread, allMessages),
+  };
+}
+
+async function getEpisodeAssetConversationRoute(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    mediaMode: AssetConversationMediaMode;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const thread = await findAssetConversationThread(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    assetId: input.assetId,
+    mediaMode: input.mediaMode,
+  });
+  if (!thread) {
+    return {
+      thread: null,
+      messages: [],
+      entries: [],
+    };
+  }
+  const messages = await listAssetConversationMessages(db, {
+    threadId: thread.threadId,
+  });
+  return {
+    thread,
+    messages,
+    entries: buildAssetConversationEntries(thread, messages),
+  };
+}
+
+async function deleteEpisodeAssetConversationTurnRoute(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    taskId: string;
+    mediaMode: AssetConversationMediaMode;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const thread = await findAssetConversationThread(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    assetId: input.assetId,
+    mediaMode: input.mediaMode,
+  });
+  if (!thread) {
+    return {
+      deleted: false,
+      deletedCount: 0,
+      thread: null,
+      messages: [],
+      entries: [],
+    };
+  }
+
+  const deleted = await deleteAssetConversationTurn(db, {
+    threadId: thread.threadId,
+    turnIdOrTaskId: input.taskId,
+    now: input.now,
+  });
+  const nextThread = deleted.remainingMessages.length
+    ? await findAssetConversationThread(db, {
+        organizationId: context.actor.organizationId,
+        projectId: context.project.id,
+        episodeId: input.episodeId,
+        assetId: input.assetId,
+        mediaMode: input.mediaMode,
+      })
+    : null;
+  return {
+    deleted: (deleted.deletedCount ?? 0) > 0,
+    deletedCount: deleted.deletedCount ?? 0,
+    thread: nextThread,
+    messages: deleted.remainingMessages,
+    entries: nextThread ? buildAssetConversationEntries(nextThread, deleted.remainingMessages) : [],
+  };
+}
+
+function normalizeAssetConversationMessageInput(item: unknown, index: number) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const messageTypeRaw = String((item as { messageType?: unknown }).messageType ?? "").trim().toLowerCase();
+  const messageType: AssetConversationMessageType | null =
+    messageTypeRaw === "user_request" || messageTypeRaw === "task_status" || messageTypeRaw === "result"
+      ? messageTypeRaw
+      : null;
+  if (!messageType) {
+    return null;
+  }
+  const turnId = String(
+    (item as { turnId?: unknown; taskId?: unknown }).turnId ??
+      (item as { taskId?: unknown }).taskId ??
+      `asset-conversation-turn-${index + 1}`,
+  ).trim();
+  const messageKey = String(
+    (item as { messageKey?: unknown }).messageKey ??
+      `${turnId}:${messageType}`,
+  ).trim();
+  const statusRaw = String((item as { status?: unknown }).status ?? "running").trim().toLowerCase();
+  const status: AssetConversationStatus =
+    statusRaw === "queued" ||
+    statusRaw === "completed" ||
+    statusRaw === "failed" ||
+    statusRaw === "canceled"
+      ? statusRaw
+      : "running";
+  const payload =
+    (item as { payload?: unknown }).payload && typeof (item as { payload?: unknown }).payload === "object"
+      ? (item as { payload: Record<string, unknown> }).payload
+      : {};
+  return {
+    turnId,
+    messageKey,
+    messageType,
+    status,
+    taskId: String((item as { taskId?: unknown }).taskId ?? "").trim() || null,
+    payload,
+  };
+}
+
 function applyDevCorsHeaders(
   request: Parameters<typeof createServer>[0],
   response: ServerResponse,
@@ -2070,6 +3385,16 @@ async function serveStatic(pathname: string, response: ServerResponse) {
     return;
   }
 
+  if (pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js") {
+    const vendorFile = pathname === "/vendor/three.module.js" ? "three.module.js" : "three.core.js";
+    const file = await readFile(join(nodeModulesRoot, "three", "build", vendorFile), "utf8");
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/javascript; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end(file);
+    return;
+  }
+
   const normalizedPath =
     pathname === "/" ? "/login.html" : pathname === "/login" ? "/login.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
@@ -2096,7 +3421,10 @@ async function serveStatic(pathname: string, response: ServerResponse) {
 
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
-  const filePath = join(vendorRoot, normalizedPath);
+  const filePath =
+    normalizedPath === "three.module.js" || normalizedPath === "three.core.js"
+      ? join(vendorRoot, "three", "build", normalizedPath)
+      : join(vendorRoot, normalizedPath);
   const file = await readFile(filePath);
 
   response.statusCode = 200;
@@ -2676,15 +4004,46 @@ export function createPhoneAuthDevServer(
 
       if (
         request.method === "POST" &&
+        pathname.startsWith("/api/payment-provider-callbacks/")
+      ) {
+        const provider = decodeURIComponent(
+          pathname.slice("/api/payment-provider-callbacks/".length),
+        );
+        if (!isPaymentProvider(provider)) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "invalid_payment_provider" },
+          });
+        }
+        const commercePayment = createCommercePaymentService({
+          db,
+          workspaceId: devWorkspaceId,
+          callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+        });
+        return writeJson(
+          response,
+          await commercePayment.processProviderCallback({
+            provider,
+            rawBody: await readTextBody(request),
+            headers: singleValueHeaders(request.headers),
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (
+        request.method === "POST" &&
         pathname === "/api/billing/payment-callback/mock"
       ) {
         const commercePayment = createCommercePaymentService({
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
         });
         const body = (await readJsonBody(request)) as {
-          provider: "wechat_pay" | "alipay";
+          provider: PaymentProvider;
           providerEventDedupKey: string;
           merchantOrderNo: string;
           providerTradeId: string;
@@ -2726,10 +4085,38 @@ export function createPhoneAuthDevServer(
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: request.headers.host
+            ? `http://${request.headers.host}`
+            : undefined,
         });
 
         if (request.method === "GET" && pathname === "/api/billing/packages") {
           return writeJson(response, await commercePayment.listCreditPackages());
+        }
+
+        const paymentIntentMatch = pathname.match(/^\/api\/billing\/payment-intents\/([^/]+)$/);
+        if (request.method === "GET" && paymentIntentMatch) {
+          return writeJson(
+            response,
+            await commercePayment.getPaymentIntent({
+              user: { sessionToken: authenticated.sessionToken },
+              paymentIntentId: decodeURIComponent(paymentIntentMatch[1]),
+              now: new Date(),
+            }),
+          );
+        }
+
+        const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);
+        if (request.method === "GET" && orderMatch) {
+          return writeJson(
+            response,
+            await commercePayment.getBillingOrder({
+              user: { sessionToken: authenticated.sessionToken },
+              orderId: decodeURIComponent(orderMatch[1]),
+              now: new Date(),
+            }),
+          );
         }
 
         if (request.method === "POST" && pathname === "/api/billing/orders") {
@@ -2761,12 +4148,32 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             orderId: string;
-            provider: "wechat_pay" | "alipay";
+            provider: PaymentProvider;
             productMode: string;
           };
           return writeJson(
             response,
             await commercePayment.createPaymentIntent({
+              user: { sessionToken: authenticated.sessionToken },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/billing/enterprise-contact-requests") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            source?: string | null;
+            note?: string | null;
+          };
+          return writeJson(
+            response,
+            await commercePayment.requestEnterpriseContact({
               user: { sessionToken: authenticated.sessionToken },
               body,
               idempotencyKey,
@@ -3148,17 +4555,18 @@ export function createPhoneAuthDevServer(
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
           const episode = await queryOne<{
             id: string;
+            organization_id: string;
             project_id: string;
             title: string;
             sequence: number;
             status: string;
           }>(
             db,
-            "SELECT id, project_id, title, sequence, status FROM episodes WHERE id = $1",
+            "SELECT id, organization_id, project_id, title, sequence, status FROM episodes WHERE id = $1",
             [episodeId],
           );
           if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
           }
           const result = await creatorApplication.getProjectDetail({
             user: {
@@ -3173,6 +4581,45 @@ export function createPhoneAuthDevServer(
           }
           const detail = normalizeProjectDetailForEpisodeContract(result.body as Record<string, unknown>);
           const project = detail.project as Record<string, unknown>;
+          const now = new Date();
+          const [roleAssets, sceneAssets, propAssets] = await Promise.all([
+            listEpisodeAssetsFromDb(db, {
+              episodeId: episode.id,
+              assetType: "role",
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              now,
+              capability: null,
+            }),
+            listEpisodeAssetsFromDb(db, {
+              episodeId: episode.id,
+              assetType: "scene",
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              now,
+              capability: null,
+            }),
+            listEpisodeAssetsFromDb(db, {
+              episodeId: episode.id,
+              assetType: "prop",
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              now,
+              capability: null,
+            }),
+          ]);
+          const assetsByType = {
+            role: roleAssets ?? [],
+            character: roleAssets ?? [],
+            scene: sceneAssets ?? [],
+            prop: propAssets ?? [],
+          };
           return writeJson(
             response,
             enveloped(200, {
@@ -3201,6 +4648,7 @@ export function createPhoneAuthDevServer(
               },
               defaultScopeMode: "storyboard",
               creditBalance: await getOrganizationCreditBalance(db, episode.organization_id),
+              assetsByType,
             }),
           );
         }
@@ -3211,52 +4659,153 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/assets")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const episode = await queryOne<{ project_id: string }>(
-            db,
-            "SELECT project_id FROM episodes WHERE id = $1",
-            [episodeId],
-          );
-          if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
-          }
-          const result = await creatorApplication.getProjectDetail({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            projectId: episode.project_id,
+          const items = await listEpisodeAssetsFromDb(db, {
+            episodeId,
+            assetType: url.searchParams.get("assetType"),
+            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
             now: new Date(),
           });
-          if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "资源不存在或已被删除"));
+          if (!items) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
           }
-          const detail = result.body as Record<string, unknown>;
-          const assetsByType = detail.assetsByType && typeof detail.assetsByType === "object"
-            ? detail.assetsByType as Record<string, unknown>
-            : {};
-          const assetType = url.searchParams.get("assetType");
-          const legacyKey = assetType === "role" ? "character" : assetType ?? "";
-          const sourceItems = Array.isArray(assetsByType[legacyKey]) ? assetsByType[legacyKey] as unknown[] : [];
-          const items = sourceItems.map((asset) => {
-            const item = asset && typeof asset === "object" ? asset as Record<string, unknown> : {};
-            const latestVersion = item.latestVersion && typeof item.latestVersion === "object"
-              ? item.latestVersion as Record<string, unknown>
-              : {};
-            return {
-              assetId: item.id ?? null,
-              assetType: assetType ?? legacyKey,
-              name: item.label ?? item.assetKey ?? "Untitled Asset",
-              description: (latestVersion.metadata as Record<string, unknown> | undefined)?.description ?? item.assetKey ?? "",
-              fixedImageFileId: latestVersion.storageObjectId ?? null,
-              fixedImageUrl: item.previewUrl ?? latestVersion.previewUrl ?? null,
-              voiceId: null,
-              sortOrder: 0,
-              updatedAt: item.updatedAt ?? latestVersion.createdAt ?? null,
-            };
-          });
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/assets")
+        ) {
+          const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await createEpisodeAssetRecord(db, {
+            episodeId,
+            body,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          if ("error" in result) {
+            return writeJson(response, envelopedError(400, result.error, "Asset name is required"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/assets/import")
+        ) {
+          const episodeId = decodeURIComponent(pathname.split("/").at(-3) ?? "");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await importEpisodeAssetRecord(db, {
+            episodeId,
+            body,
+            authenticated,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          if ("error" in result) {
+            const message =
+              result.error === "asset_name_required"
+                ? "Asset name is required"
+                : result.error === "asset_preview_required"
+                  ? "A previewable file is required before importing"
+                  : result.error === "storage_object_not_available"
+                    ? "The selected file is not available yet"
+                    : "The selected file could not be found";
+            return writeJson(response, envelopedError(400, result.error, message));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "PATCH" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await updateEpisodeAssetRecord(db, {
+            episodeId,
+            assetId,
+            body,
+            authenticated,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
+          if (!result?.asset) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          !pathname.includes("/conversation/messages/")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          const result = await deleteEpisodeAssetRecord(db, {
+            episodeId,
+            assetId,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          pathname.endsWith("/save-to-library")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          const result = await saveEpisodeAssetToProjectLibrary(db, {
+            episodeId,
+            assetId,
+            authenticated,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          if ("error" in result) {
+            const status = result.error === "asset_library_duplicate" ? 409 : 400;
+            const message =
+              result.error === "asset_library_duplicate"
+                ? "Asset already exists in library"
+                : result.error === "asset_preview_required"
+                  ? "Asset needs a fixed image before saving"
+                  : "Asset name is required";
+            return writeJson(response, envelopedError(status, result.error, message));
+          }
+          return writeJson(response, enveloped(200, result));
         }
 
         if (
@@ -3324,7 +4873,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!context) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
           }
           return writeJson(
             response,
@@ -3456,6 +5005,101 @@ export function createPhoneAuthDevServer(
         }
 
         if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          pathname.endsWith("/conversation")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          if (!isUuid(episodeId) || !isUuid(assetId)) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_asset_conversation_target", "资产对话目标无效"),
+            );
+          }
+          const mediaMode: AssetConversationMediaMode =
+            String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
+              ? "video"
+              : "image";
+          const result = await getEpisodeAssetConversationRoute(db, {
+            episodeId,
+            assetId,
+            mediaMode,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          pathname.endsWith("/conversation/messages")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          if (!isUuid(episodeId) || !isUuid(assetId)) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_asset_conversation_target", "资产对话目标无效"),
+            );
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await saveEpisodeAssetConversationMessagesRoute(db, {
+            episodeId,
+            assetId,
+            body,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          pathname.includes("/conversation/messages/")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          const taskId = decodeURIComponent(parts.at(8) ?? "");
+          if (!isUuid(episodeId) || !isUuid(assetId) || !taskId.trim()) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
+            );
+          }
+          const mediaMode: AssetConversationMediaMode =
+            String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
+              ? "video"
+              : "image";
+          const result = await deleteEpisodeAssetConversationTurnRoute(db, {
+            episodeId,
+            assetId,
+            taskId,
+            mediaMode,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
           request.method === "DELETE" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.includes("/file-resources/")
@@ -3479,7 +5123,7 @@ export function createPhoneAuthDevServer(
             const status = result.error === "file_in_use" ? 409 : 400;
             return writeJson(
               response,
-              envelopedError(status, result.error, "文件仍被使用或删除失败", "details" in result ? result.details : undefined),
+              envelopedError(status, result.error, "文件仍在使用或删除失败", "details" in result ? result.details : undefined),
             );
           }
           return writeJson(response, enveloped(200, result));
@@ -3656,7 +5300,7 @@ export function createPhoneAuthDevServer(
             if (!result) {
               return writeJson(
                 response,
-                envelopedError(404, "resource_not_found", "资源不存在或无权访问"),
+                envelopedError(404, "resource_not_found", "资源不存在或无权限访问"),
               );
             }
             return writeJson(response, enveloped(200, result));
@@ -4027,6 +5671,7 @@ export function createPhoneAuthDevServer(
           const body = (await readJsonBody(request)) as {
             kind: "character" | "scene" | "prop" | "image" | "video";
             name?: string | null;
+            description?: string | null;
             uploadSessionId?: string | null;
             storageObjectId?: string | null;
             storageObjectKey?: string | null;
@@ -4121,6 +5766,136 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/creator/projects/") &&
+          pathname.endsWith("/members")
+        ) {
+          const projectId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const body = (await readJsonBody(request)) as {
+            phone?: string | null;
+            role?: "producer" | "creator" | "viewer" | null;
+            note?: string | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.createProjectMember({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              projectId,
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        const projectMemberMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/members\/([^/]+)$/);
+        if (request.method === "PATCH" && projectMemberMatch) {
+          const projectId = decodeURIComponent(projectMemberMatch[1] ?? "");
+          const memberId = decodeURIComponent(projectMemberMatch[2] ?? "");
+          const body = (await readJsonBody(request)) as {
+            role?: "producer" | "creator" | "viewer" | null;
+            note?: string | null;
+            status?: "active" | "disabled" | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.updateProjectMember({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              projectId,
+              memberId,
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        const projectTeamDashboardExportMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/team-dashboard\/export$/);
+        if (request.method === "GET" && projectTeamDashboardExportMatch) {
+          const projectId = decodeURIComponent(projectTeamDashboardExportMatch[1] ?? "");
+          const memberResponse = await creatorApplication.listProjectMembers({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            projectId,
+            now: new Date(),
+          });
+          if (memberResponse.status !== 200) {
+            return writeJson(response, memberResponse);
+          }
+          const statsResponse = await creatorApplication.getProjectStats({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            projectId,
+            now: new Date(),
+          });
+          if (statsResponse.status !== 200) {
+            return writeJson(response, statsResponse);
+          }
+          const queryUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+          const roleFilter = queryUrl.searchParams.get("role") ?? "all";
+          const statusFilter = queryUrl.searchParams.get("status") ?? "all";
+          const dashboardTab = queryUrl.searchParams.get("tab") ?? "member-consumption";
+          const dateShortcut = queryUrl.searchParams.get("dateShortcut") ?? "今天";
+          const members = Array.isArray((memberResponse.body as Record<string, unknown>).members)
+            ? ((memberResponse.body as Record<string, unknown>).members as Array<Record<string, unknown>>)
+            : [];
+          const filteredMembers = members.filter((member) => {
+            if (roleFilter !== "all" && String(member.role ?? "") !== roleFilter) {
+              return false;
+            }
+            if (statusFilter !== "all" && String(member.status ?? "") !== statusFilter) {
+              return false;
+            }
+            return true;
+          });
+          const stats = ((statsResponse.body as Record<string, unknown>).stats ?? {}) as Record<string, unknown>;
+          const rows = [
+            ["tab", "dateShortcut", "phone", "role", "status", "creditQuota", "projectScope", "memberGroup", "note"],
+            ...filteredMembers.map((member) => [
+              dashboardTab,
+              dateShortcut,
+              String(member.phone ?? ""),
+              String(member.role ?? ""),
+              String(member.status ?? ""),
+              String(member.creditQuota ?? member.consumedCredits ?? ""),
+              String(member.projectScope ?? ""),
+              String(member.memberGroup ?? ""),
+              String(member.note ?? ""),
+            ]),
+            [],
+            ["memberCount", "episodeCount", "generatedVideoCount", "generatedImageCount", "assetCount", "exportCount"],
+            [
+              String(stats.memberCount ?? 0),
+              String(stats.episodeCount ?? 0),
+              String(stats.generatedVideoCount ?? 0),
+              String(stats.generatedImageCount ?? 0),
+              String(stats.assetCount ?? 0),
+              String(stats.exportCount ?? 0),
+            ],
+          ];
+          const csv = rows
+            .map((row) =>
+              row
+                .map((cell) => `"${String(cell ?? "").replaceAll(`"`, `""`)}"`)
+                .join(","))
+            .join("\n");
+          return writeText(response, {
+            status: 200,
+            contentType: "text/csv; charset=utf-8",
+            fileName: `team-dashboard-${projectId}.csv`,
+            body: csv,
+          });
         }
 
         if (

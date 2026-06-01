@@ -1,0 +1,44 @@
+{
+  "origin": "http://127.0.0.1:4314",
+  "projectId": "fcc8fe19-75cd-4b3a-b991-10903ade43b9",
+  "episodeId": "a391779a-0724-4288-a9ea-ad6f487b6d8d",
+  "workbenchUrl": "http://127.0.0.1:4314/app.html#/projects/fcc8fe19-75cd-4b3a-b991-10903ade43b9/episodes/a391779a-0724-4288-a9ea-ad6f487b6d8d",
+  "screenshots": {
+    "emptyStoryboard": "artifacts/episode-workbench-empty-qa/step-32a-empty-storyboard.png",
+    "firstStoryboard": "artifacts/episode-workbench-empty-qa/step-32b-first-storyboard.png",
+    "emptyPromptToast": "artifacts/episode-workbench-empty-qa/step-32c-empty-prompt-toast.png"
+  },
+  "metrics": {
+    "emptyStoryboard": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n空白分镜集 · a391779a\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n导出\n操作栏\n故事栏\n批量导入分镜\n新增分镜\n当前剧集还没有分镜\n共 0 条\n10条/页\n‹ 1 ›\n做图片\n做视频\n对口型\n\n分镜：\n\n分镜：\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\nnano banana 2（链路G）\n16:9\n2K\n90 生成\n\n资产快捷栏\n⌕",
+      "promptLength": 0,
+      "storyboardCountText": "0",
+      "hasEmptyState": true,
+      "stageTitle": "分镜：",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": false,
+      "hasResultAction": false
+    },
+    "firstStoryboard": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n空白分镜集 · a391779a\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n导出\n操作栏\n故事栏\n批量导入分镜\n新增分镜\n分镜 1: 2026-05-30 21:55:58\n角色 / 场景 / 道具\n做图片 / 做视频\n●\n0 / 3000\n分镜剧情\n编辑分镜\n+\n×\n共 1 条\n10条/页\n‹ 1 ›\n做图片\n做视频\n对口型\n\n分镜：2026-05-30 21:55:58\n\n分镜：2026-05-30 21:55:58\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\nnano banana 2（链路G）\n16:9\n2K\n90 生成\n\n资产快捷栏\n⌕",
+      "promptLength": 0,
+      "storyboardCountText": "1",
+      "hasEmptyState": false,
+      "stageTitle": "分镜：2026-05-30 21:55:58",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": false,
+      "hasResultAction": false
+    },
+    "emptyPromptToast": {
+      "bodyText": "首页\n剧本\n项目\n资产库\n工具箱\n团队\n←\n返回\n空白分镜集 · a391779a\n全选\n批量生图/视频 | 高清处理\n角色/场景\n分镜\n导出\n操作栏\n故事栏\n批量导入分镜\n新增分镜\n分镜 1: 2026-05-30 21:55:58\n角色 / 场景 / 道具\n做图片 / 做视频\n●\n0 / 3000\n分镜剧情\n编辑分镜\n+\n×\n共 1 条\n10条/页\n‹ 1 ›\n做图片\n做视频\n对口型\n\n分镜：2026-05-30 21:55:58\n\n分镜：2026-05-30 21:55:58\n+\n图片\n\n图片 20MB · 视频 500MB · 最多 30 张参考图\n\n多参考图\n预设：无预设\n快捷引用\nAI\n0 / 5000\nnano banana 2（链路G）\n16:9\n2K\n90 生成\n\n请输入内容\n\n资产快捷栏\n⌕\n\n请输入内容",
+      "promptLength": 0,
+      "storyboardCountText": "1",
+      "hasEmptyState": false,
+      "stageTitle": "分镜：2026-05-30 21:55:58",
+      "hasPromptPlaceholder": true,
+      "hasValidationToast": true,
+      "hasResultAction": false
+    }
+  },
+  "consoleErrors": []
+}
