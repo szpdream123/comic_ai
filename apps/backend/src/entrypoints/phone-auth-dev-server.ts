@@ -11,6 +11,14 @@ import {
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import {
+  createDefaultPaymentProviderRegistry,
+  createLocalPaymentProviderAdapter,
+  createPayLabAdapter,
+  createStaticPaymentProviderRegistry,
+  isPaymentProvider,
+  type PaymentProvider,
+} from "../modules/commerce-payment/payment-provider-adapter.ts";
+import {
   createPersistentLoginChallenge,
   findPersistentAuthSessionByToken,
   revokePersistentAuthSession,
@@ -52,12 +60,14 @@ import { capabilities } from "../../../../packages/contracts/domain/capabilities
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
+const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
+const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const devInitialCreditBalance = 10000;
 const generationTaskTimeoutMs = 15 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -122,6 +132,24 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
+function createDevPaymentProviderRegistry() {
+  const paylabBaseUrl = process.env.PAYLAB_BASE_URL?.trim();
+  if (!paylabBaseUrl) {
+    return createDefaultPaymentProviderRegistry();
+  }
+
+  return createStaticPaymentProviderRegistry({
+    paylab: createPayLabAdapter({
+      baseUrl: paylabBaseUrl,
+      apiKey: process.env.PAYLAB_API_KEY?.trim(),
+      webhookSigningSecret: process.env.PAYLAB_WEBHOOK_SIGNING_SECRET?.trim(),
+      dashboardBaseUrl: process.env.PAYLAB_DASHBOARD_BASE_URL?.trim(),
+    }),
+    wechat_pay: createLocalPaymentProviderAdapter("wechat_pay"),
+    alipay: createLocalPaymentProviderAdapter("alipay"),
+  });
+}
+
 interface AuthHttpResponse<T> {
   status: number;
   body: T;
@@ -165,13 +193,18 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<unknown> {
+  const body = await readTextBody(request);
+  return body ? JSON.parse(body) : {};
+}
+
+async function readTextBody(request: AsyncIterable<Buffer | string>): Promise<string> {
   let body = "";
 
   for await (const chunk of request) {
     body += String(chunk);
   }
 
-  return body ? JSON.parse(body) : {};
+  return body;
 }
 
 async function readMultipartFormData(
@@ -210,6 +243,17 @@ function writeIdempotencyKeyRequired(response: ServerResponse) {
     status: 400,
     body: { error: "idempotency_key_required" },
   });
+}
+
+function singleValueHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).flatMap(([key, value]) => {
+      const first = Array.isArray(value) ? value[0] : value;
+      return first ? [[key, first]] : [];
+    }),
+  );
 }
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -2070,6 +2114,16 @@ async function serveStatic(pathname: string, response: ServerResponse) {
     return;
   }
 
+  if (pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js") {
+    const vendorFile = pathname === "/vendor/three.module.js" ? "three.module.js" : "three.core.js";
+    const file = await readFile(join(nodeModulesRoot, "three", "build", vendorFile), "utf8");
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/javascript; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end(file);
+    return;
+  }
+
   const normalizedPath =
     pathname === "/" ? "/login.html" : pathname === "/login" ? "/login.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
@@ -2096,7 +2150,10 @@ async function serveStatic(pathname: string, response: ServerResponse) {
 
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
-  const filePath = join(vendorRoot, normalizedPath);
+  const filePath =
+    normalizedPath === "three.module.js" || normalizedPath === "three.core.js"
+      ? join(vendorRoot, "three", "build", normalizedPath)
+      : join(vendorRoot, normalizedPath);
   const file = await readFile(filePath);
 
   response.statusCode = 200;
@@ -2676,15 +2733,46 @@ export function createPhoneAuthDevServer(
 
       if (
         request.method === "POST" &&
+        pathname.startsWith("/api/payment-provider-callbacks/")
+      ) {
+        const provider = decodeURIComponent(
+          pathname.slice("/api/payment-provider-callbacks/".length),
+        );
+        if (!isPaymentProvider(provider)) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "invalid_payment_provider" },
+          });
+        }
+        const commercePayment = createCommercePaymentService({
+          db,
+          workspaceId: devWorkspaceId,
+          callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+        });
+        return writeJson(
+          response,
+          await commercePayment.processProviderCallback({
+            provider,
+            rawBody: await readTextBody(request),
+            headers: singleValueHeaders(request.headers),
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (
+        request.method === "POST" &&
         pathname === "/api/billing/payment-callback/mock"
       ) {
         const commercePayment = createCommercePaymentService({
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
         });
         const body = (await readJsonBody(request)) as {
-          provider: "wechat_pay" | "alipay";
+          provider: PaymentProvider;
           providerEventDedupKey: string;
           merchantOrderNo: string;
           providerTradeId: string;
@@ -2726,6 +2814,10 @@ export function createPhoneAuthDevServer(
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: request.headers.host
+            ? `http://${request.headers.host}`
+            : undefined,
         });
 
         if (request.method === "GET" && pathname === "/api/billing/packages") {
@@ -2761,7 +2853,7 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             orderId: string;
-            provider: "wechat_pay" | "alipay";
+            provider: PaymentProvider;
             productMode: string;
           };
           return writeJson(

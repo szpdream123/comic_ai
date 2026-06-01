@@ -1033,7 +1033,7 @@ CREATE TABLE payment_intents (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organizations(id),
   order_id uuid NOT NULL REFERENCES billing_orders(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay')),
   product_mode text NOT NULL,
   status text NOT NULL CHECK (
     status IN (
@@ -1080,7 +1080,7 @@ CREATE TABLE payment_provider_events (
   organization_id uuid NULL REFERENCES organizations(id),
   order_id uuid NULL REFERENCES billing_orders(id),
   payment_intent_id uuid NULL REFERENCES payment_intents(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay')),
   provider_event_dedup_key text NOT NULL,
   merchant_order_no text NULL,
   provider_trade_id text NULL,
@@ -1171,7 +1171,7 @@ CREATE INDEX payment_risk_events_open_idx
 CREATE TABLE payment_reconciliation_runs (
   id uuid PRIMARY KEY,
   organization_id uuid NULL REFERENCES organizations(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay', 'all')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay', 'all')),
   run_type text NOT NULL CHECK (
     run_type IN ('recent', 'expiry', 'paid_without_credit', 'daily_settlement')
   ),

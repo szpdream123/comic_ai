@@ -45,6 +45,28 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("serves the local Three module files used by the LiquidEther homepage background", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const moduleResponse = await fetch(`${server.origin}/vendor/three.module.js`);
+      const moduleText = await moduleResponse.text();
+      const coreResponse = await fetch(`${server.origin}/vendor/three.core.js`);
+      const coreText = await coreResponse.text();
+
+      assert.equal(moduleResponse.status, 200);
+      assert.match(moduleResponse.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.match(moduleText, /three\.core\.js/);
+      assert.equal(coreResponse.status, 200);
+      assert.match(coreResponse.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.match(coreText, /class Vector2/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves app shell for episode deep links", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -136,6 +158,29 @@ describe("phone auth dev server", () => {
       assert.equal(sessionResponse.status, 401);
       assert.equal(sessionResponse.headers.get("access-control-allow-origin"), "null");
       assert.equal(sessionResponse.headers.get("access-control-allow-credentials"), "true");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes the provider callback boundary and rejects unknown payment providers", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(
+        `${server.origin}/api/payment-provider-callbacks/stripe`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        },
+      );
+      const payload = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(payload, { error: "invalid_payment_provider" });
     } finally {
       await server.close();
     }

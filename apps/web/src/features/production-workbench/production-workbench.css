@@ -402,8 +402,8 @@
   min-width: 14rem;
   padding: 0 1rem;
   background:
-    linear-gradient(90deg, oklch(82% 0.13 95 / 0.92), oklch(74% 0.19 205 / 0.92));
-  color: oklch(10% 0.01 250);
+    linear-gradient(100deg, oklch(61% 0.27 286 / 0.94), oklch(72% 0.24 316 / 0.94) 58%, oklch(78% 0.16 220 / 0.92));
+  color: oklch(100% 0 0);
   font-size: 0.78rem;
   font-weight: 900;
   letter-spacing: 0.02em;
@@ -670,23 +670,33 @@
   overflow: hidden;
   border-left: 1px solid oklch(100% 0 0 / 0.04);
   background:
-    linear-gradient(180deg, oklch(0% 0 0 / 0.16), oklch(0% 0 0 / 0.44)),
-    linear-gradient(135deg, oklch(0% 0 0 / 0.52), oklch(0% 0 0 / 0.14) 42%, oklch(0% 0 0 / 0.66)),
-    url("https://images.unsplash.com/photo-1518709414768-a88981a4515d?auto=format&fit=crop&w=1800&q=80")
-      center center / cover no-repeat;
+    radial-gradient(circle at 18% 22%, oklch(62% 0.27 292 / 0.28), transparent 24rem),
+    radial-gradient(circle at 74% 18%, oklch(72% 0.24 316 / 0.2), transparent 25rem),
+    radial-gradient(circle at 58% 72%, oklch(76% 0.16 220 / 0.13), transparent 23rem),
+    linear-gradient(135deg, oklch(11% 0.04 285), oklch(7% 0.03 258) 44%, oklch(9% 0.04 308));
+}
+
+.home-liquid-ether {
+  position: absolute;
+  inset: -8%;
+  z-index: 0;
+  opacity: 0.92;
+  pointer-events: none;
+  filter: saturate(1.22) contrast(1.08);
 }
 
 .hero-overlay {
   position: absolute;
   inset: 0;
+  z-index: 1;
   background:
-    radial-gradient(circle at 58% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.26) 35rem),
-    linear-gradient(180deg, oklch(0% 0 0 / 0.15), oklch(0% 0 0 / 0.58));
+    radial-gradient(circle at 52% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.28) 35rem),
+    linear-gradient(180deg, oklch(0% 0 0 / 0.1), oklch(0% 0 0 / 0.64));
 }
 
 .hero-content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -708,7 +718,7 @@
   height: clamp(3.1rem, 5.5vh, 4rem);
   place-items: center;
   border-radius: 1.2rem;
-  background: linear-gradient(180deg, oklch(78% 0.19 325), oklch(62% 0.27 285));
+  background: linear-gradient(180deg, oklch(79% 0.21 315), oklch(58% 0.3 286));
   color: oklch(100% 0 0);
   font-size: 2rem;
   font-weight: 800;
@@ -752,11 +762,13 @@
   width: min(27rem, 100%);
   min-height: 3.8rem;
   border-radius: 1.1rem;
-  background: linear-gradient(90deg, oklch(64% 0.28 290), oklch(75% 0.22 320));
+  background: linear-gradient(90deg, oklch(61% 0.29 286), oklch(71% 0.25 316), oklch(75% 0.18 230));
   color: oklch(100% 0 0);
   font-size: 1.1rem;
   font-weight: 700;
-  box-shadow: 0 1rem 3rem oklch(0% 0 0 / 0.3);
+  box-shadow:
+    0 1rem 3rem oklch(0% 0 0 / 0.32),
+    0 0 2.8rem oklch(67% 0.25 305 / 0.28);
 }
 
 .hero-status-strip {
@@ -8382,6 +8394,44 @@
 
   .workbench-main.home-mode,
   .workbench-main.workspace-mode {
+    padding: 0;
+  }
+
+  .workbench-main.home-mode .global-statusbar {
+    left: calc(var(--workbench-rail-width) + 0.55rem);
+    right: 0.7rem;
+    top: 0.8rem;
+    align-items: flex-start;
+    justify-content: flex-end;
+    min-height: auto;
+  }
+
+  .workbench-main.home-mode .statusbar-brand {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-actions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 3.05rem));
+    justify-content: end;
+    gap: 0.55rem;
+  }
+
+  .workbench-main.home-mode .statusbar-seedance {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    min-height: 3rem;
+    padding: 0.5rem 0.8rem;
+    text-align: center;
+  }
+
+  .workbench-main.home-mode .statusbar-pill {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-credit {
+    min-width: 0;
     padding: 0;
   }
 

@@ -82,6 +82,7 @@ async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!tableCheck.rows[0]?.exists) {
     await applySqlMigrations(db);
+    await ensurePaymentProviderConstraints(db);
     return;
   }
 
@@ -112,4 +113,48 @@ async function ensureFoundationSchema(db: SqlDatabase) {
   if (!hardeningTableCheck.rows[0]?.exists) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
   }
+
+  await ensurePaymentProviderConstraints(db);
+}
+
+async function ensurePaymentProviderConstraints(db: SqlDatabase) {
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_intents
+        DROP CONSTRAINT IF EXISTS payment_intents_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_intents
+        ADD CONSTRAINT payment_intents_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay'))
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_provider_events
+        DROP CONSTRAINT IF EXISTS payment_provider_events_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_provider_events
+        ADD CONSTRAINT payment_provider_events_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay'))
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_reconciliation_runs
+        DROP CONSTRAINT IF EXISTS payment_reconciliation_runs_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_reconciliation_runs
+        ADD CONSTRAINT payment_reconciliation_runs_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay', 'all'))
+    `,
+  );
 }

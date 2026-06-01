@@ -87,6 +87,7 @@ describe("production workbench home shell", () => {
 
     assert.match(html, /data-action="set-nav-tab"/);
     assert.match(html, /data-action="open-create-modal"/);
+    assert.match(html, /data-liquid-ether-root/);
     assert.match(html, /hero-avatar/);
   });
 
