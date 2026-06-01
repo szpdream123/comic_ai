@@ -37,11 +37,18 @@ export interface TextModelGatewayRequestContext {
   providerOperation: typeof textModelGatewayOperationNames.chatCompletions;
 }
 
-export interface TextGatewayFinalUsage {
-  status: "succeeded";
-  usage: Record<string, unknown> | null;
-  usageSource: "provider" | "provider_missing";
-}
+export type TextGatewayFinalUsage =
+  | {
+      status: "succeeded";
+      usage: Record<string, unknown> | null;
+      usageSource: "provider" | "provider_missing";
+    }
+  | {
+      status: "failed" | "canceled";
+      failureCode: string;
+      usage: Record<string, unknown> | null;
+      usageSource: "provider" | "provider_missing";
+    };
 
 export interface TextGatewayChatStreamResult {
   providerRequestId: string;
@@ -127,10 +134,8 @@ export class TextModelGatewayService {
     const tracker = new StreamTracker();
     let aborted = false;
     let resolveCompleted!: (value: TextGatewayFinalUsage) => void;
-    let rejectCompleted!: (reason: unknown) => void;
-    const completed = new Promise<TextGatewayFinalUsage>((resolve, reject) => {
+    const completed = new Promise<TextGatewayFinalUsage>((resolve) => {
       resolveCompleted = resolve;
-      rejectCompleted = reject;
     });
 
     const stream = this.wrapStream({
@@ -141,7 +146,6 @@ export class TextModelGatewayService {
       tracker,
       isAborted: () => aborted,
       resolveCompleted,
-      rejectCompleted,
       now,
     });
 
@@ -164,7 +168,6 @@ export class TextModelGatewayService {
     tracker: StreamTracker;
     isAborted: () => boolean;
     resolveCompleted: (value: TextGatewayFinalUsage) => void;
-    rejectCompleted: (reason: unknown) => void;
     now: () => Date;
   }) {
     try {
@@ -196,37 +199,42 @@ export class TextModelGatewayService {
       });
       input.resolveCompleted(final);
     } catch (error) {
-      const failure = new TextModelGatewayError(
-        "provider_stream_error",
-        "provider_stream_error",
-        error,
-      );
+      const status = input.isAborted() ? "canceled" : "failed";
+      const failureCode = input.isAborted()
+        ? "client_aborted_stream"
+        : "provider_stream_error";
+      const usageSource = input.tracker.usage ? "provider" : "provider_missing";
       const redactedResponse = {
         model: input.modelId,
         providerModel: input.providerModel,
         chunkCount: input.tracker.chunkCount,
         finishReasons: input.tracker.finishReasons,
         usage: input.tracker.usage,
-        usageSource: input.tracker.usage ? "provider" : "provider_missing",
+        usageSource,
       };
 
-      if (input.isAborted()) {
+      if (status === "canceled") {
         await markProviderRequestCanceled(this.config.db, {
           providerRequestId: input.providerRequestId,
-          failureCode: "client_aborted_stream",
+          failureCode,
           redactedResponse,
           now: input.now(),
         });
       } else {
         await markProviderRequestFailed(this.config.db, {
           providerRequestId: input.providerRequestId,
-          failureCode: "provider_stream_error",
+          failureCode,
           redactedResponse,
           now: input.now(),
         });
       }
 
-      input.rejectCompleted(failure);
+      input.resolveCompleted({
+        status,
+        failureCode,
+        usage: input.tracker.usage,
+        usageSource,
+      });
       throw error;
     }
   }

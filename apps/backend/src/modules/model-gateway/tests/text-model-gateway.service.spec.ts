@@ -130,7 +130,6 @@ describe("text model gateway service", () => {
         },
         requestContext("stream-error"),
       );
-      const completedFailure = result.completed.catch((error) => error);
 
       await assert.rejects(async () => {
         for await (const _chunk of result.stream) {
@@ -138,8 +137,9 @@ describe("text model gateway service", () => {
         }
       }, /upstream exploded/);
 
-      const completedError = await completedFailure;
-      assert.equal(completedError.code, "provider_stream_error");
+      const final = await result.completed;
+      assert.equal(final.status, "failed");
+      assert.equal(final.failureCode, "provider_stream_error");
 
       const stored = await db.query<{
         status: string;
@@ -171,7 +171,6 @@ describe("text model gateway service", () => {
         },
         requestContext("abort"),
       );
-      const completedFailure = result.completed.catch((error) => error);
 
       const iterator = result.stream[Symbol.asyncIterator]();
       const first = await iterator.next();
@@ -180,8 +179,9 @@ describe("text model gateway service", () => {
       result.abort();
 
       await assert.rejects(iterator.next(), /stream aborted/);
-      const completedError = await completedFailure;
-      assert.equal(completedError.code, "provider_stream_error");
+      const final = await result.completed;
+      assert.equal(final.status, "canceled");
+      assert.equal(final.failureCode, "client_aborted_stream");
       assert.equal(adapter.lastSignal?.aborted, true);
 
       const stored = await db.query<{
