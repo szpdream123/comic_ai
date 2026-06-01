@@ -52,6 +52,141 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
+test("importEpisodeAsset targets the episode-scoped import route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.importEpisodeAsset("episode/1", {
+    assetType: "scene",
+    name: "废土街角",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/episodes/episode%2F1/assets/import");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "include");
+});
+
+test("deleteAssetConversationTurn targets the episode asset conversation turn route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.deleteAssetConversationTurn("episode/1", "asset/1", "task/1", "image");
+
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    "/api/episodes/episode%2F1/assets/asset%2F1/conversation/messages/task%2F1?mediaMode=image",
+  );
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.equal(calls[0].options.credentials, "include");
+});
+
+test("billing write routes send idempotency keys", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.createBillingOrder({ creditPackageId: "pkg-1" });
+  await creatorApi.createPaymentIntent({
+    orderId: "order-1",
+    provider: "wechat_pay",
+    productMode: "native_qr",
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/billing/orders");
+  assert.match(calls[0].options.headers["idempotency-key"], /^billing\.order\.create:/);
+  assert.equal(calls[1].url, "/api/billing/payment-intents");
+  assert.match(calls[1].options.headers["idempotency-key"], /^billing\.intent\.create:/);
+});
+
+test("project member create targets the project-scoped route and sends an idempotency key", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.createProjectMember("project/1", {
+    phone: "13800138001",
+    role: "creator",
+    note: "分镜协作",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/members");
+  assert.equal(calls[0].options.method, "POST");
+  assert.match(calls[0].options.headers["idempotency-key"], /^project\.member\.create:/);
+});
+
+test("project member update targets the member-scoped route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.updateProjectMember("project/1", "member/1", {
+    role: "viewer",
+    status: "disabled",
+    note: "只读",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/members/member%2F1");
+  assert.equal(calls[0].options.method, "PATCH");
+});
+
+test("billing read routes target explicit order and payment intent resources", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getBillingOrder("order/1");
+  await creatorApi.getPaymentIntent("intent/1");
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/billing/orders/order%2F1");
+  assert.equal(calls[1].url, "/api/billing/payment-intents/intent%2F1");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[1].options.credentials, "include");
+});
+
 test("deleteShotMedia targets explicit shot media resource when assetVersionId is provided", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -530,6 +665,53 @@ test("resolveApiUrl keeps same-origin URLs on alternate dev API ports", async ()
   );
 });
 
+test("resolveApiUrl keeps same-origin URLs on the user-selected dev port", async () => {
+  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
+
+  await withWindowLocation(
+    {
+      protocol: "http:",
+      host: "127.0.0.1:4399",
+      hostname: "127.0.0.1",
+      port: "4399",
+      origin: "http://127.0.0.1:4399",
+    },
+    () => {
+      assert.equal(
+        resolveApiUrl("/api/auth/session"),
+        "http://127.0.0.1:4399/api/auth/session",
+      );
+      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4399/app.html");
+    },
+  );
+});
+
+test("team dashboard export url uses the project-scoped route and preserves filters", async () => {
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+
+  await withWindowLocation(
+    {
+      protocol: "http:",
+      host: "127.0.0.1:4321",
+      hostname: "127.0.0.1",
+      port: "4321",
+      origin: "http://127.0.0.1:4321",
+    },
+    () => {
+      const url = creatorApi.getProjectTeamDashboardExportUrl("project-1", {
+        tab: "ranking",
+        dateShortcut: "今天",
+        role: "producer",
+        status: "enabled",
+      });
+      assert.equal(
+        url,
+        "http://127.0.0.1:4310/api/creator/projects/project-1/team-dashboard/export?tab=ranking&dateShortcut=%E4%BB%8A%E5%A4%A9&role=producer&status=enabled",
+      );
+    },
+  );
+});
+
 test("new episode helpers unwrap envelopes and target v2 workbench routes", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -548,11 +730,16 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   const workbench = await creatorApi.getEpisodeWorkbench("episode/1");
   const config = await creatorApi.listGenerationConfig("episode/1");
   const storyboards = await creatorApi.listStoryboards("episode/1", { page: 2, pageSize: 5 });
+  const conversation = await creatorApi.getAssetConversationHistory("episode/1", "asset/1", "video");
   const task = await creatorApi.createVideoTask(
     "episode/1",
     { targetType: "storyboard", targetId: "shot/1" },
     { idempotencyKey: "video-key" },
   );
+  const persistedConversation = await creatorApi.saveAssetConversationMessages("episode/1", "asset/1", {
+    mediaMode: "image",
+    messages: [{ messageType: "user_request" }],
+  });
   const exportTask = await creatorApi.createEpisodeExportTask(
     "episode/1",
     { assetVersionId: "asset-version/1", storageObjectId: "storage/1" },
@@ -563,18 +750,23 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   assert.equal(workbench.ok, true);
   assert.equal(config.ok, true);
   assert.equal(storyboards.ok, true);
+  assert.equal(conversation.ok, true);
   assert.equal(task.ok, true);
+  assert.equal(persistedConversation.ok, true);
   assert.equal(exportTask.ok, true);
   assert.deepEqual(calls.map((call) => call.url), [
     "/api/projects/project%2F1/detail",
     "/api/episodes/episode%2F1/workbench",
     "/api/episodes/episode%2F1/generation-config",
     "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5",
+    "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video",
     "/api/episodes/episode%2F1/generation/video-tasks",
+    "/api/episodes/episode%2F1/assets/asset%2F1/conversation/messages",
     "/api/episodes/episode%2F1/export-tasks",
   ]);
-  assert.equal(calls[4].options.headers["idempotency-key"], "video-key");
-  assert.equal(calls[5].options.headers["idempotency-key"], "export-key");
+  assert.equal(calls[5].options.headers["idempotency-key"], "video-key");
+  assert.equal(calls[6].options.method, "POST");
+  assert.equal(calls[7].options.headers["idempotency-key"], "export-key");
 });
 
 test("new envelope errors expose status code, error code, details, and request id", async () => {
@@ -601,4 +793,29 @@ test("new envelope errors expose status code, error code, details, and request i
       return true;
     },
   );
+});
+
+test("enterprise contact request targets the billing intake route and sends an idempotency key", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { request: { id: "enterprise-request-1", status: "submitted" } },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const response = await creatorApi.requestEnterpriseContact(
+    { source: "pricing_modal", note: "enterprise_plan_interest" },
+    { idempotencyKey: "enterprise-key" },
+  );
+
+  assert.equal(response.request.id, "enterprise-request-1");
+  assert.equal(calls[0].url, "/api/billing/enterprise-contact-requests");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["idempotency-key"], "enterprise-key");
 });

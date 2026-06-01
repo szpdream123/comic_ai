@@ -1,5 +1,7 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
+import { renderAssetImportModal } from "./project-detail.js";
+import { resolveApiUrl } from "../../shared/creator-api.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -27,6 +29,133 @@ const VIDEO_MODELS = [
   { id: "happy-horse", label: "Happy Horse" },
 ];
 
+const BATCH_IMAGE_MODEL_OPTIONS = [
+  {
+    id: "tnb-pro",
+    label: "nano banana 2（链路G）",
+    group: "Nano banana",
+  },
+  {
+    id: "tnb-fast",
+    label: "nano banana fast（链路G）",
+    group: "Nano banana",
+  },
+  {
+    id: "tnb-ultra",
+    label: "nano banana pro（链路G）",
+    group: "Nano banana",
+  },
+  {
+    id: "jimeng-4-5",
+    label: "gpt image 2（链路G）",
+    group: "Gpt image",
+  },
+  {
+    id: "jimeng-4-5-vip",
+    label: "gpt image 2 VIP（链路G）",
+    group: "Gpt image",
+  },
+];
+
+const BATCH_VIDEO_MODEL_OPTIONS = [
+  { id: "vidu-q3-pro", label: "Vidu Q3 Pro" },
+  { id: "hailuo-2-0", label: "海螺 2.0" },
+  { id: "seedance-2-0-vip", label: "SeeDance 2.0 VIP" },
+];
+
+const BATCH_RATIO_OPTIONS = [
+  "auto",
+  "9:16",
+  "16:9",
+  "1:1",
+  "4:3",
+  "3:4",
+  "3:2",
+  "2:3",
+  "5:4",
+  "4:5",
+  "21:9",
+];
+
+const BATCH_SIZE_OPTIONS = ["1K", "2K"];
+
+const BATCH_PRESET_OPTIONS = [
+  { id: "none", label: "无预设" },
+  { id: "scene-vr", label: "[系统]VR场景图" },
+  { id: "scene-overlook", label: "[系统]场景-俯视图" },
+  { id: "prop-triple", label: "[系统]道具-三视图" },
+  { id: "scene-wide", label: "[系统]场景-广角图" },
+  { id: "character-triple", label: "[系统]角色-三视图" },
+];
+
+const BATCH_PUBLIC_STYLES = [
+  { id: "public-1", label: "邵氏兄弟", preview: buildBatchStylePreview("#7c563f", "#f3cf95", "portrait") },
+  { id: "public-2", label: "[动漫]赛博", preview: buildBatchStylePreview("#303755", "#7ee0ff", "energy") },
+  { id: "public-3", label: "[动漫]中式", preview: buildBatchStylePreview("#463226", "#e4c28b", "city") },
+  { id: "public-4", label: "[真人]中式", preview: buildBatchStylePreview("#2f241f", "#f3d7a2", "portrait") },
+  { id: "public-5", label: "[动漫]废土", preview: buildBatchStylePreview("#44392f", "#c9baa2", "robot") },
+  { id: "public-6", label: "[动漫]国风", preview: buildBatchStylePreview("#27324d", "#a7d7ff", "sword") },
+  { id: "public-7", label: "[动漫]多镜", preview: buildBatchStylePreview("#1f2831", "#8fd0a2", "mask") },
+  { id: "public-8", label: "[动漫]复古", preview: buildBatchStylePreview("#29455c", "#f1b06a", "scene") },
+  { id: "public-9", label: "中国古风", preview: buildBatchStylePreview("#32403f", "#f0d08d", "sword") },
+  { id: "public-10", label: "国漫3D", preview: buildBatchStylePreview("#27415a", "#9bd8ff", "scene") },
+  { id: "public-11", label: "胡金铨武侠", preview: buildBatchStylePreview("#3a2b21", "#f4d9a6", "portrait") },
+];
+
+const BATCH_CUSTOM_STYLES = [
+  { id: "custom-1", label: "日系动漫风", preview: buildBatchStylePreview("#2b3250", "#a9d8ff", "portrait") },
+  { id: "custom-2", label: "都市电影感", preview: buildBatchStylePreview("#2e2b30", "#f3c391", "city") },
+  { id: "custom-3", label: "灰蓝末世", preview: buildBatchStylePreview("#28303b", "#98b3c9", "scene") },
+];
+
+const VOICE_OPTIONS_BY_TAB = {
+  custom: [
+    { id: "custom-1", name: "军官音色" },
+    { id: "custom-2", name: "应先生" },
+    { id: "custom-3", name: "李右" },
+    { id: "custom-4", name: "白野(我)" },
+  ],
+  system: [
+    { id: "system-1", name: "女/稚嫩" },
+    { id: "system-2", name: "女/天真" },
+    { id: "system-3", name: "女/欢橘" },
+    { id: "system-4", name: "女/甜美" },
+    { id: "system-5", name: "女/温柔" },
+    { id: "system-6", name: "男/普通01" },
+    { id: "system-7", name: "男/不拘" },
+    { id: "system-8", name: "男/阳光" },
+    { id: "system-9", name: "女/嚣张" },
+  ],
+};
+
+function buildBatchStylePreview(background, accent, art = "portrait") {
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+      <defs>
+        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stop-color="${background}" />
+          <stop offset="100%" stop-color="${accent}" />
+        </linearGradient>
+      </defs>
+      <rect width="160" height="120" rx="16" fill="url(#bg)"/>
+      ${renderBatchStyleSvg(art)}
+    </svg>
+  `)}`;
+}
+
+function renderBatchStyleSvg(art) {
+  const svgByArt = {
+    portrait: '<circle cx="80" cy="36" r="17" fill="rgba(255,255,255,.92)"/><path d="M50 104c5-27 24-42 30-42s25 15 30 42Z" fill="rgba(18,18,20,.76)"/>',
+    energy: '<path d="M76 16 40 70h26l-8 34 62-62H90l12-26Z" fill="rgba(255,255,255,.92)"/>',
+    city: '<rect x="18" y="58" width="24" height="42" rx="4" fill="rgba(255,255,255,.85)"/><rect x="46" y="42" width="28" height="58" rx="4" fill="rgba(20,20,24,.78)"/><rect x="80" y="28" width="24" height="72" rx="4" fill="rgba(255,255,255,.78)"/><rect x="110" y="50" width="30" height="50" rx="4" fill="rgba(20,20,24,.7)"/>',
+    robot: '<rect x="56" y="26" width="48" height="42" rx="10" fill="rgba(255,255,255,.88)"/><circle cx="70" cy="47" r="7" fill="rgba(20,20,24,.8)"/><circle cx="90" cy="47" r="7" fill="rgba(20,20,24,.8)"/><rect x="62" y="71" width="36" height="28" rx="8" fill="rgba(20,20,24,.72)"/>',
+    sword: '<path d="M88 18 102 34 66 72 50 58Z" fill="rgba(255,255,255,.9)"/><path d="M56 62 48 100l40-8Z" fill="rgba(20,20,24,.76)"/>',
+    mask: '<path d="M36 28h88v56c0 12-20 20-44 20S36 96 36 84Z" fill="rgba(255,255,255,.9)"/><circle cx="64" cy="60" r="8" fill="rgba(20,20,24,.78)"/><circle cx="96" cy="60" r="8" fill="rgba(20,20,24,.78)"/>',
+    scene: '<path d="M0 88 38 54l28 20 22-14 30 24 42-36v72H0Z" fill="rgba(255,255,255,.28)"/><path d="M0 104 30 78l22 14 30-20 26 18 52-30v60H0Z" fill="rgba(20,20,24,.42)"/>',
+  };
+  return svgByArt[art] ?? svgByArt.portrait;
+}
+
 export function renderEpisodeWorkbench({
   episodeId = "",
   episodeTitle = "",
@@ -37,6 +166,7 @@ export function renderEpisodeWorkbench({
   selectedEpisodeCardId = null,
   selectedEpisodeAssetId = null,
   selectedEpisodeAssetIds = [],
+  selectedStoryboardIds = [],
   episodeWorkbenchSelectedAttachmentIds = [],
   isStoryboardDescriptionModalOpen = false,
   storyboardDescriptionDraft = "",
@@ -61,10 +191,27 @@ export function renderEpisodeWorkbench({
   generationPollingActive = false,
   assetSearchQuery = "",
   exportPreviewResult = null,
+  exportOptionModal = null,
   episodeBatchModal = null,
+  assetImportModal = null,
+  assetImportModalTab = "local",
+  assetImportCategory = "domestic-modern-city",
+  assetImportDrafts = [],
+  assetImportSelection = [],
+  assetImportPage = 1,
+  assetImportPageSize = 10,
+  assetImportPageSizeMenuOpen = false,
+  assetImportOfficialAssets = [],
+  projectLibraryAssetsByType = null,
+  projectOtherAssetMediaType = "video",
+  projectDetail = null,
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
   const boardMode = generationUiState.museBoardMode ?? "operation";
+  const effectiveModelId =
+    scopeMode === "assets" && mediaMode === "image"
+      ? "jimeng-4-5"
+      : selectedModelId;
   const assetGroups = {
     character: mergeAssetGroup(assetLibrary.character ?? []),
     scene: mergeAssetGroup(assetLibrary.scene ?? []),
@@ -85,8 +232,11 @@ export function renderEpisodeWorkbench({
   const allAssetIds = [...assetGroups.character, ...assetGroups.scene, ...assetGroups.prop].map(
     (item) => item.id,
   );
+  const allStoryboardIds = normalizedStoryboards.map((item) => item.id);
   const isAllSelected =
-    allAssetIds.length > 0 && allAssetIds.every((id) => selectedEpisodeAssetIds.includes(id));
+    scopeMode === "storyboard"
+      ? allStoryboardIds.length > 0 && allStoryboardIds.every((id) => selectedStoryboardIds.includes(id))
+      : allAssetIds.length > 0 && allAssetIds.every((id) => selectedEpisodeAssetIds.includes(id));
   const canGenerateCurrentMode =
     mediaMode === "video" || mediaMode === "lip-sync"
       ? canGenerateVideos
@@ -96,6 +246,30 @@ export function renderEpisodeWorkbench({
   const filteredQuickAssets = normalizedAssetSearchQuery
     ? quickAssets.filter((asset) => matchesAssetQuery(asset, normalizedAssetSearchQuery))
     : quickAssets;
+  const showQuickSearch = quickAssets.length > 0;
+  const showQuickEmptyState = Boolean(normalizedAssetSearchQuery) && filteredQuickAssets.length === 0;
+  const assetPromptDraft = generationUiState.assetPromptDraft ?? {};
+  const assetConversationHistory = generationUiState.assetConversationHistory ?? {};
+  const assetQuickReferenceItems = assetPromptDraft.quickReferenceItems ?? [];
+  const assetSelectionContext = assetPromptDraft.selectionContext ?? {};
+  const assetConversationEntries = resolveAssetConversationEntries(
+    assetConversationHistory,
+    selectedAsset?.id ?? null,
+    mediaMode === "video" ? "video" : "image",
+    imageGenerationResult,
+  );
+  const selectedAssetSummary = String(selectedAsset?.description ?? "").trim();
+  const assetStageTitle = selectedAsset
+    ? `${resolveAssetLabel(activeAssetTab)}${selectedAsset?.name ?? ""}${
+        selectedAssetSummary ? `：${selectedAssetSummary}` : ""
+      }`
+    : "";
+  const exportButtonLabel = scopeMode === "assets" ? "下一步：分镜制作" : "导出";
+  const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
+  const batchButtonDisabled =
+    scopeMode === "storyboard"
+      ? selectedStoryboardIds.length === 0 && allStoryboardIds.length === 0
+      : selectedEpisodeAssetIds.length === 0 && allAssetIds.length === 0;
 
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
@@ -107,15 +281,15 @@ export function renderEpisodeWorkbench({
           <span class="episode-replica-timestamp">${escapeHtml(formatEpisodeWorkbenchIdentity(episodeTitle, episodeId))}</span>
         </div>
         <div class="episode-replica-topbar-center">
-          <button class="episode-replica-pill ${isAllSelected ? "active" : ""}" type="button" data-action="toggle-episode-asset-select-all">全选</button>
-          <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">批量生图/视频 | 高清处理</button>
+          <button class="episode-replica-pill ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" ${disabled(selectAllDisabled)}>全选</button>
+          <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions" ${disabled(batchButtonDisabled)}>批量生图/视频 | 高清处理</button>
         </div>
         <div class="episode-replica-topbar-right">
           <div class="episode-replica-main-switch">
             <button class="${scopeMode === "assets" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="assets">角色/场景</button>
             <button class="${scopeMode === "storyboard" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="storyboard">分镜</button>
           </div>
-          <button class="episode-replica-export" type="button" data-action="preview-export">导出</button>
+          <button class="episode-replica-export ${scopeMode === "assets" ? "next-step" : ""}" type="button" data-action="${scopeMode === "assets" ? "set-muse-scope-mode" : "preview-export"}" ${scopeMode === "assets" ? 'data-mode="storyboard"' : ""}>${escapeHtml(exportButtonLabel)}</button>
         </div>
       </header>
 
@@ -129,7 +303,7 @@ export function renderEpisodeWorkbench({
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                 )
-              : renderStoryboardWorkspace(normalizedStoryboards, currentStoryboard, boardMode)
+              : renderStoryboardWorkspace(normalizedStoryboards, currentStoryboard, boardMode, selectedStoryboardIds, assetGroups)
           }
         </section>
 
@@ -140,21 +314,35 @@ export function renderEpisodeWorkbench({
             </div>
             <p class="episode-replica-stage-title">${
               scopeMode === "storyboard"
-                ? `分镜：${escapeHtml(currentStoryboard?.title ?? "")}`
-                : `${escapeHtml(resolveAssetLabel(activeAssetTab))}：${escapeHtml(selectedAsset?.name ?? "")}`
+                ? `分镜：${escapeHtml(currentStoryboard?.displayTitle ?? currentStoryboard?.title ?? "")}`
+                : escapeHtml(assetStageTitle)
             }</p>
           </div>
           <div class="episode-replica-stage-body">
             ${
               scopeMode === "storyboard"
-                ? renderStoryboardStage(currentStoryboard, mediaMode === "lip-sync" ? "video" : mediaMode, imageGenerationResult, videoGenerationResult)
-                : renderAssetPreview(selectedAsset, activeAssetTab)
+                ? renderStoryboardStage(currentStoryboard, mediaMode, imageGenerationResult, videoGenerationResult)
+                : assetConversationEntries.length > 0
+                  ? renderAssetGeneratedStage(
+                      selectedAsset,
+                      activeAssetTab,
+                      imageGenerationResult,
+                      mediaMode,
+                      assetConversationEntries,
+                    )
+                  : renderAssetStage({
+                      asset: selectedAsset,
+                      activeAssetTab,
+                      mediaMode,
+                      quickReferenceItems: assetQuickReferenceItems,
+                      selectionContext: assetSelectionContext,
+                    })
             }
           </div>
           ${renderPromptDock({
             selectedStoryboard: currentStoryboard,
             selectedAsset,
-            selectedModelId,
+            selectedModelId: effectiveModelId,
             prompt,
             busy,
             canGenerateCurrentMode,
@@ -165,45 +353,95 @@ export function renderEpisodeWorkbench({
             attachments: episodeWorkbenchAttachments,
             selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
             generationPollingActive,
+            scopeMode,
           })}
         </section>
 
         <aside class="episode-replica-right">
           <div class="episode-replica-right-head">
             <strong>资产快捷栏</strong>
-            <span>⌘</span>
+            <span class="episode-replica-right-head-icon">⌕</span>
           </div>
-          <label class="episode-replica-right-search">
-            <input
-              type="search"
-              value="${escapeAttr(assetSearchQuery ?? "")}"
-              placeholder="搜索资产快捷引用"
-              data-action="episode-asset-search"
-            />
-          </label>
+          ${
+            showQuickSearch
+              ? `<label class="episode-replica-right-search">
+                  <input
+                    type="search"
+                    value="${escapeAttr(assetSearchQuery ?? "")}"
+                    placeholder="搜索资产快捷引用"
+                    data-action="episode-asset-search"
+                  />
+                </label>`
+              : ""
+          }
           <div class="episode-replica-right-list">
             ${
               filteredQuickAssets.length
                 ? filteredQuickAssets.map((asset) => renderQuickAsset(asset, asset.id === selectedEpisodeAssetId)).join("")
-                : '<div class="episode-replica-right-empty">没有匹配到可快捷引用的资产。</div>'
+                : showQuickEmptyState && showQuickSearch
+                  ? '<div class="episode-replica-right-empty">没有匹配到可快捷引用的资产。</div>'
+                  : ""
             }
           </div>
         </aside>
       </div>
 
       ${renderEpisodeExportPreview(exportPreviewResult)}
+      ${renderEpisodeExportOptionModal(exportOptionModal)}
       ${renderEpisodeBatchModal(episodeBatchModal)}
       ${renderStoryboardDescriptionModal({
         show: isStoryboardDescriptionModalOpen,
         value: storyboardDescriptionDraft,
         selectedStoryboard: currentStoryboard,
       })}
-      ${renderSimpleDeleteModal(Boolean(storyboardDeleteTarget), "确认删除当前分镜吗？", "close-delete-storyboard-modal", "confirm-delete-storyboard")}
-      ${renderSimpleDeleteModal(Boolean(storyboardImageDeleteTarget?.storyboardId && storyboardImageDeleteTarget?.imageId), "确认删除当前图片吗？", "close-delete-storyboard-image-modal", "confirm-delete-storyboard-image")}
-      ${renderSimpleDeleteModal(Boolean(storyboardVideoDeleteTarget?.storyboardId && storyboardVideoDeleteTarget?.videoId), "确认删除当前视频吗？", "close-delete-storyboard-video-modal", "confirm-delete-storyboard-video")}
+      ${renderEpisodeDeleteModal({
+        show: Boolean(storyboardDeleteTarget),
+        title: "删除分镜提示",
+        text: "删除后无法找回，确认删除该分镜吗？",
+        closeAction: "close-delete-storyboard-modal",
+        confirmAction: "confirm-delete-storyboard",
+      })}
+      ${renderEpisodeDeleteModal({
+        show: Boolean(storyboardImageDeleteTarget?.storyboardId && storyboardImageDeleteTarget?.imageId),
+        title: "删除图片提示",
+        text: "删除后无法找回，确认删除当前图片吗？",
+        closeAction: "close-delete-storyboard-image-modal",
+        confirmAction: "confirm-delete-storyboard-image",
+      })}
+      ${renderEpisodeDeleteModal({
+        show: Boolean(storyboardVideoDeleteTarget?.storyboardId && storyboardVideoDeleteTarget?.videoId),
+        title: "删除视频提示",
+        text: "删除后无法找回，确认删除当前视频吗？",
+        closeAction: "close-delete-storyboard-video-modal",
+        confirmAction: "confirm-delete-storyboard-video",
+      })}
+      ${renderEpisodeDeleteModal({
+        show: Boolean(assetInspector?.episodeDeleteAssetTarget?.assetId),
+        title: "删除素材提示",
+        text: "删除后无法找回，确认删除吗？",
+        closeAction: "close-delete-episode-asset-modal",
+        confirmAction: "confirm-delete-episode-asset",
+      })}
       ${renderEpisodeAssetCreateModal(episodeAssetCreateModal)}
       ${renderEpisodeVoiceModal(episodeVoiceModal)}
       ${renderAssetInspectorModal(assetInspector)}
+      ${assetImportModal
+        ? renderAssetImportModal({
+            projectPanelMode: "episode-workbench",
+            assetImportModal,
+            assetImportModalTab,
+            assetImportCategory,
+            assetImportDrafts,
+            assetImportSelection,
+            assetImportPage,
+            assetImportPageSize,
+            assetImportPageSizeMenuOpen,
+            assetImportOfficialAssets,
+            projectLibraryAssetsByType,
+            projectOtherAssetMediaType,
+            projectDetail,
+          })
+        : ""}
     </section>
   `;
 }
@@ -250,6 +488,7 @@ function renderAssetWorkspace(
     scene: assetGroups.scene ?? [],
     prop: assetGroups.prop ?? [],
   };
+  const visibleTabs = ASSET_TABS.filter((tab) => (groups[tab.id] ?? []).length > 0);
   return `
     <div class="episode-replica-asset-toolbar unified">
       <div class="episode-replica-asset-toolbar-head">
@@ -264,27 +503,22 @@ function renderAssetWorkspace(
         </div>
       </div>
       <div class="episode-replica-asset-sections">
-        ${ASSET_TABS.map((tab) => `
+        ${visibleTabs.map((tab) => `
           <section
             class="episode-replica-asset-section ${escapeAttr(tab.id)}-mode ${tab.id === activeAssetTab ? "is-active" : ""}"
             data-asset-section="${escapeAttr(tab.id)}"
           >
             <div class="episode-replica-asset-grid ${escapeAttr(tab.id)}-mode">
               ${
-                (groups[tab.id] ?? []).length
-                  ? (groups[tab.id] ?? []).map((asset, index) =>
-                      renderAssetCard(
-                        asset,
-                        tab.id,
-                        asset.id === selectedEpisodeCardId ||
-                          (!selectedEpisodeCardId && tab.id === activeAssetTab && index === 0),
-                        selectedEpisodeAssetIds.includes(asset.id),
-                      ),
-                    ).join("")
-                  : `<article class="episode-replica-asset-empty">
-                      <strong>暂无${escapeHtml(tab.label)}资产</strong>
-                      <span>可先手动添加，或从资产库选取后再生成固定图。</span>
-                    </article>`
+                (groups[tab.id] ?? []).map((asset, index) =>
+                  renderAssetCard(
+                    asset,
+                    tab.id,
+                    asset.id === selectedEpisodeCardId ||
+                      (!selectedEpisodeCardId && tab.id === activeAssetTab && index === 0),
+                    selectedEpisodeAssetIds.includes(asset.id),
+                  ),
+                ).join("")
               }
             </div>
           </section>
@@ -297,6 +531,10 @@ function renderAssetWorkspace(
 function renderAssetCard(asset, assetKind, active, checked) {
   const desc = String(asset?.description ?? "").trim() || "";
   const title = assetKind === "scene" ? "编辑场景" : assetKind === "prop" ? "编辑道具" : "编辑角色";
+  const saveLabel = assetKind === "scene" ? "保存场景到资产库" : assetKind === "prop" ? "保存道具到资产库" : "保存角色到资产库";
+  const fixedLabel = assetKind === "scene" ? "场景固定" : assetKind === "prop" ? "道具固定" : "角色固定";
+  const descLabel = assetKind === "scene" ? "场景描述" : assetKind === "prop" ? "道具描述" : "角色描述";
+  const voiceButton = renderAssetVoiceButton(asset, assetKind);
   return `
     <article
       class="episode-replica-asset-card ${active ? "active" : ""} ${checked ? "checked" : ""}"
@@ -309,12 +547,19 @@ function renderAssetCard(asset, assetKind, active, checked) {
           <strong class="name">${escapeHtml(asset?.name ?? "测试素材")}</strong>
           <span class="title">${escapeHtml(title)}</span>
         </button>
+        <span class="episode-replica-asset-hover-tools" aria-hidden="true">
+          <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
+          <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
+        </span>
       </div>
-      <span class="toolbar">+</span>
-      <span class="label">${escapeHtml(resolveAssetLabel(assetKind))}设定</span>
-      <span class="label">${escapeHtml(resolveAssetLabel(assetKind))}描述</span>
+      <span class="toolbar">
+        <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
+        <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
+      </span>
+      <span class="label">${escapeHtml(fixedLabel)}</span>
+      <span class="label">${escapeHtml(descLabel)}</span>
       <span class="preview">${renderAssetPreviewVisual(asset, assetKind)}</span>
-      ${assetKind === "character" ? `<button class="voice" type="button" data-action="open-episode-voice-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-name="${escapeAttr(asset?.name ?? "角色")}" data-asset-kind="${escapeAttr(assetKind)}">${escapeHtml(asset?.voiceName ?? "+ 配音员")}</button>` : ""}
+      ${voiceButton}
       <label class="episode-replica-asset-desc-wrap">
         <textarea class="episode-replica-asset-desc-input" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" placeholder="可以编辑，点击框外后自动保存">${escapeHtml(desc)}</textarea>
       </label>
@@ -323,27 +568,17 @@ function renderAssetCard(asset, assetKind, active, checked) {
   `;
 }
 
-function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode) {
+function renderAssetVoiceButton(asset, assetKind) {
+  if (assetKind !== "character") {
+    return "";
+  }
+  const voiceName = String(asset?.voiceName ?? "").trim();
+  const label = voiceName || "+ 配音员";
   return `
-    <div class="episode-replica-storyboard-toolbar">
-      <div class="episode-replica-storyboard-board-tabs">
-        <button class="${boardMode === "operation" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="operation">操作栏</button>
-        <button class="${boardMode === "story" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="story">故事栏</button>
-      </div>
-      <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">+</button>
-    </div>
-    <div class="episode-replica-storyboard-grid">
-      ${
-        boardMode === "story"
-          ? renderStoryBoardPreview(selectedStoryboard)
-          : storyboards.length
-            ? storyboards.map((storyboard, index) => renderStoryboardCard(storyboard, storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && index === 0))).join("")
-            : `<article class="episode-replica-storyboard-empty">
-                <strong>当前剧集还没有分镜</strong>
-                <span>先创建分镜或从项目脚本拆分镜头，再进入生成流程。</span>
-              </article>`
-      }
-    </div>
+    <button class="voice ${voiceName ? "configured" : ""}" type="button" data-action="open-episode-voice-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-name="${escapeAttr(asset?.name ?? "角色")}" data-asset-kind="${escapeAttr(assetKind)}">
+      <strong>${escapeHtml(label)}</strong>
+      ${voiceName ? "<span>编辑</span>" : ""}
+    </button>
   `;
 }
 
@@ -360,43 +595,217 @@ function renderStoryBoardPreview(selectedStoryboard) {
   `;
 }
 
-function renderStoryboardCard(storyboard, active) {
-  const desc = String(storyboard.description ?? "").trim() || "请填写分镜描述，记录分镜对应的画面内容。";
-  const refs = (storyboard.references ?? []).slice(0, 6);
-  const previewVideo = resolveSelectedVideoSource(storyboard);
-  const previewImage = resolveSelectedImageSource(storyboard);
+function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, selectedStoryboardIds = [], assetGroups = {}) {
+  const totalCount = storyboards.length;
   return `
-    <button class="episode-replica-shot-card ${active ? "active" : ""}" type="button" data-action="select-storyboard" data-storyboard-id="${escapeAttr(storyboard.id)}">
-      <span class="pick"></span>
-      <span class="episode-replica-shot-card-head">
-        <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(storyboard.title ?? "")}</strong>
-      </span>
-      <span class="episode-replica-shot-card-body">
-        <span class="episode-replica-shot-card-column assets">
-          <span class="meta">角色 / 场景 / 道具</span>
-          <span class="asset-preview">${renderStoryboardPreviewThumb(refs)}</span>
-        </span>
-        <span class="episode-replica-shot-card-column copy">
-          <span class="episode-replica-shot-copy-head">
-            <span class="tabs">做图片 / 做视频</span>
-            <span class="comment">●</span>
-          </span>
-          <span class="desc">${escapeHtml(desc)}</span>
-          <span class="count">${[...desc].length} / 3000</span>
-        </span>
-        <span class="episode-replica-shot-card-column preview-column">
-          <span class="episode-replica-shot-preview-head">
-            <span class="preview-title">分镜剧情</span>
-            <span class="edit">编辑分镜</span>
-          </span>
-          <span class="preview">${renderStoryboardMediaThumb(storyboard, previewVideo, previewImage, refs)}</span>
-        </span>
-      </span>
-    </button>
+    <div class="episode-replica-storyboard-toolbar">
+      <div class="episode-replica-storyboard-board-tabs">
+        <button class="${boardMode === "operation" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="operation">操作栏</button>
+        <button class="${boardMode === "story" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="story">故事栏</button>
+      </div>
+      <div class="episode-replica-storyboard-actions">
+        <button class="episode-replica-import-shot" type="button" data-action="open-batch-episode-flow">批量导入分镜</button>
+        <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">新增分镜</button>
+      </div>
+    </div>
+    <div class="episode-replica-storyboard-grid">
+      ${
+        boardMode === "story"
+          ? renderStoryBoardPreview(selectedStoryboard)
+            : storyboards.length
+            ? storyboards.map((storyboard, index) =>
+                renderStoryboardCard(
+                  storyboard,
+                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && index === 0),
+                  selectedStoryboardIds.includes(storyboard.id),
+                  assetGroups,
+                ),
+              ).join("")
+            : renderStoryboardEmptyState()
+      }
+    </div>
+    ${renderStoryboardPagination(totalCount)}
   `;
 }
 
-function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage, refs) {
+function renderStoryboardEmptyState() {
+  return `
+    <article class="episode-replica-storyboard-empty cinematic" aria-label="当前剧集还没有分镜">
+      <span class="sr-only-action">当前剧集还没有分镜</span>
+    </article>
+  `;
+}
+
+function renderStoryboardPagination(totalCount = 0) {
+  return `
+    <div class="episode-replica-storyboard-pagination">
+      <strong>共 ${escapeHtml(String(totalCount))} 条</strong>
+      <button class="episode-replica-storyboard-page-size" type="button">10条/页</button>
+      <span class="episode-replica-storyboard-pagination-arrows">
+        <button type="button" disabled aria-label="上一页">‹</button>
+        <em class="page-index">1</em>
+        <button type="button" disabled aria-label="下一页">›</button>
+      </span>
+    </div>
+  `;
+}
+
+function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
+  const desc = String(storyboard.description ?? "").trim();
+  const displayTitle = String(storyboard.displayTitle ?? "").trim() || String(storyboard.title ?? "");
+  const refs = mergeStoryboardMentionReferences(storyboard, assetGroups).slice(0, 6);
+  const linkedRefs = groupStoryboardReferences((storyboard.references ?? []).slice(0, 6));
+  const previewVideo = resolveSelectedVideoSource(storyboard);
+  const previewImage = resolveSelectedImageSource(storyboard);
+  return `
+    <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""}">
+      <div class="episode-replica-shot-card ${active ? "active" : ""}" data-storyboard-id="${escapeAttr(storyboard.id)}">
+        <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="选择分镜"></button>
+        <span class="episode-replica-shot-card-head">
+          <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(displayTitle)}</strong>
+        </span>
+        <span class="episode-replica-shot-card-body">
+          <span class="episode-replica-shot-card-column assets">
+            <span class="meta">角色 / 场景 / 道具</span>
+            <span class="asset-preview">${renderStoryboardPreviewThumb(refs)}</span>
+            <span class="episode-replica-shot-linked-assets">
+              ${linkedRefs.map((group) => `<span class="episode-replica-shot-linked-group"><b>${escapeHtml(group.label)}</b><em>${escapeHtml(group.items.join(" / "))}</em></span>`).join("")}
+            </span>
+          </span>
+          <span class="episode-replica-shot-card-column copy">
+            <span class="episode-replica-shot-copy-head">
+              <span class="tabs">做图片 / 做视频</span>
+              <span class="comment">●</span>
+            </span>
+            <label class="episode-replica-shot-desc-wrap">
+              <textarea
+                class="episode-replica-shot-desc-input ${desc ? "" : "placeholder"}"
+                data-storyboard-id="${escapeAttr(storyboard.id)}"
+                placeholder="请输入内容"
+              >${escapeHtml(desc)}</textarea>
+            </label>
+            <span class="count">${[...(desc || "")].length} / 3000</span>
+          </span>
+          <span class="episode-replica-shot-card-column preview-column">
+            <span class="episode-replica-shot-preview-head">
+              <span class="preview-title">分镜剧情</span>
+              <span class="edit">编辑分镜</span>
+            </span>
+            <span class="preview">${renderStoryboardMediaThumb(storyboard, previewVideo, previewImage, refs)}</span>
+          </span>
+        </span>
+      </div>
+      <div class="episode-replica-shot-hover-tools">
+        <button class="episode-replica-shot-add" type="button" data-action="add-storyboard" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="添加分镜">+</button>
+        <button class="episode-replica-shot-delete" type="button" data-action="open-delete-sidebar-storyboard-modal" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="删除分镜">×</button>
+      </div>
+    </article>
+  `;
+}
+
+function groupStoryboardReferences(refs = []) {
+  const groups = [
+    { key: "character", label: "角色", roles: ["character", "role", "locked_character"] },
+    { key: "scene", label: "场景", roles: ["scene"] },
+    { key: "prop", label: "道具", roles: ["prop"] },
+  ];
+  return groups
+    .map((group) => ({
+      label: group.label,
+      items: refs
+        .filter((item) => group.roles.includes(item.role ?? item.kind))
+        .map((item) => item.name ?? item.assetName ?? item.assetId)
+        .filter(Boolean),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function mergeStoryboardMentionReferences(storyboard, assetGroups = {}) {
+  const existingRefs = Array.isArray(storyboard?.references) ? storyboard.references : [];
+  const mentionNames = extractStoryboardMentionNames(storyboard);
+  if (!mentionNames.length) {
+    return existingRefs;
+  }
+
+  const existingKeys = new Set(existingRefs.map((item) => resolveReferenceDedupeKey(item)).filter(Boolean));
+  const assetsByName = new Map();
+  for (const kind of ["character", "scene", "prop"]) {
+    for (const asset of assetGroups?.[kind] ?? []) {
+      const name = resolveAssetDisplayName(asset);
+      if (!name) {
+        continue;
+      }
+      assetsByName.set(name, {
+        ...asset,
+        kind: asset?.kind ?? kind,
+        role: asset?.role ?? kind,
+        name,
+      });
+    }
+  }
+
+  const matchedRefs = [];
+  for (const mentionName of mentionNames) {
+    const asset = assetsByName.get(mentionName);
+    if (!asset) {
+      continue;
+    }
+    const nextRef = {
+      role: asset.role ?? asset.kind ?? "character",
+      kind: asset.kind ?? asset.role ?? "character",
+      assetId: asset.assetId ?? asset.id ?? null,
+      name: asset.name,
+      preview: resolveReferencePreview(asset),
+      previewUrl: asset.previewUrl ?? asset.preview ?? asset.fixedImageUrl ?? null,
+    };
+    const key = resolveReferenceDedupeKey(nextRef);
+    if (key && existingKeys.has(key)) {
+      continue;
+    }
+    if (key) {
+      existingKeys.add(key);
+    }
+    matchedRefs.push(nextRef);
+  }
+
+  return [...existingRefs, ...matchedRefs];
+}
+
+function extractStoryboardMentionNames(storyboard) {
+  const text = [
+    storyboard?.description,
+    storyboard?.sceneAnalysis,
+    storyboard?.plotPreview,
+    storyboard?.title,
+    storyboard?.displayTitle,
+  ].filter(Boolean).join("\n");
+  const names = [];
+  const seen = new Set();
+  for (const match of text.matchAll(/(?:【@([^】]+)】|@([^\s【】,，。；;：:]+))/g)) {
+    const name = String(match[1] ?? match[2] ?? "").trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+function resolveAssetDisplayName(asset) {
+  return String(asset?.name ?? asset?.label ?? asset?.assetName ?? "").trim();
+}
+
+function resolveReferenceDedupeKey(item) {
+  const id = item?.assetId ?? item?.id ?? null;
+  if (id) {
+    return `id:${id}`;
+  }
+  const name = String(item?.name ?? item?.assetName ?? "").trim();
+  return name ? `name:${name}` : "";
+}
+
+function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage) {
   if (previewVideo) {
     const thumbnail =
       storyboard?.previewThumbnailUrl ??
@@ -407,7 +816,21 @@ function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage, refs
   if (previewImage) {
     return `<span class="episode-replica-shot-media-thumb has-image-preview active"><img src="${escapeAttr(previewImage)}" alt="" /></span>`;
   }
-  return renderStoryboardPreviewThumb(refs);
+  return renderStoryboardMediaPlaceholder();
+}
+
+function renderStoryboardMediaPlaceholder() {
+  return `
+    <span class="episode-replica-shot-media-placeholder" aria-label="暂无分镜图片">
+      <span class="episode-replica-shot-media-placeholder-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Z" />
+          <path d="m6.8 16.8 3.7-4 2.4 2.5 2.2-2 2.9 3.5" />
+          <circle cx="9" cy="8.8" r="1.15" />
+        </svg>
+      </span>
+    </span>
+  `;
 }
 
 function renderAssetPreview(asset, activeAssetTab) {
@@ -424,19 +847,169 @@ function renderAssetPreview(asset, activeAssetTab) {
   `;
 }
 
-function renderQuickAsset(asset, active) {
+function renderAssetStage({ asset, activeAssetTab, mediaMode, quickReferenceItems = [], selectionContext = {} }) {
+  const hasAsset = Boolean(asset);
   return `
-    <button class="episode-replica-quick-asset ${active ? "active" : ""}" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset.id ?? "")}" data-asset-kind="${escapeAttr(asset.kind || inferKind(asset.name))}" title="${escapeAttr(asset.name ?? "素材")}">
-      <span class="thumb">${renderQuickPlaceholder(asset.kind || inferKind(asset.name), asset.name ?? "素材")}</span>
-      <span class="episode-replica-quick-copy">
-        <strong>${escapeHtml(asset.name ?? "素材")}</strong>
-        <small>${escapeHtml(resolveAssetLabel(asset.kind || inferKind(asset.name)))}</small>
+    <section class="episode-replica-asset-stage clean-session ${mediaMode === "video" ? "video-mode" : "image-mode"}">
+      <div class="episode-replica-asset-stage-canvas">
+        ${
+          hasAsset
+            ? `<div class="episode-replica-asset-stage-frame clean"></div>`
+            : `<div class="episode-replica-asset-stage-frame clean empty" aria-label="当前未选中资产"></div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "image", generationResult = null) {
+  const key = `${mediaKind}:${assetId ?? ""}`;
+  const historyEntries = Array.isArray(historyMap?.[key]) ? historyMap[key].filter(Boolean) : [];
+  if (!generationResult) {
+    return historyEntries;
+  }
+  const resultAssetId = generationResult?.selectionContext?.selectedAssetId ?? generationResult?.assetId ?? null;
+  if (!assetId || resultAssetId !== assetId) {
+    return historyEntries;
+  }
+  const taskId = resolveGenerationTaskId(generationResult);
+  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+    return historyEntries;
+  }
+  return [...historyEntries, generationResult];
+}
+
+function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
+  const entries = Array.isArray(generationHistory) && generationHistory.length
+    ? generationHistory
+    : (generationResult ? [generationResult] : []);
+  if (!entries.length) {
+    return renderAssetStage({
+      asset,
+      activeAssetTab,
+      mediaMode,
+      quickReferenceItems: [],
+      selectionContext: {},
+    });
+  }
+  return `
+    <div class="episode-replica-generated-stage visible asset-scope">
+      <div class="episode-replica-asset-conversation-list">
+        ${entries.map((entry) => renderAssetConversationEntry(entry, activeAssetTab)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderAssetConversationEntry(generationResult, assetKind = "character") {
+  const promptPreview = truncateDisplayText(generationResult?.promptPreview ?? "", 140);
+  const userMeta = buildAssetGenerationUserMeta(generationResult);
+  const quickReferenceItems = generationResult?.quickReferenceItems ?? [];
+  return `
+    <section class="episode-replica-asset-conversation-entry">
+      <div class="episode-replica-message-thread">
+        ${promptPreview ? renderUserMessage(promptPreview, userMeta, quickReferenceItems) : ""}
+      </div>
+      ${renderFixedImageResults(generationResult, assetKind)}
+    </section>
+  `;
+}
+
+function resolveGenerationTaskId(generationResult) {
+  return (
+    generationResult?.taskId ??
+    generationResult?.platform?.tasks?.[0]?.taskId ??
+    generationResult?.id ??
+    "local-asset-fixed-image-task"
+  );
+}
+
+function buildAssetGenerationUserMeta(generationResult) {
+  const taskId = resolveGenerationTaskId(generationResult);
+  const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
+  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
+  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
+  return [
+    `任务ID：${taskId}`,
+    modelLabel,
+    `比例：${ratioLabel}`,
+    `清晰度：${resolutionLabel}`,
+    generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
+    workflowStatus && workflowStatus !== "completed" && workflowStatus !== "succeeded"
+      ? `状态：${resolveWorkflowStatusLabel(workflowStatus)}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function renderAssetResultPanel(generationResult, quickReferenceItems = [], selectionContext = {}) {
+  const createdAt =
+    generationResult?.createdAt ??
+    generationResult?.completedAt ??
+    new Date().toISOString().slice(0, 19).replace("T", " ");
+  const taskId =
+    generationResult?.taskId ??
+    generationResult?.platform?.tasks?.[0]?.taskId ??
+    generationResult?.id ??
+    "local-asset-fixed-image-task";
+  const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
+  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
+  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const extraMeta = [
+    modelLabel,
+    `比例：${ratioLabel}`,
+    `清晰度：${resolutionLabel}`,
+    generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+  const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
+  return `
+    <article class="episode-replica-result-panel visible asset-result-panel">
+      <div class="assets task-card">
+        <div class="episode-replica-task-refs">
+          ${quickReferenceItems.slice(0, 1).map((item) => renderResultReference(item)).join("")}
+        </div>
+        <div class="episode-replica-task-meta">
+          <div class="episode-replica-task-line">
+            <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
+            <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(resolveWorkflowStatusLabel(workflowStatus))}</span>
+          </div>
+          <div class="episode-replica-task-line muted">
+            ${selectionContext ? renderSelectionContextInline(selectionContext) : ""}
+            <span>${escapeHtml(extraMeta)}</span>
+          </div>
+        </div>
+      </div>
+      <time>${escapeHtml(String(createdAt))}</time>
+    </article>
+  `;
+}
+
+function renderQuickAsset(asset, active) {
+  const name = asset.name ?? "素材";
+  const kind = asset.kind || inferKind(name);
+  const preview = resolveReferencePreview(asset);
+  return `
+    <button class="episode-replica-quick-asset ${active ? "active" : ""}" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset.id ?? "")}" data-asset-kind="${escapeAttr(kind)}" title="${escapeAttr(name)}">
+      <span class="thumb">
+        ${
+          preview
+            ? `<img class="episode-replica-quick-thumb-image" src="${escapeAttr(preview)}" alt="" />`
+            : renderQuickPlaceholder(kind, name)
+        }
+        <span class="episode-replica-quick-name">${escapeHtml(name)}</span>
       </span>
     </button>
   `;
 }
 
 function renderStoryboardStage(selectedStoryboard, currentMode, imageGenerationResult, videoGenerationResult) {
+  if (currentMode === "lip-sync") {
+    return renderCurrentStoryboardMediaStage(selectedStoryboard, true);
+  }
   if (currentMode === "video") {
     return renderGeneratedStage(selectedStoryboard, true, videoGenerationResult);
   }
@@ -452,16 +1025,32 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     selectedStoryboard?.generationState?.quickReferenceItems ??
     [];
   const attachmentItems = generationResult?.attachmentItems ?? [];
+  const promptPreview = truncateDisplayText(
+    generationResult?.promptPreview ??
+      selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
+      selectedStoryboard?.description ??
+      "",
+    140,
+  );
   return `
     <div class="episode-replica-generated-stage visible">
-      <div class="episode-replica-stage-actions">
-        <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}">重新编辑</button>
-        ${isVideo ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video">设为分镜视频</button>` : ""}
-        <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}">下载</button>
-        <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}">删除</button>
-      </div>
-      ${renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
-      ${isVideo ? "" : renderFixedImageResults(generationResult)}
+      ${renderResultMessageThread({
+        promptPreview,
+        systemContent: `
+          <div class="episode-replica-stage-actions">
+            <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}">重新编辑</button>
+            ${
+              isVideo
+                ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video">设为分镜视频</button>`
+                : `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-image" data-media-kind="image">设为分镜图</button>`
+            }
+            <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}">下载</button>
+            <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}">删除</button>
+          </div>
+          ${renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
+          ${isVideo ? "" : renderFixedImageResults(generationResult)}
+        `,
+      })}
     </div>
   `;
 }
@@ -479,13 +1068,6 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       ? quickReferenceItems.slice(0, 5)
       : (selectedStoryboard?.references ?? []).slice(0, 5)),
   ].slice(0, 6);
-  const promptPreview = truncateDisplayText(
-    generationResult?.promptPreview ??
-      selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
-      selectedStoryboard?.description ??
-      "",
-    140,
-  );
   const createdAt =
     generationResult?.createdAt ??
     generationResult?.completedAt ??
@@ -516,9 +1098,10 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       selectedStoryboard?.generationState?.lastSubmission?.status ??
       "pending",
   ).toLowerCase();
+  const failureCode = String(generationResult?.failureCode ?? generationResult?.result?.failureCode ?? "");
+  const failureMessage = resolveGenerationFailureMessage(workflowStatus, failureCode);
   return `
     <article class="episode-replica-result-panel visible">
-      <div class="copy message">${escapeHtml(promptPreview)}</div>
       <div class="assets task-card">
         <div class="episode-replica-task-refs">
           ${references.slice(0, 1).map((item) => renderResultReference(item)).join("")}
@@ -534,12 +1117,79 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
           </div>
         </div>
       </div>
+      ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
       <time>${escapeHtml(String(createdAt))}</time>
     </article>
   `;
 }
 
-function renderFixedImageResults(generationResult) {
+function renderResultMessageThread({ promptPreview = "", systemContent = "" } = {}) {
+  return `
+    <div class="episode-replica-message-thread">
+      ${promptPreview ? renderUserMessage(promptPreview) : ""}
+      <div class="episode-replica-message-row system">
+        <article class="episode-replica-system-message">
+          <span class="episode-replica-message-badge">系统</span>
+          ${systemContent}
+        </article>
+      </div>
+    </div>
+  `;
+}
+
+function renderUserMessage(promptPreview, metaText = "", quickReferenceItems = []) {
+  return `
+    <div class="episode-replica-message-row user">
+      <article class="episode-replica-user-message">
+        <span class="episode-replica-message-badge">用户</span>
+        <div class="episode-replica-user-message-copy">${escapeHtml(promptPreview)}</div>
+        ${
+          quickReferenceItems.length
+            ? `<div class="episode-replica-user-message-refs">${quickReferenceItems.map((item) => renderUserReferenceItem(item)).join("")}</div>`
+            : ""
+        }
+        ${metaText ? `<div class="episode-replica-user-message-meta">${escapeHtml(metaText)}</div>` : ""}
+      </article>
+    </div>
+  `;
+}
+
+function renderUserReferenceItem(item) {
+  const previewUrl = resolveReferencePreview(item);
+  const summary = truncateDisplayText(item.description ?? item.name ?? "", 60);
+  return `
+    <article class="episode-replica-user-ref-card">
+      ${
+        previewUrl
+          ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" /></span>`
+          : ""
+      }
+      <span class="episode-replica-user-ref-copy">
+        <strong>${escapeHtml(item.name ?? "引用素材")}</strong>
+        <small>${escapeHtml(summary)}</small>
+      </span>
+    </article>
+  `;
+}
+
+function resolveGenerationFailureMessage(status, failureCode) {
+  if (status !== "failed" && status !== "canceled") {
+    return "";
+  }
+  if (failureCode === "client_poll_timeout" || failureCode === "task_timeout") {
+    return "任务超过 15 分钟未完成，已按失败处理，积分应由后端返还。";
+  }
+  if (failureCode === "permission_denied") {
+    return "当前账号没有权限处理该生成结果，请联系项目管理员。";
+  }
+  if (failureCode === "resource_not_found") {
+    return "生成结果已失效或被删除，请刷新当前剧集后重试。";
+  }
+  return "生成失败，请重新编辑后再试，失败记录会保留在当前结果区。";
+}
+
+function renderFixedImageResults(generationResult, assetKind = "character") {
+  const taskId = resolveGenerationTaskId(generationResult);
   const images = Array.isArray(generationResult?.fixedImages) ? generationResult.fixedImages : [];
   if (!images.length) {
     return "";
@@ -553,13 +1203,10 @@ function renderFixedImageResults(generationResult) {
         </article>
       `).join("")}
       <div class="episode-replica-fixed-actions">
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="edit">重新编辑</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="text-to-image">文字改图</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character">设为角色图</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="paint">画笔</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="panorama">全景</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="download">下载</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="delete">删除</button>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新编辑</button>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character" data-task-id="${escapeAttr(String(taskId))}">${escapeHtml(resolveAssetSetLabel(assetKind))}</button>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="download" data-task-id="${escapeAttr(String(taskId))}">下载</button>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}">删除</button>
       </div>
     </div>
   `;
@@ -586,7 +1233,10 @@ function resolveGenerationModelLabel(modelId) {
   const catalog = {
     "vidu-q3-pro": "Vidu Q3 Pro",
     "jimeng-4-5": "gpt image 2（链路G）",
+    "jimeng-4-5-vip": "gpt image 2 VIP（链路G）",
     "tnb-pro": "nano banana 2（链路G）",
+    "tnb-fast": "nano banana fast（链路G）",
+    "tnb-ultra": "nano banana pro（链路G）",
     "hailuo-2-0": "海螺 2.0",
     "seedance-2-0-vip": "SeeDance 2.0 VIP",
     "happy-horse": "Happy Horse",
@@ -636,7 +1286,7 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
 function renderPromptDock({
   selectedStoryboard,
   selectedAsset,
-  selectedModelId,
+  selectedModelId = "tnb-pro",
   prompt,
   busy,
   canGenerateCurrentMode = true,
@@ -647,21 +1297,39 @@ function renderPromptDock({
   attachments = [],
   selectedAttachmentIds = [],
   generationPollingActive = false,
+  scopeMode = "storyboard",
 }) {
+  if (mediaMode === "lip-sync") {
+    return renderLipSyncDock({
+      prompt,
+      busy,
+      generationControls,
+      generationUiState,
+      generationPollingActive,
+      validationMessage,
+      attachments,
+    });
+  }
   const supportsAudioUpload = mediaMode === "video" || mediaMode === "lip-sync";
-  const promptValue =
-    prompt ||
-    selectedStoryboard?.description ||
-    selectedAsset?.description ||
-    "请输入画面内容、镜头运动和角色状态。";
-  const quickReferenceItems = selectedStoryboard?.generationState?.quickReferenceItems ?? [];
-  const generationAttachmentCards = buildGenerationAttachmentCards(selectedStoryboard?.generationState);
+  const generationState =
+    scopeMode === "assets"
+      ? generationUiState.assetPromptDraft ?? {}
+      : selectedStoryboard?.generationState ?? {};
+  const promptValue = String(prompt ?? "");
+  const mentionReferences = generationState.mentionReferences ?? [];
+  const mentionSuggestions = generationUiState.promptMentionSuggestions ?? [];
+  const mentionMenuOpen = Boolean(generationUiState.promptMentionMenuOpen);
+  const mentionPreviewOpen = Boolean(generationUiState.promptMentionPreviewOpen);
+  const mentionPreviewAsset = generationUiState.promptMentionPreviewAsset ?? null;
+  const quickReferenceItems = generationState.quickReferenceItems ?? [];
+  const generationAttachmentCards = buildGenerationAttachmentCards(generationState);
   const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
   const resolution = generationControls.imageResolution ?? "2K";
   const duration = generationControls.videoDurationSec ?? "5";
   const uploadLimits = generationControls.uploadLimits ?? {};
   const activePromptMenu = generationUiState.musePromptMenu ?? null;
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
+  const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
   const models = isVideoMode ? VIDEO_MODELS : IMAGE_MODELS;
   const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
@@ -670,9 +1338,20 @@ function renderPromptDock({
   );
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
+  const generateCost =
+    scopeMode === "assets" && mediaMode === "image"
+      ? 50
+      : resolveGenerateCost(mediaMode, generationControls);
+  const contextSummary =
+    scopeMode === "assets"
+      ? ""
+      : selectedStoryboard?.title
+        ? `分镜：${selectedStoryboard.displayTitle ?? selectedStoryboard.title}`
+        : "分镜：";
 
   return `
     <section class="episode-replica-prompt">
+      ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       <div class="episode-replica-ref-strip">
         ${quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
         ${attachmentCards.join("")}
@@ -690,14 +1369,46 @@ function renderPromptDock({
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload)}
       <div class="episode-replica-prompt-tools">
         ${renderMiniMenu("references", "多参考图", activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
-        ${renderMiniMenu("preset", "预设：无预设", activePromptMenu, [["none", "无预设"]], "select-muse-preset")}
+        ${renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
         <button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>
       </div>
       <label class="episode-replica-textarea">
-        <textarea id="video-prompt-input" placeholder="输入生成提示词">${escapeHtml(promptValue)}</textarea>
+        <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
         <span class="magic">AI</span>
         <em>${[...promptValue].length} / 5000</em>
       </label>
+      ${
+        mentionMenuOpen
+          ? `<div class="episode-replica-mention-menu">
+              ${mentionSuggestions.map((item) => `
+                <button
+                  class="episode-replica-mention-option"
+                  type="button"
+                  data-action="select-prompt-mention"
+                  data-asset-id="${escapeAttr(item.id ?? "")}"
+                  data-asset-kind="${escapeAttr(item.assetKind ?? item.kind ?? "character")}"
+                >
+                  <strong>${escapeHtml(item.name ?? "素材")}</strong>
+                  <small>${escapeHtml(resolveAssetLabel(item.assetKind ?? item.kind ?? "character"))}</small>
+                </button>
+              `).join("")}
+            </div>`
+          : ""
+      }
+      ${
+        mentionPreviewOpen && mentionPreviewAsset
+          ? renderPromptMentionPreview(mentionPreviewAsset)
+          : ""
+      }
+      ${
+        mentionReferences.length
+          ? `<div class="episode-replica-mention-strip">${mentionReferences.map((item) => `
+              <button class="episode-replica-mention-chip" type="button" data-action="remove-mention-reference" data-reference-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(item.description ?? item.name ?? "")}">
+                <span>${escapeHtml(item.token ?? `【@${item.name ?? "素材"}】`)}</span>
+              </button>
+            `).join("")}</div>`
+          : ""
+      }
       <div class="episode-replica-prompt-footer">
         <div class="episode-replica-prompt-selects">
           ${renderControlMenu("model", selectedModel.label, openGenerationSelectMenu, models.map((item) => [item.id, item.label]), "select-video-model")}
@@ -705,8 +1416,8 @@ function renderPromptDock({
           ${renderControlMenu("imageResolution", resolution, openGenerationSelectMenu, [["720p", "720p"], ["1K", "1K"], ["2K", "2K"]])}
           ${isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, [["5", "5秒"], ["10", "10秒"], ["15", "15秒"]]) : ""}
         </div>
-        <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy || !canGenerateCurrentMode)}>
-          <span>${escapeHtml(String(resolveGenerateCost(mediaMode, generationControls)))}</span>
+        <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy)}>
+          <span>${escapeHtml(String(generateCost))}</span>
           <strong class="episode-replica-generate-label">${generationPollingActive ? "生成中" : "生成"}</strong>
         </button>
       </div>
@@ -836,11 +1547,7 @@ function renderEpisodeExportPreview(exportPreviewResult) {
   if (!exportPreviewResult?.exportRecord && !exportPreviewResult?.export) {
     return "";
   }
-  const signedUrl =
-    exportPreviewResult?.platform?.signedUrl ??
-    exportPreviewResult?.export?.signedUrl ??
-    exportPreviewResult?.export?.url ??
-    "";
+  const signedUrl = resolveEpisodeExportPreviewLink(exportPreviewResult);
   const missingAssets = Array.isArray(exportPreviewResult?.export?.missingAssets)
     ? exportPreviewResult.export.missingAssets
     : [];
@@ -858,36 +1565,217 @@ function renderEpisodeExportPreview(exportPreviewResult) {
       ${
         signedUrl
           ? `<a class="episode-export-preview-link" href="${escapeAttr(signedUrl)}" target="_blank" rel="noreferrer">下载导出包</a>`
-          : ""
+          : '<p class="episode-export-preview-warning">原视频导出链接暂未生成，请稍后刷新重试。</p>'
       }
     </section>
   `;
 }
 
-function renderAttachment(item, index, selected) {
+function renderPromptMentionPreview(asset) {
+  const previewUrl = resolveReferencePreview(asset);
+  const name = asset?.name ?? asset?.label ?? "素材";
   return `
-    <article class="episode-replica-ref-card attachment ${escapeAttr(item.type ?? "image")} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}">
+    <div class="episode-replica-mention-preview" role="status">
+      <span class="episode-replica-mention-preview-thumb">
+        ${
+          previewUrl
+            ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
+            : renderQuickPlaceholder(asset?.assetKind ?? asset?.kind ?? inferKind(name), name)
+        }
+      </span>
+      <strong>${escapeHtml(name)}</strong>
+    </div>
+  `;
+}
+
+function resolveEpisodeExportPreviewLink(exportPreviewResult) {
+  return (
+    exportPreviewResult?.platform?.signedUrl ??
+    exportPreviewResult?.export?.signedUrl ??
+    exportPreviewResult?.export?.url ??
+    ""
+  );
+}
+
+function renderEpisodeExportOptionModal(modal) {
+  if (!modal?.show) {
+    return "";
+  }
+  const status = modal.status ?? "idle";
+  const feedbackClass =
+    status === "error"
+      ? "error"
+      : status === "done"
+        ? "done"
+        : status === "running"
+          ? "running"
+          : "idle";
+  const feedbackMessage =
+    modal.message ??
+    (status === "error"
+      ? "请确保所有分镜都已生成图片或者视频"
+      : status === "running"
+        ? "正在导出视频..."
+        : "");
+  const feedbackLink = modal.downloadUrl ?? "";
+  return `
+    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
+      <button class="modal-backdrop-hit" type="button" data-action="close-episode-export-modal"></button>
+      <div class="episode-export-modal">
+        <div class="single-episode-modal-head storyboard-description-head">
+          <h2>导出</h2>
+          <button class="modal-close" type="button" data-action="close-episode-export-modal">×</button>
+        </div>
+        <div class="episode-export-options">
+          <button class="episode-export-option" type="button" data-action="start-episode-export" data-export-kind="mp4">
+            <span class="icon">▣</span>
+            <strong>MP4</strong>
+          </button>
+          <button class="episode-export-option" type="button" data-action="start-episode-export" data-export-kind="jianying">
+            <span class="icon">▤</span>
+            <strong>剪映工程文件</strong>
+          </button>
+        </div>
+        ${
+          feedbackMessage || feedbackLink
+            ? `<div class="episode-export-modal-feedback ${feedbackClass}">
+                ${feedbackMessage ? `<p class="episode-export-modal-status">${escapeHtml(feedbackMessage)}</p>` : ""}
+                ${
+                  feedbackLink
+                    ? `<a class="episode-export-modal-link" href="${escapeAttr(feedbackLink)}" target="_blank" rel="noreferrer">下载导出包</a>`
+                    : ""
+                }
+              </div>`
+            : ""
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderLipSyncDock({
+  prompt,
+  busy,
+  generationControls,
+  generationUiState,
+  generationPollingActive = false,
+  validationMessage = "",
+  attachments = [],
+}) {
+  const promptValue = String(prompt ?? "");
+  const voiceName = String(generationUiState?.lipSyncVoiceName ?? "").trim();
+  const lipSyncCost = calculateLipSyncCreditCost(promptValue);
+  const previewAudioId = generationUiState?.lipSyncPreviewAudioId ?? null;
+  const audioItems = (generationUiState?.lipSyncAudioItems?.length
+    ? generationUiState.lipSyncAudioItems
+    : (attachments ?? []).filter((item) => item?.type === "audio" || item?.kind === "audio"));
+  return `
+    <section class="episode-replica-prompt lip-sync-mode">
+      <div class="episode-replica-stage-head lip-sync-head">
+        <p class="episode-replica-stage-title">配音内容</p>
+      </div>
+      <label class="episode-replica-textarea lip-sync-textarea">
+        <textarea id="video-prompt-input" placeholder="输入音频内容 2灵感值/10个字">${escapeHtml(promptValue)}</textarea>
+        <em>${[...promptValue].length} / 800</em>
+      </label>
+      <div class="episode-replica-prompt-footer lip-sync-footer">
+        <div class="episode-replica-lipsync-voice-row">
+          <button
+            class="episode-replica-mini ${voiceName ? "active" : ""}"
+            type="button"
+            data-action="open-episode-voice-modal"
+            data-voice-scope="lip-sync"
+          >${escapeHtml(voiceName || "+ 配音员")}</button>
+          ${voiceName ? `<span class="episode-replica-lipsync-voice-chip">${escapeHtml(voiceName)}</span>` : ""}
+        </div>
+        <button class="episode-replica-generate" type="button" data-action="generate-videos" ${disabled(busy)}>
+          <span>${escapeHtml(String(lipSyncCost))}</span>
+          <strong class="episode-replica-generate-label">${generationPollingActive ? "生成中" : "生成"}</strong>
+        </button>
+      </div>
+      <div class="episode-replica-stage-head lip-sync-head secondary">
+        <p class="episode-replica-stage-title">音频内容</p>
+      </div>
+      <div class="episode-replica-ref-strip lip-sync-audio-list">
+        ${
+          audioItems.length
+            ? audioItems.map((item, index) => renderLipSyncAudioItem(item, index, previewAudioId)).join("")
+            : `
+              <div class="episode-replica-audio-empty">
+                <span class="episode-replica-audio-empty-icon">♫</span>
+                <strong>暂无数据</strong>
+              </div>
+            `
+        }
+      </div>
+      ${renderUploadLimitHint(generationControls.uploadLimits ?? {}, true)}
+      <p class="episode-replica-validation">${escapeHtml(validationMessage)}</p>
+    </section>
+  `;
+}
+
+function renderLipSyncAudioItem(item, index, previewAudioId) {
+  const audioId = String(item?.id ?? `audio-${index + 1}`);
+  const isPlaying = previewAudioId === audioId;
+  const voiceName = String(item?.voiceName ?? "").trim();
+  const summary = String(item?.summary ?? "").trim();
+  const title = String(item?.name ?? `音频 ${index + 1}`).trim();
+  const durationLabel = String(item?.durationLabel ?? item?.duration ?? "").trim();
+  return `
+    <article class="episode-replica-audio-item ${isPlaying ? "playing" : ""}">
+      <button
+        class="episode-replica-audio-play"
+        type="button"
+        data-action="preview-lip-sync-audio"
+        data-audio-id="${escapeAttr(audioId)}"
+      >${isPlaying ? "停止试听" : "试听"}</button>
+      <div class="episode-replica-audio-copy">
+        <strong>${escapeHtml(title)}</strong>
+        ${summary ? `<p>${escapeHtml(summary)}</p>` : ""}
+      </div>
+      <div class="episode-replica-audio-side">
+        <span class="episode-replica-audio-meta">${escapeHtml(voiceName || "已生成音频")}</span>
+        ${durationLabel ? `<small>${escapeHtml(durationLabel)}</small>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderAttachment(item, index, selected) {
+  const mediaType = item.type ?? item.kind ?? "image";
+  const previewUrl = resolveReferencePreview(item);
+  const title = mediaType === "audio" ? `音频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
+  const preview =
+    mediaType === "audio"
+      ? "<i>♫</i>"
+      : previewUrl
+        ? mediaType === "video"
+          ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+          : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "attachment")}" />`
+        : renderQuickPlaceholder(mediaType, item.name ?? "图片");
+  return `
+    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(item.type ?? "image")}">${item.type === "audio" ? "<i>♫</i>" : renderQuickPlaceholder("image", item.name ?? "图片")}</span>
-      <strong>${escapeHtml(item.type === "audio" ? `音频 ${index + 1}` : item.name ?? `图片 ${index + 1}`)}</strong>
+      <span class="episode-replica-ref-art ${escapeAttr(mediaType)}">${preview}</span>
+      <strong>${escapeHtml(title)}</strong>
     </article>
   `;
 }
 
 function renderQuickReferenceItem(item) {
   const previewUrl = resolveReferencePreview(item);
-  const summary = truncateDisplayText(item.description ?? item.name ?? "", 100);
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
+  const kind = item.kind ?? "image";
   return `
     <article class="episode-replica-ref-card quick-reference" title="${escapeAttr(item.description ?? item.name ?? "")}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(item.kind ?? "image")}">
+      <span class="episode-replica-ref-art ${escapeAttr(kind)}">
         ${previewUrl
-          ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
-          : previewMarkup || renderQuickPlaceholder(item.kind || inferKind(item.name), item.name ?? "reference")}
+          ? kind === "video"
+            ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+            : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
+          : previewMarkup || renderQuickPlaceholder(kind || inferKind(item.name), item.name ?? "reference")}
       </span>
-      <strong>${escapeHtml(item.name ?? "引用素材")}</strong>
-      <small>${escapeHtml(summary)}</small>
     </article>
   `;
 }
@@ -949,15 +1837,15 @@ function renderStoryboardDescriptionModal({ show, value, selectedStoryboard }) {
   `;
 }
 
-function renderSimpleDeleteModal(show, text, closeAction, confirmAction) {
+function renderEpisodeDeleteModal({ show, title, text, closeAction, confirmAction }) {
   if (!show) return "";
   return `
     <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true">
       <div class="delete-project-modal asset-delete-modal">
         <div class="delete-project-head">
-          <div class="delete-project-icon">×</div>
+          <div class="delete-project-icon warning">!</div>
           <div>
-            <h2>确认删除</h2>
+            <h2>${escapeHtml(title ?? "确认删除")}</h2>
             <p>${escapeHtml(text)}</p>
           </div>
           <button class="modal-close" type="button" data-action="${escapeAttr(closeAction)}">×</button>
@@ -1003,17 +1891,8 @@ function renderEpisodeVoiceModal(modal) {
     { id: "custom", label: "自定义" },
     { id: "system", label: "系统" },
   ];
-  const options = [
-    "女声·甜妹",
-    "女声·天真",
-    "女声·温柔",
-    "女声·甜美",
-    "女声·知性",
-    "男声·标准 1",
-    "男声·沉稳",
-    "男声·阳光",
-    "女声·夸张",
-  ];
+  const activeTab = modal.tab === "system" ? "system" : "custom";
+  const options = VOICE_OPTIONS_BY_TAB[activeTab];
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-voice-modal"></button>
@@ -1021,19 +1900,33 @@ function renderEpisodeVoiceModal(modal) {
         <button class="episode-asset-create-close" type="button" data-action="close-episode-voice-modal">×</button>
         <h3>选择配音</h3>
         <div class="episode-voice-tabs">
-          ${tabs.map((tab) => `<button class="${modal.tab === tab.id ? "active" : ""}" type="button" data-action="set-episode-voice-tab" data-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
+          ${tabs.map((tab) => `<button class="${activeTab === tab.id ? "active" : ""}" type="button" data-action="set-episode-voice-tab" data-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
         </div>
         <div class="episode-voice-grid">
           ${options.map((voice) => `
-            <button
-              class="episode-voice-card ${modal.voiceName === voice ? "active" : ""}"
-              type="button"
+            <article
+              class="episode-voice-card ${modal.voiceName === voice.name ? "active" : ""}"
               data-action="select-episode-voice"
-              data-voice-name="${escapeAttr(voice)}"
+              data-voice-id="${escapeAttr(voice.id)}"
+              data-voice-name="${escapeAttr(voice.name)}"
+              data-voice-source="${escapeAttr(activeTab)}"
+              role="button"
+              tabindex="0"
+              aria-pressed="${modal.voiceName === voice.name ? "true" : "false"}"
             >
-              <span class="episode-voice-avatar"></span>
-              <strong>${escapeHtml(voice)}</strong>
-            </button>
+              <span class="episode-voice-card-radio" aria-hidden="true"></span>
+              <span class="episode-voice-avatar"><i></i></span>
+              <strong>${escapeHtml(voice.name)}</strong>
+              <div class="episode-voice-card-foot">
+                <span class="episode-voice-card-state">${modal.voiceName === voice.name ? "已选中" : ""}</span>
+                <button
+                  type="button"
+                  class="episode-voice-preview-trigger ${modal.previewVoiceName === voice.name ? "active" : ""}"
+                  data-action="preview-episode-voice"
+                  data-voice-name="${escapeAttr(voice.name)}"
+                >${modal.previewVoiceName === voice.name ? "停止试听" : "试听"}</button>
+              </div>
+            </article>
           `).join("")}
         </div>
       </div>
@@ -1042,7 +1935,10 @@ function renderEpisodeVoiceModal(modal) {
 }
 
 function resolveGenerateCost(mediaMode, generationControls = {}) {
-  if (mediaMode === "video" || mediaMode === "lip-sync") {
+  if (mediaMode === "lip-sync") {
+    return calculateLipSyncCreditCost(generationControls?.lipSyncPrompt ?? "");
+  }
+  if (mediaMode === "video") {
     return Number(generationControls.videoCreditCost ?? 120);
   }
   const mode = generationControls.imageMode ?? generationControls.mode ?? null;
@@ -1053,7 +1949,8 @@ function resolveGenerateCost(mediaMode, generationControls = {}) {
 }
 
 function renderAssetInspectorModal(inspector) {
-  if (!inspector) return "";
+  const mediaUrl = String(inspector?.url ?? "").trim();
+  if (!inspector || !mediaUrl) return "";
   const isVideo = inspector.type === "video";
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
@@ -1064,7 +1961,7 @@ function renderAssetInspectorModal(inspector) {
           <button class="modal-close" type="button" data-action="close-asset-inspector">×</button>
         </div>
         <div class="asset-inspector-preview">
-          ${isVideo ? `<video src="${escapeAttr(inspector.url ?? "")}" controls playsinline preload="metadata"></video>` : `<img src="${escapeAttr(inspector.url ?? "")}" alt="${escapeAttr(inspector.name ?? "素材")}" />`}
+          ${isVideo ? `<video src="${escapeAttr(mediaUrl)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "素材")}" />`}
         </div>
         <div class="asset-inspector-meta">
           <strong>${escapeHtml(inspector.name ?? "未命名素材")}</strong>
@@ -1080,42 +1977,239 @@ function renderAssetInspectorModal(inspector) {
 
 function renderEpisodeBatchModal(modal) {
   if (!modal?.show) return "";
+  const mode = modal.mode ?? "image";
+  const scope = modal.scope ?? "asset";
+  const selectedCount = modal.items?.length ?? 0;
+  const title = mode === "video" ? "批量生视频" : mode === "upscale" ? "批量高清处理" : "批量生图";
+  const totalCredits = modal.totalCredits ?? 0;
+  const primaryLabel =
+    mode === "video"
+      ? `生成 ${selectedCount} 条视频 | ${totalCredits} 积分`
+      : mode === "upscale"
+        ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
+        : `生成${selectedCount}张图 | ${totalCredits} 积分`;
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal"></button>
       <div class="episode-batch-modal">
         <div class="single-episode-modal-head storyboard-description-head">
-          <h2>批量生图</h2>
+          <h2>${escapeHtml(title)}</h2>
           <button class="modal-close" type="button" data-action="close-episode-batch-modal">×</button>
         </div>
-        <p class="episode-batch-modal-copy">已选 ${modal.items?.length ?? 0} 项，以下内容将进入批量生图队列。</p>
-        <div class="episode-batch-modal-list">
-          ${(modal.items ?? []).map((item) => `
-            <article class="episode-batch-modal-item">
-              <span class="episode-batch-modal-thumb">${renderAssetPreviewVisual(item, item.kind || "character")}</span>
-              <div class="episode-batch-modal-meta">
-                <strong>${escapeHtml(item.name ?? "素材")}</strong>
-                <span>${escapeHtml(resolveAssetLabel(item.kind || "character"))}</span>
-              </div>
-            </article>
-          `).join("")}
+        <div class="episode-batch-mode-tabs">
+          <button class="${mode === "image" ? "active" : ""}" type="button" disabled>批量生图</button>
+          <button class="${mode === "video" ? "active" : ""}" type="button" disabled>批量生视频</button>
+          <button class="${mode === "upscale" ? "active" : ""}" type="button" disabled>批量高清处理</button>
+          <button type="button" disabled>主体固定</button>
         </div>
-        <div class="single-episode-actions storyboard-description-actions">
-          <button class="primary-action compact" type="button" data-action="close-episode-batch-modal">确认</button>
-        </div>
+        ${
+          mode === "image"
+            ? renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel)
+            : renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
+        }
       </div>
     </section>
   `;
+}
+
+function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
+  const styleTab = modal.styleTab === "custom" ? "custom" : "public";
+  const styleCards = styleTab === "custom" ? BATCH_CUSTOM_STYLES : BATCH_PUBLIC_STYLES;
+  const selectedStyleId = modal.selectedStyleId ?? styleCards[0]?.id ?? "";
+  const imageModel = resolveBatchImageModelLabel(modal.imageModelId);
+  return `
+    <div class="episode-batch-image-panel">
+      ${renderEpisodeBatchSelectField("imageModelId", "图片模型", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions())}
+      <section class="episode-batch-style-panel">
+        <div class="episode-batch-section-title">模型画风</div>
+        <div class="episode-batch-style-tabs">
+          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">公共画风</button>
+          <button class="${styleTab === "custom" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="custom">定制画风</button>
+        </div>
+        <div class="episode-batch-style-grid">
+          ${styleCards.map((card) => `
+            <button
+              class="episode-batch-style-card ${card.id === selectedStyleId ? "selected" : ""}"
+              type="button"
+              data-action="select-episode-batch-style"
+              data-style-id="${escapeAttr(card.id)}"
+            >
+              <img src="${escapeAttr(card.preview)}" alt="${escapeAttr(card.label)}" />
+              <strong>${escapeHtml(card.label)}</strong>
+            </button>
+          `).join("")}
+        </div>
+      </section>
+      <section class="episode-batch-config-panel">
+        <div class="episode-batch-section-title">其他配置</div>
+        <div class="episode-batch-config-grid">
+          ${renderEpisodeBatchSelectField("scenePresetId", "场景", resolveBatchPresetLabel(modal.scenePresetId), modal.openField === "scenePresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
+          ${renderEpisodeBatchSelectField("rolePresetId", "角色预设", resolveBatchPresetLabel(modal.rolePresetId), modal.openField === "rolePresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
+          ${renderEpisodeBatchSelectField("propPresetId", "道具预设", resolveBatchPresetLabel(modal.propPresetId), modal.openField === "propPresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
+          ${renderEpisodeBatchSelectField("aspectRatio", "比例", modal.aspectRatio ?? "16:9", modal.openField === "aspectRatio", BATCH_RATIO_OPTIONS.map((option) => ({ value: option, label: option })))}
+          ${renderEpisodeBatchSelectField("size", "大小", modal.size ?? "2K", modal.openField === "size", BATCH_SIZE_OPTIONS.map((option) => ({ value: option, label: option })))}
+        </div>
+      </section>
+      <footer class="episode-batch-footer">
+        <span class="episode-batch-footer-summary">批量生成选中的 ${selectedCount} 项素材</span>
+        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
+      </footer>
+    </div>
+  `;
+}
+
+function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope) {
+  const selectedCountLabel = scope === "storyboard" ? `${selectedCount} 条分镜` : `${selectedCount} 项素材`;
+  const options = BATCH_VIDEO_MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }));
+  return `
+    <div class="episode-batch-video-panel">
+      <p class="episode-batch-modal-copy">已选 ${selectedCountLabel}，统一配置会按当前内容分别写入视频任务。</p>
+      <p class="episode-batch-modal-copy subtle">确认后会为每条分镜各自创建视频任务，并回到列表查看进度。</p>
+      <div class="episode-batch-video-config-grid">
+        ${renderEpisodeBatchInfoCard("视频模型", resolveBatchVideoModelLabel(modal.videoModelId), modal.openField === "videoModelId", "videoModelId", options)}
+        ${renderEpisodeBatchInfoCard("预设", "无预设", false)}
+        ${renderEpisodeBatchInfoCard("比例", modal.aspectRatio ?? "16:9", modal.openField === "aspectRatio", "aspectRatio", BATCH_RATIO_OPTIONS.map((option) => ({ value: option, label: option })))}
+        ${renderEpisodeBatchInfoCard("分辨率", modal.videoResolution ?? "720P", modal.openField === "videoResolution", "videoResolution", [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }])}
+      </div>
+      <div class="episode-batch-selection-grid compact">
+        ${(modal.items ?? []).map((item, index) => `
+          <article class="episode-batch-selection-card compact">
+            <span class="episode-batch-selection-thumb">
+              ${
+                item.kind === "storyboard" && Array.isArray(item.references) && item.references.length
+                  ? renderStoryboardPreviewThumb(item.references)
+                  : renderAssetPreviewVisual(item, item.kind || "character")
+              }
+              <i>${index + 1}</i>
+            </span>
+            <div class="episode-batch-selection-meta">
+              <strong>${escapeHtml(item.name ?? `素材 ${index + 1}`)}</strong>
+              <span>${escapeHtml(item.kind === "storyboard" ? "分镜" : resolveAssetLabel(item.kind || "character"))}</span>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+      <footer class="episode-batch-footer">
+        <span class="episode-batch-footer-summary">批量生成选中的 ${selectedCountLabel}视频</span>
+        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
+      </footer>
+    </div>
+  `;
+}
+
+function renderEpisodeBatchSelectField(field, label, value, open, options) {
+  return `
+    <div class="episode-batch-select-group">
+      ${label ? `<span class="episode-batch-field-label">${escapeHtml(label)}</span>` : ""}
+      <div class="episode-batch-select-wrap ${open ? "open" : ""}">
+        <button
+          class="episode-batch-select"
+          type="button"
+          data-action="toggle-episode-batch-menu"
+          data-field="${escapeAttr(field)}"
+        >
+          <span>${escapeHtml(value)}</span>
+          <i>⌄</i>
+        </button>
+        ${
+          open
+            ? `<div class="episode-batch-select-menu">
+                ${options.map((option) => `
+                  <button
+                    type="button"
+                    data-action="select-episode-batch-option"
+                    data-field="${escapeAttr(field)}"
+                    data-value="${escapeAttr(option.value)}"
+                    ${option.disabled ? "disabled" : ""}
+                  >
+                    ${escapeHtml(option.label)}
+                  </button>
+                `).join("")}
+              </div>`
+            : ""
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderEpisodeBatchInfoCard(label, value, open = false, field = "", options = []) {
+  return `
+    <div class="episode-batch-info-card ${open ? "open" : ""}">
+      <strong>${escapeHtml(label)}</strong>
+      ${
+        field
+          ? renderEpisodeBatchSelectField(field, "", value, open, options)
+          : `<span>${escapeHtml(value)}</span>`
+      }
+    </div>
+  `;
+}
+
+function groupBatchImageModelOptions() {
+  const groups = new Map();
+  for (const option of BATCH_IMAGE_MODEL_OPTIONS) {
+    if (!groups.has(option.group)) {
+      groups.set(option.group, []);
+    }
+    groups.get(option.group).push(option);
+  }
+  return [...groups.entries()].flatMap(([group, options]) => [
+    { value: `__label__${group}`, label: `【${group}】`, disabled: true },
+    ...options.map((option) => ({ value: option.id, label: option.label })),
+  ]);
+}
+
+function resolveBatchImageModelLabel(value) {
+  return BATCH_IMAGE_MODEL_OPTIONS.find((option) => option.id === value)?.label ?? "nano banana 2（链路G）";
+}
+
+function resolveBatchVideoModelLabel(value) {
+  return BATCH_VIDEO_MODEL_OPTIONS.find((option) => option.id === value)?.label ?? "Vidu Q3 Pro";
+}
+
+function resolveBatchPresetLabel(value) {
+  return BATCH_PRESET_OPTIONS.find((option) => option.id === value)?.label ?? "无预设";
+}
+
+function resolveReferencePromptPresetLabel(value) {
+  const presetMap = {
+    none: "无预设",
+    "scene-wide": "[系统]场景-广角图",
+    "scene-vr": "[系统]场景-VR场景图",
+    "prop-triple": "[系统]道具-三视图",
+    "character-triple": "[系统]角色-三视图",
+    "comic-style": "无预设",
+  };
+  return presetMap[value] ?? "无预设";
+}
+
+function calculateLipSyncCreditCost(value) {
+  const length = [...String(value ?? "").trim()].length;
+  if (!length) {
+    return 0;
+  }
+  return Math.ceil(length / 10) * 2;
 }
 
 function resolveAssetLabel(tab) {
   return ASSET_TABS.find((item) => item.id === tab)?.label ?? "素材";
 }
 
+function resolveAssetSetLabel(tab) {
+  if (tab === "scene") {
+    return "设为场景图";
+  }
+  if (tab === "prop") {
+    return "设为道具图";
+  }
+  return "设为角色图";
+}
+
 function renderAssetPreviewVisual(asset, kind) {
   const previewUrl = resolveReferencePreview(asset);
   if (previewUrl) {
-    return `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(asset?.name ?? "asset")}" />`;
+    return `<img src="${escapeAttr(resolveApiUrl(previewUrl))}" alt="${escapeAttr(asset?.name ?? "asset")}" />`;
   }
   return renderPlaceholderArt(kind, asset?.name ?? "");
 }
@@ -1137,9 +2231,26 @@ function renderQuickPlaceholder(kind, label) {
 }
 
 function renderStoryboardPreviewThumb(refs) {
+  const items = refs.slice(0, 4).map((item) => {
+    const preview = resolveReferencePreview(item);
+    const name = item.name ?? item.assetName ?? "素材";
+    return { preview, name, kind: item.kind || inferKind(name) };
+  });
+  if (!items.length) {
+    return `<span class="episode-replica-shot-preview-art"></span>`;
+  }
+  const renderThumb = (item) => `
+    <span class="episode-replica-shot-ref-card" aria-label="引用图片">
+      ${
+        item.preview
+          ? `<img src="${escapeAttr(item.preview)}" alt="" />`
+          : renderQuickPlaceholder(item.kind, "")
+      }
+    </span>
+  `;
   return `
-    <span class="episode-replica-shot-preview-art">
-      ${refs.slice(0, 4).map((item) => `<span>${renderQuickPlaceholder(item.kind || inferKind(item.name), item.name)}</span>`).join("")}
+    <span class="episode-replica-shot-ref-list" aria-label="引用图片">
+      ${items.map(renderThumb).join("")}
     </span>
   `;
 }
@@ -1154,6 +2265,7 @@ function truncateDisplayText(value, maxLength = 100) {
 
 function resolveReferencePreview(item) {
   const candidates = [
+    item?.fixedImageUrl,
     item?.preview,
     item?.previewUrl,
     item?.publicUrl,
@@ -1162,7 +2274,24 @@ function resolveReferencePreview(item) {
     item?.imageUrl,
     item?.url,
   ];
-  return candidates.find((candidate) => typeof candidate === "string" && candidate.trim()) ?? "";
+  return (
+    candidates.find((candidate) => {
+      if (typeof candidate !== "string") {
+        return false;
+      }
+      const value = candidate.trim();
+      if (!value) {
+        return false;
+      }
+      if (
+        value === "http://www.w3.org/2000/svg" ||
+        value === "https://www.w3.org/2000/svg"
+      ) {
+        return false;
+      }
+      return true;
+    }) ?? ""
+  );
 }
 
 function resolveSelectedImageSource(storyboard) {

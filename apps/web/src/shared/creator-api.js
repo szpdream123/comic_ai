@@ -72,7 +72,7 @@ export function resolveApiUrl(url) {
   const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
     window.location.host ?? "",
   );
-  const localBackendPort = /^431\d$/.test(window.location.port ?? "");
+  const localBackendPort = /^(?:431\d|4399)$/.test(window.location.port ?? "");
   const shouldUseDevBackend =
     window.location.protocol === "file:" ||
     (backendOwnedPath && localHttpHost && !localBackendPort);
@@ -614,8 +614,77 @@ export const creatorApi = {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/members`);
   },
 
+  createProjectMember(projectId, input, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/members`,
+      input,
+      {
+        action: "project.member.create",
+        idempotencyKey: options.idempotencyKey,
+      },
+    );
+  },
+
+  updateProjectMember(projectId, memberId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(memberId)}`,
+      input,
+    );
+  },
+
   getProjectStats(projectId) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/stats`);
+  },
+
+  getProjectTeamDashboardExportUrl(projectId, params = {}) {
+    const query = new URLSearchParams();
+    if (params.tab) {
+      query.set("tab", String(params.tab));
+    }
+    if (params.dateShortcut) {
+      query.set("dateShortcut", String(params.dateShortcut));
+    }
+    if (params.role && params.role !== "all") {
+      query.set("role", String(params.role));
+    }
+    if (params.status && params.status !== "all") {
+      query.set("status", String(params.status));
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return resolveApiUrl(`/api/creator/projects/${encodeURIComponent(projectId)}/team-dashboard/export${suffix}`);
+  },
+
+  getBillingPackages() {
+    return fetchJson("/api/billing/packages", { unwrapEnvelope: false });
+  },
+
+  createBillingOrder(input, options = {}) {
+    return postJsonWithIdempotency("/api/billing/orders", input, {
+      action: "billing.order.create",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  createPaymentIntent(input, options = {}) {
+    return postJsonWithIdempotency("/api/billing/payment-intents", input, {
+      action: "billing.intent.create",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  requestEnterpriseContact(input, options = {}) {
+    return postJsonWithIdempotency("/api/billing/enterprise-contact-requests", input, {
+      action: "billing.enterprise-contact.create",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  getBillingOrder(orderId) {
+    return fetchJson(`/api/billing/orders/${encodeURIComponent(orderId)}`, { unwrapEnvelope: false });
+  },
+
+  getPaymentIntent(paymentIntentId) {
+    return fetchJson(`/api/billing/payment-intents/${encodeURIComponent(paymentIntentId)}`, { unwrapEnvelope: false });
   },
 
   createEpisode(input) {
@@ -674,12 +743,61 @@ export const creatorApi = {
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets${suffix}`);
   },
 
+  createEpisodeAsset(episodeId, input) {
+    return postJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets`, input);
+  },
+
+  importEpisodeAsset(episodeId, input) {
+    return postJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets/import`, input);
+  },
+
+  updateEpisodeAsset(episodeId, assetId, input) {
+    return patchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}`,
+      input,
+    );
+  },
+
+  deleteEpisodeAsset(episodeId, assetId) {
+    return deleteJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}`);
+  },
+
+  saveEpisodeAssetToLibrary(episodeId, assetId) {
+    return postJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/save-to-library`,
+      {},
+    );
+  },
+
   listStoryboards(episodeId, params = {}) {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     const suffix = query.toString() ? `?${query}` : "";
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/storyboards${suffix}`);
+  },
+
+  getAssetConversationHistory(episodeId, assetId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation?${query}`,
+    );
+  },
+
+  saveAssetConversationMessages(episodeId, assetId, input) {
+    return postJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation/messages`,
+      input,
+    );
+  },
+
+  deleteAssetConversationTurn(episodeId, assetId, taskId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    return deleteJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation/messages/${encodeURIComponent(taskId)}?${query}`,
+    );
   },
 
   listGenerationTasks(episodeId, params = {}) {

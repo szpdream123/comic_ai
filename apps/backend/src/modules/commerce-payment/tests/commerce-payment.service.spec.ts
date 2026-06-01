@@ -277,6 +277,48 @@ describe("commerce payment service", { concurrency: false }, () => {
     }
   });
 
+  it("records an enterprise contact request as a real backend intake event", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const response = await service.requestEnterpriseContact({
+        user: { sessionToken: ownerSession.token },
+        body: { source: "pricing_modal", note: "enterprise_plan_interest" },
+        idempotencyKey: "enterprise-contact-key-1",
+        now: new Date("2026-05-21T08:20:00.000Z"),
+      });
+      const audit = await db.query<{
+        event_type: string;
+        target_type: string;
+        reason: string | null;
+      }>(
+        `
+          SELECT event_type, target_type, reason
+          FROM audit_events
+          WHERE event_type = 'billing.enterprise_contact_requested'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.request.status, "submitted");
+      assert.equal(audit.rows[0]?.event_type, "billing.enterprise_contact_requested");
+      assert.equal(audit.rows[0]?.target_type, "enterprise_contact_request");
+      assert.equal(audit.rows[0]?.reason, "enterprise_pricing_request");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects malformed provider callback payloads before SQL writes", async () => {
     const db = await createMigratedTestDb();
 

@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
@@ -879,6 +879,7 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           kind: "scene",
           name: "Imported Alley",
+          description: "imported-scene-description",
           uploadSessionId: importedAlleyUpload.uploadSessionId,
           storageObjectId: importedAlleyUpload.storageObjectId,
           mimeType: "image/png",
@@ -887,6 +888,7 @@ describe("phone auth dev server", () => {
         }),
       });
       const importedAsset = await importedAssetResponse.json();
+      assert.equal(importedAsset.version.metadata.description, "imported-scene-description");
 
       const deletablePropUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
         purpose: "asset-import/prop",
@@ -956,6 +958,31 @@ describe("phone auth dev server", () => {
         },
       );
       const stats = await statsResponse.json();
+
+      const dashboardExportResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/team-dashboard/export?tab=member-consumption&dateShortcut=%E4%BB%8A%E5%A4%A9&role=all&status=all`,
+        {
+          headers: { cookie },
+        },
+      );
+      const dashboardExportCsv = await dashboardExportResponse.text();
+
+      const enterpriseContactResponse = await fetch(
+        `${server.origin}/api/billing/enterprise-contact-requests`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "enterprise-contact-request-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            source: "pricing_modal",
+            note: "enterprise_plan_interest",
+          }),
+        },
+      );
+      const enterpriseContact = await enterpriseContactResponse.json();
 
       const updateAssetResponse = await fetch(
         `${server.origin}/api/creator/assets/${importedAsset.asset.id}`,
@@ -1363,6 +1390,13 @@ describe("phone auth dev server", () => {
       assert.equal(statsResponse.status, 200);
       assert.ok(stats.stats.memberCount >= 1);
       assert.equal(stats.stats.assetCount, 3);
+      assert.equal(dashboardExportResponse.status, 200);
+      assert.match(dashboardExportResponse.headers.get("content-type") ?? "", /text\/csv/);
+      assert.match(dashboardExportResponse.headers.get("content-disposition") ?? "", /team-dashboard-/);
+      assert.match(dashboardExportCsv, /member-consumption/);
+      assert.match(dashboardExportCsv, /\+8613800138000/);
+      assert.equal(enterpriseContactResponse.status, 200);
+      assert.equal(enterpriseContact.request.status, "submitted");
       assert.equal(updateAssetResponse.status, 200);
       assert.equal(typeof updatedAsset.asset, "string");
       assert.equal(detailAfterAssetUpdateResponse.status, 200);
@@ -1567,7 +1601,7 @@ describe("phone auth dev server", () => {
             "idempotency-key": "episode-workbench-contract-episode",
             cookie,
           },
-          body: JSON.stringify({ title: "第一集" }),
+          body: JSON.stringify({ title: "Episode 1" }),
         },
       );
       const createdEpisodeEnvelope = await createEpisodeResponse.json();
@@ -1614,8 +1648,8 @@ describe("phone auth dev server", () => {
             cookie,
           },
           body: JSON.stringify({
-            title: "第一镜",
-            description: "草稿存储测试分镜",
+            title: "Storyboard 1",
+            description: "generation draft storyboard",
             episodeId,
           }),
         });
@@ -1630,7 +1664,7 @@ describe("phone auth dev server", () => {
               cookie,
             },
             body: JSON.stringify({
-              prompt: "一个更贴近废土气质的分镜草稿",
+              prompt: "storyboard draft prompt",
               mode: "image",
               payload: {
                 modelCode: "nano_banana_2",
@@ -1648,7 +1682,7 @@ describe("phone auth dev server", () => {
       assert.ok(
         detailEnvelope.data.episodes.some(
           (episode: { episodeId: string; title: string }) =>
-            episode.episodeId === episodeId && episode.title === "第一集",
+            episode.episodeId === episodeId && episode.title === "Episode 1",
         ),
       );
       assert.equal(workbenchResponse.status, 200);
@@ -1658,7 +1692,10 @@ describe("phone auth dev server", () => {
       assert.equal(workbenchEnvelope.data.navigation.backTarget, "project_episodes");
       assert.equal(typeof workbenchEnvelope.data.permissions.canEdit, "boolean");
       assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "storyboards"), false);
-      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "assets"), false);
+      assert.deepEqual(workbenchEnvelope.data.assetsByType.role, []);
+      assert.deepEqual(workbenchEnvelope.data.assetsByType.character, []);
+      assert.deepEqual(workbenchEnvelope.data.assetsByType.scene, []);
+      assert.deepEqual(workbenchEnvelope.data.assetsByType.prop, []);
       assert.equal(assetsResponse.status, 200);
       assert.deepEqual(Object.keys(assetsEnvelope.data).sort(), [
         "hasNext",
@@ -1686,15 +1723,1331 @@ describe("phone auth dev server", () => {
         assert.equal(saveDraftEnvelope.data.draft.episodeId, episodeId);
         assert.equal(saveDraftEnvelope.data.draft.targetType, "storyboard");
         assert.equal(saveDraftEnvelope.data.draft.targetId, storyboardId);
-        assert.equal(saveDraftEnvelope.data.draft.prompt, "一个更贴近废土气质的分镜草稿");
+        assert.equal(saveDraftEnvelope.data.draft.prompt, "storyboard draft prompt");
         assert.equal(saveDraftEnvelope.data.draft.payload.modelCode, "nano_banana_2");
       } finally {
         await server.close();
       }
   });
 
-  it("persists episode generation tasks with fixed mock media results", async () => {
+  it("creates and updates project members through the project-scoped team API", async () => {
     const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138001");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "team-member-project-create",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          name: "Team member create",
+          scriptInput: "Episode 1: create project member.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createMemberResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "team-member-create-1",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({
+            phone: "13800138002",
+            role: "creator",
+            note: "storyboard-collab",
+          }),
+        },
+      );
+      const createdMember = await createMemberResponse.json();
+
+      const updateMemberResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "team-member-create-2",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({
+            phone: "13800138002",
+            role: "viewer",
+            note: "readonly-review",
+          }),
+        },
+      );
+      const updatedMember = await updateMemberResponse.json();
+
+      const listMembersResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members`,
+        {
+          headers: {
+            cookie: ownerCookie,
+          },
+        },
+      );
+      const listedMembers = await listMembersResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createMemberResponse.status, 200);
+      assert.equal(createdMember.member.phone, "+8613800138002");
+      assert.equal(createdMember.member.role, "creator");
+      assert.equal(createdMember.member.note, "storyboard-collab");
+
+      assert.equal(updateMemberResponse.status, 200);
+      assert.equal(updatedMember.member.phone, "+8613800138002");
+      assert.equal(updatedMember.member.role, "viewer");
+      assert.equal(updatedMember.member.note, "readonly-review");
+
+      assert.equal(listMembersResponse.status, 200);
+      assert.equal(
+        listedMembers.members.some(
+          (member: { phone?: string; role?: string; note?: string }) =>
+            member.phone === "+8613800138002" &&
+            member.role === "viewer" &&
+            member.note === "readonly-review",
+        ),
+        true,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("patches member role, note, and status through the member-scoped team API", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138001");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "team-member-patch-project-create",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          name: "Team member patch",
+          scriptInput: "Episode 1: patch team member.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createMemberResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "team-member-patch-create",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({
+            phone: "13800138004",
+            role: "creator",
+            note: "new-member",
+          }),
+        },
+      );
+      const createdMember = await createMemberResponse.json();
+      const memberId = createdMember.member.id;
+
+      const patchMemberResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members/${memberId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({
+            role: "producer",
+            note: "producer-updated",
+            status: "disabled",
+          }),
+        },
+      );
+      const patchedMember = await patchMemberResponse.json();
+
+      const restoreMemberResponse = await fetch(
+        `${server.origin}/api/creator/projects/${projectId}/members/${memberId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie: ownerCookie,
+          },
+          body: JSON.stringify({
+            status: "active",
+          }),
+        },
+      );
+      const restoredMember = await restoreMemberResponse.json();
+
+      assert.equal(patchMemberResponse.status, 200);
+      assert.equal(patchedMember.member.role, "producer");
+      assert.equal(patchedMember.member.note, "producer-updated");
+      assert.equal(patchedMember.member.status, "disabled");
+
+      assert.equal(restoreMemberResponse.status, 200);
+      assert.equal(restoredMember.member.status, "enabled");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("persists and reloads asset conversation history by selected asset id", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138006");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "asset-conversation-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Asset conversation persistence",
+          scriptInput: "Episode 1: persist selected asset history.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "asset-conversation-episode-create",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "废土主角",
+            description: "疲惫，警惕，穿破旧夹克。",
+          }),
+        },
+      );
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
+
+      const appendConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [
+              {
+                turnId: "asset-image-turn-1",
+                messageKey: "asset-image-turn-1:user_request",
+                messageType: "user_request",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
+                  quickReferenceItems: [],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+              {
+                turnId: "asset-image-turn-1",
+                messageKey: "asset-image-turn-1:result",
+                messageType: "result",
+                taskId: "asset-image-task-1",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
+                  status: "completed",
+                  taskId: "asset-image-task-1",
+                  fixedImages: [
+                    {
+                      id: "asset-image-result-1",
+                      label: "角色图片",
+                      url: "https://example.com/asset-image-result-1.png",
+                    },
+                  ],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+            ],
+          }),
+        },
+      );
+      const appendConversationEnvelope = await appendConversationResponse.json();
+
+      const getConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
+        {
+          headers: { cookie },
+        },
+      );
+      const getConversationEnvelope = await getConversationResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
+      assert.equal(appendConversationResponse.status, 200);
+      assert.equal(getConversationResponse.status, 200);
+      assert.equal(appendConversationEnvelope.data.entries.length, 1);
+      assert.equal(getConversationEnvelope.data.entries.length, 1);
+      assert.equal(getConversationEnvelope.data.entries[0].taskId, "asset-image-task-1");
+      assert.equal(getConversationEnvelope.data.entries[0].status, "completed");
+      assert.equal(
+        getConversationEnvelope.data.entries[0].promptPreview,
+        "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
+      );
+      assert.equal(
+        getConversationEnvelope.data.entries[0].fixedImages[0].url,
+        "https://example.com/asset-image-result-1.png",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes only the requested asset conversation turn and keeps the remaining history", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138007");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "asset-conversation-delete-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Asset conversation delete",
+          scriptInput: "Episode 1: delete only one persisted asset result.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "asset-conversation-delete-episode-create",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "废土主角",
+            description: "疲惫，警惕，穿破旧夹克。",
+          }),
+        },
+      );
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
+
+      const appendConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [
+              {
+                turnId: "asset-image-task-1",
+                messageKey: "asset-image-task-1:user_request",
+                messageType: "user_request",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "第一条：补强破旧夹克和肩背磨损。",
+                  quickReferenceItems: [],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+              {
+                turnId: "asset-image-task-1",
+                messageKey: "asset-image-task-1:result",
+                messageType: "result",
+                taskId: "asset-image-task-1",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "第一条：补强破旧夹克和肩背磨损。",
+                  fixedImages: [
+                    {
+                      id: "asset-image-result-1",
+                      label: "角色图片",
+                      url: "https://example.com/asset-image-result-1.png",
+                    },
+                  ],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+              {
+                turnId: "asset-image-task-2",
+                messageKey: "asset-image-task-2:user_request",
+                messageType: "user_request",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "第二条：补强眼神和面部风尘细节。",
+                  quickReferenceItems: [],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+              {
+                turnId: "asset-image-task-2",
+                messageKey: "asset-image-task-2:result",
+                messageType: "result",
+                taskId: "asset-image-task-2",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "第二条：补强眼神和面部风尘细节。",
+                  fixedImages: [
+                    {
+                      id: "asset-image-result-2",
+                      label: "角色图片",
+                      url: "https://example.com/asset-image-result-2.png",
+                    },
+                  ],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+            ],
+          }),
+        },
+      );
+      await appendConversationResponse.json();
+
+      const deleteConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-task-1?mediaMode=image`,
+        {
+          method: "DELETE",
+          headers: {
+            cookie,
+          },
+        },
+      );
+      const deleteConversationEnvelope = await deleteConversationResponse.json();
+
+      const getConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
+        {
+          headers: { cookie },
+        },
+      );
+      const getConversationEnvelope = await getConversationResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
+      assert.equal(appendConversationResponse.status, 200);
+      assert.equal(deleteConversationResponse.status, 200);
+      assert.equal(getConversationResponse.status, 200);
+      assert.equal(deleteConversationEnvelope.data.deleted, true);
+      assert.equal(deleteConversationEnvelope.data.deletedCount, 2);
+      assert.equal(deleteConversationEnvelope.data.entries.length, 1);
+      assert.equal(deleteConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
+      assert.equal(getConversationEnvelope.data.entries.length, 1);
+      assert.equal(getConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
+      assert.equal(
+        getConversationEnvelope.data.entries[0].promptPreview,
+        "第二条：补强眼神和面部风尘细节。",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes a project that has persisted asset conversation history", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138016");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "asset-conversation-delete-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Delete project with persisted asset conversation",
+          scriptInput: "Episode 1: Delete a project after asset conversation persistence.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "asset-conversation-delete-project-episode-create",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode delete project" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "删除测试角色",
+            description: "用于项目删除回归测试。",
+          }),
+        },
+      );
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
+
+      const appendConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [
+              {
+                turnId: "delete-project-turn-1",
+                messageKey: "delete-project-turn-1:user_request",
+                messageType: "user_request",
+                payload: {
+                  promptPreview: "删除项目回归测试提示词",
+                },
+              },
+            ],
+          }),
+        },
+      );
+
+      const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      const deletedProject = await deleteProjectResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
+      assert.equal(appendConversationResponse.status, 200);
+      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(deletedProject.deleted, true);
+      assert.equal(deletedProject.projectId, projectId);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes a project that has episode generation credit reservations", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138017");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "delete-project-with-credit-reservations-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Delete project with credit reservations",
+          scriptInput: "Episode 1: create generation task then delete project.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode with reservation" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const generationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "delete-project-with-credit-reservations-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "generate before deleting project",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const generationEnvelope = await generationResponse.json();
+      const taskId = generationEnvelope.data.taskId;
+
+      const reservationRows = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM credit_reservations
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND task_id = $3
+        `,
+        ["10000000-0000-4000-8000-000000000001", projectId, taskId],
+      );
+
+      const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      const deletedProject = await deleteProjectResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(generationResponse.status, 200);
+      assert.equal(Number(reservationRows.rows[0]?.count ?? 0) > 0, true);
+      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(deletedProject.deleted, true);
+      assert.equal(deletedProject.projectId, projectId);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("persists episode asset create, update, list, and delete through the episode workbench APIs", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-asset-crud-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode asset CRUD",
+          scriptInput: "Episode 1: Persist episode assets and voices.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-asset-crud-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Asset CRUD" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "废土主角",
+            description: "初始角色设定",
+          }),
+        },
+      );
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
+
+      const listAfterCreateResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`,
+        { headers: { cookie } },
+      );
+      const listAfterCreateEnvelope = await listAfterCreateResponse.json();
+      const workbenchAfterCreateResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/workbench`,
+        { headers: { cookie } },
+      );
+      const workbenchAfterCreateEnvelope = await workbenchAfterCreateResponse.json();
+
+      const updateAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            description: "更新后的角色设定",
+            voiceId: "voice-wasteland-01",
+            voiceName: "冷峻低音",
+            dubbingConfig: {
+              style: "calm",
+            },
+          }),
+        },
+      );
+      const updateAssetEnvelope = await updateAssetResponse.json();
+
+      const deleteAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      const deleteAssetEnvelope = await deleteAssetResponse.json();
+
+      const listAfterDeleteResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`,
+        { headers: { cookie } },
+      );
+      const listAfterDeleteEnvelope = await listAfterDeleteResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
+      assert.equal(createAssetEnvelope.data.asset.assetType, "role");
+      assert.equal(createAssetEnvelope.data.asset.name, "废土主角");
+      assert.equal(createAssetEnvelope.data.asset.description, "初始角色设定");
+      assert.equal(listAfterCreateResponse.status, 200);
+      assert.equal(listAfterCreateEnvelope.data.items.length, 1);
+      assert.equal(listAfterCreateEnvelope.data.items[0].assetId, assetId);
+      assert.equal(workbenchAfterCreateResponse.status, 200);
+      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 1);
+      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role[0].assetId, assetId);
+      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.character[0].name, "废土主角");
+      assert.equal(updateAssetResponse.status, 200);
+      assert.equal(updateAssetEnvelope.data.asset.assetId, assetId);
+      assert.equal(updateAssetEnvelope.data.asset.description, "更新后的角色设定");
+      assert.equal(updateAssetEnvelope.data.asset.voiceId, "voice-wasteland-01");
+      assert.equal(updateAssetEnvelope.data.asset.voiceName, "冷峻低音");
+      assert.deepEqual(updateAssetEnvelope.data.asset.dubbingConfig, { style: "calm" });
+      assert.equal(deleteAssetResponse.status, 200);
+      assert.equal(deleteAssetEnvelope.data.deleted, true);
+      assert.equal(listAfterDeleteResponse.status, 200);
+      assert.deepEqual(listAfterDeleteEnvelope.data.items, []);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("imports assets into the current episode workbench instead of the project asset library", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-asset-import-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode asset import",
+          scriptInput: "Episode 1: Import an asset into the current episode workbench.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-asset-import-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Asset Import" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-asset-import-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "asset",
+            targetId: "scene-import-seed",
+            assetId: "scene-import-seed",
+            assetType: "scene",
+            prompt: "A wasteland camp entrance at dusk",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+
+      const importResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/import`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: "钀ュ湴鍏ュ彛",
+            description: "钖勯浘涓殑钀ュ湴鍏ュ彛鍦烘櫙",
+            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+            mimeType: "image/avif",
+            width: 1024,
+            height: 1024,
+          }),
+        },
+      );
+      const importEnvelope = await importResponse.json();
+
+      const listResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets?assetType=scene&page=1&pageSize=20`,
+        { headers: { cookie } },
+      );
+      const listEnvelope = await listResponse.json();
+
+      const detailResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/detail`,
+        { headers: { cookie } },
+      );
+      const detailEnvelope = await detailResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(
+        imageTaskEnvelope.data.result.imageUrl,
+        "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/1ee6f1a1-8bb8-4424-9ce3-e1361075b234-d256255d69a702a1f2095159c5aa1b1.png",
+      );
+      assert.equal(importResponse.status, 200);
+      assert.equal(importEnvelope.data.asset.name, "钀ュ湴鍏ュ彛");
+      assert.equal(importEnvelope.data.asset.assetType, "scene");
+      assert.ok(importEnvelope.data.asset.fixedImageUrl);
+      assert.equal(listResponse.status, 200);
+      assert.equal(listEnvelope.data.items.length, 1);
+      assert.equal(listEnvelope.data.items[0].name, "钀ュ湴鍏ュ彛");
+      assert.equal(detailResponse.status, 200);
+      assert.equal(
+        detailEnvelope.data.assetsByType.scene.some(
+          (asset: { label?: string }) => asset.label === "钀ュ湴鍏ュ彛",
+        ),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("saves an episode asset into the project asset library with real persisted media", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-asset-library-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode asset library bridge",
+          scriptInput: "Episode 1: Save an episode asset into the project asset library.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-asset-library-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Library Save" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: "搴熷湡琛楄",
+            description: "闆ㄥ闇撹櫣搴熷琛楄",
+          }),
+        },
+      );
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
+
+      const saveWithoutImageResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/save-to-library`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      const saveWithoutImageEnvelope = await saveWithoutImageResponse.json();
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-asset-library-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "asset",
+            targetId: assetId,
+            assetId,
+            assetType: "scene",
+            prompt: "A neon-lit wasteland street corner in the rain",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const fixedImageVersionId = imageTaskEnvelope.data.result.assetVersionId;
+
+      const setFixedImageResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/set-fixed-image`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: fixedImageVersionId,
+            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+          }),
+        },
+      );
+      const setFixedImageEnvelope = await setFixedImageResponse.json();
+
+      const workbenchResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/workbench`,
+        { headers: { cookie } },
+      );
+      const workbenchEnvelope = await workbenchResponse.json();
+
+      const episodeAssetsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets?assetType=scene`,
+        { headers: { cookie } },
+      );
+      const episodeAssetsEnvelope = await episodeAssetsResponse.json();
+
+      const saveResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/save-to-library`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      const saveEnvelope = await saveResponse.json();
+
+      const detailResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/detail`,
+        { headers: { cookie } },
+      );
+      const detailEnvelope = await detailResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
+      assert.equal(saveWithoutImageResponse.status, 400);
+      assert.equal(saveWithoutImageEnvelope.errorCode, "asset_preview_required");
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(setFixedImageResponse.status, 200);
+      assert.equal(workbenchResponse.status, 200);
+      assert.equal(episodeAssetsResponse.status, 200);
+      const savedFixedImagePath = String(setFixedImageEnvelope.data.asset.fixedImageUrl).split("?")[0];
+      const workbenchFixedAsset = workbenchEnvelope.data.assetsByType.scene.find(
+        (asset: { assetId: string }) => asset.assetId === assetId,
+      );
+      const listedFixedAsset = episodeAssetsEnvelope.data.items.find(
+        (asset: { assetId: string }) => asset.assetId === assetId,
+      );
+      assert.equal(workbenchFixedAsset?.fixedImageFileId, fixedImageVersionId);
+      assert.equal(listedFixedAsset?.fixedImageFileId, fixedImageVersionId);
+      assert.equal(String(workbenchFixedAsset?.fixedImageUrl).split("?")[0], savedFixedImagePath);
+      assert.equal(String(listedFixedAsset?.fixedImageUrl).split("?")[0], savedFixedImagePath);
+      assert.equal(saveResponse.status, 200);
+      assert.equal(saveEnvelope.data.asset.label, "搴熷湡琛楄");
+      assert.equal(saveEnvelope.data.asset.assetType, "scene_reference");
+      assert.ok(saveEnvelope.data.asset.previewUrl);
+      assert.equal(detailResponse.status, 200);
+      assert.ok(
+        detailEnvelope.data.assetsByType.scene.some(
+          (asset: { id: string; label: string; latestVersion?: { metadata?: { description?: string } } }) =>
+            asset.id === saveEnvelope.data.asset.id &&
+            asset.label === "搴熷湡琛楄" &&
+            asset.latestVersion?.metadata?.description === "闆ㄥ闇撹櫣搴熷琛楄",
+        ),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a newly created blank episode workbench empty when the project library already has assets", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "blank-episode-assets-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Blank episode assets",
+          scriptInput: "Episode 1: keep a new blank episode asset workspace empty.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+
+      const createFirstEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "blank-episode-assets-first-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode One" }),
+        },
+      );
+      const firstEpisodeId = (await createFirstEpisodeResponse.json()).data.episode.id;
+
+      const createSceneResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: "Library Seed Scene",
+            description: "Source scene for the project library",
+          }),
+        },
+      );
+      const sceneAssetId = (await createSceneResponse.json()).data.asset.assetId;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "blank-episode-assets-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "asset",
+            targetId: sceneAssetId,
+            assetId: sceneAssetId,
+            assetType: "scene",
+            prompt: "A project library seed scene",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+
+      const setFixedImageResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets/${sceneAssetId}/set-fixed-image`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: imageTaskEnvelope.data.result.assetVersionId,
+            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+          }),
+        },
+      );
+      await setFixedImageResponse.json();
+
+      const saveToLibraryResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets/${sceneAssetId}/save-to-library`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      const saveToLibraryEnvelope = await saveToLibraryResponse.json();
+
+      const createSecondEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "blank-episode-assets-second-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Two" }),
+        },
+      );
+      const secondEpisodeId = (await createSecondEpisodeResponse.json()).data.episode.id;
+
+      const [firstEpisodeSceneAssetsResponse, secondEpisodeRoleAssetsResponse, secondEpisodeSceneAssetsResponse, secondEpisodePropAssetsResponse, detailResponse] = await Promise.all([
+        fetch(`${server.origin}/api/episodes/${firstEpisodeId}/assets?assetType=scene&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=role&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=scene&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=prop&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/projects/${createdProject.project.id}/detail`, {
+          headers: { cookie },
+        }),
+      ]);
+
+      const firstEpisodeSceneAssetsEnvelope = await firstEpisodeSceneAssetsResponse.json();
+      const secondEpisodeRoleAssetsEnvelope = await secondEpisodeRoleAssetsResponse.json();
+      const secondEpisodeSceneAssetsEnvelope = await secondEpisodeSceneAssetsResponse.json();
+      const secondEpisodePropAssetsEnvelope = await secondEpisodePropAssetsResponse.json();
+      const detailEnvelope = await detailResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createFirstEpisodeResponse.status, 200);
+      assert.equal(createSceneResponse.status, 200);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(setFixedImageResponse.status, 200);
+      assert.equal(saveToLibraryResponse.status, 200);
+      assert.equal(createSecondEpisodeResponse.status, 200);
+      assert.equal(firstEpisodeSceneAssetsResponse.status, 200);
+      assert.equal(secondEpisodeRoleAssetsResponse.status, 200);
+      assert.equal(secondEpisodeSceneAssetsResponse.status, 200);
+      assert.equal(secondEpisodePropAssetsResponse.status, 200);
+      assert.equal(detailResponse.status, 200);
+      assert.equal(firstEpisodeSceneAssetsEnvelope.data.items.length, 1);
+      assert.equal(firstEpisodeSceneAssetsEnvelope.data.items[0].assetId, sceneAssetId);
+      assert.deepEqual(secondEpisodeRoleAssetsEnvelope.data.items, []);
+      assert.deepEqual(secondEpisodeSceneAssetsEnvelope.data.items, []);
+      assert.deepEqual(secondEpisodePropAssetsEnvelope.data.items, []);
+      assert.ok(
+        detailEnvelope.data.assetsByType.scene.some(
+          (asset: { id: string }) => asset.id === saveToLibraryEnvelope.data.asset.id,
+        ),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("persists episode generation tasks with fixed mock media results", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -1820,6 +3173,60 @@ describe("phone auth dev server", () => {
       const videoTaskEnvelope = await videoTaskResponse.json();
       const videoTask = videoTaskEnvelope.data;
 
+      const lipSyncTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-lip-sync-task-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "storyboard",
+            targetId: storyboardId,
+            motionPrompt: "lip sync mock video",
+            model: "video_mock_1",
+            parameters: {
+              mode: "lip-sync",
+              durationSec: 5,
+              lipSyncConfig: {
+                text: "对口型文本示例",
+                textLength: 7,
+                voiceId: "system-1",
+                voiceName: "女/稚嫩",
+                voiceSource: "system",
+                estimatedCreditCost: 2,
+              },
+            },
+            audioEnabled: true,
+            lipSyncEnabled: true,
+          }),
+        },
+      );
+      const lipSyncTaskEnvelope = await lipSyncTaskResponse.json();
+      const lipSyncTask = lipSyncTaskEnvelope.data;
+      const lipSyncTaskLookupResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${lipSyncTask.taskId}`,
+        { headers: { cookie } },
+      );
+      const lipSyncTaskLookupEnvelope = await lipSyncTaskLookupResponse.json();
+
+      const persistedLipSyncTask = await db.query<{
+        input_snapshot_json: Record<string, unknown> | string;
+      }>(
+        `
+          SELECT input_snapshot_json
+          FROM tasks
+          WHERE id = $1
+        `,
+        [lipSyncTask.taskId],
+      );
+      const lipSyncSnapshot =
+        typeof persistedLipSyncTask.rows[0]?.input_snapshot_json === "string"
+          ? JSON.parse(persistedLipSyncTask.rows[0]?.input_snapshot_json as string)
+          : persistedLipSyncTask.rows[0]?.input_snapshot_json ?? {};
+
       const setImageResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/storyboards/${storyboardId}/set-current-image`,
         {
@@ -1902,6 +3309,18 @@ describe("phone auth dev server", () => {
       assert.match(videoTask.result.videoUrl, /\/uploads\/storage\//);
       assert.doesNotMatch(videoTask.result.videoUrl, /C:\\Users\\/);
       assert.ok(videoTask.creditBalance < 10000);
+      assert.equal(lipSyncTaskResponse.status, 200);
+      assert.equal(lipSyncTask.kind, "video");
+      assert.equal(lipSyncTask.status, "succeeded");
+      assert.equal(lipSyncTaskLookupResponse.status, 200);
+      assert.equal(lipSyncTaskLookupEnvelope.data.generatedAudioItems.length, 1);
+      assert.equal(lipSyncTaskLookupEnvelope.data.generatedAudioItems[0].voiceName, "女/稚嫩");
+      assert.match(lipSyncTaskLookupEnvelope.data.generatedAudioItems[0].audioUrl, /^data:audio\/wav;base64,/);
+      assert.equal(lipSyncSnapshot.parameters?.mode, "lip-sync");
+      assert.equal(lipSyncSnapshot.parameters?.lipSyncConfig?.voiceName, "女/稚嫩");
+      assert.equal(lipSyncSnapshot.parameters?.lipSyncConfig?.estimatedCreditCost, 2);
+      assert.equal(lipSyncSnapshot.audioEnabled, true);
+      assert.equal(lipSyncSnapshot.lipSyncEnabled, true);
       assert.equal(setImageResponse.status, 200);
       assert.equal(setImageEnvelope.data.storyboard.currentImageFileId, imageTask.result.assetVersionId);
       assert.equal(setImageEnvelope.data.file.storageObjectId, imageTask.result.storageObjectId);
@@ -2851,3 +4270,4 @@ async function waitFor<T>(
   }
   throw new Error(`wait_for_timeout:${JSON.stringify(lastValue ?? null)}`);
 }
+

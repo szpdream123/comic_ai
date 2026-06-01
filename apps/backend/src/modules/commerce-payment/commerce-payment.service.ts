@@ -474,6 +474,107 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       }
     },
 
+    async getBillingOrder(input: {
+      user: AuthenticatedCommerceUser;
+      orderId: string;
+      now: Date;
+    }) {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          capability: createBillingOrderCommand.capability,
+          now: input.now,
+        });
+        const order = await findOrderForActor(deps.db, {
+          organizationId: actor.organizationId,
+          orderId: input.orderId,
+        });
+        if (!order) {
+          throw new CommercePaymentError("order_not_payable");
+        }
+        return { status: 200, body: { order: orderViewFromRow(order) } };
+      } catch (error) {
+        return mapCommerceError(error);
+      }
+    },
+
+    async getPaymentIntent(input: {
+      user: AuthenticatedCommerceUser;
+      paymentIntentId: string;
+      now: Date;
+    }) {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          capability: createPaymentIntentCommand.capability,
+          now: input.now,
+        });
+        const intent = await findPaymentIntentForActor(deps.db, {
+          organizationId: actor.organizationId,
+          paymentIntentId: input.paymentIntentId,
+        });
+        if (!intent) {
+          throw new CommercePaymentError("order_not_payable");
+        }
+        return { status: 200, body: intentResponseBody(intent) };
+      } catch (error) {
+        return mapCommerceError(error);
+      }
+    },
+
+    async requestEnterpriseContact(input: {
+      user: AuthenticatedCommerceUser;
+      body: { source?: string | null; note?: string | null };
+      idempotencyKey: string;
+      now: Date;
+    }) {
+      if (!input.idempotencyKey.trim()) {
+        return { status: 400, body: { error: "invalid_enterprise_contact_input" } };
+      }
+
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+
+        const targetId = randomUUID();
+        const audit = await appendAuditEvent(deps.db, {
+          organizationId: actor.organizationId,
+          workspaceId: actor.workspaceId,
+          actorUserId: actor.actorId,
+          eventType: "billing.enterprise_contact_requested",
+          targetType: "enterprise_contact_request",
+          targetId,
+          reason: "enterprise_pricing_request",
+          sensitive: true,
+          metadata: {
+            source: input.body.source?.trim() || "pricing_modal",
+            note: input.body.note?.trim() || "",
+            idempotencyKey: input.idempotencyKey,
+          },
+          occurredAt: input.now,
+        });
+
+        return {
+          status: 200,
+          body: {
+            request: {
+              id: targetId,
+              status: "submitted",
+              source: input.body.source?.trim() || "pricing_modal",
+              createdAt: audit.createdAt.toISOString(),
+            },
+          },
+        };
+      } catch (error) {
+        return mapCommerceError(error);
+      }
+    },
+
     async processPaymentCallback(input: {
       body: PaymentCallbackSignatureInput & { signature: string };
       now: Date;
@@ -1083,6 +1184,17 @@ async function findPaymentIntentById(
     db,
     "SELECT * FROM payment_intents WHERE id = $1",
     [paymentIntentId],
+  );
+}
+
+async function findPaymentIntentForActor(
+  db: SqlDatabase,
+  input: { organizationId: string; paymentIntentId: string },
+) {
+  return queryOne<PaymentIntentRow>(
+    db,
+    "SELECT * FROM payment_intents WHERE organization_id = $1 AND id = $2",
+    [input.organizationId, input.paymentIntentId],
   );
 }
 

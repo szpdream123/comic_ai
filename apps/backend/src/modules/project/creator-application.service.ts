@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
@@ -237,6 +238,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     body: {
       kind: "character" | "scene" | "prop" | "image" | "video";
       name?: string | null;
+      description?: string | null;
       uploadSessionId?: string | null;
       storageObjectId?: string | null;
       storageObjectKey?: string | null;
@@ -315,6 +317,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         prompt: input.body.prompt ?? null,
         model: input.body.model ?? null,
         label: name,
+        description: input.body.description?.trim() || null,
         sourceUrl: resolvedUpload?.sourceUrl ?? (input.body.sourceUrl?.trim() || null),
         previewUrl:
           resolvedUpload?.sourceUrl ||
@@ -1019,6 +1022,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
         name?: string | null;
+        description?: string | null;
         uploadSessionId?: string | null;
         storageObjectId?: string | null;
         storageObjectKey?: string | null;
@@ -1134,6 +1138,163 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId,
           }),
+        },
+      };
+    },
+
+    async createProjectMember(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      body: {
+        phone?: string | null;
+        role?: "producer" | "creator" | "viewer" | null;
+        note?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+
+      if (!["owner_admin", "producer"].includes(actor.role)) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_create_forbidden",
+            },
+          },
+        };
+      }
+
+      let phone = "";
+      try {
+        phone = normalizeCnPhone(input.body.phone ?? "");
+      } catch {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_member_input",
+            fieldErrors: {
+              phone: "invalid_phone",
+            },
+          },
+        };
+      }
+
+      const role = String(input.body.role ?? "creator");
+      if (!["producer", "creator", "viewer"].includes(role)) {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_member_input",
+            fieldErrors: {
+              role: "invalid_role",
+            },
+          },
+        };
+      }
+
+      const note = String(input.body.note ?? "").trim().slice(0, 100);
+      const member = await upsertWorkspaceMember(deps.db, {
+        organizationId: actor.organizationId,
+        workspaceId: actor.workspaceId,
+        phoneE164: phone,
+        role: role as "producer" | "creator" | "viewer",
+        note,
+        now: input.now,
+      });
+
+      return {
+        status: 200,
+        body: {
+          member,
+        },
+      };
+    },
+
+    async updateProjectMember(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      memberId: string;
+      body: {
+        role?: "producer" | "creator" | "viewer" | null;
+        note?: string | null;
+        status?: "active" | "disabled" | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+
+      if (!["owner_admin", "producer"].includes(actor.role)) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_update_forbidden",
+            },
+          },
+        };
+      }
+
+      const role = input.body.role == null ? null : String(input.body.role);
+      if (role != null && !["producer", "creator", "viewer"].includes(role)) {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_member_input",
+            fieldErrors: {
+              role: "invalid_role",
+            },
+          },
+        };
+      }
+
+      const status = input.body.status == null ? null : String(input.body.status);
+      if (status != null && !["active", "disabled"].includes(status)) {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_member_input",
+            fieldErrors: {
+              status: "invalid_status",
+            },
+          },
+        };
+      }
+
+      const note = input.body.note == null ? null : String(input.body.note).trim().slice(0, 100);
+      const member = await updateWorkspaceMember(deps.db, {
+        organizationId: actor.organizationId,
+        workspaceId: actor.workspaceId,
+        memberId: input.memberId,
+        role: role as "producer" | "creator" | "viewer" | null,
+        status: status as "active" | "disabled" | null,
+        note,
+        now: input.now,
+      });
+
+      if (!member) {
+        return {
+          status: 404,
+          body: {
+            error: "member_not_found",
+          },
+        };
+      }
+
+      return {
+        status: 200,
+        body: {
+          member,
         },
       };
     },
@@ -3081,12 +3242,14 @@ async function listProjectMembersForWorkspace(
     role: string;
     status: string;
     created_at: Date | string;
+    display_name: string | null;
   }>(
     `
       SELECT
         m.id AS membership_id,
         m.user_id,
         u.phone_e164,
+        u.display_name,
         m.role,
         m.status,
         m.created_at
@@ -3106,8 +3269,164 @@ async function listProjectMembersForWorkspace(
     phone: row.phone_e164,
     role: row.role,
     status: row.status,
+    note: row.display_name ?? "",
+    projectScope: "当前工作区",
+    memberGroup: "默认组",
+    creditQuota: 0,
     joinedAt: new Date(row.created_at),
   }));
+}
+
+async function upsertWorkspaceMember(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string | null;
+    phoneE164: string;
+    role: "producer" | "creator" | "viewer";
+    note: string;
+    now: Date;
+  },
+) {
+  if (!input.workspaceId) {
+    throw new Error("workspace_required");
+  }
+
+  const userResult = await db.query<{
+    id: string;
+    phone_e164: string;
+    display_name: string | null;
+    status: string;
+  }>(
+    `
+      INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
+      VALUES ($1, $2, $3, 'active', $4, $4)
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET
+        display_name = CASE
+          WHEN EXCLUDED.display_name <> '' THEN EXCLUDED.display_name
+          ELSE users.display_name
+        END,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, phone_e164, display_name, status
+    `,
+    [randomUUID(), input.phoneE164, input.note || null, input.now],
+  );
+  const user = userResult.rows[0];
+
+  const membershipResult = await db.query<{
+    membership_id: string;
+    role: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `
+      INSERT INTO memberships (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        role,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET
+        role = EXCLUDED.role,
+        status = 'active',
+        updated_at = EXCLUDED.updated_at
+      RETURNING id AS membership_id, role, status, created_at
+    `,
+    [randomUUID(), input.organizationId, input.workspaceId, user.id, input.role, input.now],
+  );
+  const membership = membershipResult.rows[0];
+
+  return {
+    id: membership.membership_id,
+    userId: user.id,
+    phone: user.phone_e164,
+    role: membership.role,
+    status: membership.status === "active" ? "enabled" : membership.status,
+    note: user.display_name ?? "",
+    projectScope: "当前工作区",
+    memberGroup: "默认组",
+    creditQuota: 0,
+    joinedAt: new Date(membership.created_at),
+  };
+}
+
+async function updateWorkspaceMember(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string | null;
+    memberId: string;
+    role: "producer" | "creator" | "viewer" | null;
+    status: "active" | "disabled" | null;
+    note: string | null;
+    now: Date;
+  },
+) {
+  if (!input.workspaceId) {
+    throw new Error("workspace_required");
+  }
+
+  const membershipResult = await db.query<{
+    membership_id: string;
+    user_id: string;
+    role: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `
+      UPDATE memberships
+      SET
+        role = COALESCE($4, role),
+        status = COALESCE($5, status),
+        updated_at = $6
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+      RETURNING id AS membership_id, user_id, role, status, created_at
+    `,
+    [input.organizationId, input.workspaceId, input.memberId, input.role, input.status, input.now],
+  );
+  const membership = membershipResult.rows[0];
+  if (!membership) {
+    return null;
+  }
+
+  const userResult = await db.query<{
+    id: string;
+    phone_e164: string;
+    display_name: string | null;
+  }>(
+    `
+      UPDATE users
+      SET
+        display_name = COALESCE($2, display_name),
+        updated_at = $3
+      WHERE id = $1
+      RETURNING id, phone_e164, display_name
+    `,
+    [membership.user_id, input.note, input.now],
+  );
+  const user = userResult.rows[0];
+
+  return {
+    id: membership.membership_id,
+    userId: user.id,
+    phone: user.phone_e164,
+    role: membership.role,
+    status: membership.status === "active" ? "enabled" : membership.status,
+    note: user.display_name ?? "",
+    projectScope: "当前工作区",
+    memberGroup: "默认组",
+    creditQuota: 0,
+    joinedAt: new Date(membership.created_at),
+  };
 }
 
 async function updateProjectRecord(
@@ -3669,6 +3988,55 @@ async function deleteProjectRecord(
 ) {
   await db.query(
     `
+      DELETE FROM credit_ledger_entries
+      WHERE organization_id = $1
+        AND (
+          reservation_id IN (
+            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+          )
+          OR allocation_id IN (
+            SELECT a.id
+            FROM credit_reservation_allocations a
+            LEFT JOIN credit_reservations r ON r.id = a.reservation_id
+            WHERE a.organization_id = $1
+              AND (
+                r.project_id = $2
+                OR a.task_id IN (
+                  SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
+                )
+                OR a.attempt_id IN (
+                  SELECT id FROM task_attempts WHERE organization_id = $1 AND project_id = $2
+                )
+              )
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query(
+    `
+      DELETE FROM credit_reservation_allocations
+      WHERE organization_id = $1
+        AND (
+          reservation_id IN (
+            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+          )
+          OR task_id IN (
+            SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
+          )
+          OR attempt_id IN (
+            SELECT id FROM task_attempts WHERE organization_id = $1 AND project_id = $2
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query("DELETE FROM credit_reservations WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
+  await db.query(
+    `
       UPDATE projects
       SET cover_storage_object_id = NULL
       WHERE organization_id = $1
@@ -3715,6 +4083,10 @@ async function deleteProjectRecord(
     `,
     [input.organizationId, input.projectId],
   );
+  await db.query("DELETE FROM shot_reference_assets WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
   await db.query("DELETE FROM assets WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -3741,6 +4113,14 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
+  await db.query("DELETE FROM episode_generation_drafts WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
+  await db.query(
+    "DELETE FROM episode_asset_conversation_threads WHERE organization_id = $1 AND project_id = $2",
+    [input.organizationId, input.projectId],
+  );
   await db.query("DELETE FROM shots WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -4010,26 +4390,31 @@ async function listAssetsForProject(
     [input.organizationId, input.projectId],
   );
 
-  return result.rows.map((row) => ({
-    id: row.id,
-    assetType: row.asset_type,
-    assetKey: row.asset_key,
-    label: row.metadata_json?.label ?? row.asset_key,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-    previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
-    latestVersion: row.version_id
-      ? {
-          id: row.version_id,
-          versionNumber: Number(row.version_number),
-          storageObjectId: row.storage_object_id,
-          storageObjectKey: row.storage_object_key,
-          metadata: row.metadata_json,
-          previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
-          createdAt: row.version_created_at ? new Date(row.version_created_at) : null,
-        }
-      : null,
-  }));
+  return result.rows
+    .map((row) => ({
+      id: row.id,
+      assetType: row.asset_type,
+      assetKey: row.asset_key,
+      label: row.metadata_json?.label ?? row.asset_key,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+      previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
+      latestVersion: row.version_id
+        ? {
+            id: row.version_id,
+            versionNumber: Number(row.version_number),
+            storageObjectId: row.storage_object_id,
+            storageObjectKey: row.storage_object_key,
+            metadata: row.metadata_json,
+            previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
+            createdAt: row.version_created_at ? new Date(row.version_created_at) : null,
+          }
+        : null,
+    }))
+    .filter((asset) => {
+      const metadata = asset.latestVersion?.metadata;
+      return !(metadata && typeof metadata === "object" && typeof metadata.episodeId === "string" && metadata.episodeId);
+    });
 }
 
 type ListedAsset = Awaited<ReturnType<typeof listAssetsForProject>>[number];

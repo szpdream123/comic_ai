@@ -4,5 +4,4 @@ export const pricingPlans = [
   { id: "enterprise", name: "企业版", price: "联系商务", credits: "定制" },
 ];
 
-export const commercePrototypeNotice = "支付与兑换码仅为原型占位，暂未接入真实交易。";
-
+export const commercePrototypeNotice = "支付下单已接入真实后端链路；兑换码暂未开放，企业版会提交商务联系请求。";

@@ -1,40 +1,131 @@
 {
-  "generatedAt": "2026-05-29T05:08:24.734Z",
+  "generatedAt": "2026-05-30T02:22:05.398Z",
   "routes": [
     {
-      "id": "assets-personal",
-      "length": 5330,
-      "hasLibraryShell": true,
-      "hasDialogSupport": false,
-      "hasPlaceholderGate": true
+      "id": "script-page-desktop",
+      "screenshot": "artifacts/library-team-qa/script-page-desktop.png",
+      "metrics": {
+        "hasScriptPage": true,
+        "hasScriptRecord": 1,
+        "hasLibraryShell": false,
+        "hasAssetCards": 0,
+        "hasMemberTable": false,
+        "hasDashboardTable": false,
+        "scrollWidth": 1440,
+        "viewportWidth": 1440,
+        "hasPricingButton": false,
+        "hasRulesButton": false,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "首页\n剧本\n项目\n资产库\n工具箱\n团队\nW\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n小说改编剧本\n从分析开始改编小说\n\n上传或粘贴小说后，先分析世界观、角色与章节结构，再进入剧本规划。\n\n从分析开始改编小说\n小说改编剧本\n直接开始改编小说\n\n跳过预分析，从已有小说文本直接进入剧本改编草稿。\n\n直接开始改编小说\nAI 创作剧本\n从故事灵感创作剧本\n\n填写受众、题材、集数与灵感，让系统生成规划方案。\n\n从故事灵感创作剧本\nAI 创作剧本\n从剧本创作衍生剧本\n\n基于既有剧本延展番外、续集或不同平台版本。\n\n从剧本创作衍生剧本\n我的剧本\n\n共 1 个剧本。剧本会在生成规划、项目上传或资产提取后沉淀到这里。\n\n⌕\n类型筛选\n全部类型\n小说改编\n原始剧本\nAI 原创\n项目占位\n排序\n最近更新\n集数最多\n名称 A-Z\n剧集工作台联调\n原始剧本\n待拆镜\n\n第1集：主角在废土街区醒来，发现时间停止，只剩风声和霓虹故障闪烁。第2集：他带着旧式通讯器进入山谷营地，准备继续追查。\n\n集数\n1\n分镜\n0\n更新"
+      }
     },
     {
-      "id": "assets-official",
-      "length": 7088,
-      "hasLibraryShell": true,
-      "hasDialogSupport": true,
-      "hasPlaceholderGate": true
+      "id": "script-page-mobile",
+      "screenshot": "artifacts/library-team-qa/script-page-mobile.png",
+      "metrics": {
+        "hasScriptPage": true,
+        "hasScriptRecord": 1,
+        "hasLibraryShell": false,
+        "hasAssetCards": 0,
+        "hasMemberTable": false,
+        "hasDashboardTable": false,
+        "scrollWidth": 390,
+        "viewportWidth": 390,
+        "hasPricingButton": false,
+        "hasRulesButton": false,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "W\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n小说改编剧本\n从分析开始改编小说\n\n上传或粘贴小说后，先分析世界观、角色与章节结构，再进入剧本规划。\n\n从分析开始改编小说\n小说改编剧本\n直接开始改编小说\n\n跳过预分析，从已有小说文本直接进入剧本改编草稿。\n\n直接开始改编小说\nAI 创作剧本\n从故事灵感创作剧本\n\n填写受众、题材、集数与灵感，让系统生成规划方案。\n\n从故事灵感创作剧本\nAI 创作剧本\n从剧本创作衍生剧本\n\n基于既有剧本延展番外、续集或不同平台版本。\n\n从剧本创作衍生剧本\n我的剧本\n\n共 1 个剧本。剧本会在生成规划、项目上传或资产提取后沉淀到这里。\n\n⌕\n类型筛选\n全部类型\n小说改编\n原始剧本\nAI 原创\n项目占位\n排序\n最近更新\n集数最多\n名称 A-Z\n剧集工作台联调\n原始剧本\n待拆镜\n\n第1集：主角在废土街区醒来，发现时间停止，只剩风声和霓虹故障闪烁。第2集：他带着旧式通讯器进入山谷营地，准备继续追查。\n\n集数\n1\n分镜\n0\n更新\n05-29 18:15\n重新上传\nAI"
+      }
     },
     {
-      "id": "assets-team",
-      "length": 7088,
-      "hasLibraryShell": true,
-      "hasDialogSupport": true,
-      "hasPlaceholderGate": true
+      "id": "project-library-desktop",
+      "screenshot": "artifacts/library-team-qa/project-library-desktop.png",
+      "metrics": {
+        "hasScriptPage": false,
+        "hasScriptRecord": 0,
+        "hasLibraryShell": true,
+        "hasAssetCards": 4,
+        "hasMemberTable": false,
+        "hasDashboardTable": false,
+        "scrollWidth": 1440,
+        "viewportWidth": 1440,
+        "hasPricingButton": false,
+        "hasRulesButton": false,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "首页\n剧本\n项目\n资产库\n工具箱\n团队\nW\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n剧集工作台联调\n未开始\n\n当前账号 13800138000 · 1/7 步完成\n\nAI 智能提取资产\nAI 拆分镜\n\n资产库\n\n资产沉淀台\n\n集中沉淀历史创作、Agent项目、上传素材和常用提示词，后续生产可以直接复用。\n\n上传素材\n生成资产\n个人资产库\n官方资产库\n团队资产库\n历史创作\nAgent项目\n历史上传\n我的提示词\n类型筛选\n全部\n角色\n场景\n道具\n搜索\n我的收藏\n批量操作\n时间顺序\n文件夹\n废土主角\n\n角色\n\n蓬头垢面的女人\n\n角色\n\n残破街区\n\n场景\n\n旧式通讯器\n\n道具\n\nready"
+      }
     },
     {
-      "id": "team",
-      "length": 5559,
-      "hasLibraryShell": true,
-      "hasDialogSupport": true,
-      "hasPlaceholderGate": true
+      "id": "project-library-mobile",
+      "screenshot": "artifacts/library-team-qa/project-library-mobile.png",
+      "metrics": {
+        "hasScriptPage": false,
+        "hasScriptRecord": 0,
+        "hasLibraryShell": true,
+        "hasAssetCards": 4,
+        "hasMemberTable": false,
+        "hasDashboardTable": false,
+        "scrollWidth": 390,
+        "viewportWidth": 390,
+        "hasPricingButton": false,
+        "hasRulesButton": false,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "W\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n剧集工作台联调\n未开始\n\n当前账号 13800138000 · 1/7 步完成\n\nAI 智能提取资产\nAI 拆分镜\n\n资产库\n\n资产沉淀台\n\n集中沉淀历史创作、Agent项目、上传素材和常用提示词，后续生产可以直接复用。\n\n上传素材\n生成资产\n个人资产库\n官方资产库\n团队资产库\n历史创作\nAgent项目\n历史上传\n我的提示词\n类型筛选\n全部\n角色\n场景\n道具\n搜索\n我的收藏\n批量操作\n时间顺序\n文件夹\n废土主角\n\n角色\n\n蓬头垢面的女人\n\n角色\n\n残破街区\n\n场景\n\n旧式通讯器\n\n道具\n\nready"
+      }
     },
     {
-      "id": "team-dashboard",
-      "length": 5692,
-      "hasLibraryShell": true,
-      "hasDialogSupport": false,
-      "hasPlaceholderGate": true
+      "id": "team-desktop",
+      "screenshot": "artifacts/library-team-qa/team-desktop.png",
+      "metrics": {
+        "hasScriptPage": false,
+        "hasScriptRecord": 0,
+        "hasLibraryShell": true,
+        "hasAssetCards": 0,
+        "hasMemberTable": true,
+        "hasDashboardTable": false,
+        "scrollWidth": 1440,
+        "viewportWidth": 1440,
+        "hasPricingButton": true,
+        "hasRulesButton": true,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "首页\n剧本\n项目\n资产库\n工具箱\n团队\nW\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n剧集工作台联调\n未开始\n\n当前账号 13800138000 · 1/7 步完成\n\nAI 智能提取资产\nAI 拆分镜\n\n团队\n\n团队协作台\n\n围绕项目 剧集工作台联调 的成员、额度与协作规则管理。\n\n创建成员账号\n\n团队额度\n\n团队资产库为专业版会员权益\n\n团队资产库为专业版会员权益，开通后即可同步管理共享素材。\n\n开通专业版\n\n最近 30 天\n\n数据管理\n刷新\n查看详细数据看板\n团队项目\n1\n团队席位 扩容\n1/1\n单账号任务并发 扩容\n4\n团队总消耗积分\n1280\n团队剩余积分\n720\n团队可分配积分 加量\n300\n\n成员与权限\n\n成员管理\n规则说明\n创建成员账号\n账号\n成员名称\n角色\n全部\n管理员\n项目\n全部\n状态\n全部\n启用中\n备注\n重置\n账号\t成员名称\t角色\t项目\t成员组\t状态\t积分\t备注\t操作\n13800138000\t13800138000\t管理员\t当前工作区\t默认组\t启用中\t512\t-\t查"
+      }
+    },
+    {
+      "id": "team-dashboard-desktop",
+      "screenshot": "artifacts/library-team-qa/team-dashboard-desktop.png",
+      "metrics": {
+        "hasScriptPage": false,
+        "hasScriptRecord": 0,
+        "hasLibraryShell": true,
+        "hasAssetCards": 0,
+        "hasMemberTable": false,
+        "hasDashboardTable": true,
+        "scrollWidth": 1440,
+        "viewportWidth": 1440,
+        "hasPricingButton": false,
+        "hasRulesButton": false,
+        "statusbarCreditText": "✦ 720 ⌄",
+        "textSample": "首页\n剧本\n项目\n资产库\n工具箱\n团队\nW\nWondershare 万兴科技\nN\n万兴剧厂\n限时特惠 免费排队\nSEEDANCE 2.0\n创作手册\n商务合作\n✦\n720\n⌄\n✉\n◎\n00\n剧集工作台联调\n未开始\n\n当前账号 13800138000 · 1/7 步完成\n\nAI 智能提取资产\nAI 拆分镜\n返回\n\n查看详细数据看板\n\n团队数据看板\n\n按成员、项目和时间查看创作产出与积分消耗，方便排查成本和资源分配。\n\n成员创作与消耗\n项目资产与成本\n排行榜\n\n总览\n\n成员创作与消耗\n成员数\n1\n启用成员数\n1\n成员总消耗积分\n512\n成员均消耗积分\n512\n\n明细\n\n成员创作与消耗详情\n导出\n角色\n全部\n管理员\n状态\n全部\n启用中\n今天\n昨天\n本周\n本月\n上月\n今年\n账号\t成员名称\t角色\t总消耗积分\t创作剧本数\t项目均消耗积分\t创作项目数\t项目均消耗积分\t操作\n13800138000\t13800138000\t管理员\t512\t8\t171\t3\t171\t查看\n13800138000 成员创作与消耗 时间范围：今天 角色：管理员 状态：启用中 积分：512 备注：-\n\nready"
+      }
+    },
+    {
+      "id": "asset-library-direct-desktop",
+      "screenshot": "artifacts/library-team-qa/asset-library-direct-desktop.png",
+      "metrics": {
+        "hasScriptPage": false,
+        "hasScriptRecord": 0,
+        "hasLibraryShell": true,
+        "hasAssetCards": 6,
+        "hasMemberTable": false,
+        "hasDashboardTable": false,
+        "scrollWidth": 1440,
+        "viewportWidth": 1440,
+        "hasPricingButton": true,
+        "hasRulesButton": false,
+        "statusbarCreditText": "",
+        "textSample": "官方资产库\n\n团队资产工作区\n\n从官方角色、场景、道具开始搭建团队共用素材池，减少重复生成和素材丢失。\n\n开通专业版\n导入所选 (1)\n个人资产库\n官方资产库\n团队资产库\n官方资产库\n团队资产库\n团队专用\n角色\n场景\n道具\n搜索\n当前为官方/团队资产库预览，支持浏览、筛选、选中和导入到项目。\n文件夹\n国内仿真人·现代都市\n国内仿真人·东方古代\n3D漫·现代都市\n3D漫·东方修仙\n2D漫·现代都市\n2D漫·东方修仙\n\n角色素材\n\n国内仿真人·现代都市\n已选 1 项，可直接导入到当前项目资产。\n医生\n\n角色\n\n国内仿真人·现代都市\n取消选择\n厨师\n\n角色\n\n国内仿真人·现代都市\n加入导入\n老师\n\n角色\n\n国内仿真人·现代都市\n加入导入\n司机\n\n角色\n\n国内仿真人·现代都市\n加入导入\n保姆\n\n角色\n\n国内仿真人·现代都市\n加入导入\n保镖\n\n角色\n\n国内仿真人·现代都市\n加入导入\n医生 角色 国内仿真人·现代都市 白大褂、身形干练，适用于都市医疗场景的主演或配角。 取消导入\n专业版会员权益\n\n团队资产库为专业版会员权益，开通后即可同步管理共享素材。\n\n去开通"
+      }
     }
   ]
 }

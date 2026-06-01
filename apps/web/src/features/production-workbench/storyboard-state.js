@@ -1,4 +1,4 @@
-import { resolveApiUrl } from "../../shared/creator-api.js";
+﻿import { resolveApiUrl } from "../../shared/creator-api.js";
 
 function formatDurationLabelFromMs(value) {
   const seconds = Math.max(0, Math.round(Number(value ?? 10_000) / 1000));
@@ -65,23 +65,26 @@ export function addStoryboard(storyboards) {
   const nextIndex = resolveNextStoryboardIndex(orderedStoryboards);
   return normalizeStoryboardIndices([
     ...orderedStoryboards,
-    {
-      id: `storyboard-${nextIndex}`,
-      index: nextIndex,
-      title: `${nextIndex}`,
-      status: "未定稿",
-      imageStatus: "empty",
-      videoStatus: "empty",
-      linkedShotId: null,
-      description: "请填写分镜描述，记录分镜对应的画面内容。",
-      uploadedImageName: "",
-      uploadedImages: [],
-      uploadedVideos: [],
-      selectedUploadedVideoId: null,
-      previewThumbnailUrl: null,
-      references: [],
-      generationState: createEmptyGenerationState(),
-    },
+    createDraftStoryboard(nextIndex),
+  ]);
+}
+
+export function insertStoryboardAfter(storyboards, anchorStoryboardId = null) {
+  const orderedStoryboards = sortStoryboardsByIndex(storyboards);
+  const nextStoryboard = createDraftStoryboard(resolveNextStoryboardIndex(orderedStoryboards));
+  if (!anchorStoryboardId) {
+    return normalizeStoryboardIndices([...orderedStoryboards, nextStoryboard]);
+  }
+
+  const anchorIndex = orderedStoryboards.findIndex((storyboard) => storyboard.id === anchorStoryboardId);
+  if (anchorIndex < 0) {
+    return normalizeStoryboardIndices([...orderedStoryboards, nextStoryboard]);
+  }
+
+  return normalizeStoryboardIndices([
+    ...orderedStoryboards.slice(0, anchorIndex + 1),
+    nextStoryboard,
+    ...orderedStoryboards.slice(anchorIndex + 1),
   ]);
 }
 
@@ -158,6 +161,8 @@ export function createStoryboardList(state) {
     })),
     uploadedVideos: (shot.videoVersions ?? []).map((version) => ({
       id: version.id,
+      assetVersionId: version.id,
+      storageObjectId: version.storageObjectId ?? version.metadata?.storageObjectId ?? null,
       fileName: version.metadata?.label ?? "video",
       src: resolveVideoVersionSource(version),
       durationLabel: formatDurationLabelFromMs(version.metadata?.durationMs),
@@ -173,6 +178,7 @@ export function createStoryboardList(state) {
 
 export function createEmptyGenerationState() {
   return {
+    prompt: "",
     firstFrame: null,
     lastFrame: null,
     imageReference: null,
@@ -245,6 +251,33 @@ function resolveNextStoryboardIndex(storyboards = []) {
     return Math.max(maxValue, ...numericValues);
   }, 0);
   return maxExistingIndex + 1;
+}
+
+function createDraftStoryboard(nextIndex) {
+  const now = new Date();
+  const displayTitle = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-") + ` ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+  return {
+    id: `storyboard-${nextIndex}`,
+    index: nextIndex,
+    title: `${nextIndex}`,
+    displayTitle,
+    status: "未定稿",
+    imageStatus: "empty",
+    videoStatus: "empty",
+    linkedShotId: null,
+    description: "",
+    uploadedImageName: "",
+    uploadedImages: [],
+    uploadedVideos: [],
+    selectedUploadedVideoId: null,
+    previewThumbnailUrl: null,
+    references: [],
+    generationState: createEmptyGenerationState(),
+  };
 }
 
 function isNumericStoryboardTitle(value) {
