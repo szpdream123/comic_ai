@@ -11,6 +11,14 @@ import {
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import {
+  createDefaultPaymentProviderRegistry,
+  createLocalPaymentProviderAdapter,
+  createPayLabAdapter,
+  createStaticPaymentProviderRegistry,
+  isPaymentProvider,
+  type PaymentProvider,
+} from "../modules/commerce-payment/payment-provider-adapter.ts";
+import {
   createPersistentLoginChallenge,
   findPersistentAuthSessionByToken,
   revokePersistentAuthSession,
@@ -63,16 +71,21 @@ import { capabilities } from "../../../../packages/contracts/domain/capabilities
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
+const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
+const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const devInitialCreditBalance = 10000;
-const mockImageSourcePath = "C:\\Users\\yzk\\Desktop\\AI相关\\时停(漫剧)\\废土人.avif";
-const mockVideoSourcePath = "C:\\Users\\yzk\\Desktop\\AI相关\\时停(漫剧)\\第二集\\1-7.mp4";
 const generationTaskTimeoutMs = 15 * 60 * 1000;
+const fallbackMockImageBytes = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
+const fallbackMockVideoBytes = Buffer.from("mock episode video\n", "utf8");
 const episodeUploadLimits = {
   image: {
     label: "图片",
@@ -130,6 +143,24 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
+function createDevPaymentProviderRegistry() {
+  const paylabBaseUrl = process.env.PAYLAB_BASE_URL?.trim();
+  if (!paylabBaseUrl) {
+    return createDefaultPaymentProviderRegistry();
+  }
+
+  return createStaticPaymentProviderRegistry({
+    paylab: createPayLabAdapter({
+      baseUrl: paylabBaseUrl,
+      apiKey: process.env.PAYLAB_API_KEY?.trim(),
+      webhookSigningSecret: process.env.PAYLAB_WEBHOOK_SIGNING_SECRET?.trim(),
+      dashboardBaseUrl: process.env.PAYLAB_DASHBOARD_BASE_URL?.trim(),
+    }),
+    wechat_pay: createLocalPaymentProviderAdapter("wechat_pay"),
+    alipay: createLocalPaymentProviderAdapter("alipay"),
+  });
+}
+
 interface AuthHttpResponse<T> {
   status: number;
   body: T;
@@ -153,6 +184,12 @@ export interface PhoneAuthDevServerRepairSchedulerOptions {
   limit?: number;
 }
 
+export interface PhoneAuthDevServerOptions {
+  db?: Awaited<ReturnType<typeof createDevDb>>;
+  repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
+  seedTeamEntitlements?: boolean;
+}
+
 function parseCookies(header: string | undefined): Record<string, string> {
   if (!header) {
     return {};
@@ -167,13 +204,18 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<unknown> {
+  const body = await readTextBody(request);
+  return body ? JSON.parse(body) : {};
+}
+
+async function readTextBody(request: AsyncIterable<Buffer | string>): Promise<string> {
   let body = "";
 
   for await (const chunk of request) {
     body += String(chunk);
   }
 
-  return body ? JSON.parse(body) : {};
+  return body;
 }
 
 async function readMultipartFormData(
@@ -212,6 +254,17 @@ function writeIdempotencyKeyRequired(response: ServerResponse) {
     status: 400,
     body: { error: "idempotency_key_required" },
   });
+}
+
+function singleValueHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).flatMap(([key, value]) => {
+      const first = Array.isArray(value) ? value[0] : value;
+      return first ? [[key, first]] : [];
+    }),
+  );
 }
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -484,7 +537,7 @@ function normalizeGenerationKind(kind: "image" | "video") {
         mediaKind: "video",
         contentType: "video/mp4",
         fileExtension: "mp4",
-        sourcePath: process.env.MOCK_VIDEO_SOURCE_PATH?.trim() || mockVideoSourcePath,
+        sourcePath: process.env.MOCK_VIDEO_SOURCE_PATH?.trim() || null,
         configuredStorageObjectId: process.env.MOCK_VIDEO_STORAGE_OBJECT_ID?.trim() || null,
         objectNamePrefix: "mock-video",
         cost: Number(process.env.EPISODE_VIDEO_GENERATION_COST ?? 120),
@@ -497,7 +550,7 @@ function normalizeGenerationKind(kind: "image" | "video") {
         mediaKind: "image",
         contentType: "image/avif",
         fileExtension: "avif",
-        sourcePath: process.env.MOCK_IMAGE_SOURCE_PATH?.trim() || mockImageSourcePath,
+        sourcePath: process.env.MOCK_IMAGE_SOURCE_PATH?.trim() || null,
         configuredStorageObjectId: process.env.MOCK_IMAGE_STORAGE_OBJECT_ID?.trim() || null,
         objectNamePrefix: "mock-image",
         cost: Number(process.env.EPISODE_IMAGE_GENERATION_COST ?? 90),
@@ -747,22 +800,23 @@ async function ensureMockGenerationStorageObject(
     }
   }
 
-  const bytes = await readFile(config.sourcePath);
-  const objectName = `episodes/${input.episodeId}/mock/${config.objectNamePrefix}-${input.taskId}.${config.fileExtension}`;
+  const media = await readMockGenerationMedia(config);
+  const objectName = `episodes/${input.episodeId}/mock/${config.objectNamePrefix}-${input.taskId}.${media.fileExtension}`;
   const storageObject = await createScopedStorageObject(db, {
     organizationId: input.organizationId,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
     bucket: input.runtime.bucket,
     objectName,
-    contentType: config.contentType,
-    sizeBytes: bytes.byteLength,
+    contentType: media.contentType,
+    sizeBytes: media.bytes.byteLength,
     provider: input.runtime.provider,
     status: "available",
     metadata: {
       episodeId: input.episodeId,
       taskId: input.taskId,
       mockSource: config.mediaKind,
+      mockFallback: media.usedFallback,
     },
     createdByUserId: input.userId,
     now: input.now,
@@ -775,14 +829,14 @@ async function ensureMockGenerationStorageObject(
     await input.runtime.adapter.putObject({
       bucket: storageObject.bucket,
       objectKey: storageObject.objectKey,
-      body: bytes,
-      contentType: config.contentType,
+      body: media.bytes,
+      contentType: media.contentType,
     });
   } else {
     await writeLocalStorageObject({
       bucket: storageObject.bucket,
       objectKey: storageObject.objectKey,
-      bytes,
+      bytes: media.bytes,
     });
   }
 
@@ -3331,19 +3385,29 @@ async function serveStatic(pathname: string, response: ServerResponse) {
     return;
   }
 
+  if (pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js") {
+    const vendorFile = pathname === "/vendor/three.module.js" ? "three.module.js" : "three.core.js";
+    const file = await readFile(join(nodeModulesRoot, "three", "build", vendorFile), "utf8");
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/javascript; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end(file);
+    return;
+  }
+
   const normalizedPath =
     pathname === "/" ? "/login.html" : pathname === "/login" ? "/login.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
-  let file: string;
+  let file: Buffer;
   try {
-    file = await readFile(filePath, "utf8");
+    file = await readFile(filePath);
   } catch (error) {
     const extension = extname(normalizedPath);
     if (extension) {
       throw error;
     }
     filePath = join(webRoot, "app.html");
-    file = await readFile(filePath, "utf8");
+    file = await readFile(filePath);
   }
 
   response.statusCode = 200;
@@ -3357,7 +3421,10 @@ async function serveStatic(pathname: string, response: ServerResponse) {
 
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
-  const filePath = join(vendorRoot, normalizedPath);
+  const filePath =
+    normalizedPath === "three.module.js" || normalizedPath === "three.core.js"
+      ? join(vendorRoot, "three", "build", normalizedPath)
+      : join(vendorRoot, normalizedPath);
   const file = await readFile(filePath);
 
   response.statusCode = 200;
@@ -3503,6 +3570,7 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
 async function ensureDevWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
+  options: PhoneAuthDevServerOptions = {},
 ) {
   const user = await queryOne<{ phone_e164: string }>(
     db,
@@ -3542,6 +3610,43 @@ async function ensureDevWorkspaceAccess(
     `,
     [randomUUID(), devOrganizationId, devWorkspaceId, userId, role],
   );
+
+  if (role === "owner_admin" && options.seedTeamEntitlements) {
+    await db.query(
+      `
+        INSERT INTO organization_entitlements (
+          id,
+          organization_id,
+          entitlement_key,
+          status,
+          source
+        )
+        VALUES
+          ($1, $2, 'team_member_management', 'active', 'dev_seed'),
+          ($3, $2, 'team_asset_library', 'active', 'dev_seed'),
+          ($4, $2, 'team_dashboard', 'active', 'dev_seed')
+        ON CONFLICT (organization_id, entitlement_key)
+        DO UPDATE SET status = 'active', source = EXCLUDED.source
+      `,
+      [randomUUID(), devOrganizationId, randomUUID(), randomUUID()],
+    );
+    await db.query(
+      `
+        INSERT INTO team_plan_limits (
+          id,
+          organization_id,
+          seat_limit,
+          single_account_concurrency_limit
+        )
+        VALUES ($1, $2, 5, 1)
+        ON CONFLICT (organization_id)
+        DO UPDATE SET
+          seat_limit = EXCLUDED.seat_limit,
+          single_account_concurrency_limit = EXCLUDED.single_account_concurrency_limit
+      `,
+      [randomUUID(), devOrganizationId],
+    );
+  }
 }
 
 async function findAuthenticatedUser(
@@ -3623,10 +3728,9 @@ function parseRepairSchedulerOptions(
   return { enabled, intervalMs, limit };
 }
 
-export function createPhoneAuthDevServer(options: {
-  db?: Awaited<ReturnType<typeof createDevDb>>;
-  repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
-} = {}): PhoneAuthDevServer {
+export function createPhoneAuthDevServer(
+  options: PhoneAuthDevServerOptions = {},
+): PhoneAuthDevServer {
   const dbPromise = options.db
     ? Promise.resolve(options.db)
     : process.env.NODE_ENV === "test"
@@ -3787,7 +3891,7 @@ export function createPhoneAuthDevServer(options: {
           });
         }
 
-        await ensureDevWorkspaceAccess(db, verified.user.id);
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
 
         return writeJson(response, {
           status: 200,
@@ -3900,15 +4004,46 @@ export function createPhoneAuthDevServer(options: {
 
       if (
         request.method === "POST" &&
+        pathname.startsWith("/api/payment-provider-callbacks/")
+      ) {
+        const provider = decodeURIComponent(
+          pathname.slice("/api/payment-provider-callbacks/".length),
+        );
+        if (!isPaymentProvider(provider)) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "invalid_payment_provider" },
+          });
+        }
+        const commercePayment = createCommercePaymentService({
+          db,
+          workspaceId: devWorkspaceId,
+          callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+        });
+        return writeJson(
+          response,
+          await commercePayment.processProviderCallback({
+            provider,
+            rawBody: await readTextBody(request),
+            headers: singleValueHeaders(request.headers),
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (
+        request.method === "POST" &&
         pathname === "/api/billing/payment-callback/mock"
       ) {
         const commercePayment = createCommercePaymentService({
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
         });
         const body = (await readJsonBody(request)) as {
-          provider: "wechat_pay" | "alipay";
+          provider: PaymentProvider;
           providerEventDedupKey: string;
           merchantOrderNo: string;
           providerTradeId: string;
@@ -3950,6 +4085,10 @@ export function createPhoneAuthDevServer(options: {
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: request.headers.host
+            ? `http://${request.headers.host}`
+            : undefined,
         });
 
         if (request.method === "GET" && pathname === "/api/billing/packages") {
@@ -4009,7 +4148,7 @@ export function createPhoneAuthDevServer(options: {
           }
           const body = (await readJsonBody(request)) as {
             orderId: string;
-            provider: "wechat_pay" | "alipay";
+            provider: PaymentProvider;
             productMode: string;
           };
           return writeJson(
@@ -5188,6 +5327,55 @@ export function createPhoneAuthDevServer(options: {
           });
         }
 
+        if (request.method === "GET" && pathname === "/api/creator/team/overview") {
+          return writeJson(
+            response,
+            await creatorApplication.getTeamOverview({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/team/members") {
+          return writeJson(
+            response,
+            await creatorApplication.listTeamMembers({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/team/members") {
+          const body = (await readJsonBody(request)) as {
+            teamAccount?: string | null;
+            displayName?: string | null;
+            businessRole?: string | null;
+            memberGroupId?: string | null;
+            projectIds?: string[] | null;
+            initialCredits?: number | null;
+            remark?: string | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.createTeamMember({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
         if (request.method === "GET" && pathname === "/api/creator/state") {
           return writeJson(
             response,
@@ -5409,6 +5597,26 @@ export function createPhoneAuthDevServer(options: {
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/library/assets") {
+          return writeJson(
+            response,
+            await creatorApplication.listReusableAssetLibrary({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              query: {
+                scope: url.searchParams.get("scope"),
+                category: url.searchParams.get("category"),
+                folder: url.searchParams.get("folder"),
+                q: url.searchParams.get("q"),
+                query: url.searchParams.get("query"),
               },
               now: new Date(),
             }),

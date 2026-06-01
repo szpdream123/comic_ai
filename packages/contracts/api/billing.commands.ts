@@ -21,7 +21,7 @@ export const createPaymentIntentCommand: ApiCommandContract = {
   operationName: operationNames.billingCreatePaymentIntent,
   capability: capabilities.billingPurchase,
   idempotencyRequired: true,
-  requestSchema: { orderId: "uuid", provider: "wechat_pay|alipay", productMode: "string" },
+  requestSchema: { orderId: "uuid", provider: "paylab|wechat_pay|alipay", productMode: "string" },
   responseSchema: { paymentIntentId: "uuid", payAction: "provider-normalized action" },
   resourceScope: "order:{order_id}",
   statePreconditions: ["order.status = pending_payment", "order not expired"],

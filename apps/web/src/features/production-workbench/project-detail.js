@@ -285,6 +285,13 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
+      <header class="episode-workbench-titlebar">
+        <div>
+          <span>当前剧集</span>
+          <strong>${escapeHtml(episodeTitle)}</strong>
+        </div>
+        <em>${escapeHtml(episodeStatus)} · ${storyboardCount} 个分镜</em>
+      </header>
       ${renderEpisodeWorkbench({
         session,
         episodeId: activeEpisode?.id ?? "",
@@ -2424,11 +2431,23 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "library") {
-    return `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
+    return renderScrollableWorkbenchSurface("library", `
+      ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
       ${renderLibraryTeam({
         route: "assets",
         assetScope: ui.libraryTeamAssetScope,
+        libraryCategory: ui.libraryCategory,
+        libraryFolder: ui.libraryFolder,
+        libraryQuery: ui.libraryQuery,
+        libraryCategories: ui.libraryCategories,
+        libraryFolders: ui.libraryFolders,
+        libraryAssets: ui.libraryAssets,
+        libraryEntitlement: ui.libraryEntitlement,
+        teamAssetLocalUploads: ui.teamAssetLocalUploads,
+        libraryLoading: ui.libraryLoading,
+        libraryError: ui.libraryError,
+        libraryDetailAssetId: ui.libraryDetailAssetId,
+        libraryDetailView: ui.libraryDetailView,
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
         billingPackages: ui.billingPackages ?? [],
         billingOrder: ui.lastBillingOrder ?? null,
@@ -2458,7 +2477,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "team") {
-    return `
+    return renderScrollableWorkbenchSurface("team", `
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
@@ -2603,19 +2622,15 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   `;
 }
 
-function renderWorkbenchHeader({ state, session, detailState, progress, ui }) {
+function renderWorkbenchHeader({ state, session, detailState, progress, ui, compact = false }) {
   return `
-    <header class="workbench-topbar">
+    <header class="workbench-topbar${compact ? " is-library-compact" : ""}">
       <div>
         <div class="project-title-row">
           <h1>${escapeHtml(detailState.project.name)}</h1>
           <span class="phase-pill">${escapeHtml(detailState.project.statusLabel)}</span>
         </div>
         <p class="session-line">当前账号 ${escapeHtml(session.user.phone)} · ${progress.readySteps}/${progress.totalSteps} 步完成</p>
-      </div>
-      <div class="topbar-actions">
-        <button id="script-upload-button" class="secondary-action" type="button" data-action="open-script-modal">AI 智能提取资产</button>
-        <button id="parse-script-button" class="primary-action" type="button" data-action="parse-script" ${disabled(!state.project || ui.busy)}>AI 拆分镜</button>
       </div>
     </header>
   `;
@@ -2800,6 +2815,7 @@ function renderGlobalStatusbar(session, options = {}) {
 function renderHomeHero({ detailState }) {
   return `
     <section class="home-hero" aria-label="首页">
+      <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
         <div class="hero-brand-lockup">
@@ -2821,6 +2837,15 @@ function renderHomeHero({ detailState }) {
         </div>
       </div>
     </section>
+  `;
+}
+
+function renderScrollableWorkbenchSurface(surface, content) {
+  const legacyClass = surface === "library" ? " library-workspace-scroll" : "";
+  return `
+    <div class="workbench-scroll-surface${legacyClass}" data-scroll-surface="${escapeAttr(surface)}">
+      ${content}
+    </div>
   `;
 }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import { applySqlMigrations } from "./migrations.ts";
 import type { SqlDatabase } from "./sql.ts";
@@ -14,6 +15,7 @@ export async function createMigratedTestDb(): Promise<TestDatabase> {
     "test-db",
     randomUUID(),
   );
+  await mkdir(dirname(localTestDbPath), { recursive: true });
   const db = new PGlite(localTestDbPath) as TestDatabase;
   await applySqlMigrations(db);
   return db;

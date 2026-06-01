@@ -26,6 +26,47 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("serves official library PNG previews as binary static assets", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(
+        `${server.origin}/assets/library/official/characters/nanny.png`,
+      );
+      const bytes = new Uint8Array(await response.arrayBuffer());
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "image/png");
+      assert.deepEqual(Array.from(bytes.slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves the local Three module files used by the LiquidEther homepage background", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const moduleResponse = await fetch(`${server.origin}/vendor/three.module.js`);
+      const moduleText = await moduleResponse.text();
+      const coreResponse = await fetch(`${server.origin}/vendor/three.core.js`);
+      const coreText = await coreResponse.text();
+
+      assert.equal(moduleResponse.status, 200);
+      assert.match(moduleResponse.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.match(moduleText, /three\.core\.js/);
+      assert.equal(coreResponse.status, 200);
+      assert.match(coreResponse.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.match(coreText, /class Vector2/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves app shell for episode deep links", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -117,6 +158,29 @@ describe("phone auth dev server", () => {
       assert.equal(sessionResponse.status, 401);
       assert.equal(sessionResponse.headers.get("access-control-allow-origin"), "null");
       assert.equal(sessionResponse.headers.get("access-control-allow-credentials"), "true");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes the provider callback boundary and rejects unknown payment providers", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(
+        `${server.origin}/api/payment-provider-callbacks/stripe`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        },
+      );
+      const payload = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(payload, { error: "invalid_payment_provider" });
     } finally {
       await server.close();
     }
@@ -1491,6 +1555,48 @@ describe("phone auth dev server", () => {
       assert.equal(imageResult.request.promptOverride, "single shot prompt");
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes reusable official asset library routes without project import", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+
+      const cookie = await login(server.origin, "13800138000");
+
+      const officialResponse = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=official&category=character&q=${encodeURIComponent("医生")}`,
+        { headers: { cookie } },
+      );
+      const official = await officialResponse.json();
+      const libraryAsset = official.assets[0];
+
+      const removedImportResponse = await fetch(
+        `${server.origin}/api/creator/library/assets/import-to-project`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            projectId: "40000000-0000-4000-8000-000000000001",
+            libraryAssetId: libraryAsset.id,
+          }),
+        },
+      );
+
+      assert.equal(officialResponse.status, 200);
+      assert.equal(libraryAsset.name, "医生");
+      assert.match(
+        libraryAsset.previewUrl,
+        /^\/assets\/library\/official\/characters\/doctor\.png$/,
+      );
+      assert.equal(removedImportResponse.status, 404);
     } finally {
       await server.close();
     }
@@ -4166,6 +4272,93 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
+  });
+
+  it("gates team member creation behind the paid team entitlement", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const overviewResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
+        headers: { cookie },
+      });
+      const overview = await overviewResponse.json();
+
+      const createResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          teamAccount: "api_director_001",
+          displayName: "API Director",
+          businessRole: "director",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const created = await createResponse.json();
+
+      assert.equal(overviewResponse.status, 200);
+      assert.equal(overview.entitlements.teamMemberManagement, false);
+      assert.equal(createResponse.status, 402);
+      assert.deepEqual(created, { error: "team_member_management_required" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates a team subaccount through the API when paid team entitlement is active", async () => {
+    const server = createPhoneAuthDevServer({ seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          teamAccount: "api_director_001",
+          displayName: "API Director",
+          businessRole: "director",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const created = await createResponse.json();
+
+      const overviewResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
+        headers: { cookie },
+      });
+      const overview = await overviewResponse.json();
+      const membersResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        headers: { cookie },
+      });
+      const members = await membersResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(created.member.teamAccount, "api_director_001");
+      assert.match(created.temporaryPassword, /^[A-Za-z0-9_-]{18,}$/);
+      assert.equal("passwordHash" in created, false);
+      assert.equal("password_hash" in created, false);
+      assert.equal(overviewResponse.status, 200);
+      assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.seats.used, 1);
+      assert.equal(membersResponse.status, 200);
+      assert.equal(members.members.length, 1);
+      assert.equal(members.members[0].teamAccount, "api_director_001");
+      assert.equal("passwordHash" in members.members[0], false);
+      assert.equal("temporaryPassword" in members.members[0], false);
+    } finally {
+      await server.close();
+    }
   });
 });
 

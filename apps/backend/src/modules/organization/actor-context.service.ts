@@ -6,8 +6,18 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { findPersistentAuthSessionByToken } from "../identity/persistent-auth.service.ts";
+import {
+  getTeamRoleCapabilities,
+  isTeamBusinessRole,
+  type TeamBusinessRole,
+} from "./team-roles.ts";
 
-export type MembershipRole = "owner_admin" | "producer" | "creator" | "viewer";
+export type MembershipRole =
+  | "owner_admin"
+  | "producer"
+  | "creator"
+  | "viewer"
+  | "sub_account";
 
 export interface ActorContext {
   actorId: string;
@@ -15,6 +25,12 @@ export interface ActorContext {
   workspaceId: string | null;
   role: MembershipRole;
   capabilities: Capability[];
+  teamProfile?: {
+    membershipId: string;
+    businessRole: TeamBusinessRole;
+    memberGroupId: string | null;
+    teamAccount: string;
+  };
 }
 
 interface UserRow {
@@ -39,9 +55,17 @@ interface OrganizationRow {
 }
 
 interface MembershipRow {
+  id: string;
   role: MembershipRole;
   status: "active" | "invited" | "disabled";
   workspace_id: string | null;
+}
+
+interface TeamProfileRow {
+  membership_id: string;
+  business_role: string;
+  member_group_id: string | null;
+  team_account: string;
 }
 
 export class AuthorizationError extends Error {
@@ -66,18 +90,21 @@ export class AuthorizationError extends Error {
 const roleCapabilities: Record<MembershipRole, Capability[]> = {
   owner_admin: [...p0Capabilities],
   producer: [
+    capabilities.projectView,
     capabilities.projectCreate,
     capabilities.projectEdit,
     capabilities.generationStart,
     capabilities.exportCreate,
   ],
   creator: [
+    capabilities.projectView,
     capabilities.projectCreate,
     capabilities.projectEdit,
     capabilities.generationStart,
     capabilities.exportCreate,
   ],
-  viewer: [],
+  viewer: [capabilities.projectView],
+  sub_account: [],
 };
 
 export async function resolveActorContext(
@@ -125,12 +152,24 @@ export async function resolveActorContext(
     throw new AuthorizationError("membership_disabled");
   }
 
+  const teamProfile =
+    membership.role === "sub_account"
+      ? await resolveTeamProfile(db, {
+          membershipId: membership.id,
+          organizationId: scope.organizationId,
+          workspaceId: scope.workspaceId,
+        })
+      : undefined;
+
   const actor: ActorContext = {
     actorId: user.id,
     organizationId: scope.organizationId,
     workspaceId: scope.workspaceId,
     role: membership.role,
-    capabilities: roleCapabilities[membership.role],
+    capabilities: teamProfile
+      ? getTeamRoleCapabilities(teamProfile.businessRole)
+      : roleCapabilities[membership.role],
+    teamProfile,
   };
 
   if (input.capability) {
@@ -261,7 +300,7 @@ async function findMembership(
   return queryOne<MembershipRow>(
     db,
     `
-      SELECT role, status, workspace_id
+      SELECT id, role, status, workspace_id
       FROM memberships
       WHERE organization_id = $1
         AND user_id = $2
@@ -274,4 +313,40 @@ async function findMembership(
     `,
     [input.organizationId, input.userId, input.workspaceId],
   );
+}
+
+async function resolveTeamProfile(
+  db: SqlDatabase,
+  input: {
+    membershipId: string;
+    organizationId: string;
+    workspaceId: string | null;
+  },
+): Promise<ActorContext["teamProfile"]> {
+  if (!input.workspaceId) {
+    throw new AuthorizationError("membership_missing");
+  }
+
+  const profile = await queryOne<TeamProfileRow>(
+    db,
+    `
+      SELECT membership_id, business_role, member_group_id, team_account
+      FROM team_member_profiles
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND membership_id = $3
+    `,
+    [input.organizationId, input.workspaceId, input.membershipId],
+  );
+
+  if (!profile || !isTeamBusinessRole(profile.business_role)) {
+    throw new AuthorizationError("membership_missing");
+  }
+
+  return {
+    membershipId: profile.membership_id,
+    businessRole: profile.business_role,
+    memberGroupId: profile.member_group_id,
+    teamAccount: profile.team_account,
+  };
 }

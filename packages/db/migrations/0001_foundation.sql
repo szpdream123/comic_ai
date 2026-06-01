@@ -38,11 +38,12 @@ CREATE TABLE memberships (
   organization_id uuid NOT NULL REFERENCES organizations(id),
   workspace_id uuid NULL REFERENCES workspaces(id),
   user_id uuid NOT NULL REFERENCES users(id),
-  role text NOT NULL CHECK (role IN ('owner_admin', 'producer', 'creator', 'viewer')),
+  role text NOT NULL CHECK (role IN ('owner_admin', 'producer', 'creator', 'viewer', 'sub_account')),
   status text NOT NULL CHECK (status IN ('active', 'invited', 'disabled')),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id, workspace_id, user_id),
+  UNIQUE (organization_id, id),
   FOREIGN KEY (organization_id, workspace_id)
     REFERENCES workspaces (organization_id, id)
 );
@@ -222,6 +223,205 @@ CREATE TABLE storage_objects (
 
 CREATE INDEX storage_objects_tenant_idx
   ON storage_objects (organization_id, project_id, created_at DESC);
+
+CREATE TABLE organization_entitlements (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  entitlement_key text NOT NULL CHECK (
+    entitlement_key IN (
+      'team_asset_library',
+      'team_member_management',
+      'team_dashboard',
+      'priority_generation'
+    )
+  ),
+  status text NOT NULL CHECK (status IN ('active', 'expired', 'revoked')),
+  source text NOT NULL CHECK (source IN ('manual', 'payment', 'trial', 'dev_seed')),
+  expires_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, entitlement_key)
+);
+
+CREATE INDEX organization_entitlements_active_idx
+  ON organization_entitlements (organization_id, entitlement_key, status, expires_at);
+
+CREATE TABLE library_assets (
+  id uuid PRIMARY KEY,
+  scope text NOT NULL CHECK (scope IN ('official', 'team', 'personal')),
+  organization_id uuid NULL REFERENCES organizations(id),
+  workspace_id uuid NULL REFERENCES workspaces(id),
+  created_by_user_id uuid NULL REFERENCES users(id),
+  asset_type text NOT NULL CHECK (asset_type IN ('character', 'scene', 'prop', 'image', 'video')),
+  category text NOT NULL CHECK (category IN ('character', 'scene', 'prop', 'image', 'video')),
+  folder text NOT NULL,
+  name text NOT NULL,
+  description text NULL,
+  tags_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL CHECK (status IN ('active', 'archived')),
+  requires_pro_entitlement boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (scope = 'official' AND organization_id IS NULL AND workspace_id IS NULL AND created_by_user_id IS NULL)
+    OR (scope = 'team' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL)
+    OR (scope = 'personal' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL AND created_by_user_id IS NOT NULL)
+  ),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id)
+);
+
+CREATE INDEX library_assets_scope_idx
+  ON library_assets (scope, organization_id, workspace_id, category, folder, status, updated_at DESC);
+
+CREATE TABLE library_asset_versions (
+  id uuid PRIMARY KEY,
+  library_asset_id uuid NOT NULL REFERENCES library_assets(id),
+  version_number integer NOT NULL CHECK (version_number >= 1),
+  storage_object_key text NOT NULL,
+  preview_url text NULL,
+  mime_type text NOT NULL,
+  width integer NOT NULL CHECK (width >= 1),
+  height integer NOT NULL CHECK (height >= 1),
+  metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (library_asset_id, version_number)
+);
+
+CREATE INDEX library_asset_versions_asset_idx
+  ON library_asset_versions (library_asset_id, version_number DESC);
+
+CREATE TABLE team_member_groups (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  name text NOT NULL,
+  status text NOT NULL CHECK (status IN ('active', 'archived')),
+  created_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, name),
+  UNIQUE (organization_id, id),
+  UNIQUE (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id)
+);
+
+CREATE INDEX team_member_groups_scope_idx
+  ON team_member_groups (organization_id, workspace_id, status, created_at DESC);
+
+CREATE TABLE team_member_profiles (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  membership_id uuid NOT NULL REFERENCES memberships(id),
+  team_account text NOT NULL,
+  display_name text NOT NULL,
+  business_role text NOT NULL CHECK (
+    business_role IN (
+      'admin',
+      'group_admin',
+      'director_plus',
+      'animator_plus',
+      'director',
+      'animator',
+      'screenwriter',
+      'editor'
+    )
+  ),
+  member_group_id uuid NULL REFERENCES team_member_groups(id),
+  credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
+  credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
+  last_credit_consumed_at timestamptz NULL,
+  remark text NULL,
+  created_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, membership_id),
+  UNIQUE (organization_id, workspace_id, team_account),
+  UNIQUE (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id, member_group_id)
+    REFERENCES team_member_groups (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, membership_id)
+    REFERENCES memberships (organization_id, id)
+);
+
+CREATE INDEX team_member_profiles_scope_idx
+  ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+
+CREATE TABLE team_project_assignments (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  membership_id uuid NOT NULL REFERENCES memberships(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  assigned_by_user_id uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, membership_id, project_id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, membership_id)
+    REFERENCES memberships (organization_id, id),
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id)
+);
+
+CREATE INDEX team_project_assignments_member_idx
+  ON team_project_assignments (organization_id, workspace_id, membership_id, created_at DESC);
+
+CREATE TABLE team_project_ownerships (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  member_group_id uuid NULL REFERENCES team_member_groups(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, workspace_id, project_id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id, member_group_id)
+    REFERENCES team_member_groups (organization_id, workspace_id, id),
+  FOREIGN KEY (organization_id, project_id)
+    REFERENCES projects (organization_id, id)
+);
+
+CREATE INDEX team_project_ownerships_group_idx
+  ON team_project_ownerships (organization_id, workspace_id, member_group_id);
+
+CREATE TABLE team_credit_adjustments (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  operator_user_id uuid NOT NULL REFERENCES users(id),
+  target_membership_id uuid NOT NULL REFERENCES memberships(id),
+  adjustment_type text NOT NULL CHECK (
+    adjustment_type IN ('allocate', 'recover', 'reset', 'expire')
+  ),
+  amount integer NOT NULL CHECK (amount > 0),
+  reason text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, id),
+  FOREIGN KEY (organization_id, workspace_id)
+    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (organization_id, target_membership_id)
+    REFERENCES memberships (organization_id, id)
+);
+
+CREATE INDEX team_credit_adjustments_scope_idx
+  ON team_credit_adjustments (organization_id, workspace_id, created_at DESC);
+
+CREATE TABLE team_plan_limits (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL REFERENCES organizations(id),
+  seat_limit integer NOT NULL DEFAULT 5 CHECK (seat_limit >= 0),
+  single_account_concurrency_limit integer NOT NULL DEFAULT 1 CHECK (single_account_concurrency_limit >= 1),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (organization_id)
+);
 
 CREATE TABLE shots (
   id uuid PRIMARY KEY,
@@ -833,7 +1033,7 @@ CREATE TABLE payment_intents (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organizations(id),
   order_id uuid NOT NULL REFERENCES billing_orders(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay')),
   product_mode text NOT NULL,
   status text NOT NULL CHECK (
     status IN (
@@ -880,7 +1080,7 @@ CREATE TABLE payment_provider_events (
   organization_id uuid NULL REFERENCES organizations(id),
   order_id uuid NULL REFERENCES billing_orders(id),
   payment_intent_id uuid NULL REFERENCES payment_intents(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay')),
   provider_event_dedup_key text NOT NULL,
   merchant_order_no text NULL,
   provider_trade_id text NULL,
@@ -971,7 +1171,7 @@ CREATE INDEX payment_risk_events_open_idx
 CREATE TABLE payment_reconciliation_runs (
   id uuid PRIMARY KEY,
   organization_id uuid NULL REFERENCES organizations(id),
-  provider text NOT NULL CHECK (provider IN ('wechat_pay', 'alipay', 'all')),
+  provider text NOT NULL CHECK (provider IN ('paylab', 'wechat_pay', 'alipay', 'all')),
   run_type text NOT NULL CHECK (
     run_type IN ('recent', 'expiry', 'paid_without_credit', 'daily_settlement')
   ),

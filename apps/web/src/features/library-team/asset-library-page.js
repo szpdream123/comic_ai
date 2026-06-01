@@ -1,8 +1,4 @@
-import {
-  officialAssetLibraryFixture,
-  personalAssetLibraryFixture,
-  teamAssetGate,
-} from "./asset-fixtures.js";
+import { officialAssetLibraryFixture, teamAssetGate } from "./asset-fixtures.js";
 import { escapeAttr, escapeHtml } from "./markup.js";
 import { renderPricingModal } from "./pricing-modal.js";
 
@@ -119,6 +115,31 @@ export function renderAssetLibraryPage(context = {}) {
 
 function renderOfficialTeamLibrary(context) {
   const assetScope = context.assetScope ?? "official";
+  const categories =
+    assetScope === "team" ? teamCategories : normalizeCategories(context.libraryCategories);
+  const requestedCategory = context.libraryCategory ?? categories[0]?.id ?? "character";
+  const selectedCategory = categories.some((category) => category.id === requestedCategory)
+    ? requestedCategory
+    : categories[0]?.id ?? "character";
+  const folders = normalizeFolders(context.libraryFolders);
+  const selectedFolder = context.libraryFolder ?? folders[0] ?? "";
+  const query = String(context.libraryQuery ?? "").trim();
+  const assets = normalizeAssets(
+    context.libraryAssets,
+    selectedCategory,
+    selectedFolder,
+    query,
+    Boolean(context.libraryFolder),
+  );
+  const teamLocked =
+    assetScope === "team" && context.libraryEntitlement?.hasTeamAssetLibrary !== true;
+  const isTeamApi = assetScope === "team" && selectedCategory === "api";
+  const localUploads =
+    assetScope === "team" ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
+  const localUploadToolbar =
+    assetScope === "team" ? renderTeamAssetLocalUploadToolbar(selectedCategory) : "";
+  const localUploadSection =
+    assetScope === "team" ? renderTeamAssetLocalUploadSection(selectedCategory, localUploads) : "";
   const title = assetScope === "team" ? "团队资产库" : "官方资产库";
   const activeCategory = String(context.libraryCategory ?? "角色");
   const activeFolder = String(context.libraryFolder ?? officialAssetLibraryFixture.folders[0] ?? "");
@@ -143,11 +164,9 @@ function renderOfficialTeamLibrary(context) {
   return `
     <section class="library-team-page official-library-page" aria-labelledby="official-library-title">
       <div class="library-team-shell">
-        <header class="library-team-page-head">
-          <div>
-            <p class="library-team-kicker">${escapeHtml(title)}</p>
-            <h1 id="official-library-title">团队资产工作区</h1>
-            <p class="library-team-subcopy">从官方角色、场景、道具开始搭建团队共用素材池，减少重复生成和素材丢失。</p>
+        <header class="library-team-page-head library-team-asset-head">
+          <div id="official-library-title">
+            ${renderAssetScopeTabs(assetScope, { officialTeamOnly: true })}
           </div>
           <div class="library-team-head-actions">
             <button class="library-team-button" type="button" data-action="open-pricing">开通专业版</button>
@@ -268,25 +287,297 @@ function renderOfficialTeamLibrary(context) {
   `;
 }
 
-function renderAssetScopeTabs(assetScope) {
+function renderTeamAssetLocalUploadToolbar(selectedCategory) {
+  const config = teamLocalUploadConfigs[selectedCategory];
+  if (!config) {
+    return "";
+  }
+  const label = categoryLabel(selectedCategory);
+
   return `
-    <nav class="library-team-tabs" role="tablist" aria-label="资产库范围">
-      ${[
-        ["personal", "个人资产库"],
-        ["official", "官方资产库"],
-        ["team", "团队资产库"],
-      ]
+    <section class="library-team-local-upload-toolbar" aria-label="${escapeAttr(label)}本地上传">
+      <div class="library-team-local-upload-copy">
+        <strong>${escapeHtml(label)}本地上传</strong>
+        <span>${escapeHtml(config.helperText)}，上传后先显示为本地预览，后续可同步到团队云端。</span>
+      </div>
+      <div class="library-team-local-upload-actions">
+        <button
+          class="library-team-button library-team-button-primary"
+          type="button"
+          data-action="pick-team-asset-local-upload"
+          data-library-category="${escapeAttr(selectedCategory)}"
+        >${escapeHtml(config.actionLabel)}</button>
+        <input
+          class="team-asset-local-upload-input"
+          type="file"
+          accept="${escapeAttr(config.accept)}"
+          multiple
+          data-library-category="${escapeAttr(selectedCategory)}"
+          aria-label="${escapeAttr(`${label}${config.actionLabel}`)}"
+        />
+      </div>
+    </section>
+  `;
+}
+
+function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
+  const config = teamLocalUploadConfigs[selectedCategory];
+  if (!config || uploads.length === 0) {
+    return "";
+  }
+  const label = categoryLabel(selectedCategory);
+  const unit = config.mediaType === "audio" ? "段音频" : "张图片";
+
+  return `
+    <section class="library-team-local-upload-section" aria-label="${escapeAttr(label)}本地上传预览">
+      <div class="library-team-local-upload-section-head">
+        <div>
+          <p>本地上传，待同步</p>
+          <h2>${escapeHtml(label)}本地预览</h2>
+        </div>
+        <span>${uploads.length} ${escapeHtml(unit)}</span>
+      </div>
+      <div class="library-team-local-upload-grid is-${escapeAttr(config.mediaType)}">
+        ${uploads.map((asset) => renderTeamAssetLocalUploadCard(asset, config)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderTeamAssetLocalUploadCard(asset, config) {
+  const name = formatLocalUploadDisplayName(asset.name ?? asset.fileName ?? "未命名上传");
+  const previewUrl = asset.previewUrl ?? asset.sourceUrl ?? asset.url ?? "";
+  const meta = [asset.sizeLabel, asset.mimeType || asset.extension].filter(Boolean).join(" · ");
+  const deleteButton = renderTeamAssetLocalUploadDeleteButton(asset, name);
+
+  if (config.mediaType === "audio") {
+    return `
+      <article class="library-team-local-upload-card is-audio" data-local-upload-id="${escapeAttr(asset.id ?? "")}">
+        <div class="library-team-local-upload-audio-icon" aria-hidden="true"></div>
+        <div class="library-team-local-upload-card-body">
+          <div class="library-team-local-upload-card-title">
+            <div class="library-team-local-upload-card-name">
+              <h3>${escapeHtml(name)}</h3>
+              <span class="library-team-local-upload-status">待同步</span>
+            </div>
+            ${deleteButton}
+          </div>
+          ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
+          <audio controls preload="metadata" src="${escapeAttr(previewUrl)}"></audio>
+        </div>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="library-team-local-upload-card is-image" data-local-upload-id="${escapeAttr(asset.id ?? "")}">
+      <div class="library-team-local-upload-card-body">
+        <div class="library-team-local-upload-card-title">
+          <div class="library-team-local-upload-card-name">
+            <h3>${escapeHtml(name)}</h3>
+            <span class="library-team-local-upload-status">待同步</span>
+          </div>
+          ${deleteButton}
+        </div>
+        ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
+      </div>
+      <figure class="library-team-local-upload-preview">
+        ${
+          previewUrl
+            ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(name)}" loading="lazy" />`
+            : `<div aria-hidden="true"></div>`
+        }
+      </figure>
+    </article>
+  `;
+}
+
+function formatLocalUploadDisplayName(name) {
+  const value = String(name ?? "").trim();
+  if (!value) {
+    return "未命名上传";
+  }
+  return value.replace(/\.[^./\\]+$/, "") || value;
+}
+
+function renderTeamAssetLocalUploadDeleteButton(asset, name) {
+  return `
+    <button
+      class="library-team-local-upload-delete"
+      type="button"
+      data-action="delete-team-asset-local-upload"
+      data-library-category="${escapeAttr(asset.category ?? "")}"
+      data-local-upload-id="${escapeAttr(asset.id ?? "")}"
+      aria-label="${escapeAttr(`删除${name}`)}"
+    >删除</button>
+  `;
+}
+
+function renderAssetBoard({ assets, context, folders, selectedCategory, selectedFolder, query, title }) {
+  const hasQuery = query.length > 0;
+  const category = categoryLabel(selectedCategory);
+  const heading = hasQuery ? `搜索“${query}”` : selectedFolder || title;
+  const resultCopy = hasQuery ? `找到 ${assets.length} 个资产` : `${assets.length} 个资产`;
+  const contextCopy = hasQuery ? "角色、场景、道具" : category;
+
+  return `
+    <div class="library-team-board">
+      <aside class="library-team-folder-list" aria-label="文件夹">
+        ${folders.map((folder) => renderFolderButton(folder, folder === selectedFolder)).join("")}
+      </aside>
+      <section class="library-team-asset-browser" aria-label="${escapeAttr(title)}">
+        <div class="library-team-browser-header">
+          <div class="library-team-browser-heading">
+            <h2>${escapeHtml(heading)}</h2>
+            <p>${escapeHtml(contextCopy)}<span>${escapeHtml(resultCopy)}</span></p>
+          </div>
+          <div class="library-team-search-row">
+            <label class="library-team-search library-team-asset-search">
+              <span class="sr-only">搜索</span>
+              <input
+                type="search"
+                placeholder="搜索角色、场景、道具"
+                aria-label="搜索"
+                data-library-search-input
+                value="${escapeAttr(query)}"
+              />
+            </label>
+            ${
+              hasQuery
+                ? `<button class="library-team-search-clear" type="button" data-action="clear-library-search" aria-label="清空搜索">清空</button>`
+                : ""
+            }
+          </div>
+        </div>
+        ${renderAssetBrowserBody({ assets, context, selectedCategory, selectedFolder, query })}
+      </section>
+    </div>
+  `;
+}
+
+function renderAssetBrowserBody({ assets, context, selectedCategory, selectedFolder = "", query = "" }) {
+  if (context.libraryLoading) {
+    return renderStatusState("正在加载资产库", " ");
+  }
+
+  if (context.libraryError) {
+    return renderStatusState("资产库加载失败", context.libraryError);
+  }
+
+  if (!assets.length) {
+    if (query) {
+      return renderStatusState(`没有找到“${query}”`, "试试资产名称、风格或用途。");
+    }
+    return renderStatusState("暂无匹配资产", "换个分类、文件夹或关键词再试。");
+  }
+
+  const selectedAssetId =
+    context.libraryDetailAssetId ??
+    context.selectedLibraryAssetId ??
+    (selectedCategory === "character" ? assets[0]?.id : "");
+  const folderClass = assetFolderClass(selectedFolder);
+
+  return `
+    <div class="library-team-asset-grid is-${escapeAttr(query ? "mixed" : assetCategoryClass(selectedCategory))}${folderClass ? ` ${escapeAttr(folderClass)}` : ""}">
+      ${assets
+        .map((asset) =>
+          renderAssetCard(asset, {
+            selected: asset.id === selectedAssetId,
+            selectedCategory,
+          }),
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderStatusState(title, message) {
+  return `
+    <div class="library-team-empty-state compact">
+      <div>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(message)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderLockedTeamPanel() {
+  return `
+    <section class="library-team-locked-panel" aria-label="${escapeAttr(teamAssetGate.title)}">
+      <div class="library-team-locked-icon" aria-hidden="true"></div>
+      <h2 class="sr-only">${escapeHtml(teamAssetGate.title)}</h2>
+      <p>${escapeHtml(teamAssetGate.message)}</p>
+      <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">立即开通</button>
+    </section>
+  `;
+}
+
+function renderTeamApiPanel() {
+  return `
+    <section class="library-team-api-panel" aria-label="API">
+      <div class="library-team-api-head">
+        <p>
+          配置团队专属 API，全员共享优质模型。
+          <button
+            class="library-team-inline-action"
+            type="button"
+            data-action="show-library-placeholder"
+            data-placeholder-message="企业 API 使用位置将在模型调用链路接入后展示。"
+          >查看使用位置</button>
+        </p>
+        <button
+          class="library-team-button library-team-button-primary"
+          type="button"
+          data-action="show-library-placeholder"
+          data-placeholder-message="企业 API 配置暂未接入真实服务。"
+        >配置企业API服务</button>
+      </div>
+      <div class="library-team-api-table">
+        <table>
+          <thead>
+            <tr>
+              <th>模型名称</th>
+              <th>状态</th>
+              <th>更新人</th>
+              <th>最近更新时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="library-team-api-empty">
+        <div class="library-team-api-empty-icon" aria-hidden="true"></div>
+        <p>本团队暂未给任何模型配置企业API服务</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetScopeTabs(assetScope, options = {}) {
+  const scopes = [
+    ["official", "官方资产库"],
+    ["team", "团队资产库", "团队复用"],
+  ];
+
+  return `
+    <nav class="${options.officialTeamOnly ? "library-team-scope-tabs" : "library-team-tabs"}" role="tablist" aria-label="资产库范围">
+      ${scopes
         .map(([scope, label]) => {
           const selected = scope === assetScope;
           return `
             <button
-              class="library-team-tab${selected ? " is-active" : ""}"
+              class="${options.officialTeamOnly ? "library-team-scope-tab" : "library-team-tab"}${selected ? " is-active" : ""}"
               type="button"
               role="tab"
               aria-selected="${selected ? "true" : "false"}"
               data-action="set-library-asset-scope"
               data-asset-scope="${escapeAttr(scope)}"
-            >${escapeHtml(label)}</button>
+            >
+              <span>${escapeHtml(label)}</span>
+              ${options.officialTeamOnly && scope === "team" ? '<small class="library-team-scope-badge">团队复用</small>' : ""}
+            </button>
           `;
         })
         .join("")}
@@ -297,7 +588,7 @@ function renderAssetScopeTabs(assetScope) {
 function renderStaticTab(label, selected) {
   return `
     <button
-      class="library-team-tab${selected ? " is-active" : ""}"
+      class="library-team-category-tab${selected ? " is-active" : ""}"
       type="button"
       role="tab"
       aria-selected="${selected ? "true" : "false"}"
@@ -322,7 +613,7 @@ function renderInteractiveTab(label, selected, action, data = {}) {
       data-action="${escapeAttr(action)}"
       ${attrs}
     >
-      ${escapeHtml(label)}
+      ${escapeHtml(category.label)}
     </button>
   `;
 }
@@ -334,7 +625,7 @@ function renderPlaceholderButton(label, message, primary = false) {
       : "show-library-placeholder";
   return `
     <button
-      class="library-team-button${primary ? " library-team-button-primary" : ""}"
+      class="library-team-folder${selected ? " is-active" : ""}"
       type="button"
       data-action="${action}"
       data-placeholder-message="${escapeAttr(message)}"

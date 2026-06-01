@@ -205,6 +205,79 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("lists reusable official assets as browse-only application data", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-library-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const official = await creator.listReusableAssetLibrary({
+        user,
+        query: {
+          scope: "official",
+          category: "character",
+          query: "医生",
+        },
+        now: new Date("2026-05-23T10:01:00.000Z"),
+      });
+      const libraryAsset = (
+        official.body as { assets: Array<{ id: string; name: string; category: string }> }
+      ).assets[0];
+
+      assert.equal(official.status, 200);
+      assert.equal(libraryAsset.name, "医生");
+      assert.equal(libraryAsset.category, "character");
+      assert.equal("importReusableAssetToProject" in creator, false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("authenticates before seeding reusable official assets", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+
+      await assert.rejects(
+        () =>
+          creator.listReusableAssetLibrary({
+            user: {
+              id: userId,
+              sessionToken: "invalid-session-token",
+            },
+            query: {
+              scope: "official",
+              category: "character",
+            },
+            now: new Date("2026-05-23T10:01:00.000Z"),
+          }),
+        /unauthenticated/,
+      );
+
+      const seeded = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM library_assets WHERE scope = 'official'",
+      );
+
+      assert.equal(seeded.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("stores project covers by storage object id and returns signed cover urls", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();

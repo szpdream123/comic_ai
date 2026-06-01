@@ -24,4 +24,15 @@ describe("test runner", () => {
     assert.doesNotMatch(runner, /shell:\s*true/);
     assert.match(runner, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
   });
+
+  it("skips generated workspace scratch directories when collecting tests", async () => {
+    const runner = await readFile(
+      new URL("../../../../../scripts/run-tests.mjs", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(runner, /"tmp"/);
+    assert.match(runner, /"tmp-dev-server"/);
+    assert.match(runner, /"tmp-ui-screenshots"/);
+  });
 });

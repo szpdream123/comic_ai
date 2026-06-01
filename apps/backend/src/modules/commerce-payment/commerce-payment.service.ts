@@ -13,23 +13,33 @@ import type {
   RiskEventSeverity,
 } from "../../../../../packages/contracts/domain/states.ts";
 import { appendAuditEvent } from "../audit/audit.service.ts";
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import {
+  resolveActorContext,
+  type ActorContext,
+} from "../organization/actor-context.service.ts";
 import { runIdempotentCommand } from "../shared/command/platform-command-runtime.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
+  beginOrReplayCommand,
   IdempotencyConflictError,
   IdempotencyProcessingError,
+  type IdempotencyRecord,
 } from "../shared/idempotency/idempotency.service.ts";
-
-type PaymentProvider = "wechat_pay" | "alipay";
-type PaymentEventType =
-  | "payment_succeeded"
-  | "payment_failed"
-  | "payment_closed"
-  | "refund_succeeded"
-  | "unknown";
-type SignatureStatus = "unverified" | "verified" | "invalid";
+import { SqlIdempotencyRecordStore } from "../shared/idempotency/persistent-idempotency.store.ts";
+import {
+  createDefaultPaymentProviderRegistry,
+  isPaymentProvider,
+  PaymentProviderError,
+  type CreateProviderPaymentIntentResult,
+  type NormalizedPaymentStatus,
+  type PaymentEventType,
+  type PaymentProvider,
+  type PaymentProviderAdapter,
+  type PaymentProviderRegistry,
+  type ProviderPayAction,
+  type SignatureStatus,
+} from "./payment-provider-adapter.ts";
 
 interface AuthenticatedCommerceUser {
   sessionToken: string;
@@ -124,6 +134,27 @@ interface PaymentRiskEventRow {
   updated_at: Date | string;
 }
 
+interface PaymentReconciliationItemRow {
+  id: string;
+  organization_id: string | null;
+  run_id: string | null;
+  order_id: string | null;
+  payment_intent_id: string | null;
+  provider_trade_id: string | null;
+  issue_type:
+    | "missing_callback"
+    | "paid_without_credit"
+    | "amount_mismatch"
+    | "provider_paid_platform_unpaid"
+    | "platform_paid_provider_unpaid"
+    | "refund_mismatch"
+    | "invoice_refund_mismatch";
+  status: "open" | "resolved" | "manual_review_required" | "ignored_with_reason";
+  resolution_json: Record<string, unknown> | string;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
 interface CallbackOrderJoinRow extends BillingOrderRow {
   payment_intent_id: string;
   payment_intent_status: PaymentIntentStatus;
@@ -163,10 +194,15 @@ interface CommercePaymentServiceDeps {
   workspaceId: string;
   callbackSecret?: string;
   merchantId?: string;
+  providerRegistry?: PaymentProviderRegistry;
+  providerCallbackBaseUrl?: string;
+  paymentReturnUrl?: string;
 }
 
 export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
   const merchantId = deps.merchantId ?? "comic-ai-dev-merchant";
+  const providerRegistry =
+    deps.providerRegistry ?? createDefaultPaymentProviderRegistry();
 
   return {
     async listCreditPackages(): Promise<{
@@ -331,7 +367,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
     }) {
       if (
         !input.body.orderId ||
-        !["wechat_pay", "alipay"].includes(input.body.provider) ||
+        !isPaymentProvider(input.body.provider) ||
         !input.body.productMode.trim() ||
         !input.idempotencyKey.trim()
       ) {
@@ -339,136 +375,39 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       }
 
       try {
-        const executed = await runIdempotentCommand({
-          db: deps.db,
-          operationName: createPaymentIntentCommand.operationName,
-          capability: createPaymentIntentCommand.capability,
-          idempotencyKey: input.idempotencyKey,
-          requestHash: hashJson(input.body),
-          now: input.now,
-          resolveActor: (db) =>
-            resolveActorContext(db, {
-              sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
-              capability: createPaymentIntentCommand.capability,
-              now: input.now,
-            }),
-          replay: async ({ idempotencyRecord }) => {
-            const intent = await findPaymentIntentById(
-              deps.db,
-              idempotencyRecord.responseResourceId,
-            );
-            if (!intent) {
-              throw new Error("payment_intent_replay_missing_resource");
-            }
-            return intentResponseBody(intent);
-          },
-          execute: async ({ actor, idempotencyRecord }) => {
-            const order = await findOrderForActor(deps.db, {
-              organizationId: actor.organizationId,
-              orderId: input.body.orderId,
-            });
-            if (
-              !order ||
-              order.status !== "pending_payment" ||
-              new Date(order.expires_at).getTime() <= input.now.getTime()
-            ) {
-              throw new CommercePaymentError("order_not_payable");
-            }
+        const adapter = providerRegistry.require(input.body.provider);
+        const prepared = await preparePaymentIntentSubmission(deps.db, {
+          input,
+          workspaceId: deps.workspaceId,
+        });
+        if (prepared.kind === "replayed") {
+          return { status: 200, body: intentResponseBody(prepared.intent) };
+        }
 
-            const intentId = randomUUID();
-            const payloadHash = hashJson({
-              orderId: order.id,
-              provider: input.body.provider,
-              amountMinor: order.amount_minor,
-              currency: order.currency,
-            });
-            const intent = await queryOne<PaymentIntentRow>(
-              deps.db,
-              `
-                INSERT INTO payment_intents (
-                  id,
-                  organization_id,
-                  order_id,
-                  provider,
-                  product_mode,
-                  status,
-                  amount_minor,
-                  currency,
-                  merchant_order_no,
-                  provider_payload_hash,
-                  provider_safe_metadata_json,
-                  submitted_at,
-                  expires_at,
-                  idempotency_record_id,
-                  idempotency_key,
-                  created_at,
-                  updated_at
-                )
-                VALUES (
-                  $1,
-                  $2,
-                  $3,
-                  $4,
-                  $5,
-                  'submitted',
-                  $6,
-                  $7,
-                  $8,
-                  $9,
-                  $10::jsonb,
-                  $11,
-                  $12,
-                  $13,
-                  $14,
-                  $11,
-                  $11
-                )
-                RETURNING *
-              `,
-              [
-                intentId,
-                actor.organizationId,
-                order.id,
-                input.body.provider,
-                input.body.productMode,
-                order.amount_minor,
-                order.currency,
-                order.order_no,
-                payloadHash,
-                JSON.stringify({
-                  mode: input.body.productMode,
-                  actionKind: "mock_qr",
-                }),
-                input.now,
-                order.expires_at,
-                idempotencyRecord.id,
-                input.idempotencyKey,
-              ],
-            );
-            const result = intentResponseBody(intent!);
-
-            return {
-              result,
-              responseResourceType: "payment_intent",
-              responseResourceId: intent!.id,
-              responseSnapshot: result,
-              audit: {
-                eventType: createPaymentIntentCommand.auditEvent,
-                targetType: "payment_intent",
-                targetId: intent!.id,
-                workspaceId: actor.workspaceId,
-                metadata: {
-                  orderId: order.id,
-                  provider: input.body.provider,
-                  amountMinor: order.amount_minor,
-                },
-              },
-            };
+        const providerResult = await createProviderIntentSafely(adapter, {
+          provider: prepared.intent.provider,
+          productMode: prepared.intent.product_mode,
+          merchantOrderNo: prepared.intent.merchant_order_no,
+          providerIdempotencyKey: providerIdempotencyKey(prepared.intent),
+          amountMinor: prepared.intent.amount_minor,
+          currency: prepared.intent.currency as "CNY",
+          subject: `Credit package ${prepared.order.credits}`,
+          notifyUrl: providerCallbackUrl(deps.providerCallbackBaseUrl, prepared.intent.provider),
+          returnUrl: deps.paymentReturnUrl,
+          expiresAt: new Date(prepared.intent.expires_at),
+          safeMetadata: {
+            orderId: prepared.order.id,
+            creditPackageId: prepared.order.credit_package_id,
+            idempotencyRecordId: prepared.idempotencyRecord.id,
           },
         });
+        const completed = await completePaymentIntentSubmission(deps.db, {
+          prepared,
+          providerResult,
+          now: input.now,
+        });
 
-        return { status: 200, body: executed.result };
+        return { status: 200, body: intentResponseBody(completed) };
       } catch (error) {
         return mapCommerceError(error);
       }
@@ -577,6 +516,8 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
 
     async processPaymentCallback(input: {
       body: PaymentCallbackSignatureInput & { signature: string };
+      rawPayloadHash?: string;
+      signatureStatus?: SignatureStatus;
       now: Date;
     }) {
       const body = parsePaymentCallbackBody(input.body);
@@ -588,10 +529,11 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       }
 
       const callbackSecret = requiredCallbackSecret(deps.callbackSecret);
-      const rawPayloadHash = hashJson(body);
+      const rawPayloadHash = input.rawPayloadHash ?? hashJson(body);
       const expectedSignature = signPaymentCallback(body, callbackSecret);
       const signatureStatus =
-        expectedSignature === body.signature ? "verified" : "invalid";
+        input.signatureStatus ??
+        (expectedSignature === body.signature ? "verified" : "invalid");
       const joined = await findCallbackOrder(deps.db, {
         provider: body.provider,
         merchantOrderNo: body.merchantOrderNo,
@@ -879,6 +821,881 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         throw error;
       }
     },
+
+    async processProviderCallback(input: {
+      provider: PaymentProvider;
+      rawBody: string;
+      headers: Record<string, string>;
+      now: Date;
+    }) {
+      if (!isPaymentProvider(input.provider)) {
+        return {
+          status: 400,
+          body: { error: "invalid_payment_provider" },
+        };
+      }
+
+      const adapter = providerRegistry.require(input.provider);
+      const verification = await adapter.verifyCallback(input.rawBody, input.headers);
+      const event = await adapter.normalizeCallback(
+        input.rawBody,
+        input.headers,
+        verification,
+      );
+      if (!event) {
+        return {
+          status: 400,
+          body: { error: "invalid_provider_callback" },
+        };
+      }
+
+      const callbackBody: PaymentCallbackSignatureInput = {
+        provider: event.provider,
+        providerEventDedupKey: event.providerEventDedupKey,
+        merchantOrderNo: event.merchantOrderNo,
+        providerTradeId: event.providerTradeId,
+        eventType: event.eventType,
+        amountMinor: event.amountMinor,
+        currency: event.currency,
+        merchantId: event.providerAccountRef ?? merchantId,
+      };
+
+      return this.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature:
+            verification.signatureStatus === "verified"
+              ? signPaymentCallback(
+                  callbackBody,
+                  requiredCallbackSecret(deps.callbackSecret),
+                )
+              : "invalid-provider-signature",
+        },
+        rawPayloadHash: event.rawPayloadHash,
+        signatureStatus: event.signatureStatus,
+        now: input.now,
+      });
+    },
+
+    async reconcilePaymentIntent(input: {
+      paymentIntentId: string;
+      now: Date;
+    }) {
+      const intent = await findPaymentIntentById(deps.db, input.paymentIntentId);
+      if (!intent) {
+        return {
+          status: 404,
+          body: { error: "payment_intent_not_found" },
+        };
+      }
+
+      const adapter = providerRegistry.require(intent.provider);
+      const metadata = normalizeJson(intent.provider_safe_metadata_json);
+      const providerStatus = await adapter.queryPaymentStatus({
+        merchantOrderNo: intent.merchant_order_no,
+        providerIntentId: stringMetadata(metadata, "providerIntentId"),
+        providerPaymentId: stringMetadata(metadata, "providerPaymentId"),
+        providerTradeId:
+          intent.provider_trade_id ?? stringMetadata(metadata, "providerTradeId"),
+      });
+      const reconciliation = await createPaymentReconciliationAttempt(deps.db, {
+        intent,
+        providerStatus,
+        now: input.now,
+      });
+      if (providerStatusAlreadyAppliedToIntent(intent, providerStatus)) {
+        const updated = await finishPaymentReconciliationAttempt(deps.db, {
+          itemId: reconciliation.item.id,
+          runId: reconciliation.runId,
+          status: "resolved",
+          resolution: {
+            providerStatus: providerStatus.status,
+            providerPayloadHash: providerStatus.providerPayloadHash,
+            alreadySettled: true,
+          },
+          now: input.now,
+        });
+
+        return {
+          status: 200,
+          body: {
+            reconciliation: reconciliationViewFromItem(updated, providerStatus),
+          },
+        };
+      }
+      const callbackBody = paymentCallbackBodyForReconciliation({
+        intent,
+        providerStatus,
+        merchantId,
+      });
+
+      if (!callbackBody) {
+        const status =
+          providerStatus.status === "unknown" || providerStatus.status === "not_found"
+            ? "open"
+            : "manual_review_required";
+        const updated = await finishPaymentReconciliationAttempt(deps.db, {
+          itemId: reconciliation.item.id,
+          runId: reconciliation.runId,
+          status,
+          resolution: {
+            providerStatus: providerStatus.status,
+            providerPayloadHash: providerStatus.providerPayloadHash,
+            failureCode: "provider_status_not_actionable",
+          },
+          now: input.now,
+        });
+
+        return {
+          status: 200,
+          body: {
+            reconciliation: reconciliationViewFromItem(updated, providerStatus),
+          },
+        };
+      }
+
+      const callbackResponse = await this.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature: signPaymentCallback(
+            callbackBody,
+            requiredCallbackSecret(deps.callbackSecret),
+          ),
+        },
+        rawPayloadHash: providerStatus.providerPayloadHash,
+        signatureStatus: "unverified",
+        now: input.now,
+      });
+      const callbackBodyView = callbackResponse.body as {
+        providerEvent?: ReturnType<typeof providerEventViewFromRow>;
+        order?: ReturnType<typeof orderViewFromRow>;
+        riskEvent?: ReturnType<typeof riskEventViewFromRow>;
+      };
+      const reconciliationStatus = callbackBodyView.riskEvent
+        ? "manual_review_required"
+        : callbackBodyView.providerEvent
+          ? "resolved"
+          : "open";
+      const updated = await finishPaymentReconciliationAttempt(deps.db, {
+        itemId: reconciliation.item.id,
+        runId: reconciliation.runId,
+        status: reconciliationStatus,
+        resolution: {
+          providerStatus: providerStatus.status,
+          providerPayloadHash: providerStatus.providerPayloadHash,
+          providerEventId: callbackBodyView.providerEvent?.id,
+          riskEventId: callbackBodyView.riskEvent?.id,
+          orderId: callbackBodyView.order?.id,
+        },
+        now: input.now,
+      });
+
+      return {
+        status: callbackResponse.status,
+        body: {
+          reconciliation: reconciliationViewFromItem(updated, providerStatus),
+          ...callbackResponse.body,
+        },
+      };
+    },
+  };
+}
+
+type PreparedPaymentIntentSubmission =
+  | { kind: "replayed"; intent: PaymentIntentRow }
+  | {
+      kind: "created";
+      actor: ActorContext;
+      idempotencyRecord: IdempotencyRecord;
+      order: BillingOrderRow;
+      intent: PaymentIntentRow;
+    };
+
+async function preparePaymentIntentSubmission(
+  db: SqlDatabase,
+  input: {
+    input: {
+      user: AuthenticatedCommerceUser;
+      body: { orderId: string; provider: PaymentProvider; productMode: string };
+      idempotencyKey: string;
+      now: Date;
+    };
+    workspaceId: string;
+  },
+): Promise<PreparedPaymentIntentSubmission> {
+  await db.query("BEGIN");
+  try {
+    const actor = await resolveActorContext(db, {
+      sessionToken: input.input.user.sessionToken,
+      workspaceId: input.workspaceId,
+      capability: createPaymentIntentCommand.capability,
+      now: input.input.now,
+    });
+    const store = new SqlIdempotencyRecordStore(db);
+    const started = await beginOrReplayCommand(store, {
+      organizationId: actor.organizationId,
+      operationName: createPaymentIntentCommand.operationName,
+      idempotencyKey: input.input.idempotencyKey,
+      requestHash: hashJson(input.input.body),
+    });
+
+    if (started.kind === "replayed") {
+      const intent = await findPaymentIntentById(
+        db,
+        started.record.responseResourceId,
+      );
+      if (!intent) {
+        throw new Error("payment_intent_replay_missing_resource");
+      }
+      await db.query("COMMIT");
+      return { kind: "replayed", intent };
+    }
+
+    if (started.kind === "processing") {
+      const existingIntent = await findPaymentIntentByIdempotencyRecord(db, {
+        idempotencyRecordId: started.record.id,
+      });
+      if (!existingIntent) {
+        throw new IdempotencyProcessingError(started.record);
+      }
+
+      if (existingIntent.status !== "created") {
+        const result = intentResponseBody(existingIntent);
+        await store.update({
+          ...started.record,
+          responseResourceType: "payment_intent",
+          responseResourceId: existingIntent.id,
+          responseSnapshot: result,
+          status: "succeeded",
+          updatedAt: input.input.now,
+        });
+        await db.query("COMMIT");
+        return { kind: "replayed", intent: existingIntent };
+      }
+
+      const order = await findOrderForActor(db, {
+        organizationId: actor.organizationId,
+        orderId: existingIntent.order_id,
+      });
+      if (!order) {
+        throw new CommercePaymentError("order_not_payable");
+      }
+
+      await db.query("COMMIT");
+      return {
+        kind: "created",
+        actor,
+        idempotencyRecord: started.record,
+        order,
+        intent: existingIntent,
+      };
+    }
+
+    const order = await findOrderForActor(db, {
+      organizationId: actor.organizationId,
+      orderId: input.input.body.orderId,
+    });
+    if (
+      !order ||
+      order.status !== "pending_payment" ||
+      new Date(order.expires_at).getTime() <= input.input.now.getTime()
+    ) {
+      throw new CommercePaymentError("order_not_payable");
+    }
+
+    const intent = await insertCreatedPaymentIntent(db, {
+      actor,
+      order,
+      body: input.input.body,
+      idempotencyRecord: started.record,
+      idempotencyKey: input.input.idempotencyKey,
+      now: input.input.now,
+    });
+
+    await db.query("COMMIT");
+    return {
+      kind: "created",
+      actor,
+      idempotencyRecord: started.record,
+      order,
+      intent,
+    };
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+async function insertCreatedPaymentIntent(
+  db: SqlDatabase,
+  input: {
+    actor: ActorContext;
+    order: BillingOrderRow;
+    body: { provider: PaymentProvider; productMode: string };
+    idempotencyRecord: IdempotencyRecord;
+    idempotencyKey: string;
+    now: Date;
+  },
+): Promise<PaymentIntentRow> {
+  const intentId = randomUUID();
+  const initialPayloadHash = hashJson({
+    orderId: input.order.id,
+    provider: input.body.provider,
+    amountMinor: input.order.amount_minor,
+    currency: input.order.currency,
+    status: "created",
+  });
+  const intent = await queryOne<PaymentIntentRow>(
+    db,
+    `
+      INSERT INTO payment_intents (
+        id,
+        organization_id,
+        order_id,
+        provider,
+        product_mode,
+        status,
+        amount_minor,
+        currency,
+        merchant_order_no,
+        provider_payload_hash,
+        provider_safe_metadata_json,
+        submitted_at,
+        expires_at,
+        idempotency_record_id,
+        idempotency_key,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        'created',
+        $6,
+        $7,
+        $8,
+        $9,
+        $10::jsonb,
+        NULL,
+        $11,
+        $12,
+        $13,
+        $14,
+        $14
+      )
+      RETURNING *
+    `,
+    [
+      intentId,
+      input.actor.organizationId,
+      input.order.id,
+      input.body.provider,
+      input.body.productMode,
+      input.order.amount_minor,
+      input.order.currency,
+      input.order.order_no,
+      initialPayloadHash,
+      JSON.stringify({
+        mode: input.body.productMode,
+        actionKind: "pending_provider_submission",
+      }),
+      input.order.expires_at,
+      input.idempotencyRecord.id,
+      input.idempotencyKey,
+      input.now,
+    ],
+  );
+  if (!intent) {
+    throw new Error("payment_intent_create_failed");
+  }
+
+  return intent;
+}
+
+async function createProviderIntentSafely(
+  adapter: Pick<PaymentProviderAdapter, "createPaymentIntent">,
+  input: Parameters<PaymentProviderAdapter["createPaymentIntent"]>[0],
+): Promise<CreateProviderPaymentIntentResult> {
+  try {
+    return await adapter.createPaymentIntent(input);
+  } catch (error) {
+    if (error instanceof PaymentProviderError) {
+      if (error.code === "provider_not_enabled") {
+        throw error;
+      }
+      return {
+        kind: "unknown",
+        providerPayloadHash: hashJson({
+          failureCode: error.code,
+          ambiguous: error.details.ambiguous ?? false,
+        }),
+        providerSafeMetadata: {
+          failureCode: error.code,
+          ambiguous: error.details.ambiguous ?? false,
+        },
+        failureCode: error.code,
+      };
+    }
+    return {
+      kind: "unknown",
+      providerPayloadHash: hashJson({
+        failureCode: "provider_submission_error",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      providerSafeMetadata: {
+        failureCode: "provider_submission_error",
+      },
+      failureCode: "provider_submission_error",
+    };
+  }
+}
+
+async function completePaymentIntentSubmission(
+  db: SqlDatabase,
+  input: {
+    prepared: Extract<PreparedPaymentIntentSubmission, { kind: "created" }>;
+    providerResult: CreateProviderPaymentIntentResult;
+    now: Date;
+  },
+): Promise<PaymentIntentRow> {
+  await db.query("BEGIN");
+  try {
+    const intent = await updatePaymentIntentProviderSubmission(db, {
+      intent: input.prepared.intent,
+      providerResult: input.providerResult,
+      now: input.now,
+    });
+    const result = intentResponseBody(intent);
+    const store = new SqlIdempotencyRecordStore(db);
+    await store.update({
+      ...input.prepared.idempotencyRecord,
+      responseResourceType: "payment_intent",
+      responseResourceId: intent.id,
+      responseSnapshot: result,
+      status: "succeeded",
+      updatedAt: input.now,
+    });
+    await appendAuditEvent(db, {
+      organizationId: input.prepared.actor.organizationId,
+      workspaceId: input.prepared.actor.workspaceId,
+      actorUserId: input.prepared.actor.actorId,
+      eventType: createPaymentIntentCommand.auditEvent,
+      targetType: "payment_intent",
+      targetId: intent.id,
+      metadata: {
+        orderId: input.prepared.order.id,
+        provider: intent.provider,
+        amountMinor: intent.amount_minor,
+        providerResult: input.providerResult.kind,
+      },
+      occurredAt: input.now,
+    });
+
+    await db.query("COMMIT");
+    return intent;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+async function updatePaymentIntentProviderSubmission(
+  db: SqlDatabase,
+  input: {
+    intent: PaymentIntentRow;
+    providerResult: CreateProviderPaymentIntentResult;
+    now: Date;
+  },
+): Promise<PaymentIntentRow> {
+  const payAction =
+    input.providerResult.kind === "submitted"
+      ? input.providerResult.payAction
+      : input.providerResult.payAction ?? manualConfirmPayAction(input.intent, input.providerResult.failureCode);
+  const providerSafeMetadata = {
+    ...input.providerResult.providerSafeMetadata,
+    mode: input.intent.product_mode,
+    actionKind: payAction.kind,
+    payAction,
+    ...(input.providerResult.kind === "submitted"
+      ? {
+          providerIntentId: input.providerResult.providerIntentId,
+          providerPaymentId: input.providerResult.providerPaymentId,
+        }
+      : {
+          failureCode: input.providerResult.failureCode,
+        }),
+  };
+  const intent = await queryOne<PaymentIntentRow>(
+    db,
+    `
+      UPDATE payment_intents
+      SET status = $2,
+          provider_trade_id = COALESCE($3, provider_trade_id),
+          provider_payload_hash = $4,
+          provider_safe_metadata_json = $5::jsonb,
+          submitted_at = $6,
+          updated_at = $7
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      input.intent.id,
+      input.providerResult.kind === "submitted" ? "submitted" : "unknown",
+      input.providerResult.kind === "submitted"
+        ? input.providerResult.providerTradeId ?? null
+        : null,
+      input.providerResult.providerPayloadHash,
+      JSON.stringify(providerSafeMetadata),
+      input.providerResult.kind === "submitted" ? input.now : null,
+      input.now,
+    ],
+  );
+  if (!intent) {
+    throw new Error("payment_intent_submission_update_failed");
+  }
+
+  return intent;
+}
+
+function providerIdempotencyKey(intent: PaymentIntentRow) {
+  return `payment_intent:${intent.id}`;
+}
+
+function providerCallbackUrl(
+  baseUrl: string | undefined,
+  provider: PaymentProvider,
+) {
+  const normalized = baseUrl?.trim().replace(/\/+$/, "");
+  return normalized
+    ? `${normalized}/api/payment-provider-callbacks/${provider}`
+    : undefined;
+}
+
+function manualConfirmPayAction(
+  intent: PaymentIntentRow,
+  failureCode?: string,
+): ProviderPayAction {
+  return {
+    kind: "manual_confirm",
+    provider: intent.provider,
+    merchantOrderNo: intent.merchant_order_no,
+    amountMinor: intent.amount_minor,
+    currency: intent.currency as "CNY",
+    failureCode,
+  };
+}
+
+async function createPaymentReconciliationAttempt(
+  db: SqlDatabase,
+  input: {
+    intent: PaymentIntentRow;
+    providerStatus: NormalizedPaymentStatus;
+    now: Date;
+  },
+) {
+  await db.query("BEGIN");
+  try {
+    const runId = randomUUID();
+    await db.query(
+      `
+        INSERT INTO payment_reconciliation_runs (
+          id,
+          organization_id,
+          provider,
+          run_type,
+          status,
+          summary_json,
+          started_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          'recent',
+          'running',
+          $4::jsonb,
+          $5,
+          $5,
+          $5
+        )
+      `,
+      [
+        runId,
+        input.intent.organization_id,
+        input.intent.provider,
+        JSON.stringify({
+          paymentIntentId: input.intent.id,
+          merchantOrderNo: input.intent.merchant_order_no,
+          providerStatus: input.providerStatus.status,
+        }),
+        input.now,
+      ],
+    );
+    const item = await queryOne<PaymentReconciliationItemRow>(
+      db,
+      `
+        INSERT INTO payment_reconciliation_items (
+          id,
+          organization_id,
+          run_id,
+          order_id,
+          payment_intent_id,
+          provider_trade_id,
+          issue_type,
+          status,
+          resolution_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          'open',
+          $8::jsonb,
+          $9,
+          $9
+        )
+        RETURNING *
+      `,
+      [
+        randomUUID(),
+        input.intent.organization_id,
+        runId,
+        input.intent.order_id,
+        input.intent.id,
+        input.providerStatus.providerTradeId ?? input.intent.provider_trade_id,
+        reconciliationIssueType(input.intent, input.providerStatus),
+        JSON.stringify({
+          providerStatus: input.providerStatus.status,
+          providerPayloadHash: input.providerStatus.providerPayloadHash,
+          providerSafeMetadata: input.providerStatus.providerSafeMetadata,
+        }),
+        input.now,
+      ],
+    );
+    if (!item) {
+      throw new Error("payment_reconciliation_item_create_failed");
+    }
+
+    await db.query("COMMIT");
+    return { runId, item };
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+async function finishPaymentReconciliationAttempt(
+  db: SqlDatabase,
+  input: {
+    runId: string;
+    itemId: string;
+    status: PaymentReconciliationItemRow["status"];
+    resolution: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  await db.query("BEGIN");
+  try {
+    const item = await queryOne<PaymentReconciliationItemRow>(
+      db,
+      `
+        UPDATE payment_reconciliation_items
+        SET status = $3,
+            resolution_json = resolution_json || $4::jsonb,
+            updated_at = $5
+        WHERE run_id = $1
+          AND id = $2
+        RETURNING *
+      `,
+      [
+        input.runId,
+        input.itemId,
+        input.status,
+        JSON.stringify(input.resolution),
+        input.now,
+      ],
+    );
+    if (!item) {
+      throw new Error("payment_reconciliation_item_finish_failed");
+    }
+
+    await db.query(
+      `
+        UPDATE payment_reconciliation_runs
+        SET status = $2,
+            finished_at = $3,
+            summary_json = summary_json || $4::jsonb,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [
+        input.runId,
+        input.status === "manual_review_required" ? "partial_failed" : "succeeded",
+        input.now,
+        JSON.stringify({
+          itemStatus: input.status,
+          resolution: input.resolution,
+        }),
+      ],
+    );
+
+    await db.query("COMMIT");
+    return item;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+function reconciliationIssueType(
+  intent: PaymentIntentRow,
+  providerStatus: NormalizedPaymentStatus,
+): PaymentReconciliationItemRow["issue_type"] {
+  if (
+    providerStatus.status === "succeeded" &&
+    ((providerStatus.amountMinor !== undefined &&
+      providerStatus.amountMinor !== intent.amount_minor) ||
+      (providerStatus.currency !== undefined &&
+        providerStatus.currency !== intent.currency))
+  ) {
+    return "amount_mismatch";
+  }
+  if (providerStatus.status === "succeeded") {
+    return "provider_paid_platform_unpaid";
+  }
+  if (providerStatus.status === "failed" || providerStatus.status === "closed") {
+    return "missing_callback";
+  }
+  return "missing_callback";
+}
+
+function providerStatusAlreadyAppliedToIntent(
+  intent: PaymentIntentRow,
+  providerStatus: NormalizedPaymentStatus,
+) {
+  if (!providerStatusMatchesIntentFacts(intent, providerStatus)) {
+    return false;
+  }
+  if (providerStatus.status === "succeeded") {
+    return intent.status === "succeeded";
+  }
+  if (providerStatus.status === "failed") {
+    return intent.status === "failed";
+  }
+  if (providerStatus.status === "closed" || providerStatus.status === "expired") {
+    return intent.status === "closed" || intent.status === "expired";
+  }
+  return false;
+}
+
+function providerStatusMatchesIntentFacts(
+  intent: PaymentIntentRow,
+  providerStatus: NormalizedPaymentStatus,
+) {
+  if (
+    providerStatus.amountMinor !== undefined &&
+    providerStatus.amountMinor !== intent.amount_minor
+  ) {
+    return false;
+  }
+  if (
+    providerStatus.currency !== undefined &&
+    providerStatus.currency !== intent.currency
+  ) {
+    return false;
+  }
+  if (
+    providerStatus.providerTradeId &&
+    intent.provider_trade_id &&
+    providerStatus.providerTradeId !== intent.provider_trade_id
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function paymentCallbackBodyForReconciliation(input: {
+  intent: PaymentIntentRow;
+  providerStatus: NormalizedPaymentStatus;
+  merchantId: string;
+}): PaymentCallbackSignatureInput | null {
+  const eventType = paymentEventTypeForProviderStatus(input.providerStatus.status);
+  if (!eventType) {
+    return null;
+  }
+  const amountMinor = input.providerStatus.amountMinor ?? input.intent.amount_minor;
+  const currency = input.providerStatus.currency ?? (input.intent.currency as "CNY");
+  const providerTradeId =
+    input.providerStatus.providerTradeId ?? input.intent.provider_trade_id;
+  if (!providerTradeId || currency !== "CNY") {
+    return null;
+  }
+
+  return {
+    provider: input.intent.provider,
+    providerEventDedupKey: reconciliationProviderEventDedupKey(
+      input.intent,
+      input.providerStatus,
+    ),
+    merchantOrderNo: input.intent.merchant_order_no,
+    providerTradeId,
+    eventType,
+    amountMinor,
+    currency,
+    merchantId: input.merchantId,
+  };
+}
+
+function paymentEventTypeForProviderStatus(
+  status: NormalizedPaymentStatus["status"],
+): PaymentEventType | null {
+  if (status === "succeeded") {
+    return "payment_succeeded";
+  }
+  if (status === "failed") {
+    return "payment_failed";
+  }
+  if (status === "closed" || status === "expired") {
+    return "payment_closed";
+  }
+  return null;
+}
+
+function reconciliationProviderEventDedupKey(
+  intent: PaymentIntentRow,
+  providerStatus: NormalizedPaymentStatus,
+) {
+  return [
+    "reconciliation",
+    intent.provider,
+    intent.merchant_order_no,
+    providerStatus.status,
+    providerStatus.providerPayloadHash,
+  ].join(":");
+}
+
+function reconciliationViewFromItem(
+  item: PaymentReconciliationItemRow,
+  providerStatus: NormalizedPaymentStatus,
+) {
+  return {
+    runId: item.run_id,
+    itemId: item.id,
+    issueType: item.issue_type,
+    status: item.status,
+    providerStatus: providerStatus.status,
+    resolution: normalizeJson(item.resolution_json),
   };
 }
 
@@ -921,10 +1738,6 @@ function parsePaymentCallbackBody(payload: unknown): PaymentCallbackBody | null 
     merchantId: value.merchantId,
     signature: value.signature,
   };
-}
-
-function isPaymentProvider(value: unknown): value is PaymentProvider {
-  return value === "wechat_pay" || value === "alipay";
 }
 
 function isPaymentEventType(value: unknown): value is PaymentEventType {
@@ -1786,16 +2599,58 @@ function riskEventViewFromRow(row: PaymentRiskEventRow) {
 
 function intentResponseBody(intent: PaymentIntentRow) {
   const paymentIntent = paymentIntentViewFromRow(intent);
+  const metadata = normalizeJson(intent.provider_safe_metadata_json);
   return {
     paymentIntent,
-    payAction: {
-      kind: "mock_qr",
-      provider: intent.provider,
-      merchantOrderNo: intent.merchant_order_no,
-      amountMinor: intent.amount_minor,
-      currency: intent.currency,
-    },
+    payAction: providerPayActionFromMetadata(metadata, intent),
   };
+}
+
+function providerPayActionFromMetadata(
+  metadata: Record<string, unknown>,
+  intent: PaymentIntentRow,
+): ProviderPayAction {
+  const payAction = metadata.payAction;
+  if (isProviderPayAction(payAction, intent)) {
+    return payAction;
+  }
+
+  if (intent.status === "unknown") {
+    return manualConfirmPayAction(intent, stringMetadata(metadata, "failureCode"));
+  }
+
+  return {
+    kind: "mock_qr",
+    provider: intent.provider,
+    merchantOrderNo: intent.merchant_order_no,
+    amountMinor: intent.amount_minor,
+    currency: intent.currency as "CNY",
+  };
+}
+
+function isProviderPayAction(
+  value: unknown,
+  intent: PaymentIntentRow,
+): value is ProviderPayAction {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const action = value as Record<string, unknown>;
+  return (
+    typeof action.kind === "string" &&
+    action.provider === intent.provider &&
+    action.merchantOrderNo === intent.merchant_order_no &&
+    action.amountMinor === intent.amount_minor &&
+    action.currency === intent.currency
+  );
+}
+
+function stringMetadata(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function hashJson(value: unknown) {
@@ -1837,6 +2692,10 @@ function mapCommerceError(error: unknown) {
   }
   if (error instanceof IdempotencyProcessingError) {
     return { status: 202, body: { error: error.code } };
+  }
+  if (error instanceof PaymentProviderError) {
+    const status = error.code === "provider_not_enabled" ? 409 : 502;
+    return { status, body: { error: error.code } };
   }
   if (
     typeof error === "object" &&

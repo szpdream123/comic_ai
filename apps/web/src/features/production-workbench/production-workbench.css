@@ -239,9 +239,34 @@
   margin-left: 0;
   padding: 5.8rem 0.65rem 0.85rem calc(var(--workbench-rail-width) + 0.45rem);
   min-width: 0;
+  min-height: 0;
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
+}
+
+.workbench-scroll-surface {
+  position: relative;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.25rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.workbench-scroll-surface::-webkit-scrollbar {
+  width: 0.55rem;
+}
+
+.workbench-scroll-surface::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: oklch(100% 0 0 / 0.16);
 }
 
 .workbench-main.home-mode {
@@ -377,8 +402,8 @@
   min-width: 14rem;
   padding: 0 1rem;
   background:
-    linear-gradient(90deg, oklch(82% 0.13 95 / 0.92), oklch(74% 0.19 205 / 0.92));
-  color: oklch(10% 0.01 250);
+    linear-gradient(100deg, oklch(61% 0.27 286 / 0.94), oklch(72% 0.24 316 / 0.94) 58%, oklch(78% 0.16 220 / 0.92));
+  color: oklch(100% 0 0);
   font-size: 0.78rem;
   font-weight: 900;
   letter-spacing: 0.02em;
@@ -555,6 +580,35 @@
   border-bottom: 1px solid oklch(100% 0 0 / 0.08);
 }
 
+.workbench-topbar.is-library-compact {
+  min-height: 3rem;
+  padding: 0 0.35rem 0.35rem;
+}
+
+.workbench-topbar.is-library-compact .session-line {
+  margin-top: 0.12rem;
+}
+
+.workbench-topbar.is-library-compact .primary-action,
+.workbench-topbar.is-library-compact .secondary-action {
+  min-height: 2.45rem;
+  padding: 0.58rem 0.95rem;
+}
+
+.workbench-topbar.is-library-compact .project-title-row h1 {
+  font-size: 1.05rem;
+}
+
+.library-workspace-scroll {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+}
+
 .project-title-row {
   display: flex;
   align-items: center;
@@ -616,23 +670,33 @@
   overflow: hidden;
   border-left: 1px solid oklch(100% 0 0 / 0.04);
   background:
-    linear-gradient(180deg, oklch(0% 0 0 / 0.16), oklch(0% 0 0 / 0.44)),
-    linear-gradient(135deg, oklch(0% 0 0 / 0.52), oklch(0% 0 0 / 0.14) 42%, oklch(0% 0 0 / 0.66)),
-    url("https://images.unsplash.com/photo-1518709414768-a88981a4515d?auto=format&fit=crop&w=1800&q=80")
-      center center / cover no-repeat;
+    radial-gradient(circle at 18% 22%, oklch(62% 0.27 292 / 0.28), transparent 24rem),
+    radial-gradient(circle at 74% 18%, oklch(72% 0.24 316 / 0.2), transparent 25rem),
+    radial-gradient(circle at 58% 72%, oklch(76% 0.16 220 / 0.13), transparent 23rem),
+    linear-gradient(135deg, oklch(11% 0.04 285), oklch(7% 0.03 258) 44%, oklch(9% 0.04 308));
+}
+
+.home-liquid-ether {
+  position: absolute;
+  inset: -8%;
+  z-index: 0;
+  opacity: 0.92;
+  pointer-events: none;
+  filter: saturate(1.22) contrast(1.08);
 }
 
 .hero-overlay {
   position: absolute;
   inset: 0;
+  z-index: 1;
   background:
-    radial-gradient(circle at 58% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.26) 35rem),
-    linear-gradient(180deg, oklch(0% 0 0 / 0.15), oklch(0% 0 0 / 0.58));
+    radial-gradient(circle at 52% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.28) 35rem),
+    linear-gradient(180deg, oklch(0% 0 0 / 0.1), oklch(0% 0 0 / 0.64));
 }
 
 .hero-content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -654,7 +718,7 @@
   height: clamp(3.1rem, 5.5vh, 4rem);
   place-items: center;
   border-radius: 1.2rem;
-  background: linear-gradient(180deg, oklch(78% 0.19 325), oklch(62% 0.27 285));
+  background: linear-gradient(180deg, oklch(79% 0.21 315), oklch(58% 0.3 286));
   color: oklch(100% 0 0);
   font-size: 2rem;
   font-weight: 800;
@@ -698,11 +762,13 @@
   width: min(27rem, 100%);
   min-height: 3.8rem;
   border-radius: 1.1rem;
-  background: linear-gradient(90deg, oklch(64% 0.28 290), oklch(75% 0.22 320));
+  background: linear-gradient(90deg, oklch(61% 0.29 286), oklch(71% 0.25 316), oklch(75% 0.18 230));
   color: oklch(100% 0 0);
   font-size: 1.1rem;
   font-weight: 700;
-  box-shadow: 0 1rem 3rem oklch(0% 0 0 / 0.3);
+  box-shadow:
+    0 1rem 3rem oklch(0% 0 0 / 0.32),
+    0 0 2.8rem oklch(67% 0.25 305 / 0.28);
 }
 
 .hero-status-strip {
@@ -8372,13 +8438,123 @@
   }
 }
 
+@media (max-width: 640px) {
+  .workbench-main {
+    padding-top: 13rem;
+  }
+
+  .global-statusbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.65rem;
+    min-height: auto;
+    padding: 0.8rem 0.75rem;
+  }
+
+  .statusbar-brand {
+    width: 100%;
+    gap: 0.55rem;
+  }
+
+  .statusbar-brand strong {
+    font-size: 1.1rem;
+    line-height: 1.05;
+  }
+
+  .statusbar-wondershare small,
+  .statusbar-divider {
+    display: none;
+  }
+
+  .wondershare-w,
+  .statusbar-n-mark {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.65rem;
+    font-size: 0.92rem;
+  }
+
+  .statusbar-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    flex: none;
+    gap: 0.45rem;
+  }
+
+  .statusbar-seedance {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    min-height: 2.65rem;
+  }
+
+  .statusbar-pill,
+  .statusbar-credit,
+  .statusbar-icon,
+  .statusbar-avatar {
+    min-height: 2.65rem;
+    border-radius: 0.8rem;
+  }
+
+  .statusbar-pill,
+  .statusbar-credit {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.75rem;
+  }
+
+  .statusbar-icon,
+  .statusbar-avatar {
+    width: 100%;
+  }
+}
+
 @media (max-width: 560px) {
   .workbench-main {
-    padding: 5.6rem 0.6rem 0.6rem;
+    padding: 13rem 0.6rem 0.6rem;
   }
 
   .workbench-main.home-mode,
   .workbench-main.workspace-mode {
+    padding: 0;
+  }
+
+  .workbench-main.home-mode .global-statusbar {
+    left: calc(var(--workbench-rail-width) + 0.55rem);
+    right: 0.7rem;
+    top: 0.8rem;
+    align-items: flex-start;
+    justify-content: flex-end;
+    min-height: auto;
+  }
+
+  .workbench-main.home-mode .statusbar-brand {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-actions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 3.05rem));
+    justify-content: end;
+    gap: 0.55rem;
+  }
+
+  .workbench-main.home-mode .statusbar-seedance {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    min-height: 3rem;
+    padding: 0.5rem 0.8rem;
+    text-align: center;
+  }
+
+  .workbench-main.home-mode .statusbar-pill {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-credit {
+    min-width: 0;
     padding: 0;
   }
 

@@ -6,6 +6,13 @@ import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/pr
 import { resolveActorContext } from "../organization/actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
+import type { TeamBusinessRole } from "../organization/team-roles.ts";
+import {
+  createTeamMember as createTeamMemberRecord,
+  getTeamOverview as getTeamOverviewRecord,
+  listTeamMembers as listTeamMemberRecords,
+  TeamServiceError,
+} from "../organization/team.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
   beginOrReplayCommand,
@@ -18,6 +25,12 @@ import {
   claimQueuedTask,
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
+import {
+  ensureDefaultOfficialLibraryAssets,
+  listLibraryAssetsForActor,
+  type LibraryAssetCategory,
+  type LibraryAssetScope,
+} from "./asset-library.service.ts";
 import {
   buildSignedObjectUrls,
   deleteStorageObjectRecord,
@@ -347,6 +360,91 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   }
 
   return {
+    async getTeamOverview(input: {
+      user: AuthenticatedCreatorUser;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const overview = await getTeamOverviewRecord(deps.db, {
+          actor,
+          now: input.now,
+        });
+
+        return {
+          status: 200,
+          body: overview,
+        };
+      } catch (error) {
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async createTeamMember(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        teamAccount?: string | null;
+        displayName?: string | null;
+        businessRole?: TeamBusinessRole | string | null;
+        memberGroupId?: string | null;
+        projectIds?: string[] | null;
+        initialCredits?: number | null;
+        remark?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const created = await createTeamMemberRecord(deps.db, {
+          actor,
+          teamAccount: input.body.teamAccount ?? "",
+          displayName: input.body.displayName ?? "",
+          businessRole: (input.body.businessRole ?? "") as TeamBusinessRole,
+          memberGroupId: input.body.memberGroupId ?? null,
+          projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : [],
+          initialCredits: input.body.initialCredits ?? 0,
+          remark: input.body.remark ?? null,
+          now: input.now,
+        });
+
+        return {
+          status: 200,
+          body: created,
+        };
+      } catch (error) {
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async listTeamMembers(input: {
+      user: AuthenticatedCreatorUser;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const members = await listTeamMemberRecords(deps.db, { actor });
+
+        return {
+          status: 200,
+          body: { members },
+        };
+      } catch (error) {
+        return teamServiceErrorResponse(error);
+      }
+    },
+
     async getState(input: {
       user: AuthenticatedCreatorUser;
     }): Promise<CreatorHttpResponse<CreatorDevStateSnapshot>> {
@@ -948,6 +1046,57 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             projectId,
           }),
         },
+      };
+    },
+
+    async listReusableAssetLibrary(input: {
+      user: AuthenticatedCreatorUser;
+      query?: {
+        scope?: string | null;
+        category?: string | null;
+        folder?: string | null;
+        query?: string | null;
+        q?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const scope = parseLibraryAssetScope(input.query?.scope);
+      const category = parseLibraryAssetCategory(input.query?.category);
+      if (!scope || category === "invalid") {
+        return {
+          status: 400,
+          body: {
+            error: "invalid_library_filter",
+            fieldErrors: {
+              ...(scope ? {} : { scope: "invalid_scope" }),
+              ...(category === "invalid" ? { category: "invalid_category" } : {}),
+            },
+          },
+        };
+      }
+
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+
+      if (scope === "official") {
+        await ensureDefaultOfficialLibraryAssets(deps.db, { now: input.now });
+      }
+
+      const listed = await listLibraryAssetsForActor(deps.db, {
+        actor,
+        scope,
+        category,
+        folder: cleanOptionalText(input.query?.folder),
+        query: cleanOptionalText(input.query?.query ?? input.query?.q),
+        now: input.now,
+      });
+
+      return {
+        status: 200,
+        body: listed,
       };
     },
 
@@ -2849,6 +2998,33 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   };
 }
 
+function teamServiceErrorResponse(
+  error: unknown,
+): CreatorHttpResponse<Record<string, unknown>> {
+  if (!(error instanceof TeamServiceError)) {
+    throw error;
+  }
+
+  const conflictErrors = new Set([
+    "team_account_duplicate",
+    "team_seat_limit_reached",
+    "team_credit_insufficient",
+  ]);
+  const status =
+    error.code === "team_member_input_invalid"
+      ? 400
+      : error.code === "team_member_management_required"
+        ? 402
+        : conflictErrors.has(error.code)
+          ? 409
+          : 403;
+
+  return {
+    status,
+    body: { error: error.code },
+  };
+}
+
 async function releaseImageRetryClaimIfSafe(
   db: SqlDatabase,
   input: {
@@ -4747,6 +4923,38 @@ function assetTypeForKind(kind: "character" | "scene" | "prop" | "image" | "vide
     return "prop_reference";
   }
   return kind === "video" ? "shot_video" : "shot_image";
+}
+
+function cleanOptionalText(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function parseLibraryAssetScope(value?: string | null): LibraryAssetScope | null {
+  const normalized = value?.trim() || "official";
+  if (normalized === "official" || normalized === "team" || normalized === "personal") {
+    return normalized;
+  }
+  return null;
+}
+
+function parseLibraryAssetCategory(
+  value?: string | null,
+): LibraryAssetCategory | "invalid" | null {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized === "character" ||
+    normalized === "scene" ||
+    normalized === "prop" ||
+    normalized === "image" ||
+    normalized === "video"
+  ) {
+    return normalized;
+  }
+  return "invalid";
 }
 
 function stableEpisodeUuid(projectId: string, sourceEpisodeId: string) {

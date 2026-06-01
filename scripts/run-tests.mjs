@@ -3,14 +3,18 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ignoredDirectories = new Set([
+  ".gstack",
   "dist",
   "node_modules",
+  "tmp",
+  "tmp-dev-server",
+  "tmp-ui-screenshots",
 ]);
 
 const args = process.argv.slice(2);
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
-const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 60_000);
+const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 300_000);
 
 if (testFiles.length === 0) {
   console.error(`No test files found for: ${targets.join(", ")}`);

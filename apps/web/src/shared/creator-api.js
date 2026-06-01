@@ -35,7 +35,22 @@ async function fetchJson(url, options = {}) {
   }
 
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      const error = new Error("unexpected_response");
+      error.status = response.status ?? 0;
+      error.errorCode = "unexpected_response";
+      error.details = {
+        contentType: response.headers?.get?.("content-type") ?? "",
+        preview: text.slice(0, 120),
+        url: response.url ?? "",
+      };
+      throw error;
+    }
+  }
 
   if (!response.ok) {
     const error = new Error(
@@ -450,6 +465,20 @@ export const creatorApi = {
     return fetchJson("/api/creator/state");
   },
 
+  getTeamOverview() {
+    return fetchJson("/api/creator/team/overview");
+  },
+
+  getTeamMembers() {
+    return fetchJson("/api/creator/team/members");
+  },
+
+  createTeamMember(input) {
+    return postJsonWithIdempotency("/api/creator/team/members", input, {
+      action: "team.member.create",
+    });
+  },
+
   createProject(input) {
     return postJsonWithIdempotency("/api/creator/project/create", input, {
       action: "project.create",
@@ -504,6 +533,25 @@ export const creatorApi = {
 
   getAssetLibrary() {
     return fetchJson("/api/creator/assets/library");
+  },
+
+  getLibraryAssets(input = {}) {
+    const params = new URLSearchParams();
+    if (input.scope) {
+      params.set("scope", input.scope);
+    }
+    const hasSearchQuery = String(input.query ?? "").trim().length > 0;
+    if (input.category && !hasSearchQuery) {
+      params.set("category", input.category);
+    }
+    if (input.folder && !hasSearchQuery) {
+      params.set("folder", input.folder);
+    }
+    if (input.query) {
+      params.set("q", input.query);
+    }
+    const query = params.toString();
+    return fetchJson(`/api/creator/library/assets${query ? `?${query}` : ""}`);
   },
 
   updateProjectAsset(assetId, input) {

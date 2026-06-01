@@ -1,5 +1,6 @@
-import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { dirname, resolve } from "node:path";
 
 import { Pool } from "pg";
 
@@ -59,6 +60,7 @@ async function createLocalDevDb(): Promise<DevDatabase> {
     process.cwd(),
     configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
   );
+  await mkdir(dirname(localDbPath), { recursive: true });
   const { PGlite } = await import("@electric-sql/pglite");
   const db = new PGlite(localDbPath) as DevDatabase;
   await ensureFoundationSchema(db);
@@ -80,6 +82,7 @@ async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!tableCheck.rows[0]?.exists) {
     await applySqlMigrations(db);
+    await ensurePaymentProviderConstraints(db);
     return;
   }
 

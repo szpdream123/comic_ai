@@ -1,5 +1,6 @@
 ﻿import { renderProjectDetail } from "./project-detail.js";
 import { buildProjectCreateRequest } from "./project-create-request.js";
+import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
 import {
   addStoryboard,
   createEmptyGenerationState,
@@ -22,6 +23,43 @@ const FIXED_EPISODE_ASSET_IMAGE_URL = "https://aimanhuadrama-1310122982.cos.ap-g
 
 export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
+}
+
+export function removeTeamAssetLocalUpload(ui, category, uploadId) {
+  const uploadsByCategory = ui?.teamAssetLocalUploads ?? {};
+  const uploads = uploadsByCategory[category];
+  if (!Array.isArray(uploads)) {
+    return false;
+  }
+  const removedUpload = uploads.find((asset) => asset.id === uploadId);
+  const nextUploads = uploads.filter((asset) => asset.id !== uploadId);
+  if (nextUploads.length === uploads.length) {
+    return false;
+  }
+  revokeTeamAssetLocalUploadUrl(removedUpload);
+  ui.teamAssetLocalUploads = {
+    ...uploadsByCategory,
+    [category]: nextUploads,
+  };
+  return true;
+}
+
+export function resolveTeamAssetLocalUploadInput(target) {
+  return (
+    target
+      ?.closest?.(".library-team-local-upload-toolbar")
+      ?.querySelector?.(".team-asset-local-upload-input") ?? null
+  );
+}
+
+function revokeTeamAssetLocalUploadUrl(asset) {
+  const previewUrl = asset?.previewUrl ?? asset?.sourceUrl ?? asset?.url ?? "";
+  if (!String(previewUrl).startsWith("blob:")) {
+    return;
+  }
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(previewUrl);
+  }
 }
 
 export function syncStoryboards(current, next) {
@@ -348,6 +386,7 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 }
 
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
+const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
 export async function initProductionWorkbench({ root, session, api, onLogout }) {
   const workbench = {
@@ -356,8 +395,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     api,
     onLogout,
     uploadTasks: new Map(),
+    librarySearchTimer: null,
+    librarySearchRequestId: 0,
+    librarySearchComposing: false,
     generationPollTimer: null,
     generationPollStartedAt: null,
+    homeLiquidEther: null,
+    homeLiquidEtherToken: null,
     state: null,
     ui: {
       busy: false,
@@ -559,6 +603,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       selectedLibraryImportIds: [],
       isLibraryPricingModalOpen: false,
       isMemberRulesModalOpen: false,
+      isTeamMemberCreateOpen: false,
+      teamOverview: null,
+      teamMembers: [],
+      teamError: "",
+      teamMemberDraft: createTeamMemberDraft(),
+      teamMemberCreateNotice: "",
+      teamTemporaryPassword: "",
     },
   };
   installEpisodeWorkbenchTestHooks(workbench);
@@ -641,7 +692,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
-      actionTarget.matches?.(".asset-import-file-input")
+      actionTarget.matches?.(".asset-import-file-input") ||
+      actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
       return;
     }
@@ -662,21 +714,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
     if (
-      
       !workbench.ui.assetCardMenuId &&
-     
       !workbench.ui.episodeCardMenuId &&
-     
       !workbench.ui.projectCardMenuId &&
       !workbench.ui.isLibraryPricingModalOpen &&
-      !workbench.ui.isMemberRulesModalOpen
-     &&
+      !workbench.ui.isMemberRulesModalOpen &&
+      !workbench.ui.isTeamMemberCreateOpen &&
       !workbench.ui.isVideoModelMenuOpen &&
       !workbench.ui.openGenerationSelectMenu &&
       !workbench.ui.musePromptMenu &&
       !workbench.ui.isFirstFrameMenuOpen &&
       !workbench.ui.activeGenerationFrameMenu &&
       !workbench.ui.referenceAssetPickerKind &&
+      !workbench.ui.libraryDetailAssetId &&
       !workbench.ui.storyboardDeleteId
     ) {
       return;
@@ -686,6 +736,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.projectCardMenuId = null;
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
+    workbench.ui.isTeamMemberCreateOpen = false;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.openGenerationSelectMenu = null;
     workbench.ui.musePromptMenu = null;
@@ -693,7 +748,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.activeGenerationFrameMenu = null;
     workbench.ui.referenceAssetPickerKind = null;
     workbench.ui.storyboardDeleteId = null;
-    render(workbench);
+    render(workbench, { preserveLibraryScroll: true });
   });
 
   root.addEventListener("change", async (event) => {
@@ -785,6 +840,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#team-member-business-role")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        businessRole: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      render(workbench);
+      return;
+    }
+
     if (target?.matches?.('input[data-action="upload-project-cover"]')) {
       const [file] = [...(target.files ?? [])];
       console.log("[project-cover] input:change", {
@@ -812,6 +877,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         return;
       }
       await handleAssetImportFiles(workbench, files);
+      return;
+    }
+
+    if (target?.matches?.(".team-asset-local-upload-input")) {
+      const files = [...(target.files ?? [])];
+      const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
+      target.value = "";
+      if (!files.length) {
+        return;
+      }
+      await handleTeamAssetLocalUploadFiles(workbench, category, files);
       return;
     }
 
@@ -921,6 +997,25 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     await handleAssetImportFiles(workbench, files);
   });
 
+  root.addEventListener("compositionstart", (event) => {
+    const target = resolveEventElement(event.target);
+    if (target?.matches?.("[data-library-search-input]")) {
+      workbench.librarySearchComposing = true;
+    }
+  });
+
+  root.addEventListener("compositionend", (event) => {
+    const target = resolveEventElement(event.target);
+    if (!target?.matches?.("[data-library-search-input]")) {
+      return;
+    }
+    workbench.librarySearchComposing = false;
+    workbench.ui.libraryQuery = target.value;
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    scheduleAssetLibrarySearch(workbench);
+  });
+
   root.addEventListener("input", (event) => {
     const target = resolveEventElement(event.target);
 
@@ -1002,6 +1097,53 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.("#project-create-name-input")) {
       workbench.ui.createProjectName = target.value;
+      return;
+    }
+
+    if (target?.matches?.("[data-library-search-input]")) {
+      workbench.ui.libraryQuery = target.value;
+      workbench.ui.libraryDetailAssetId = "";
+      workbench.ui.libraryDetailView = "turnaround";
+      if (event.isComposing || workbench.librarySearchComposing) {
+        return;
+      }
+      scheduleAssetLibrarySearch(workbench);
+      return;
+    }
+
+    if (target?.matches?.("#team-member-team-account")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        teamAccount: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-display-name")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        displayName: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-initial-credits")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        initialCredits: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-remark")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        remark: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
       return;
     }
 
@@ -1329,6 +1471,7 @@ async function refresh(workbench) {
     }
   }
   await syncProjectLibraryFromApi(workbench);
+  await syncAssetLibraryFromApi(workbench);
   workbench.ui.exportHistory = workbench.state.project
     ? await loadExportHistory(workbench)
     : [];
@@ -1377,6 +1520,9 @@ async function refresh(workbench) {
     }
   }
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
+  if (workbench.ui.activeNavTab === "team") {
+    await loadTeamSurface(workbench);
+  }
 }
 
 async function loadProjectDetailForWorkbench(workbench, projectId) {
@@ -1491,6 +1637,10 @@ function render(workbench) {
       selectedStoryboard,
     },
   });
+  restoreLibraryScrollState(workbench.root, libraryScrollState);
+  if (options.focusLibrarySearch) {
+    restoreLibrarySearchFocus(workbench.root);
+  }
   persistWorkbenchState(workbench);
   applyPostRenderEffects(workbench);
 }
@@ -1533,7 +1683,7 @@ function mergeGenerationState(currentState, nextState) {
   };
 }
 
-async function handleAction(workbench, target) {
+export async function handleProductionWorkbenchAction(workbench, target) {
   const action = target.dataset.action;
   const allowWhileBusy = new Set([
     "open-delete-sidebar-storyboard-modal",
@@ -1699,8 +1849,18 @@ async function handleAction(workbench, target) {
   }
 
   if (action === "set-library-asset-scope") {
+    cancelAssetLibrarySearch(workbench);
     workbench.ui.activeNavTab = "library";
-    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "personal";
+    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "official";
+    if (
+      workbench.ui.libraryTeamAssetScope === "official" &&
+      !isApiBackedLibraryCategory(workbench.ui.libraryCategory)
+    ) {
+      workbench.ui.libraryCategory = "character";
+    }
+    workbench.ui.libraryFolder = workbench.ui.libraryFolder || "国内仿真人-现代都市";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
     if (workbench.ui.libraryTeamAssetScope === "official" || workbench.ui.libraryTeamAssetScope === "team") {
       workbench.ui.libraryCategory = workbench.ui.libraryCategory ?? "角色";
@@ -1715,6 +1875,8 @@ async function handleAction(workbench, target) {
     }
     workbench.ui.toast = `已切换到${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}资产库。`;
     window.location.hash = "library";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
     render(workbench);
     return;
   }
@@ -1801,6 +1963,121 @@ async function handleAction(workbench, target) {
     await syncProjectInteriorSupplementary(workbench);
     workbench.ui.toast = "团队数据已刷新。";
     render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-library-folder") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryFolder = target.dataset.libraryFolder ?? "";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = true;
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "clear-library-search") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-library-asset-detail") {
+    workbench.ui.activeNavTab = "library";
+    workbench.ui.libraryDetailAssetId = target.dataset.libraryAssetId ?? "";
+    workbench.ui.libraryDetailView =
+      target.dataset.detailView ?? target.dataset.libraryDetailView ?? "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "close-library-asset-detail") {
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "select-library-asset-detail-view") {
+    workbench.ui.libraryDetailView =
+      target.dataset.detailView ?? target.dataset.libraryDetailView ?? "turnaround";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "pick-team-asset-local-upload") {
+    resolveTeamAssetLocalUploadInput(target)?.click?.();
+    return;
+  }
+
+  if (action === "delete-team-asset-local-upload") {
+    const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
+    const uploadId = target.dataset.localUploadId ?? "";
+    const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
+    workbench.ui.toast = removed ? "已删除本地上传预览。" : "未找到要删除的本地上传。";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "refresh-team") {
+    workbench.ui.busy = true;
+    workbench.ui.toast = "正在刷新团队数据...";
+    render(workbench);
+    await loadTeamSurface(workbench);
+    workbench.ui.busy = false;
+    workbench.ui.toast = workbench.ui.teamError ? `团队数据加载失败：${workbench.ui.teamError}` : "团队数据已刷新。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-team-member-create") {
+    const overview = workbench.ui.teamOverview;
+    if (overview?.entitlements?.teamMemberManagement !== true) {
+      workbench.ui.isLibraryPricingModalOpen = true;
+      render(workbench);
+      return;
+    }
+    if (Number(overview?.seats?.remaining ?? 0) <= 0) {
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "团队席位已满，扩容后才能继续创建成员账号。";
+      render(workbench);
+      return;
+    }
+    if (overview?.permissions?.canCreateMember === false) {
+      workbench.ui.toast = "当前账号没有创建成员权限，请联系主账号或团队管理员。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.isTeamMemberCreateOpen = true;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-team-member-create") {
+    workbench.ui.isTeamMemberCreateOpen = false;
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.teamTemporaryPassword = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-team-member-create") {
+    await submitTeamMemberCreate(workbench);
     return;
   }
 
@@ -1991,6 +2268,8 @@ async function handleAction(workbench, target) {
   if (action === "open-team-dashboard") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardTab = "member-consumption";
+    workbench.ui.teamDashboardDateRange = "today";
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isMemberRulesModalOpen = false;
     workbench.ui.createMemberModal = null;
@@ -2002,10 +2281,34 @@ async function handleAction(workbench, target) {
     return;
   }
 
+  if (action === "set-team-dashboard-tab") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardTab = normalizeTeamDashboardTab(target.dataset.dashboardTab);
+    workbench.ui.toast = "已切换团队数据看板。";
+    window.location.hash = teamDashboardHash(workbench.ui.teamDashboardTab);
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "set-team-dashboard-date-range") {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = "team-dashboard";
+    workbench.ui.teamDashboardDateRange = normalizeTeamDashboardDateRange(
+      target.dataset.dashboardDateRange,
+    );
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
   if (action === "back-to-team-page") {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team";
-    workbench.ui.toast = "已返回团队页面。";
+    workbench.ui.teamDashboardTab = "member-consumption";
+    workbench.ui.teamDashboardDateRange = "today";
+    await loadTeamSurface(workbench);
+    workbench.ui.toast = "已返回团队管理。";
     window.location.hash = "team";
     render(workbench);
     return;
@@ -2075,15 +2378,24 @@ async function handleAction(workbench, target) {
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
       workbench.ui.libraryTeamRoute = "team";
+      workbench.ui.teamDashboardTab = "member-consumption";
+      workbench.ui.teamDashboardDateRange = "today";
     }
     if (workbench.ui.activeNavTab === "library") {
       workbench.ui.libraryTeamRoute = "assets";
+      workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     }
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.toast = `已切换到${navTabLabel(workbench.ui.activeNavTab)}。`;
     window.location.hash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
     if (workbench.ui.activeNavTab === "project") {
       await syncProjectLibraryFromApi(workbench);
+    }
+    if (workbench.ui.activeNavTab === "library") {
+      await syncAssetLibraryFromApi(workbench);
+    }
+    if (workbench.ui.activeNavTab === "team") {
+      await loadTeamSurface(workbench);
     }
     render(workbench);
     return;
@@ -9314,6 +9626,60 @@ function applyPostRenderEffects(workbench) {
   workbench.ui.assetLibraryPendingFocusAssetIds = [];
 }
 
+function disposeHomeLiquidEther(workbench) {
+  workbench.homeLiquidEtherToken = Symbol("liquid-ether-disposed");
+  if (!workbench.homeLiquidEther) {
+    return;
+  }
+  workbench.homeLiquidEther.dispose();
+  workbench.homeLiquidEther = null;
+}
+
+function syncHomeLiquidEther(workbench) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const mount = workbench.root.querySelector("[data-liquid-ether-root]");
+  if (!mount) {
+    disposeHomeLiquidEther(workbench);
+    return;
+  }
+
+  const token = Symbol("liquid-ether-mount");
+  workbench.homeLiquidEtherToken = token;
+
+  import("./liquid-ether.js?liquid-ether=3")
+    .then(({ mountLiquidEther }) => {
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        return;
+      }
+      const instance = mountLiquidEther(mount, {
+        colors: ["#5B21B6", "#7C3AED", "#A855F7", "#E879F9", "#67E8F9"],
+        mouseForce: 18,
+        cursorSize: 120,
+        resolution: 0.42,
+        isViscous: false,
+        iterationsPoisson: 28,
+        autoDemo: true,
+        autoSpeed: 0.42,
+        autoIntensity: 2.35,
+        autoResumeDelay: 1200,
+        autoRampDuration: 0.7,
+      });
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        instance.dispose();
+        return;
+      }
+      mount.dataset.liquidEtherState = "ready";
+      workbench.homeLiquidEther = instance;
+    })
+    .catch((error) => {
+      mount.dataset.liquidEtherState = "failed";
+      console.warn("LiquidEther failed to mount", error);
+    });
+}
+
 function updateStoryboardVideoById(workbench, storyboardId, videoId, updater) {
   updateStoryboardById(workbench, storyboardId, (storyboard) => ({
     ...storyboard,
@@ -10439,6 +10805,26 @@ function formatEpisodeDate(value) {
   return `${year}/${month}/${day}`;
 }
 
+function createTeamMemberDraft() {
+  return {
+    teamAccount: "",
+    displayName: "",
+    businessRole: "director",
+    initialCredits: 0,
+    remark: "",
+  };
+}
+
+const TEAM_DASHBOARD_TABS = new Set(["member-consumption", "project-cost", "ranking"]);
+const TEAM_DASHBOARD_DATE_RANGES = new Set([
+  "today",
+  "yesterday",
+  "week",
+  "month",
+  "last-month",
+  "year",
+]);
+
 function statusForAction(action) {
   return (
     {
@@ -10460,8 +10846,21 @@ export function friendlyError(error) {
   const status = Number(error?.status ?? 0);
   const errorCode = String(error?.errorCode ?? "");
   const requestId = error?.requestId ? ` (request ${error.requestId})` : "";
+  const teamMessage = teamErrorMessage(errorCode);
+  if (teamMessage) {
+    return teamMessage;
+  }
   if (errorCode === "origin_forbidden") {
     return `跨域来源被拒绝，请从允许的地址打开页面或检查 CORS 配置${requestId}`;
+  }
+  const message =
+    error instanceof Error ? error.message : (typeof error?.message === "string" ? error.message : String(error));
+  if (
+    errorCode === "unexpected_response" ||
+    error instanceof SyntaxError ||
+    message.includes("Unexpected token")
+  ) {
+    return `服务返回异常，请刷新页面或重新登录。${requestId}`;
   }
   if (errorCode === "permission_denied" || status === 403) {
     return `没有权限执行该操作，请确认账号、项目成员角色或联系管理员${requestId}`;
@@ -10472,7 +10871,10 @@ export function friendlyError(error) {
   if (status === 404 && errorCode === "resource_not_found") {
     return `资源不存在或无权访问，请刷新项目后重试${requestId}`;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const teamMessageFromBody = teamErrorMessage(message);
+  if (teamMessageFromBody) {
+    return teamMessageFromBody;
+  }
   return (
     {
       ASSET_ALREADY_EXISTS: "当前名称在资产库中已存在",
@@ -10615,7 +11017,7 @@ function deriveInitialNavTab(hash) {
   if (token === "tools") {
     return "tools";
   }
-  if (token === "team" || token === "team-dashboard") {
+  if (token === "team" || token.startsWith("team-dashboard")) {
     return "team";
   }
   return "project";
@@ -10623,13 +11025,39 @@ function deriveInitialNavTab(hash) {
 
 function deriveInitialLibraryTeamRoute(hash) {
   const token = String(hash || "").replace(/^#/, "");
-  if (token === "team-dashboard") {
+  if (token.startsWith("team-dashboard")) {
     return "team-dashboard";
   }
   if (token === "team") {
     return "team";
   }
   return "assets";
+}
+
+function normalizeTeamDashboardTab(tab) {
+  const normalizedTab = String(tab ?? "");
+  return TEAM_DASHBOARD_TABS.has(normalizedTab) ? normalizedTab : "member-consumption";
+}
+
+function normalizeTeamDashboardDateRange(range) {
+  const normalizedRange = String(range ?? "");
+  return TEAM_DASHBOARD_DATE_RANGES.has(normalizedRange) ? normalizedRange : "today";
+}
+
+function deriveInitialTeamDashboardTab(hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  if (token === "team-dashboard-project-cost") {
+    return "project-cost";
+  }
+  if (token === "team-dashboard-ranking") {
+    return "ranking";
+  }
+  return "member-consumption";
+}
+
+function teamDashboardHash(tab) {
+  const normalizedTab = normalizeTeamDashboardTab(tab);
+  return normalizedTab === "member-consumption" ? "team-dashboard" : `team-dashboard-${normalizedTab}`;
 }
 
 function deriveInitialProjectPanelMode(hash) {
@@ -11000,6 +11428,71 @@ async function syncProjectLibraryFromApi(workbench) {
   workbench.ui.projectLibrary = projects;
   syncSelectedProjectCard(workbench, projects);
   await syncProjectLibraryAssets(workbench);
+}
+
+async function syncAssetLibraryFromApi(workbench, options = {}) {
+  const scope = workbench.ui.libraryTeamAssetScope ?? "official";
+  if (
+    scope === "personal" ||
+    typeof workbench.api.getLibraryAssets !== "function" ||
+    !shouldFetchAssetLibrary(workbench)
+  ) {
+    workbench.ui.libraryLoading = false;
+    workbench.ui.libraryError = "";
+    workbench.ui.libraryAssets = [];
+    return;
+  }
+
+  workbench.ui.libraryLoading = true;
+  workbench.ui.libraryError = "";
+  try {
+    const payload = await workbench.api.getLibraryAssets({
+      scope,
+      category: workbench.ui.libraryCategory,
+      folder: workbench.ui.libraryFolder,
+      query: workbench.ui.libraryQuery,
+    });
+    if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
+      return;
+    }
+    const folders = Array.isArray(payload.folders) ? payload.folders : [];
+    workbench.ui.libraryCategories = Array.isArray(payload.categories) ? payload.categories : [];
+    workbench.ui.libraryFolders = folders;
+    workbench.ui.libraryAssets = Array.isArray(payload.assets) ? payload.assets : [];
+    workbench.ui.libraryEntitlement = payload.entitlement ?? null;
+    if (!workbench.ui.libraryFolder && folders[0]) {
+      workbench.ui.libraryFolder = folders[0];
+    }
+  } catch (error) {
+    if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
+      return;
+    }
+    workbench.ui.libraryAssets = [];
+    workbench.ui.libraryError = friendlyError(error);
+  } finally {
+    if (!options.requestId || workbench.librarySearchRequestId === options.requestId) {
+      workbench.ui.libraryLoading = false;
+    }
+  }
+}
+
+function shouldFetchAssetLibrary(workbench) {
+  const scope = workbench.ui.libraryTeamAssetScope ?? "official";
+  return scope !== "personal" && isApiBackedLibraryCategory(workbench.ui.libraryCategory);
+}
+
+function isApiBackedLibraryCategory(category) {
+  return ["character", "scene", "prop", "image", "video"].includes(category);
+}
+
+function libraryAssetScopeLabel(scope) {
+  if (scope === "official") {
+    return "官方";
+  }
+  if (scope === "team") {
+    return "团队";
+  }
+  return "个人";
 }
 
 function syncSelectedProjectCard(workbench, projects) {

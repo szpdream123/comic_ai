@@ -26,6 +26,8 @@ describe("API command contracts", () => {
         "SplitShots",
         "GenerateShotImage",
         "GenerateShotVideo",
+        "GenerateEpisodeImage",
+        "GenerateEpisodeVideo",
         "GenerateCalibration",
         "CreateExport",
       ].includes(command.name),
