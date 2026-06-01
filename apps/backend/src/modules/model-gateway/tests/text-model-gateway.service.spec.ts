@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { operationNames } from "../../../../../../packages/contracts/domain/operation-names.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type {
   TextGatewayChatCompletionChunk,
   TextGatewayChatCompletionRequest,
 } from "../openai-compatible-text.adapter.ts";
 import { TextModelGatewayError } from "../text-model-gateway.errors.ts";
-import { TextModelGatewayService } from "../text-model-gateway.service.ts";
+import {
+  TextModelGatewayService,
+  textModelGatewayOperationNames,
+} from "../text-model-gateway.service.ts";
 
 describe("text model gateway service", () => {
   it("streams OpenAI-compatible chunks and marks the provider request succeeded", async () => {
@@ -67,7 +69,7 @@ describe("text model gateway service", () => {
       assert.equal(stored.rows[0]?.provider_name, "deepseek");
       assert.equal(
         stored.rows[0]?.provider_operation,
-        operationNames.llmChatCompletions,
+        textModelGatewayOperationNames.chatCompletions,
       );
       assert.deepEqual(stored.rows[0]?.payload_redacted_json, {
         model: "deepseek-chat",
@@ -229,7 +231,7 @@ function requestContext(suffix: string) {
     requestHash: `request-hash-${suffix}`,
     payloadHash: `payload-hash-${suffix}`,
     payloadSummary: `summary-${suffix}`,
-    providerOperation: operationNames.llmChatCompletions,
+    providerOperation: textModelGatewayOperationNames.chatCompletions,
   };
 }
 

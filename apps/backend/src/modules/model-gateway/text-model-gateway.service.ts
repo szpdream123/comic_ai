@@ -1,4 +1,3 @@
-import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import type {
   OpenAICompatibleTextAdapter,
@@ -19,6 +18,10 @@ import {
 } from "./text-model-catalog.ts";
 import { TextModelGatewayError } from "./text-model-gateway.errors.ts";
 
+export const textModelGatewayOperationNames = {
+  chatCompletions: "llm.chat.completions",
+} as const;
+
 export interface TextModelGatewayRequestContext {
   organizationId: string;
   workspaceId?: string | null;
@@ -31,7 +34,7 @@ export interface TextModelGatewayRequestContext {
   requestHash: string;
   payloadHash: string;
   payloadSummary?: string;
-  providerOperation: typeof operationNames.llmChatCompletions;
+  providerOperation: typeof textModelGatewayOperationNames.chatCompletions;
 }
 
 export interface TextGatewayFinalUsage {
