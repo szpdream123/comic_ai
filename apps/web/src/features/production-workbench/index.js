@@ -1621,7 +1621,7 @@ async function syncBillingPackages(workbench) {
   }
 }
 
-function render(workbench) {
+function render(workbench, options = {}) {
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -1637,12 +1637,26 @@ function render(workbench) {
       selectedStoryboard,
     },
   });
-  restoreLibraryScrollState(workbench.root, libraryScrollState);
+  restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }
   persistWorkbenchState(workbench);
   applyPostRenderEffects(workbench);
+}
+
+function restoreLibraryScrollState(root, libraryScrollState) {
+  if (!root || !libraryScrollState) {
+    return;
+  }
+  const scrollTarget = root.querySelector?.(".library-team-shell, .workbench-scroll-surface");
+  if (scrollTarget && Number.isFinite(Number(libraryScrollState.scrollTop))) {
+    scrollTarget.scrollTop = Number(libraryScrollState.scrollTop);
+  }
+}
+
+function restoreLibrarySearchFocus(root) {
+  root?.querySelector?.('[data-action="search-library-assets"]')?.focus?.();
 }
 
 function renderPreservingEpisodeAssetScroll(workbench) {
@@ -5653,6 +5667,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   });
 }
+
+const handleAction = handleProductionWorkbenchAction;
 
 async function runSmartGenerate(workbench) {
   await ensureGenerationReady(workbench);
@@ -9874,34 +9890,15 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
   const currentAssets = assetKind === "other"
     ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
     : workbench.ui.importedAssets?.[assetKind] ?? [];
-  const targetAsset = currentAssets.find((item) => item.id === assetId) ?? null;
+  const targetAsset =
+    currentAssets.find((item) => matchesAssetRecordId(item, assetId)) ??
+    collectEpisodeAssetCandidates(workbench, assetKind).find((item) => matchesAssetRecordId(item, assetId)) ??
+    null;
   if (!targetAsset) {
     return;
   }
 
-  const applyLocal = () => {
-    if (assetKind === "other") {
-      const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
-      workbench.ui.importedAssets = {
-        ...(workbench.ui.importedAssets ?? {}),
-        other: {
-          ...(workbench.ui.importedAssets?.other ?? { image: [], video: [] }),
-          [mediaType]: (workbench.ui.importedAssets?.other?.[mediaType] ?? []).map((item) =>
-            item.id === assetId ? { ...item, description } : item,
-          ),
-        },
-      };
-      return;
-    }
-    workbench.ui.importedAssets = {
-      ...(workbench.ui.importedAssets ?? {}),
-      [assetKind]: (workbench.ui.importedAssets?.[assetKind] ?? []).map((item) =>
-        item.id === assetId ? { ...item, description } : item,
-      ),
-    };
-  };
-
-  applyLocal();
+  syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, description);
 
   if (
     isRealEpisodeWorkbench(workbench) &&
@@ -10224,6 +10221,100 @@ function updateAssetRecordBucket(bucket, assetId, updater) {
     return nextItems === bucket.items ? bucket : { ...bucket, items: nextItems };
   }
   return bucket;
+}
+
+export function syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, description) {
+  const applyToAssetRecord = (record) => {
+    const nextLatestVersionMetadata =
+      record?.latestVersion?.metadata && typeof record.latestVersion.metadata === "object"
+        ? { ...record.latestVersion.metadata, description }
+        : record?.latestVersion
+          ? { description }
+          : record?.latestVersion?.metadata;
+    return {
+      ...record,
+      description,
+      latestVersion: record?.latestVersion
+        ? {
+            ...record.latestVersion,
+            metadata: nextLatestVersionMetadata,
+          }
+        : record?.latestVersion,
+    };
+  };
+
+  const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  if (assetKind === "other") {
+    const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
+    nextImportedAssets.other[mediaType] = updateAssetRecordBucket(
+      nextImportedAssets.other[mediaType],
+      assetId,
+      applyToAssetRecord,
+    );
+  } else {
+    nextImportedAssets[assetKind] = updateAssetRecordBucket(
+      nextImportedAssets[assetKind],
+      assetId,
+      applyToAssetRecord,
+    );
+  }
+  workbench.ui.importedAssets = nextImportedAssets;
+
+  const previousContext = workbench.ui.episodeWorkbenchContext;
+  if (previousContext && typeof previousContext === "object") {
+    const nextContext = structuredClone(previousContext);
+    const contextRoots = [nextContext, nextContext?.data].filter((value) => value && typeof value === "object");
+    for (const root of contextRoots) {
+      for (const bucketName of ["assetsByType", "assets", "episodeAssets"]) {
+        const assetsByType = root?.[bucketName];
+        if (!assetsByType || typeof assetsByType !== "object") {
+          continue;
+        }
+        for (const kind of ["character", "characters", "role", "roles", "scene", "scenes", "prop", "props"]) {
+          if (kind in assetsByType) {
+            assetsByType[kind] = updateAssetRecordBucket(assetsByType[kind], assetId, applyToAssetRecord);
+          }
+        }
+      }
+    }
+    workbench.ui.episodeWorkbenchContext = nextContext;
+  }
+
+  const previousProjectDetail = workbench.state?.projectDetail ?? workbench.ui.projectDetail ?? null;
+  if (previousProjectDetail?.assetsByType && typeof previousProjectDetail.assetsByType === "object") {
+    const nextAssetsByType = {
+      ...previousProjectDetail.assetsByType,
+      character: updateAssetRecordBucket(previousProjectDetail.assetsByType.character, assetId, applyToAssetRecord),
+      scene: updateAssetRecordBucket(previousProjectDetail.assetsByType.scene, assetId, applyToAssetRecord),
+      prop: updateAssetRecordBucket(previousProjectDetail.assetsByType.prop, assetId, applyToAssetRecord),
+    };
+    const nextProjectDetail = {
+      ...previousProjectDetail,
+      assetsByType: nextAssetsByType,
+    };
+    workbench.state = {
+      ...(workbench.state ?? {}),
+      projectDetail: nextProjectDetail,
+    };
+    workbench.ui.projectDetail = nextProjectDetail;
+  }
+
+  const draft = workbench.ui.assetPromptDraft;
+  if (draft?.selectionContext?.selectedAssetId && String(draft.selectionContext.selectedAssetId) === String(assetId)) {
+    workbench.ui.assetPromptDraft = {
+      ...draft,
+      selectionContext: {
+        ...draft.selectionContext,
+        selectedAssetDescription: description,
+      },
+      quickReferenceItems: (draft.quickReferenceItems ?? []).map((item) =>
+        matchesAssetRecordId(item, assetId) ? { ...item, description, promptPreview: description } : item,
+      ),
+      mentionReferences: (draft.mentionReferences ?? []).map((item) =>
+        matchesAssetRecordId(item, assetId) ? { ...item, description, promptPreview: description } : item,
+      ),
+    };
+  }
 }
 
 function syncEpisodeAssetFixedImageState(workbench, assetId, payload = {}) {
@@ -10888,6 +10979,23 @@ export function friendlyError(error) {
       project_not_found: "The current project no longer exists. Refresh and try again.",
     }[message] ?? `${message}${requestId}`
   );
+}
+
+function teamErrorMessage(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return "";
+  }
+  if (text.includes("team_member_limit")) {
+    return "团队成员数量已达上限，请升级或调整席位后重试。";
+  }
+  if (text.includes("team_permission_denied")) {
+    return "当前账号没有团队管理权限，请联系管理员。";
+  }
+  if (text.includes("billing_required")) {
+    return "该团队能力需要开通专业版后使用。";
+  }
+  return "";
 }
 
 function buildManualAssetDefaultDescription(kind, name) {
@@ -11924,8 +12032,3 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
   render(workbench);
 }
-
-
-
-
-

@@ -16247,6 +16247,50 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.episode-replica-topbar-left {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.episode-replica-topbar-center {
+  flex: 0 1 auto;
+  min-width: max-content;
+}
+
+.episode-replica-topbar-right {
+  flex: 0 0 auto;
+}
+
+.episode-replica-timestamp {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.episode-replica-center {
+  overflow: hidden;
+}
+
+.episode-replica-prompt {
+  align-self: end;
+  overflow: visible;
+}
+
+.episode-replica-textarea textarea {
+  min-height: clamp(7.5rem, 16vh, 10.5rem);
+  height: clamp(7.5rem, 16vh, 10.5rem);
+}
+
+.episode-replica-prompt-footer,
+.episode-replica-validation {
+  flex-shrink: 0;
+}
+
 /* Match transient action buttons to the quick-reference chip height without locking containers. */
 .episode-replica-mini,
 .episode-replica-control,
@@ -16273,3 +16317,513 @@
     max-height: 1.68rem;
   }
 }
+
+/* Final composition target: left asset matrix + full right dialog column + slim quick lane. */
+@media (min-width: 961px) {
+  .episode-replica-shell {
+    overflow: hidden;
+  }
+
+  .episode-replica-topbar {
+    display: grid;
+    grid-template-columns: minmax(18rem, 1fr) auto minmax(18rem, 1fr);
+    align-items: center;
+    gap: 1.25rem;
+  }
+
+  .episode-replica-topbar-left {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .episode-replica-return {
+    flex: 0 0 auto;
+    min-height: 2.85rem;
+    padding: 0 1.3rem;
+  }
+
+  .episode-replica-timestamp {
+    flex: 1 1 auto;
+    height: 2.85rem;
+    padding: 0 1.1rem;
+    border-radius: 999px;
+    background: #28282b;
+    font-size: 0.9rem;
+  }
+
+  .episode-replica-topbar-center {
+    justify-content: center;
+  }
+
+  .episode-replica-topbar-right {
+    justify-content: flex-end;
+  }
+
+  .episode-replica-layout {
+    grid-template-columns: minmax(41rem, 1.5fr) minmax(33rem, 0.92fr) minmax(7.2rem, 0.18fr);
+    gap: 0;
+    height: calc(100dvh - 4.85rem);
+    min-height: 0;
+    padding-top: 0;
+    box-sizing: border-box;
+  }
+
+  .episode-replica-left {
+    padding: 0 1.25rem 1.2rem 1.1rem;
+  }
+
+  .episode-replica-asset-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.4rem;
+  }
+
+  .episode-replica-center {
+    grid-template-rows: auto minmax(0, 1fr) minmax(18.2rem, auto);
+    border-left: 2px solid #333438;
+    overflow: hidden;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-center {
+    grid-template-rows: auto minmax(0, 1fr) 16.8rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
+    --storyboard-video-composer-height: 24rem;
+  }
+
+  .episode-replica-stage-head {
+    position: relative;
+    z-index: 4;
+    min-height: 4.55rem;
+    padding: 0.75rem 1.15rem 0.45rem;
+    background: #242424;
+  }
+
+  .episode-replica-stage-tabs,
+  .episode-replica-stage-tab {
+    position: relative;
+    z-index: 4;
+    pointer-events: auto;
+  }
+
+  .episode-replica-stage-body {
+    min-height: 0;
+    padding: 0.95rem 1.15rem;
+    overflow: auto;
+    background: #151515;
+  }
+
+  .episode-replica-prompt {
+    display: grid;
+    grid-template-rows: auto auto auto minmax(7.8rem, 1fr) auto auto;
+    gap: 0.42rem;
+    min-height: 18.2rem;
+    max-height: 20.8rem;
+    padding: 0.75rem 1.15rem 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: #151515;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt {
+    grid-template-rows: auto auto auto minmax(5.8rem, 1fr) auto auto;
+    min-height: 16.8rem;
+    max-height: 16.8rem;
+    overflow: visible;
+    padding-top: 0.42rem;
+    padding-bottom: 0.58rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
+    grid-template-rows: auto auto auto minmax(10rem, 1fr) auto auto;
+    min-height: var(--storyboard-video-composer-height);
+    max-height: var(--storyboard-video-composer-height);
+    padding-top: 0.62rem;
+    padding-bottom: 0.78rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-center.video-mode {
+    grid-template-rows: auto minmax(0, 0.72fr) var(--storyboard-video-composer-height, 24rem);
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-stage-body {
+    overflow: auto;
+  }
+
+  .episode-replica-ref-strip {
+    min-height: 4.8rem;
+    max-height: 5.15rem;
+    align-items: flex-end;
+  }
+
+  .episode-replica-upload-card,
+  .episode-replica-ref-card {
+    width: 4.9rem;
+    min-width: 4.9rem;
+    height: 4.9rem;
+    border-radius: 0.7rem;
+  }
+
+  .episode-replica-ref-card.quick-reference .episode-replica-ref-art,
+  .episode-replica-ref-art {
+    height: 100%;
+  }
+
+  .episode-replica-textarea textarea {
+    height: 100%;
+    min-height: 7.8rem;
+    max-height: none;
+    padding: 1rem 0.95rem 2.65rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-textarea textarea {
+    min-height: 5.8rem;
+    padding-top: 0.82rem;
+    padding-bottom: 2.35rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode .episode-replica-textarea textarea {
+    min-height: 10rem;
+    padding-bottom: 2.55rem;
+  }
+
+  .episode-replica-prompt-footer {
+    align-items: center;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt-footer {
+    flex-shrink: 0;
+  }
+
+  .episode-replica-right {
+    padding: 0 0.48rem 1rem;
+    border-left: 2px solid #333438;
+  }
+
+  .episode-replica-right-head {
+    min-height: 2rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .episode-replica-right-list {
+    gap: 0.45rem;
+  }
+
+  .episode-replica-quick-asset .thumb {
+    aspect-ratio: 1 / 0.84;
+  }
+}
+
+@media (min-width: 1680px) {
+  .episode-replica-layout {
+    grid-template-columns: minmax(54rem, 1.52fr) minmax(39rem, 0.9fr) minmax(7.5rem, 0.16fr);
+  }
+}
+
+@media (min-width: 961px) and (max-height: 820px) {
+  .episode-replica-layout.storyboard-mode .episode-replica-center {
+    grid-template-rows: auto minmax(0, 1fr) 15.6rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
+    --storyboard-video-composer-height: 22rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt {
+    grid-template-rows: auto auto auto minmax(4.9rem, 1fr) auto auto;
+    min-height: 15.6rem;
+    max-height: 15.6rem;
+    padding-top: 0.55rem;
+    padding-bottom: 0.7rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
+    grid-template-rows: auto auto auto minmax(8.5rem, 1fr) auto auto;
+    min-height: var(--storyboard-video-composer-height);
+    max-height: var(--storyboard-video-composer-height);
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-center.video-mode {
+    grid-template-rows: auto minmax(0, 0.58fr) var(--storyboard-video-composer-height, 22rem);
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-ref-strip {
+    min-height: 4.25rem;
+    max-height: 4.25rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-upload-card,
+  .episode-replica-layout.storyboard-mode .episode-replica-ref-card {
+    width: 4.2rem;
+    min-width: 4.2rem;
+    height: 4.2rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-textarea textarea {
+    min-height: 4.9rem;
+    padding-bottom: 2.55rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode .episode-replica-textarea textarea {
+    min-height: 8.5rem;
+  }
+}
+
+/* Reference storyboard desktop composition */
+@media (min-width: 961px) {
+  .episode-replica-layout.storyboard-mode {
+    grid-template-columns: minmax(43rem, 63fr) minmax(27rem, 29fr) minmax(6.8rem, 8fr);
+    height: calc(100dvh - 5.6rem);
+    padding-top: 0;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-left {
+    padding: 0 1rem 1rem 1.1rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-storyboard-toolbar {
+    min-height: 3.35rem;
+    padding: 0.15rem 0 0.55rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-storyboard-grid {
+    gap: 0.78rem;
+    padding-top: 0.1rem;
+    padding-bottom: 0.82rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-shot-card {
+    height: 14.2rem;
+    min-height: 14.2rem;
+    max-height: 14.2rem;
+    border-radius: 1.35rem;
+  }
+
+  .episode-replica-shot-card-head {
+    min-height: 3.15rem;
+    padding: 0.82rem 1.2rem 0.7rem 2.75rem;
+  }
+
+  .episode-replica-shot-card .title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1rem;
+    line-height: 1.28;
+  }
+
+  .episode-replica-shot-card-body {
+    grid-template-columns: minmax(8rem, 0.68fr) minmax(22rem, 1.78fr) minmax(13.2rem, 0.9fr);
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .episode-replica-shot-card-column {
+    gap: 0.58rem;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0.78rem 0.86rem 0.86rem;
+  }
+
+  .episode-replica-shot-card .meta,
+  .episode-replica-shot-card .preview-title,
+  .episode-replica-shot-card .edit {
+    font-size: 0.78rem;
+  }
+
+  .episode-replica-shot-copy-head {
+    justify-content: space-between;
+  }
+
+  .episode-replica-shot-card .tabs {
+    gap: 0.34rem;
+    min-height: 2rem;
+    padding: 0;
+    background: transparent;
+    color: transparent;
+    font-size: 0;
+  }
+
+  .episode-replica-shot-card .tabs::before,
+  .episode-replica-shot-card .tabs::after {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2rem;
+    padding: 0 0.88rem;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #3f4045, #2e2f34);
+    color: rgba(255, 255, 255, 0.94);
+    font-size: 0.82rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .episode-replica-shot-card .tabs::before {
+    content: "做图片";
+  }
+
+  .episode-replica-shot-card .tabs::after {
+    content: "做视频";
+  }
+
+  .episode-replica-shot-copy-head .comment {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+
+  .episode-replica-shot-desc-input {
+    min-height: 0;
+    height: 100%;
+    padding: 0.66rem 0.74rem;
+    font-size: 0.82rem;
+    line-height: 1.42;
+  }
+
+  .episode-replica-shot-card .preview {
+    min-height: 7.6rem;
+  }
+
+  .episode-replica-shot-media-placeholder {
+    width: min(7.2rem, 100%);
+    margin: 0.62rem;
+  }
+
+  .episode-replica-stage-body {
+    display: grid;
+    align-items: start;
+    justify-items: center;
+    padding: 1.15rem 1.05rem;
+  }
+
+  .episode-replica-generated-stage,
+  .episode-replica-result-panel {
+    width: min(100%, 34rem);
+    max-width: 34rem;
+    justify-self: center;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-center {
+    grid-template-rows: auto minmax(0, 1fr) 16.2rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt {
+    min-height: 16.2rem;
+    max-height: 16.2rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-right {
+    padding: 0 0.54rem 1rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-right-list {
+    gap: 0.55rem;
+  }
+}
+
+@media (min-width: 1680px) {
+  .episode-replica-layout.storyboard-mode {
+    grid-template-columns: minmax(55rem, 63fr) minmax(33rem, 29fr) minmax(7rem, 8fr);
+  }
+}
+/* End reference storyboard desktop composition */
+
+/* Compact card height and exposed controls */
+@media (min-width: 961px) {
+  .episode-replica-asset-grid,
+  .episode-replica-storyboard-grid {
+    overflow: visible;
+  }
+
+  .episode-replica-asset-card {
+    height: 14.2rem;
+    min-height: 14.2rem;
+    max-height: 14.2rem;
+    overflow: visible;
+  }
+
+  .episode-replica-asset-card .preview,
+  .episode-replica-asset-desc-wrap,
+  .episode-replica-asset-desc-input {
+    overflow: hidden;
+  }
+
+  .episode-replica-asset-desc-input {
+    min-height: 6.85rem;
+    max-height: 6.85rem;
+  }
+
+  .episode-replica-asset-card .episode-replica-asset-hover-tools {
+    top: 0.42rem;
+    right: 0.42rem;
+    display: inline-flex;
+    align-items: center;
+    grid-auto-flow: column;
+    z-index: 8;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-shot-card {
+    height: 13.2rem;
+    min-height: 13.2rem;
+    max-height: 13.2rem;
+    overflow: visible;
+  }
+
+  .episode-replica-shot-card-head {
+    min-height: 2.8rem;
+    padding-top: 0.66rem;
+    padding-bottom: 0.56rem;
+  }
+
+  .episode-replica-shot-card-body {
+    overflow: hidden;
+  }
+
+  .episode-replica-shot-card-column {
+    padding-top: 0.62rem;
+    padding-bottom: 0.62rem;
+  }
+
+  .episode-replica-shot-card .preview {
+    min-height: 6.65rem;
+    overflow: hidden;
+  }
+
+  .episode-replica-shot-shell .episode-replica-shot-hover-tools {
+    top: 0.58rem;
+    bottom: auto;
+    right: 0.42rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    grid-auto-flow: column;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+    z-index: 8;
+  }
+}
+/* End compact card height and exposed controls */
+
+/* Shared asset and storyboard layout top padding */
+@media (min-width: 961px) {
+  .episode-replica-layout.assets-mode,
+  .episode-replica-layout.storyboard-mode {
+    padding-top: 5%;
+  }
+}
+/* End shared asset and storyboard layout top padding */
+
+/* Shared asset and storyboard prompt max height */
+@media (min-width: 961px) {
+  .episode-replica-layout.assets-mode .episode-replica-prompt,
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt {
+    max-height: 26.8rem;
+  }
+}
+/* End shared asset and storyboard prompt max height */

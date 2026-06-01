@@ -562,7 +562,7 @@ function renderMiniStat(label, value) {
   `;
 }
 
-function renderMemberRow(member) {
+function renderFixtureMemberRow(member) {
   return `
     <tr>
       <td>${escapeHtml(member.teamAccount)}</td>
@@ -611,7 +611,7 @@ function renderMemberEmptyRow(createState) {
   `;
 }
 
-function renderCreateMemberModal({ open, draft = {}, notice = "", temporaryPassword = "" }) {
+function renderFixtureCreateMemberModal({ open, draft = {}, notice = "", temporaryPassword = "" }) {
   if (!open) {
     return "";
   }

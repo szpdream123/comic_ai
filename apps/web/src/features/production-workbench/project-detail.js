@@ -285,13 +285,6 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
-      <header class="episode-workbench-titlebar">
-        <div>
-          <span>当前剧集</span>
-          <strong>${escapeHtml(episodeTitle)}</strong>
-        </div>
-        <em>${escapeHtml(episodeStatus)} · ${storyboardCount} 个分镜</em>
-      </header>
       ${renderEpisodeWorkbench({
         session,
         episodeId: activeEpisode?.id ?? "",
@@ -2465,7 +2458,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         stats: ui.projectStats ?? null,
       })}
       ${renderWorkspaceStatusToast(ui.toast)}
-    `;
+    `);
   }
 
   if (activeNavTab === "tools") {
@@ -2502,7 +2495,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         memberStatusFilter: ui.teamMemberStatusFilter ?? "all",
       })}
       ${renderWorkspaceStatusToast(ui.toast)}
-    `;
+    `);
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {

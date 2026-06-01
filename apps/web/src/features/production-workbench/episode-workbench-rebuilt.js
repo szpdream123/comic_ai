@@ -307,7 +307,7 @@ export function renderEpisodeWorkbench({
           }
         </section>
 
-        <section class="episode-replica-center">
+        <section class="episode-replica-center ${mediaMode === "video" || mediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
           <div class="episode-replica-stage-head">
             <div class="episode-replica-stage-tabs">
               ${MEDIA_TABS.map((tab) => renderMediaTab(tab, mediaMode)).join("")}
@@ -1350,7 +1350,7 @@ function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt">
+    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
       ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       <div class="episode-replica-ref-strip">
         ${quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}

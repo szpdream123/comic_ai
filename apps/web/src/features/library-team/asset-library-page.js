@@ -26,6 +26,57 @@ const TYPE_TO_LABEL = {
   prop: "道具",
 };
 
+const teamLocalUploadConfigs = {
+  character: {
+    accept: "image/*",
+    mediaType: "image",
+    actionLabel: "上传角色图片",
+    helperText: "支持 PNG、JPG、WEBP 等图片",
+  },
+  scene: {
+    accept: "image/*",
+    mediaType: "image",
+    actionLabel: "上传场景图片",
+    helperText: "支持 PNG、JPG、WEBP 等图片",
+  },
+  prop: {
+    accept: "image/*",
+    mediaType: "image",
+    actionLabel: "上传道具图片",
+    helperText: "支持 PNG、JPG、WEBP 等图片",
+  },
+  api: {
+    accept: ".json,.txt,text/plain,application/json",
+    mediaType: "document",
+    actionLabel: "上传接口配置",
+    helperText: "支持 JSON 或文本配置文件",
+  },
+  audio: {
+    accept: "audio/*",
+    mediaType: "audio",
+    actionLabel: "上传音频",
+    helperText: "支持 MP3、WAV、M4A 等音频",
+  },
+};
+
+export function validateTeamAssetLocalUploadFile(file, category = "character") {
+  if (!file) {
+    return { ok: false, reason: "missing-file", message: "请选择要上传的文件。" };
+  }
+  const config = teamLocalUploadConfigs[category] ?? teamLocalUploadConfigs.character;
+  const mimeType = String(file.type ?? "");
+  if (config.mediaType === "image" && !mimeType.startsWith("image/")) {
+    return { ok: false, reason: "invalid-type", message: "请上传图片文件。" };
+  }
+  if (config.mediaType === "audio" && !mimeType.startsWith("audio/")) {
+    return { ok: false, reason: "invalid-type", message: "请上传音频文件。" };
+  }
+  if (config.mediaType === "document" && !/json|text|plain/.test(mimeType)) {
+    return { ok: false, reason: "invalid-type", message: "请上传 JSON 或文本文件。" };
+  }
+  return { ok: true };
+}
+
 export function renderAssetLibraryPage(context = {}) {
   const assetScope = context.assetScope ?? "personal";
   if (assetScope === "team" || assetScope === "official") {
@@ -148,8 +199,8 @@ function renderOfficialTeamLibrary(context) {
   const selectedImportIds = Array.isArray(context.selectedLibraryImportIds)
     ? context.selectedLibraryImportIds.map((item) => String(item))
     : [];
-  const categories = officialAssetLibraryFixture.categories;
-  const folders = officialAssetLibraryFixture.folders;
+  const officialCategories = officialAssetLibraryFixture.categories;
+  const officialFolders = officialAssetLibraryFixture.folders;
   const filteredAssets = filterOfficialAssets(officialAssetLibraryFixture.assets, {
     category: activeCategory,
     folder: activeFolder,
@@ -201,7 +252,7 @@ function renderOfficialTeamLibrary(context) {
                 .join("")}
             </nav>
             <nav class="library-team-tabs compact" role="tablist" aria-label="资产分类">
-              ${categories.map((category) => renderInteractiveTab(category, activeCategory === category, "set-library-category", {
+              ${officialCategories.map((category) => renderInteractiveTab(category, activeCategory === category, "set-library-category", {
                 category,
               })).join("")}
             </nav>
@@ -223,7 +274,7 @@ function renderOfficialTeamLibrary(context) {
         <div class="library-team-split">
           <aside class="library-team-folder-list" aria-label="文件夹">
             <h2>文件夹</h2>
-            ${folders
+            ${officialFolders
               .map((folder) => `
                 <button
                   class="library-team-folder${folder === activeFolder ? " is-active" : ""}"
