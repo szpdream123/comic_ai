@@ -2178,6 +2178,7 @@ function renderGlobalStatusbar(session, options = {}) {
 function renderHomeHero({ detailState }) {
   return `
     <section class="home-hero" aria-label="首页">
+      <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
         <div class="hero-brand-lockup">
@@ -2654,5 +2655,4 @@ function getProgress(state) {
     totalSteps: steps.length,
   };
 }
-
 

@@ -211,6 +211,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     api,
     onLogout,
     uploadTasks: new Map(),
+    homeLiquidEther: null,
+    homeLiquidEtherToken: null,
     state: null,
     ui: {
       busy: false,
@@ -843,6 +845,7 @@ async function syncProjectInteriorSupplementary(workbench) {
 }
 
 function render(workbench) {
+  disposeHomeLiquidEther(workbench);
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -4008,6 +4011,8 @@ async function ensureStoryboardShot(workbench, storyboardId) {
 }
 
 function applyPostRenderEffects(workbench) {
+  syncHomeLiquidEther(workbench);
+
   const pendingIds = workbench.ui.assetLibraryPendingFocusAssetIds ?? [];
   if (!pendingIds.length) {
     return;
@@ -4027,6 +4032,60 @@ function applyPostRenderEffects(workbench) {
   focusTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
   focusTarget.focus({ preventScroll: true });
   workbench.ui.assetLibraryPendingFocusAssetIds = [];
+}
+
+function disposeHomeLiquidEther(workbench) {
+  workbench.homeLiquidEtherToken = Symbol("liquid-ether-disposed");
+  if (!workbench.homeLiquidEther) {
+    return;
+  }
+  workbench.homeLiquidEther.dispose();
+  workbench.homeLiquidEther = null;
+}
+
+function syncHomeLiquidEther(workbench) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const mount = workbench.root.querySelector("[data-liquid-ether-root]");
+  if (!mount) {
+    disposeHomeLiquidEther(workbench);
+    return;
+  }
+
+  const token = Symbol("liquid-ether-mount");
+  workbench.homeLiquidEtherToken = token;
+
+  import("./liquid-ether.js?liquid-ether=3")
+    .then(({ mountLiquidEther }) => {
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        return;
+      }
+      const instance = mountLiquidEther(mount, {
+        colors: ["#5B21B6", "#7C3AED", "#A855F7", "#E879F9", "#67E8F9"],
+        mouseForce: 18,
+        cursorSize: 120,
+        resolution: 0.42,
+        isViscous: false,
+        iterationsPoisson: 28,
+        autoDemo: true,
+        autoSpeed: 0.42,
+        autoIntensity: 2.35,
+        autoResumeDelay: 1200,
+        autoRampDuration: 0.7,
+      });
+      if (workbench.homeLiquidEtherToken !== token || !mount.isConnected) {
+        instance.dispose();
+        return;
+      }
+      mount.dataset.liquidEtherState = "ready";
+      workbench.homeLiquidEther = instance;
+    })
+    .catch((error) => {
+      mount.dataset.liquidEtherState = "failed";
+      console.warn("LiquidEther failed to mount", error);
+    });
 }
 
 function updateStoryboardVideoById(workbench, storyboardId, videoId, updater) {

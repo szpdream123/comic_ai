@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
@@ -49,6 +49,7 @@ export async function createDevDb(): Promise<DevDatabase> {
 
 async function createLocalDevDb(): Promise<DevDatabase> {
   const localDbPath = resolve(process.cwd(), process.env.LOCAL_DATABASE_DIR?.trim() || ".local/dev-db");
+  await mkdir(dirname(localDbPath), { recursive: true });
   const db = new PGlite(localDbPath) as PGlite & DevDatabase;
   await ensureFoundationSchema(db);
   console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
@@ -68,6 +69,7 @@ async function ensureFoundationSchema(db: SqlDatabase) {
   );
 
   if (tableCheck.rows[0]?.exists) {
+    await ensurePaymentProviderConstraints(db);
     return;
   }
 
@@ -76,6 +78,49 @@ async function ensureFoundationSchema(db: SqlDatabase) {
     "utf8",
   );
   await executeMigration(db, migration);
+  await ensurePaymentProviderConstraints(db);
+}
+
+async function ensurePaymentProviderConstraints(db: SqlDatabase) {
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_intents
+        DROP CONSTRAINT IF EXISTS payment_intents_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_intents
+        ADD CONSTRAINT payment_intents_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay'))
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_provider_events
+        DROP CONSTRAINT IF EXISTS payment_provider_events_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_provider_events
+        ADD CONSTRAINT payment_provider_events_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay'))
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_reconciliation_runs
+        DROP CONSTRAINT IF EXISTS payment_reconciliation_runs_provider_check
+    `,
+  );
+  await db.query(
+    `
+      ALTER TABLE IF EXISTS payment_reconciliation_runs
+        ADD CONSTRAINT payment_reconciliation_runs_provider_check
+        CHECK (provider IN ('paylab', 'wechat_pay', 'alipay', 'all'))
+    `,
+  );
 }
 
 async function executeMigration(db: SqlDatabase, migration: string) {
