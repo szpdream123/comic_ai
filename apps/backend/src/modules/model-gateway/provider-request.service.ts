@@ -308,6 +308,63 @@ export async function markProviderRequestResultUnknown(
   return providerRequestFromRow(row!);
 }
 
+export async function markProviderRequestSucceeded(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    externalRequestId: string | null;
+    redactedResponse: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  return updateProviderRequestTerminalStatus(db, {
+    providerRequestId: input.providerRequestId,
+    status: "succeeded",
+    externalRequestId: input.externalRequestId,
+    redactedResponse: input.redactedResponse,
+    failureCode: null,
+    now: input.now,
+  });
+}
+
+export async function markProviderRequestFailed(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    failureCode: string;
+    redactedResponse: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  return updateProviderRequestTerminalStatus(db, {
+    providerRequestId: input.providerRequestId,
+    status: "failed",
+    externalRequestId: null,
+    redactedResponse: input.redactedResponse,
+    failureCode: input.failureCode,
+    now: input.now,
+  });
+}
+
+export async function markProviderRequestCanceled(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    failureCode: string;
+    redactedResponse: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  return updateProviderRequestTerminalStatus(db, {
+    providerRequestId: input.providerRequestId,
+    status: "canceled",
+    externalRequestId: null,
+    redactedResponse: input.redactedResponse,
+    failureCode: input.failureCode,
+    now: input.now,
+  });
+}
+
 async function recordProviderSubmissionAccepted(
   db: SqlDatabase,
   input: {
@@ -335,6 +392,46 @@ async function recordProviderSubmissionAccepted(
       input.status,
       input.externalRequestId,
       JSON.stringify(input.redactedResponse),
+      input.now,
+    ],
+  );
+
+  return providerRequestFromRow(row!);
+}
+
+async function updateProviderRequestTerminalStatus(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    status: Extract<
+      ProviderRequestStatus,
+      "succeeded" | "failed" | "canceled"
+    >;
+    externalRequestId: string | null;
+    redactedResponse: Record<string, unknown>;
+    failureCode: string | null;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET status = $2,
+          external_request_id = COALESCE($3, external_request_id),
+          response_redacted_json = $4::jsonb,
+          failure_code = $5,
+          updated_at = $6
+      WHERE id = $1
+        AND external_submission_started_at IS NOT NULL
+      RETURNING *
+    `,
+    [
+      input.providerRequestId,
+      input.status,
+      input.externalRequestId,
+      JSON.stringify(input.redactedResponse),
+      input.failureCode,
       input.now,
     ],
   );
