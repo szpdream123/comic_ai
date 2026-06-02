@@ -4128,6 +4128,28 @@ describe("production workbench project tab", () => {
     assert.match(root.innerHTML, /open-team-dashboard/);
   });
 
+  it("keeps team member creation behind the membership gate", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 0, used: 0, remaining: 0 },
+          permissions: { canCreateMember: true },
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+    });
+
+    assert.match(html, /data-action="open-pricing"/);
+    assert.doesNotMatch(html, /data-action="open-team-member-create"/);
+    assert.doesNotMatch(html, /data-action="open-create-member"/);
+  });
+
   it("sorts newest projects first and paginates after eight items", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({

@@ -31,7 +31,6 @@ export function renderTeamPage(context = {}) {
   });
   const roleOptions = ["all", ...new Set(members.map((member) => String(member?.role ?? "").trim()).filter(Boolean))];
   const statusOptions = ["all", ...new Set(members.map((member) => String(member?.status ?? "").trim()).filter(Boolean))];
-  const projectName = context.projectName ?? "项目";
   const createMemberModal = context.createMemberModal ?? null;
   const editMemberModal = context.editMemberModal ?? null;
 
@@ -54,17 +53,9 @@ export function renderTeamPage(context = {}) {
             <button class="library-team-button" type="button" data-action="open-team-dashboard">数据看板</button>
             <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
           </div>
-          <button class="library-team-button library-team-button-primary" type="button" data-action="open-create-member">创建成员账号</button>
         </header>
-        <div class="library-team-top-grid">
-          <section class="library-team-upgrade-gate" aria-label="团队资产库专业版权益">
-            <div>
-              <p class="library-team-kicker">团队额度</p>
-              <h2>团队资产库为专业版会员权益</h2>
-              <p>团队资产库为专业版会员权益，开通后即可同步管理共享素材。</p>
-            </div>
-            <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">开通专业版</button>
-          </section>
+        <div class="library-team-operations-band">
+          ${renderTeamGate(createState)}
           <section class="library-team-metrics" aria-labelledby="team-metrics-title">
             <header>
               <div>
@@ -86,45 +77,53 @@ export function renderTeamPage(context = {}) {
             </dl>
           </section>
         </div>
-        <section class="library-team-card team-member-section" aria-labelledby="member-management-title">
-          <header class="library-team-section-header">
-            <div>
-              <p class="library-team-kicker">成员与权限</p>
-              <h2 id="member-management-title">成员管理</h2>
+        <div class="library-team-workspace-grid">
+          <section class="library-team-card team-member-section" aria-labelledby="member-management-title">
+            <header class="library-team-section-header">
+              <div>
+                <p class="library-team-kicker">成员与权限</p>
+                <h2 id="member-management-title">成员管理</h2>
+              </div>
+              <div class="library-team-section-actions">
+                <button class="library-team-link-button" type="button" data-action="open-member-rules">规则说明</button>
+                <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
+              </div>
+            </header>
+            <form class="library-team-filterbar" aria-label="成员筛选器">
+              <div class="library-team-filter-fields">
+                ${memberFilters.map((label) =>
+                  renderMemberFilter(label, {
+                    memberSearchQuery,
+                    memberRoleFilter,
+                    memberStatusFilter,
+                    roleOptions,
+                    statusOptions,
+                  }),
+                ).join("")}
+              </div>
+              <div class="library-team-filter-actions">
+                <button class="library-team-button library-team-button-primary" type="button" data-action="search-team-members">搜索</button>
+                <button class="library-team-button" type="button" data-action="reset-team-member-filters">重置</button>
+              </div>
+            </form>
+            <div class="library-team-table-wrap">
+              <table>
+                <thead>
+                  <tr>${memberTableColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+                </thead>
+                <tbody>
+                  ${
+                    filteredMembers.length
+                      ? filteredMembers.map(renderMemberRow).join("")
+                      : renderMemberEmptyRow(createState, { hasMembers: members.length > 0 })
+                  }
+                </tbody>
+              </table>
             </div>
-            <div class="library-team-section-actions">
-              <button class="library-team-link-button" type="button" data-action="open-member-rules">规则说明</button>
-              <button class="library-team-button library-team-button-primary" type="button" data-action="open-create-member">创建成员账号</button>
-            </div>
-          </header>
-          <form class="library-team-filterbar" aria-label="成员筛选器">
-            ${memberFilters.map((label) =>
-              renderMemberFilter(label, {
-                memberSearchQuery,
-                memberRoleFilter,
-                memberStatusFilter,
-                roleOptions,
-                statusOptions,
-              }),
-            ).join("")}
-            <button class="library-team-button" type="button" data-action="reset-team-member-filters">重置</button>
-          </form>
-          <div class="library-team-table-wrap">
-            <table>
-              <thead>
-                <tr>${memberTableColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
-              </thead>
-              <tbody>
-                ${
-                  filteredMembers.length
-                    ? filteredMembers.map(renderMemberRow).join("")
-                    : `<tr><td colspan="${memberTableColumns.length}"><div class="library-team-empty-state"><div class="library-team-empty-icon" aria-hidden="true">+</div><div><h3>${members.length ? "未找到匹配成员" : "创建成员开始团队协作"}</h3><p>${members.length ? "尝试调整关键词或筛选条件。" : "邀请成员后，这里会显示账号、角色、项目范围与积分额度。"}</p></div><button class="library-team-button library-team-button-primary" type="button" data-action="open-create-member">创建成员账号</button></div></td></tr>`
-                }
-              </tbody>
-            </table>
-          </div>
-        </section>
-        <p class="library-team-commerce-notice">${escapeHtml(commercePrototypeNotice)}</p>
+          </section>
+          ${renderTeamPolicyPanel({ createState, metrics })}
+        </div>
+        ${commercePrototypeNotice ? `<p class="library-team-commerce-notice is-error">${escapeHtml(commercePrototypeNotice)}</p>` : ""}
         ${renderPricingModal({
           open: context.pricingOpen === true,
           packages: context.billingPackages ?? null,
@@ -668,17 +667,26 @@ function renderDashboardMemberRow(member) {
   `;
 }
 
-function renderMemberEmptyRow(createState) {
+function renderMemberEmptyRow(createState, options = {}) {
+  const hasMembers = options.hasMembers === true;
+  const title = hasMembers ? "未找到匹配成员" : "创建成员开始团队协作";
+  const message = hasMembers
+    ? "尝试调整关键词、角色或状态筛选。"
+    : "邀请成员后，这里会显示账号、角色、项目范围与积分额度。";
+  const action = hasMembers
+    ? ""
+    : `<button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>${escapeHtml(createState.buttonLabel)}</button>`;
+
   return `
     <tr>
       <td colspan="${memberTableColumns.length}">
         <div class="library-team-empty-state">
           <div class="library-team-empty-icon" aria-hidden="true">+</div>
           <div>
-            <h3>创建成员开始团队协作</h3>
-            <p>邀请成员后，这里会显示账号、角色、项目范围与积分额度。</p>
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(message)}</p>
           </div>
-          <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>${escapeHtml(createState.buttonLabel)}</button>
+          ${action}
         </div>
       </td>
     </tr>

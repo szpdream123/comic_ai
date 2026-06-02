@@ -2032,6 +2032,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "search-team-members") {
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
   if (action === "open-library-upload") {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "workspace";
