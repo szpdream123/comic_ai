@@ -1686,6 +1686,32 @@ async function syncBillingPackages(workbench) {
   }
 }
 
+async function loadTeamSurface(workbench) {
+  if (
+    typeof workbench.api?.getTeamOverview !== "function" ||
+    typeof workbench.api?.getTeamMembers !== "function"
+  ) {
+    workbench.ui.teamOverview = null;
+    workbench.ui.teamMembers = [];
+    workbench.ui.teamError = "团队接口暂不可用，请刷新页面后重试。";
+    return;
+  }
+
+  try {
+    const [overviewPayload, membersPayload] = await Promise.all([
+      workbench.api.getTeamOverview(),
+      workbench.api.getTeamMembers(),
+    ]);
+    workbench.ui.teamOverview = overviewPayload?.overview ?? overviewPayload?.team ?? overviewPayload ?? null;
+    workbench.ui.teamMembers = Array.isArray(membersPayload?.members) ? membersPayload.members : [];
+    workbench.ui.teamError = "";
+  } catch (error) {
+    workbench.ui.teamOverview = null;
+    workbench.ui.teamMembers = [];
+    workbench.ui.teamError = friendlyError(error);
+  }
+}
+
 function render(workbench, options = {}) {
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
@@ -9644,6 +9670,19 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "workspace";
     workbench.ui.projectInteriorSection = workbench.ui.projectInteriorSection ?? "overview";
+    return;
+  }
+  if (token === "home" || token === "script" || token === "library" || token === "tools") {
+    workbench.ui.activeNavTab = token;
+    if (token === "library") {
+      workbench.ui.libraryTeamRoute = "assets";
+    }
+    return;
+  }
+  if (token === "team" || token.startsWith("team-dashboard")) {
+    workbench.ui.activeNavTab = "team";
+    workbench.ui.libraryTeamRoute = token.startsWith("team-dashboard") ? "team-dashboard" : "team";
+    workbench.ui.teamDashboardTab = deriveInitialTeamDashboardTab(token);
     return;
   }
   if (token !== "storyboard-workbench" && token !== "episode-workbench") {

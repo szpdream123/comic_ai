@@ -4054,6 +4054,80 @@ describe("production workbench project tab", () => {
     };
   }
 
+  it("opens the team rail tab after loading team data", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const root = {
+      innerHTML: "",
+      querySelector() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    let overviewCalls = 0;
+    let membersCalls = 0;
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      root,
+      api: {
+        async getTeamOverview() {
+          overviewCalls += 1;
+          return {
+            entitlements: { teamMemberManagement: true },
+            permissions: { canCreateMember: true },
+            seats: { total: 3, used: 1, remaining: 2 },
+          };
+        },
+        async getTeamMembers() {
+          membersCalls += 1;
+          return {
+            members: [
+              {
+                id: "member-1",
+                teamAccount: "director_001",
+                displayName: "Director One",
+                businessRole: "director",
+                status: "enabled",
+              },
+            ],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        libraryTeamRoute: "assets",
+        teamMembers: [],
+        teamOverview: null,
+        teamError: "",
+        teamDashboardTab: "member-consumption",
+        teamDashboardDateShortcut: "今天",
+      }),
+    };
+    let nextHash = "";
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-nav-tab", tab: "team" },
+      });
+      nextHash = globalThis.window.location.hash;
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.activeNavTab, "team");
+    assert.equal(workbench.ui.libraryTeamRoute, "team");
+    assert.equal(nextHash, "team");
+    assert.equal(workbench.ui.teamError, "");
+    assert.equal(workbench.ui.teamMembers.length, 1);
+    assert.equal(overviewCalls, 1);
+    assert.equal(membersCalls, 1);
+    assert.match(root.innerHTML, /library-team-page/);
+    assert.match(root.innerHTML, /open-team-dashboard/);
+  });
+
   it("sorts newest projects first and paginates after eight items", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({

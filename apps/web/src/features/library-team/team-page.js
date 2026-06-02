@@ -5,13 +5,22 @@ import { dashboardDateShortcuts, memberFilters, memberTableColumns, teamFixture 
 
 const DASHBOARD_TABS = [
   { id: "member-consumption", label: "成员创作与消耗" },
-  { id: "project-assets", label: "项目资产与成本" },
+  { id: "project-cost", label: "项目资产与成本" },
   { id: "ranking", label: "排行榜" },
 ];
 
 export function renderTeamPage(context = {}) {
-  const metrics = resolveTeamMetrics(context.stats, context.members);
-  const members = Array.isArray(context.members) ? context.members : context.team?.members ?? teamFixture.members;
+  const team = context.team ?? {};
+  const overview = context.overview ?? team.overview ?? null;
+  const members = Array.isArray(context.members)
+    ? context.members
+    : (Array.isArray(team.members) ? team.members : teamFixture.members);
+  const metrics = resolveTeamMetrics(context.stats ?? overview?.stats ?? overview?.metrics ?? overview, members);
+  const createState = resolveCreateMemberState(overview);
+  const canCreateMember = createState.canCreate;
+  const createAction = createState.action;
+  const createActionMessage = createState.message;
+  const commercePrototypeNotice = team.error ? `团队数据加载失败：${team.error}` : "";
   const memberSearchQuery = String(context.memberSearchQuery ?? "");
   const memberRoleFilter = String(context.memberRoleFilter ?? "all");
   const memberStatusFilter = String(context.memberStatusFilter ?? "all");
@@ -139,6 +148,71 @@ function renderCommandChip(label, value, state = "") {
       <dd>${escapeHtml(value)}</dd>
     </div>
   `;
+}
+
+function resolveCreateMemberState(overview) {
+  const isEntitled = overview?.entitlements?.teamMemberManagement === true;
+  const canCreateByPermission = overview?.permissions?.canCreateMember !== false;
+  const seats = overview?.seats ?? {};
+  const limit = Number(seats.limit ?? seats.total ?? 0);
+  const used = Number(seats.used ?? 0);
+  const remaining = Number(seats.remaining ?? (limit > 0 ? Math.max(0, limit - used) : 0));
+
+  if (!isEntitled) {
+    return {
+      canCreate: false,
+      reason: "entitlement",
+      action: "open-pricing",
+      message: "开通专业版后可创建团队成员账号。",
+      badgeLabel: "未开通",
+      buttonLabel: "开通专业版",
+      secondaryLabel: "开通专业版",
+      statusText: "团队成员功能未开通",
+    };
+  }
+
+  if (!canCreateByPermission) {
+    return {
+      canCreate: false,
+      reason: "permission",
+      action: "show-library-placeholder",
+      message: "当前账号没有创建成员权限，请联系主账号或团队管理员。",
+      badgeLabel: "权限受限",
+      buttonLabel: "查看原因",
+      secondaryLabel: "查看原因",
+      statusText: "当前账号没有创建成员权限",
+    };
+  }
+
+  if (limit > 0 && remaining <= 0) {
+    return {
+      canCreate: false,
+      reason: "seat_limit",
+      action: "open-pricing",
+      message: "团队席位已满，扩容后才能继续创建成员账号。",
+      badgeLabel: "席位已满",
+      buttonLabel: "扩容席位",
+      secondaryLabel: "扩容席位",
+      statusText: "团队席位已满",
+    };
+  }
+
+  return {
+    canCreate: true,
+    reason: "",
+    action: "open-team-member-create",
+    message: "",
+    badgeLabel: "已开通",
+    buttonLabel: "创建成员账号",
+    secondaryLabel: "创建成员账号",
+    statusText: "可创建成员账号",
+  };
+}
+
+function renderActionAttrs(action, message = "") {
+  const safeAction = action || "show-library-placeholder";
+  const messageAttr = message ? ` data-placeholder-message="${escapeAttr(message)}"` : "";
+  return `data-action="${escapeAttr(safeAction)}"${messageAttr}`;
 }
 
 export function renderTeamDashboardPage(context = {}) {
@@ -717,13 +791,18 @@ function resolveTeamMetrics(stats, members) {
     return teamFixture.metrics;
   }
   const memberCount = Array.isArray(members) ? members.length : Number(stats.memberCount ?? 0);
+  const seats = stats.seats ?? {};
+  const seatUsed = Number(seats.used ?? memberCount);
+  const seatLimit = Number(seats.limit ?? seats.total ?? stats.memberCount ?? Math.max(memberCount, seatUsed));
+  const credits = stats.credits ?? {};
+  const metrics = stats.metrics ?? {};
   return {
-    projects: Number(stats.episodeCount ?? stats.projects ?? 0),
-    seats: `${memberCount}/${Math.max(memberCount, Number(stats.memberCount ?? memberCount ?? 0))}`,
-    concurrency: Number(stats.generatedVideoCount ?? stats.concurrency ?? 0),
-    consumedCredits: Number(stats.generatedImageCount ?? stats.consumedCredits ?? 0),
-    remainingCredits: Number(stats.assetCount ?? stats.remainingCredits ?? 0),
-    distributableCredits: Number(stats.exportCount ?? stats.distributableCredits ?? 0),
+    projects: Number(stats.episodeCount ?? metrics.projects ?? stats.projects ?? 0),
+    seats: `${seatUsed}/${seatLimit}`,
+    concurrency: Number(stats.generatedVideoCount ?? stats.concurrency?.singleAccountLimit ?? stats.concurrency ?? 0),
+    consumedCredits: Number(stats.generatedImageCount ?? metrics.consumedCredits ?? stats.consumedCredits ?? 0),
+    remainingCredits: Number(stats.assetCount ?? credits.remaining ?? credits.allocatable ?? stats.remainingCredits ?? 0),
+    distributableCredits: Number(stats.exportCount ?? credits.allocatable ?? stats.distributableCredits ?? 0),
   };
 }
 
@@ -896,7 +975,7 @@ function resolveDashboardTabTitle(tabId) {
 }
 
 function resolveDashboardDetailTitle(tabId) {
-  if (tabId === "project-assets") {
+  if (tabId === "project-cost") {
     return "项目资产与成本详情";
   }
   if (tabId === "ranking") {
