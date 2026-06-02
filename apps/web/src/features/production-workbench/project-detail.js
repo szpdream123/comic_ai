@@ -12,7 +12,8 @@ import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 
-const PROJECT_STATUS_OPTIONS = ["未开始", "制作中", "一稿交付", "完结"];
+const PROJECT_STATUS_OPTIONS = ["草稿", "进行中", "已交付"];
+const PROJECTS_PER_PAGE = 12;
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
@@ -108,6 +109,36 @@ const ASSET_LIBRARY_CONFIG = {
     addDescriptionLabel: "添加主体描述",
   },
 };
+
+function isMockPreviewUrl(value) {
+  return /mock-image-[^?]+\.(?:avif|png|webp)(?:\?|$)/i.test(String(value ?? "").trim());
+}
+
+function resolvePreferredPreviewUrl(...candidates) {
+  const normalized = candidates
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  const realCandidate = normalized.find((value) => !isMockPreviewUrl(value));
+  return realCandidate ?? normalized[0] ?? "";
+}
+
+function resolveLatestConversationPreview(historyMap = {}, assetId) {
+  const entries = Array.isArray(historyMap?.[`image:${assetId ?? ""}`]) ? historyMap[`image:${assetId ?? ""}`] : [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const images = Array.isArray(entries[index]?.fixedImages) ? entries[index].fixedImages : [];
+    for (let imageIndex = images.length - 1; imageIndex >= 0; imageIndex -= 1) {
+      const preview = resolvePreferredPreviewUrl(
+        images[imageIndex]?.previewUrl,
+        images[imageIndex]?.url,
+        images[imageIndex]?.src,
+      );
+      if (preview && !isMockPreviewUrl(preview)) {
+        return preview;
+      }
+    }
+  }
+  return "";
+}
 export function renderProjectDetail(context = {}) {
   const { state = {}, ui = {}, session = { user: { phone: "" } } } = context;
   const detailState = getProjectDetailState(state);
@@ -351,6 +382,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           referencePromptPreset: ui.referencePromptPreset ?? "none",
           assetPromptDraft: ui.assetPromptDraft ?? null,
           assetConversationHistory: ui.assetConversationHistory ?? {},
+          storyboardConversationHistory: ui.storyboardConversationHistory ?? {},
           lipSyncVoiceId: ui.lipSyncVoiceId ?? null,
           lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
           lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
@@ -420,10 +452,34 @@ function resolveEpisodeWorkbenchAssetLibrary(ui) {
   }
 
   return {
-    character: importedAssets.character ?? [],
-    scene: importedAssets.scene ?? [],
-    prop: importedAssets.prop ?? [],
+    character: applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
+    scene: applyConversationPreviewFallback(importedAssets.scene ?? [], ui.assetConversationHistory ?? {}),
+    prop: applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
   };
+}
+
+function applyConversationPreviewFallback(assets = [], historyMap = {}) {
+  return (Array.isArray(assets) ? assets : []).map((asset) => {
+    const preferredPreview = resolvePreferredPreviewUrl(
+      asset?.preview,
+      asset?.previewUrl,
+      asset?.fixedImageUrl,
+      asset?.latestVersion?.previewUrl,
+    );
+    if (preferredPreview && !isMockPreviewUrl(preferredPreview)) {
+      return asset;
+    }
+    const conversationPreview = resolveLatestConversationPreview(historyMap, asset?.assetId ?? asset?.id ?? null);
+    if (!conversationPreview) {
+      return asset;
+    }
+    return {
+      ...asset,
+      preview: conversationPreview,
+      previewUrl: conversationPreview,
+      fixedImageUrl: conversationPreview,
+    };
+  });
 }
 
 function resolveEpisodeWorkbenchContextPayload(context) {
@@ -464,8 +520,8 @@ function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
     id: asset?.assetId ?? asset?.id ?? "",
     assetId: asset?.assetId ?? asset?.id ?? null,
     name: asset?.name ?? asset?.label ?? "未命名资产",
-    preview: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
-    previewUrl: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    preview: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
+    previewUrl: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
     description: asset?.description ?? "",
     kind,
     source: "episode",
@@ -476,7 +532,7 @@ function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
     dubbingConfig: asset?.dubbingConfig ?? null,
     updatedAt: asset?.updatedAt ?? null,
     fixedImageFileId: asset?.fixedImageFileId ?? null,
-    fixedImageUrl: asset?.fixedImageUrl ?? asset?.previewUrl ?? "",
+    fixedImageUrl: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
     fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
   }));
 }
@@ -1444,6 +1500,24 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
     { id: "scene", label: "场景" },
     { id: "prop", label: "道具" },
   ];
+  const episodeBackedAssets =
+    assetKind === "character"
+      ? (ui.importedAssets?.character ?? []).map((asset) => ({
+          id: asset.id,
+          name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
+          preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
+        }))
+      : assetKind === "scene"
+        ? (ui.importedAssets?.scene ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
+          }))
+        : (ui.importedAssets?.prop ?? []).map((asset) => ({
+            id: asset.id,
+            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
+            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
+          }));
   const projectLibraryBackedAssets =
     assetKind === "character"
       ? (ui.projectLibraryAssetsByType?.character ?? []).map((asset) => ({
@@ -1462,30 +1536,8 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
             name: asset.label ?? asset.assetKey ?? "未命名资产",
             preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
           }));
-  const projectBackedAssets =
-    assetKind === "character"
-      ? (ui.projectDetail?.assetsByType?.character ?? []).map((asset) => ({
-          id: asset.id,
-          name: asset.label ?? asset.assetKey ?? "未命名资产",
-          preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-        }))
-      : assetKind === "scene"
-        ? (ui.projectDetail?.assetsByType?.scene ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-          }))
-        : (ui.projectDetail?.assetsByType?.prop ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-          }));
   const assets = normalizeEpisodeWorkbenchImportAssets(
-    projectLibraryBackedAssets.length
-      ? projectLibraryBackedAssets
-      : projectBackedAssets.length
-        ? projectBackedAssets
-        : (ui.assetImportOfficialAssets ?? []),
+    episodeBackedAssets.length ? episodeBackedAssets : projectLibraryBackedAssets,
   );
   const pageSize = normalizeAssetImportPageSize(ui.assetImportPageSize);
   const totalPages = Math.max(1, Math.ceil(assets.length / pageSize));
@@ -1535,7 +1587,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
                         >
                           <span class="episode-asset-library-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true"></span>
                           <span class="episode-asset-library-thumb" aria-hidden="true">
-                            ${asset.preview ? `<img src="${escapeHtml(asset.preview)}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+                            ${asset.preview ? `<img src="${escapeHtml(resolveApiUrl(asset.preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
                           </span>
                           <strong>${escapeHtml(asset.name)}</strong>
                         </button>
@@ -1602,7 +1654,7 @@ function normalizeEpisodeWorkbenchImportAssets(assets = []) {
   return assets.map((asset) => ({
     id: asset.id,
     name: asset.name ?? asset.label ?? "未命名资产",
-    preview: asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? "",
+    preview: resolveApiUrl(asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? ""),
   }));
 }
 
@@ -1650,30 +1702,7 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
       ["two-d-modern", "2D · 现代都市"],
       ["two-d-fantasy", "2D · 东方幻想"],
     ];
-    const projectBackedAssets =
-      assetKind === "character"
-        ? (ui.projectDetail?.assetsByType?.character ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-          }))
-        : assetKind === "scene"
-          ? (ui.projectDetail?.assetsByType?.scene ?? []).map((asset) => ({
-              id: asset.id,
-              name: asset.label ?? asset.assetKey ?? "未命名资产",
-              preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-            }))
-          : assetKind === "prop"
-            ? (ui.projectDetail?.assetsByType?.prop ?? []).map((asset) => ({
-                id: asset.id,
-                name: asset.label ?? asset.assetKey ?? "未命名资产",
-                preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-              }))
-            : [];
-    const officialAssets =
-      projectBackedAssets.length > 0
-        ? projectBackedAssets
-        : (ui.assetImportOfficialAssets ?? []);
+    const officialAssets = ui.assetImportOfficialAssets ?? [];
     const selection = ui.assetImportSelection ?? [];
 
     return `
@@ -1699,17 +1728,22 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
             </label>
           </div>
           <div class="asset-import-grid">
-            ${officialAssets
-              .map(
-                (asset) => `
-                  <button type="button" class="asset-import-card-item ${selection.includes(asset.id) ? "selected" : ""}" data-action="toggle-official-asset-import" data-asset-id="${asset.id}">
-                    <span class="asset-import-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true">${selection.includes(asset.id) ? "✓" : ""}</span>
-                    <span class="asset-import-thumb" aria-hidden="true"><img src="${escapeHtml(asset.preview)}" alt="${escapeHtml(asset.name)}" /></span>
-                    <strong>${escapeHtml(asset.name)}</strong>
-                  </button>
-                `,
-              )
-              .join("")}
+            ${officialAssets.length
+              ? officialAssets
+                  .map(
+                    (asset) => `
+                      <button type="button" class="asset-import-card-item ${selection.includes(asset.id) ? "selected" : ""}" data-action="toggle-official-asset-import" data-asset-id="${asset.id}">
+                        <span class="asset-import-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true">${selection.includes(asset.id) ? "✓" : ""}</span>
+                        <span class="asset-import-thumb" aria-hidden="true"><img src="${escapeHtml(asset.preview)}" alt="${escapeHtml(asset.name)}" /></span>
+                        <strong>${escapeHtml(asset.name)}</strong>
+                      </button>
+                    `,
+                  )
+                  .join("")
+              : `<div class="asset-import-empty-state">
+                  <div class="asset-import-lock" aria-hidden="true">✦</div>
+                  <p>当前真实资产库里还没有${escapeHtml(getAssetLabel(assetKind))}素材。</p>
+                </div>`}
           </div>
           <footer class="asset-import-footer">
             <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" ${disabled(!selection.length)}>确认导入</button>
@@ -2850,16 +2884,17 @@ function renderProjectGallery({ ui }) {
     filterProjectsByStatus(sortProjectsByCreatedAt(projects), statusFilters),
     searchQuery,
   );
-  const pageSize = getAdaptiveProjectPageSize();
-  const totalPages = Math.max(1, Math.ceil(filteredProjects.length / pageSize));
-  const currentPage = clampPage(ui.projectLibraryPage ?? 1, totalPages);
-  const visibleProjects = paginateProjects(filteredProjects, currentPage, pageSize);
+  const totalProjects = filteredProjects.length;
+  const totalPages = Math.max(1, Math.ceil(totalProjects / PROJECTS_PER_PAGE));
+  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
+  const pageStart = (currentPage - 1) * PROJECTS_PER_PAGE;
+  const pagedProjects = filteredProjects.slice(pageStart, pageStart + PROJECTS_PER_PAGE);
 
   return `
     <section class="project-gallery-shell">
       <header class="project-gallery-header">
         <div>
-          <h1>全部项目(${filteredProjects.length})</h1>
+          <h1>全部项目(${totalProjects})</h1>
         </div>
         <div class="project-gallery-filters">
           <div class="gallery-filter-group">
@@ -2886,18 +2921,85 @@ function renderProjectGallery({ ui }) {
       </header>
       <section class="project-gallery-grid" aria-label="项目列表">
         ${
-          filteredProjects.length
-            ? visibleProjects.map((project) => renderProjectCard(project, ui.projectCardMenuId === project.id)).join("")
+          totalProjects
+            ? pagedProjects.map((project) => renderProjectCard(project, ui.projectCardMenuId === project.id)).join("")
             : renderEmptyProjectState(searchQuery, statusFilters)
         }
       </section>
-      ${filteredProjects.length > pageSize ? renderProjectPagination({ currentPage, totalPages }) : ""}
       ${renderWorkspaceStatusToast(ui.toast)}
+      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pagedProjects.length) : ""}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>
     </section>
   `;
+}
+
+function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize) {
+  const pages = buildProjectPageItems(currentPage, totalPages);
+  return `
+    <footer class="project-gallery-pagination" aria-label="项目分页">
+      <div class="project-gallery-pagination-summary">
+        <span>共 ${totalProjects} 条</span>
+        <span>${pageSize} 条/页</span>
+      </div>
+      <div class="project-gallery-pagination-controls">
+        <button
+          class="project-gallery-page-button"
+          type="button"
+          data-action="change-project-page"
+          data-page="${currentPage - 1}"
+          ${currentPage <= 1 ? "disabled" : ""}
+          aria-label="上一页"
+        >
+          ‹
+        </button>
+        ${pages
+          .map((page) =>
+            page === "ellipsis"
+              ? '<span class="project-gallery-page-ellipsis" aria-hidden="true">…</span>'
+              : `
+                <button
+                  class="project-gallery-page-button ${page === currentPage ? "active" : ""}"
+                  type="button"
+                  data-action="change-project-page"
+                  data-page="${page}"
+                  aria-current="${page === currentPage ? "page" : "false"}"
+                >
+                  ${page}
+                </button>
+              `,
+          )
+          .join("")}
+        <button
+          class="project-gallery-page-button"
+          type="button"
+          data-action="change-project-page"
+          data-page="${currentPage + 1}"
+          ${currentPage >= totalPages ? "disabled" : ""}
+          aria-label="下一页"
+        >
+          ›
+        </button>
+      </div>
+    </footer>
+  `;
+}
+
+function buildProjectPageItems(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis", totalPages];
+  }
+
+  if (currentPage >= totalPages - 3) {
+    return [1, "ellipsis", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+
+  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
 function renderProjectStatusMenu(activeStatuses) {
@@ -2936,13 +3038,22 @@ function renderProjectCard(project, isMenuOpen) {
       </div>
       <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
       <div class="project-gallery-meta">
-        <div>
+        <div class="project-gallery-copy">
           <h2>${escapeHtml(project.name)}</h2>
           <span class="project-gallery-status">${escapeHtml(project.status ?? "未开始")}</span>
           <p>创建于：${escapeHtml(project.createdAt ?? "2026/05/21")}</p>
         </div>
         <div class="project-card-actions">
-          <button class="project-card-menu-button" type="button" data-action="toggle-project-card-menu" data-project-id="${escapeHtml(project.id)}" aria-expanded="${isMenuOpen ? "true" : "false"}">⋯</button>
+          <button
+            class="project-card-menu-button"
+            type="button"
+            data-action="toggle-project-card-menu"
+            data-project-id="${escapeHtml(project.id)}"
+            aria-label="打开项目操作"
+            aria-expanded="${isMenuOpen ? "true" : "false"}"
+          >
+            <span aria-hidden="true">编辑</span>
+          </button>
           ${isMenuOpen ? renderProjectCardMenu(project) : ""}
         </div>
       </div>
@@ -2952,7 +3063,7 @@ function renderProjectCard(project, isMenuOpen) {
 
 function getProjectCoverSrc(project) {
   if (project.coverImageUrl) {
-    return project.coverImageUrl;
+    return resolveApiUrl(project.coverImageUrl);
   }
 
   const name = String(project.name ?? "新项目");
@@ -3077,32 +3188,6 @@ function renderEmptyProjectState(searchQuery, statusFilters) {
   return '<article class="project-empty-card"><strong>还没有项目</strong><span>从下方创建项目开始，创建后会在这里出现。</span></article>';
 }
 
-function renderProjectPagination({ currentPage, totalPages }) {
-  return `
-    <nav class="project-gallery-pagination" aria-label="项目分页">
-      <button
-        class="pagination-button"
-        type="button"
-        data-action="change-project-page"
-        data-page="${currentPage - 1}"
-        ${disabled(currentPage <= 1)}
-      >
-        上一页
-      </button>
-      <span class="pagination-status">第 ${currentPage} / ${totalPages} 页</span>
-      <button
-        class="pagination-button"
-        type="button"
-        data-action="change-project-page"
-        data-page="${currentPage + 1}"
-        ${disabled(currentPage >= totalPages)}
-      >
-        下一页
-      </button>
-    </nav>
-  `;
-}
-
 function filterProjects(projects, searchQuery) {
   if (!searchQuery) {
     return projects;
@@ -3153,26 +3238,6 @@ function getProjectCreatedAtValue(project) {
     }
   }
   return 0;
-}
-
-function getAdaptiveProjectPageSize() {
-  if (typeof window === "undefined") {
-    return 8;
-  }
-
-  const viewportWidth = Math.max(window.innerWidth || 0, 1280);
-  const availableWidth = Math.max(0, viewportWidth - 180);
-  const columns = Math.max(1, Math.floor((availableWidth + 16) / 290));
-  return Math.max(columns, columns * 2);
-}
-
-function paginateProjects(projects, currentPage, pageSize) {
-  const start = (currentPage - 1) * pageSize;
-  return projects.slice(start, start + pageSize);
-}
-
-function clampPage(page, totalPages) {
-  return Math.min(Math.max(Number(page) || 1, 1), totalPages);
 }
 
 function renderRailTab(tab, activeNavTab) {

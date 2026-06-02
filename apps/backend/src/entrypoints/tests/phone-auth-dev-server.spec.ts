@@ -2896,6 +2896,7 @@ describe("phone auth dev server", () => {
       );
       const imageTaskEnvelope = await imageTaskResponse.json();
       const fixedImageVersionId = imageTaskEnvelope.data.result.assetVersionId;
+      const visibleGeneratedSceneUrl = "https://example.com/generated-visible-scene.png";
 
       const setFixedImageResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/set-fixed-image`,
@@ -2908,6 +2909,8 @@ describe("phone auth dev server", () => {
           body: JSON.stringify({
             assetVersionId: fixedImageVersionId,
             storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+            sourceUrl: visibleGeneratedSceneUrl,
+            previewUrl: visibleGeneratedSceneUrl,
           }),
         },
       );
@@ -2954,6 +2957,7 @@ describe("phone auth dev server", () => {
       assert.equal(workbenchResponse.status, 200);
       assert.equal(episodeAssetsResponse.status, 200);
       const savedFixedImagePath = String(setFixedImageEnvelope.data.asset.fixedImageUrl).split("?")[0];
+      assert.equal(savedFixedImagePath, visibleGeneratedSceneUrl);
       const workbenchFixedAsset = workbenchEnvelope.data.assetsByType.scene.find(
         (asset: { assetId: string }) => asset.assetId === assetId,
       );
@@ -4463,4 +4467,3 @@ async function waitFor<T>(
   }
   throw new Error(`wait_for_timeout:${JSON.stringify(lastValue ?? null)}`);
 }
-

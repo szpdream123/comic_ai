@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 
@@ -28,6 +29,10 @@ import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
   createCreatorApplication,
 } from "../modules/project/creator-application.service.ts";
+import {
+  completeProjectUploadRecord,
+  createProjectUploadRecord,
+} from "../modules/project/project-upload-record.service.ts";
 import { AuthorizationError, resolveActorContext } from "../modules/organization/actor-context.service.ts";
 import { queryOne } from "../modules/shared/db/sql.ts";
 import { createDevDb } from "../modules/shared/db/dev-db.ts";
@@ -39,6 +44,7 @@ import { createStorageAdapterFromEnv } from "../modules/storage/storage-adapter.
 import { buildSignedObjectUrls, createScopedStorageObject, deleteStorageObjectRecord } from "../modules/storage/storage.service.ts";
 import {
   abortUploadSession,
+  buildStorageObjectPublicUrl,
   completeUploadSession,
   createUploadSession,
   findUploadSession,
@@ -86,6 +92,12 @@ const fallbackMockImageBytes = Buffer.from(
   "base64",
 );
 const fallbackMockVideoBytes = Buffer.from("mock episode video\n", "utf8");
+const mockEpisodeStoryboardVideoUrl =
+  "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/660b682f-d13a-49d0-b15b-1e6c57ffdd0e-storyboard-ui-video.mp4";
+const mockEpisodeImageUrls = [
+  "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/1ee6f1a1-8bb8-4424-9ce3-e1361075b234-d256255d69a702a1f2095159c5aa1b1.png",
+  "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/%E7%99%BD%E9%87%8E.png",
+] as const;
 const episodeUploadLimits = {
   image: {
     label: "图片",
@@ -557,6 +569,31 @@ function normalizeGenerationKind(kind: "image" | "video") {
       };
 }
 
+async function readMockGenerationMedia(config: {
+  mediaKind: "image" | "video";
+  sourcePath: string | null;
+  contentType: string;
+  fileExtension: string;
+}) {
+  if (config.sourcePath) {
+    try {
+      const bytes = await readFile(resolve(config.sourcePath));
+      return {
+        bytes,
+        contentType: config.contentType,
+        fileExtension: config.fileExtension,
+        usedFallback: false,
+      };
+    } catch {}
+  }
+  return {
+    bytes: config.mediaKind === "video" ? fallbackMockVideoBytes : fallbackMockImageBytes,
+    contentType: config.contentType,
+    fileExtension: config.fileExtension,
+    usedFallback: true,
+  };
+}
+
 function resolveEpisodeGenerationAssetType(input: {
   kind: "image" | "video";
   targetType?: unknown;
@@ -998,6 +1035,8 @@ async function mapGenerationTaskResponse(
           status: "ready",
         }]
       : [];
+  const mockImageUrl = kind === "image" ? pickMockEpisodeImageUrl(row.task_id) : null;
+  const storyboardVideoUrl = kind === "video" ? mockEpisodeStoryboardVideoUrl : null;
 
   const result =
     row.asset_version_id && urls
@@ -1008,12 +1047,12 @@ async function mapGenerationTaskResponse(
           fileId: row.storage_object_id,
           storageObjectKey: row.storage_object_key,
           mediaKind: kind,
-          imageUrl: kind === "image" ? urls.previewUrl : null,
-          videoUrl: kind === "video" ? urls.previewUrl : null,
-          thumbnailUrl: metadata.thumbnailUrl ?? (kind === "image" ? urls.previewUrl : null),
-          coverImageUrl: metadata.coverImageUrl ?? (kind === "image" ? urls.previewUrl : null),
-          sourceUrl: urls.sourceUrl,
-          downloadUrl: urls.downloadUrl,
+          imageUrl: mockImageUrl,
+          videoUrl: storyboardVideoUrl,
+          thumbnailUrl: metadata.thumbnailUrl ?? (kind === "image" ? mockImageUrl : null),
+          coverImageUrl: metadata.coverImageUrl ?? (kind === "image" ? mockImageUrl : null),
+          sourceUrl: kind === "image" ? mockImageUrl : storyboardVideoUrl,
+          downloadUrl: kind === "image" ? mockImageUrl : storyboardVideoUrl,
           expiresAt: urls.expiresAt,
           generatedAudioItems,
         }
@@ -1087,6 +1126,46 @@ function buildMockVoicePreviewDataUrl(seedValue: string) {
   wavBytes.set(new Uint8Array(header), 0);
   wavBytes.set(pcmBytes, header.byteLength);
   return `data:audio/wav;base64,${Buffer.from(wavBytes).toString("base64")}`;
+}
+
+function pickMockEpisodeImageUrl(taskId: string) {
+  const seed = [...String(taskId ?? "mock-image")]
+    .reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return mockEpisodeImageUrls[seed % mockEpisodeImageUrls.length];
+}
+
+function isMockEpisodeImageUrl(value: unknown) {
+  return /mock-image-[^?]+\.(?:avif|png|webp)(?:\?|$)/i.test(String(value ?? "").trim());
+}
+
+function resolvePreferredEpisodeImageUrl(...candidates: unknown[]) {
+  const normalized = candidates.map((value) => String(value ?? "").trim()).filter(Boolean);
+  return normalized.find((value) => !isMockEpisodeImageUrl(value)) ?? normalized[0] ?? null;
+}
+
+function replaceMockImageUrlsInValue(value: unknown, taskId: string | null | undefined): unknown {
+  if (!taskId) {
+    return value;
+  }
+  const mockImageUrl = pickMockEpisodeImageUrl(taskId);
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceMockImageUrlsInValue(item, taskId));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const next = { ...record };
+  for (const [key, current] of Object.entries(record)) {
+    if (typeof current === "string" && /mock-image-[^?]+\.(avif|png|webp)(\?|$)/i.test(current)) {
+      next[key] = mockImageUrl;
+      continue;
+    }
+    if (current && typeof current === "object") {
+      next[key] = replaceMockImageUrlsInValue(current, taskId);
+    }
+  }
+  return next;
 }
 
 async function settleTimedOutEpisodeGenerationTask(
@@ -1700,6 +1779,44 @@ async function listEpisodeAssetsFromDb(
   if (!context) {
     return null;
   }
+  const assetVersionRows = await db.query<{
+    asset_id: string;
+    version_id: string;
+    metadata_json: Record<string, unknown> | string | null;
+    version_number: number | string | null;
+    created_at: Date | string | null;
+  }>(
+    `
+      SELECT
+        v.asset_id,
+        v.id AS version_id,
+        v.metadata_json,
+        v.version_number,
+        v.created_at
+      FROM asset_versions v
+      JOIN assets a
+        ON a.organization_id = v.organization_id
+       AND a.id = v.asset_id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.asset_type = $3
+      ORDER BY v.asset_id ASC, v.version_number DESC, v.created_at DESC, v.id DESC
+    `,
+    [context.actor.organizationId, context.project.id, normalized.assetType],
+  );
+  const episodeScopedAssetMetadataByAssetId = new Map<string, Record<string, unknown>>();
+  for (const row of assetVersionRows.rows) {
+    const metadata =
+      typeof row.metadata_json === "string"
+        ? JSON.parse(row.metadata_json) as Record<string, unknown>
+        : row.metadata_json ?? {};
+    if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+      continue;
+    }
+    if (!episodeScopedAssetMetadataByAssetId.has(row.asset_id)) {
+      episodeScopedAssetMetadataByAssetId.set(row.asset_id, metadata);
+    }
+  }
   const rows = await db.query<{
     asset_id: string;
     asset_key: string;
@@ -1744,10 +1861,11 @@ async function listEpisodeAssetsFromDb(
     rows.rows
       .map(async (row) => {
         const metadata =
-          typeof row.metadata_json === "string"
+          episodeScopedAssetMetadataByAssetId.get(row.asset_id) ??
+          (typeof row.metadata_json === "string"
             ? JSON.parse(row.metadata_json) as Record<string, unknown>
-            : row.metadata_json ?? {};
-        if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+            : row.metadata_json ?? {});
+        if (!metadata || !matchesEpisodeScopedAsset(metadata, input.episodeId)) {
           return null;
         }
         const fixedImageFileId = typeof metadata.fixedImageFileId === "string" ? metadata.fixedImageFileId : null;
@@ -1776,6 +1894,13 @@ async function listEpisodeAssetsFromDb(
               now: input.now,
             })
           : null;
+        const persistedFixedPreviewUrl =
+          resolvePreferredEpisodeImageUrl(
+            metadata.fixedImageUrl,
+            metadata.previewUrl,
+            fixedImageVersion?.assetVersion.previewUrl,
+            fixedImageVersion?.assetVersion.metadata?.previewUrl,
+          ) ?? "";
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
@@ -1784,7 +1909,7 @@ async function listEpisodeAssetsFromDb(
           fixedImageFileId: fixedImageVersion?.assetVersion.versionId ?? fixedImageFileId ?? row.version_id,
           fixedImageStorageObjectId:
             fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id,
-          fixedImageUrl: urls?.previewUrl ?? String(metadata.fixedImageUrl ?? metadata.previewUrl ?? ""),
+          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(metadata.fixedImageUrl ?? metadata.previewUrl ?? ""),
           voiceId: typeof metadata.voiceId === "string" ? metadata.voiceId : null,
           voiceName: typeof metadata.voiceName === "string" ? metadata.voiceName : null,
           dubbingConfig:
@@ -2598,6 +2723,26 @@ async function setEpisodeAssetFixedImage(
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
     now: input.now,
   });
+  const persistedPreviewUrl = resolvePreferredEpisodeImageUrl(
+    input.body.previewUrl,
+    input.body.sourceUrl,
+    fixedResolved.assetVersion.previewUrl,
+    fixedResolved.assetVersion.metadata?.previewUrl,
+    file.previewUrl,
+  );
+  const persistedSourceUrl = resolvePreferredEpisodeImageUrl(
+    input.body.sourceUrl,
+    input.body.previewUrl,
+    fixedResolved.assetVersion.sourceUrl,
+    fixedResolved.assetVersion.metadata?.sourceUrl,
+    file.sourceUrl,
+  );
+  const persistedDownloadUrl = resolvePreferredEpisodeImageUrl(
+    fixedResolved.assetVersion.downloadUrl,
+    fixedResolved.assetVersion.metadata?.downloadUrl,
+    persistedSourceUrl,
+    file.downloadUrl,
+  );
   const latestVersion = await queryOne<{
     version_id: string;
     metadata_json: Record<string, unknown> | string | null;
@@ -2629,10 +2774,10 @@ async function setEpisodeAssetFixedImage(
   }
   metadata.fixedImageFileId = fixedResolved.assetVersion.versionId;
   metadata.fixedImageStorageObjectId = fixedResolved.assetVersion.storageObjectId;
-  metadata.fixedImageUrl = file.previewUrl;
-  metadata.previewUrl = file.previewUrl;
-  metadata.sourceUrl = file.sourceUrl;
-  metadata.downloadUrl = file.downloadUrl;
+  metadata.fixedImageUrl = persistedPreviewUrl;
+  metadata.previewUrl = persistedPreviewUrl;
+  metadata.sourceUrl = persistedSourceUrl;
+  metadata.downloadUrl = persistedDownloadUrl;
   metadata.mimeType = fixedResolved.assetVersion.contentType;
   await db.query(
     `
@@ -2658,7 +2803,7 @@ async function setEpisodeAssetFixedImage(
       episodeId: input.episodeId,
       fixedImageFileId: fixedResolved.assetVersion.versionId,
       fixedImageStorageObjectId: fixedResolved.assetVersion.storageObjectId,
-      fixedImageUrl: file.previewUrl,
+      fixedImageUrl: persistedPreviewUrl,
       status: "ready",
       isPinned: true,
       updatedAt: input.now.toISOString(),
@@ -2966,7 +3111,7 @@ async function setEpisodeStoryboardMedia(
       currentImageFileId: shot.current_image_asset_version_id,
       currentImageUrl: input.mediaKind === "image" ? file.previewUrl : null,
       currentVideoFileId: shot.current_video_asset_version_id,
-      currentVideoUrl: input.mediaKind === "video" ? file.previewUrl : null,
+      currentVideoUrl: input.mediaKind === "video" ? mockEpisodeStoryboardVideoUrl : null,
       imageStatus: normalizeTaskStatus(shot.image_status),
       videoStatus: normalizeTaskStatus(shot.video_status),
     },
@@ -3186,10 +3331,14 @@ async function saveEpisodeAssetConversationMessagesRoute(
   const allMessages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
+  const normalizedAllMessages = allMessages.map((message) => ({
+    ...message,
+    payload: replaceMockImageUrlsInValue(message.payload, message.taskId ?? message.turnId) as Record<string, unknown>,
+  }));
   return {
     thread,
     messages,
-    entries: buildAssetConversationEntries(thread, allMessages),
+    entries: buildAssetConversationEntries(thread, normalizedAllMessages),
   };
 }
 
@@ -3230,10 +3379,14 @@ async function getEpisodeAssetConversationRoute(
   const messages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
+  const normalizedMessages = messages.map((message) => ({
+    ...message,
+    payload: replaceMockImageUrlsInValue(message.payload, message.taskId ?? message.turnId) as Record<string, unknown>,
+  }));
   return {
     thread,
     messages,
-    entries: buildAssetConversationEntries(thread, messages),
+    entries: buildAssetConversationEntries(thread, normalizedMessages),
   };
 }
 
@@ -3567,6 +3720,59 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
   return `http://${host}`;
 }
 
+function proxyRemoteMedia(
+  response: ServerResponse,
+  targetUrl: string,
+  headers: Record<string, string> = {},
+) {
+  return new Promise<void>((resolvePromise) => {
+    const upstream = httpsRequest(
+      targetUrl,
+      {
+        method: "GET",
+        headers,
+      },
+      (upstreamResponse) => {
+        response.statusCode = upstreamResponse.statusCode ?? 502;
+        const passthroughHeaders = [
+          "content-type",
+          "content-length",
+          "content-range",
+          "accept-ranges",
+          "cache-control",
+          "etag",
+          "last-modified",
+        ];
+        for (const headerName of passthroughHeaders) {
+          const headerValue = upstreamResponse.headers[headerName];
+          if (headerValue) {
+            response.setHeader(headerName, headerValue);
+          }
+        }
+        response.setHeader("access-control-allow-origin", "*");
+        upstreamResponse.pipe(response);
+        upstreamResponse.on("end", () => resolvePromise());
+        upstreamResponse.on("error", () => {
+          if (!response.headersSent) {
+            response.statusCode = 502;
+          }
+          response.end();
+          resolvePromise();
+        });
+      },
+    );
+    upstream.on("error", () => {
+      if (!response.headersSent) {
+        response.statusCode = 502;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+      }
+      response.end(JSON.stringify({ ok: false, error: "remote_media_unavailable" }));
+      resolvePromise();
+    });
+    upstream.end();
+  });
+}
+
 async function ensureDevWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
@@ -3781,6 +3987,10 @@ export function createPhoneAuthDevServer(
     provider: storageMode === "cos" ? "tencent_cos" : storageMode === "s3_compatible" ? "s3_compatible" : "creator-dev",
     bucket: storageBucket,
     region: storageRegion,
+    publicBaseUrl:
+      process.env.STORAGE_PUBLIC_BASE_URL?.trim() ||
+      process.env.STORAGE_ENDPOINT?.trim() ||
+      null,
     adapter: storageAdapter,
     stsSecretId: process.env.STORAGE_COS_SECRET_ID?.trim() ?? null,
     stsSecretKey: process.env.STORAGE_COS_SECRET_KEY?.trim() ?? null,
@@ -4197,6 +4407,18 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && pathname === "/api/storage/upload-sessions") {
+          if (!process.env.DATABASE_URL?.trim()) {
+            return writeJson(
+              response,
+              envelopedError(500, "database_url_required", "未配置真实数据库，禁止上传。"),
+            );
+          }
+          if (storageRuntime.mode === "creator-dev") {
+            return writeJson(
+              response,
+              envelopedError(500, "cloud_storage_required", "未配置云存储，项目上传必须走云存储。"),
+            );
+          }
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
             return writeIdempotencyKeyRequired(response);
@@ -4244,6 +4466,38 @@ export function createPhoneAuthDevServer(
             idempotencyKey,
             now: new Date(),
             runtime: storageRuntime,
+          });
+          const userRecord = await queryOne<{ display_name: string | null; phone_e164: string | null }>(
+            db,
+            "SELECT display_name, phone_e164 FROM users WHERE id = $1",
+            [actor.actorId],
+          );
+          const projectRecord = body.projectId?.trim()
+            ? await queryOne<{ name: string | null }>(db, "SELECT name FROM projects WHERE id = $1", [body.projectId.trim()])
+            : null;
+          await createProjectUploadRecord(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? null,
+            projectId: body.projectId?.trim() || null,
+            storageObjectId: prepared.storageObjectId ?? null,
+            uploadSessionId: prepared.uploadSessionId,
+            actorUserId: actor.actorId,
+            actorDisplayName: userRecord?.display_name ?? null,
+            actorPhoneE164: userRecord?.phone_e164 ?? null,
+            projectName: projectRecord?.name ?? null,
+            pageKey: "project",
+            pageUrl: serverOriginFromRequest(request) + (request.url ?? "/"),
+            sourceAction: body.purpose,
+            fileName: body.fileName,
+            objectKey: prepared.objectKey ?? null,
+            bucket: prepared.bucket ?? null,
+            provider: prepared.provider ?? null,
+            contentType: body.contentType,
+            sizeBytes: body.sizeBytes ?? null,
+            publicUrl: null,
+            status: "created",
+            errorMessage: null,
+            now: new Date(),
           });
           return writeJson(response, {
             status: 200,
@@ -4326,18 +4580,39 @@ export function createPhoneAuthDevServer(
             workspaceId: devWorkspaceId,
             now: new Date(),
           });
+          const completed = await completeUploadSession(db, {
+            actor,
+            sessionToken: authenticated.sessionToken,
+            uploadSessionId,
+            checksum: body.checksum ?? null,
+            eTag: body.eTag ?? null,
+            now: new Date(),
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+          });
+          const publicUrl = buildStorageObjectPublicUrl(storageRuntime, {
+            bucket: completed.storageObject.bucket,
+            objectKey: completed.storageObject.objectKey,
+          });
+          const uploadRecord = await completeProjectUploadRecord(db, {
+            uploadSessionId,
+            storageObjectId: completed.storageObject.id,
+            objectKey: completed.storageObject.objectKey,
+            bucket: completed.storageObject.bucket,
+            provider: completed.storageObject.provider,
+            contentType: completed.storageObject.contentType,
+            sizeBytes: completed.storageObject.sizeBytes ?? null,
+            publicUrl,
+            status: "uploaded",
+            errorMessage: null,
+            now: new Date(),
+          });
           return writeJson(response, {
             status: 200,
-            body: await completeUploadSession(db, {
-              actor,
-              sessionToken: authenticated.sessionToken,
-              uploadSessionId,
-              checksum: body.checksum ?? null,
-              eTag: body.eTag ?? null,
-              now: new Date(),
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-            }),
+            body: {
+              ...completed,
+              uploadRecord,
+            },
           });
         }
 
@@ -4848,7 +5123,7 @@ export function createPhoneAuthDevServer(
               currentImageFileId: shot.currentImageAssetVersionId ?? null,
               currentImageUrl: shot.previewImageUrl ?? null,
               currentVideoFileId: shot.currentVideoAssetVersionId ?? null,
-              currentVideoUrl: shot.previewVideoUrl ?? null,
+              currentVideoUrl: shot.currentVideoAssetVersionId ? mockEpisodeStoryboardVideoUrl : shot.previewVideoUrl ?? null,
               imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
               videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
               assetRefs: Array.isArray(shot.references) ? shot.references : [],
@@ -4857,6 +5132,20 @@ export function createPhoneAuthDevServer(
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname === "/api/dev-proxy/storyboard-video"
+        ) {
+          await proxyRemoteMedia(
+            response,
+            mockEpisodeStoryboardVideoUrl,
+            typeof request.headers.range === "string"
+              ? { Range: request.headers.range }
+              : {},
+          );
+          return;
         }
 
         if (
@@ -5037,6 +5326,38 @@ export function createPhoneAuthDevServer(
         }
 
         if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/storyboards/") &&
+          pathname.endsWith("/conversation")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
+          if (!isUuid(episodeId) || !isUuid(storyboardId)) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+            );
+          }
+          const mediaMode: AssetConversationMediaMode =
+            String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
+              ? "video"
+              : "image";
+          const result = await getEpisodeAssetConversationRoute(db, {
+            episodeId,
+            assetId: storyboardId,
+            mediaMode,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
           request.method === "POST" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.includes("/assets/") &&
@@ -5055,6 +5376,35 @@ export function createPhoneAuthDevServer(
           const result = await saveEpisodeAssetConversationMessagesRoute(db, {
             episodeId,
             assetId,
+            body,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/storyboards/") &&
+          pathname.endsWith("/conversation/messages")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
+          if (!isUuid(episodeId) || !isUuid(storyboardId)) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+            );
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await saveEpisodeAssetConversationMessagesRoute(db, {
+            episodeId,
+            assetId: storyboardId,
             body,
             authenticated,
             now: new Date(),
@@ -5095,6 +5445,40 @@ export function createPhoneAuthDevServer(
           });
           if (!result) {
             return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/storyboards/") &&
+          pathname.includes("/conversation/messages/")
+        ) {
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
+          const taskId = decodeURIComponent(parts.at(8) ?? "");
+          if (!isUuid(episodeId) || !isUuid(storyboardId) || !taskId.trim()) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+            );
+          }
+          const mediaMode: AssetConversationMediaMode =
+            String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
+              ? "video"
+              : "image";
+          const result = await deleteEpisodeAssetConversationTurnRoute(db, {
+            episodeId,
+            assetId: storyboardId,
+            taskId,
+            mediaMode,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
           }
           return writeJson(response, enveloped(200, result));
         }

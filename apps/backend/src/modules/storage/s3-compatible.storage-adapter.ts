@@ -39,14 +39,25 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       1,
       Math.round((input.expiresAt.getTime() - Date.now()) / 1000),
     );
-    const url = await getSignedUrl(
-      this.client,
-      new GetObjectCommand({
-        Bucket: input.bucket,
-        Key: input.objectKey,
-      }),
-      { expiresIn },
-    );
+    let url: string;
+    try {
+      url = await getSignedUrl(
+        this.client,
+        new GetObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+        }),
+        { expiresIn },
+      );
+    } catch (error) {
+      console.error("[storage][s3-compatible] createSignedReadUrl failed", {
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        expiresAt: input.expiresAt.toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     return { url, expiresAt: input.expiresAt };
   }
@@ -57,14 +68,26 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     body: Uint8Array;
     contentType?: string | null;
   }) {
-    const result = await this.client.send(
-      new PutObjectCommand({
-        Bucket: input.bucket,
-        Key: input.objectKey,
-        Body: input.body,
-        ContentType: input.contentType ?? undefined,
-      }),
-    );
+    let result;
+    try {
+      result = await this.client.send(
+        new PutObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+          Body: input.body,
+          ContentType: input.contentType ?? undefined,
+        }),
+      );
+    } catch (error) {
+      console.error("[storage][s3-compatible] putObject failed", {
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        contentType: input.contentType ?? null,
+        sizeBytes: input.body.byteLength,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     return {
       eTag: result.ETag?.replaceAll('"', "") ?? null,
       versionId: result.VersionId ?? null,
@@ -93,16 +116,30 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       if (/not.?found|no.?such.?key/i.test(message)) {
         return { exists: false };
       }
+      console.error("[storage][s3-compatible] headObject failed", {
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        error: message,
+      });
       throw error;
     }
   }
 
   async deleteObject(input: { bucket: string; objectKey: string }) {
-    await this.client.send(
-      new DeleteObjectCommand({
-        Bucket: input.bucket,
-        Key: input.objectKey,
-      }),
-    );
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+        }),
+      );
+    } catch (error) {
+      console.error("[storage][s3-compatible] deleteObject failed", {
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 }

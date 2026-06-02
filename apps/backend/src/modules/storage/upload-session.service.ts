@@ -67,6 +67,7 @@ export interface UploadSessionRuntime {
   bucket: string;
   region: string;
   adapter: StorageAdapter;
+  publicBaseUrl?: string | null;
   stsSecretId?: string | null;
   stsSecretKey?: string | null;
   stsDurationSeconds?: number;
@@ -224,6 +225,23 @@ export async function completeUploadSession(
       expiresInSeconds: input.signedUrlExpiresInSeconds,
     }),
   };
+}
+
+export function buildStorageObjectPublicUrl(
+  runtime: UploadSessionRuntime,
+  object: {
+    bucket: string;
+    objectKey: string;
+  },
+) {
+  const configuredBaseUrl = String(runtime.publicBaseUrl ?? "").trim().replace(/\/+$/g, "");
+  if (configuredBaseUrl) {
+    return `${configuredBaseUrl}/${object.objectKey}`;
+  }
+  if (runtime.mode === "cos" && runtime.bucket && runtime.region) {
+    return `https://${runtime.bucket}.cos.${runtime.region}.myqcloud.com/${object.objectKey}`;
+  }
+  return null;
 }
 
 export async function abortUploadSession(

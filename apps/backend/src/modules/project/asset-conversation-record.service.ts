@@ -353,6 +353,14 @@ export function buildAssetConversationEntries(
           (userRequest.quickReferenceItems as unknown[] | undefined) ??
           (systemPayload.quickReferenceItems as unknown[] | undefined) ??
           [],
+        attachmentItems:
+          (userRequest.attachmentItems as unknown[] | undefined) ??
+          (systemPayload.attachmentItems as unknown[] | undefined) ??
+          [],
+        generatedAudioItems:
+          (userRequest.generatedAudioItems as unknown[] | undefined) ??
+          (systemPayload.generatedAudioItems as unknown[] | undefined) ??
+          [],
         fixedImages: (systemPayload.fixedImages as unknown[] | undefined) ?? [],
         fixedVideos: (systemPayload.fixedVideos as unknown[] | undefined) ?? [],
         selectionContext,

@@ -207,9 +207,20 @@ export function renderEpisodeWorkbench({
   projectDetail = null,
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
+  const storyboardVisibleMediaTabs = MEDIA_TABS.filter((tab) => tab.id !== "image");
+  const effectiveMediaMode =
+    scopeMode === "assets"
+      ? "image"
+      : mediaMode === "image"
+        ? (storyboardVisibleMediaTabs[0]?.id ?? "video")
+        : mediaMode;
+  const visibleMediaTabs =
+    scopeMode === "assets"
+      ? MEDIA_TABS.filter((tab) => tab.id === "image")
+      : storyboardVisibleMediaTabs;
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
-    scopeMode === "assets" && mediaMode === "image"
+    scopeMode === "assets" && effectiveMediaMode === "image"
       ? "jimeng-4-5"
       : selectedModelId;
   const assetGroups = {
@@ -238,7 +249,7 @@ export function renderEpisodeWorkbench({
       ? allStoryboardIds.length > 0 && allStoryboardIds.every((id) => selectedStoryboardIds.includes(id))
       : allAssetIds.length > 0 && allAssetIds.every((id) => selectedEpisodeAssetIds.includes(id));
   const canGenerateCurrentMode =
-    mediaMode === "video" || mediaMode === "lip-sync"
+    effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync"
       ? canGenerateVideos
       : canGenerateImages;
   const quickAssets = [...assetGroups.character, ...assetGroups.scene, ...assetGroups.prop].slice(0, 18);
@@ -250,13 +261,21 @@ export function renderEpisodeWorkbench({
   const showQuickEmptyState = Boolean(normalizedAssetSearchQuery) && filteredQuickAssets.length === 0;
   const assetPromptDraft = generationUiState.assetPromptDraft ?? {};
   const assetConversationHistory = generationUiState.assetConversationHistory ?? {};
+  const storyboardConversationHistory = generationUiState.storyboardConversationHistory ?? {};
   const assetQuickReferenceItems = assetPromptDraft.quickReferenceItems ?? [];
   const assetSelectionContext = assetPromptDraft.selectionContext ?? {};
   const assetConversationEntries = resolveAssetConversationEntries(
     assetConversationHistory,
     selectedAsset?.id ?? null,
-    mediaMode === "video" ? "video" : "image",
+    effectiveMediaMode === "video" ? "video" : "image",
     imageGenerationResult,
+  );
+  const storyboardMediaKind = effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video" : "image";
+  const storyboardConversationEntries = resolveStoryboardConversationEntries(
+    storyboardConversationHistory,
+    currentStoryboard?.id ?? null,
+    storyboardMediaKind,
+    storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
   );
   const selectedAssetSummary = String(selectedAsset?.description ?? "").trim();
   const assetStageTitle = selectedAsset
@@ -307,10 +326,10 @@ export function renderEpisodeWorkbench({
           }
         </section>
 
-        <section class="episode-replica-center ${mediaMode === "video" || mediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
+        <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
           <div class="episode-replica-stage-head">
             <div class="episode-replica-stage-tabs">
-              ${MEDIA_TABS.map((tab) => renderMediaTab(tab, mediaMode)).join("")}
+              ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode)).join("")}
             </div>
             <p class="episode-replica-stage-title">${
               scopeMode === "storyboard"
@@ -321,19 +340,25 @@ export function renderEpisodeWorkbench({
           <div class="episode-replica-stage-body">
             ${
               scopeMode === "storyboard"
-                ? renderStoryboardStage(currentStoryboard, mediaMode, imageGenerationResult, videoGenerationResult)
+                ? renderStoryboardStage(
+                    currentStoryboard,
+                    effectiveMediaMode,
+                    imageGenerationResult,
+                    videoGenerationResult,
+                    storyboardConversationEntries,
+                  )
                 : assetConversationEntries.length > 0
                   ? renderAssetGeneratedStage(
                       selectedAsset,
                       activeAssetTab,
                       imageGenerationResult,
-                      mediaMode,
+                      effectiveMediaMode,
                       assetConversationEntries,
                     )
                   : renderAssetStage({
                       asset: selectedAsset,
                       activeAssetTab,
-                      mediaMode,
+                      mediaMode: effectiveMediaMode,
                       quickReferenceItems: assetQuickReferenceItems,
                       selectionContext: assetSelectionContext,
                     })
@@ -349,7 +374,7 @@ export function renderEpisodeWorkbench({
             validationMessage,
             generationControls,
             generationUiState,
-            mediaMode,
+            mediaMode: effectiveMediaMode,
             attachments: episodeWorkbenchAttachments,
             selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
             generationPollingActive,
@@ -530,7 +555,6 @@ function renderAssetWorkspace(
 
 function renderAssetCard(asset, assetKind, active, checked) {
   const desc = String(asset?.description ?? "").trim() || "";
-  const title = assetKind === "scene" ? "编辑场景" : assetKind === "prop" ? "编辑道具" : "编辑角色";
   const saveLabel = assetKind === "scene" ? "保存场景到资产库" : assetKind === "prop" ? "保存道具到资产库" : "保存角色到资产库";
   const fixedLabel = assetKind === "scene" ? "场景固定" : assetKind === "prop" ? "道具固定" : "角色固定";
   const descLabel = assetKind === "scene" ? "场景描述" : assetKind === "prop" ? "道具描述" : "角色描述";
@@ -545,7 +569,6 @@ function renderAssetCard(asset, assetKind, active, checked) {
         <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
         <button class="episode-replica-asset-select" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">
           <strong class="name">${escapeHtml(asset?.name ?? "测试素材")}</strong>
-          <span class="title">${escapeHtml(title)}</span>
         </button>
         <span class="episode-replica-asset-hover-tools" aria-hidden="true">
           <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
@@ -811,7 +834,16 @@ function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage) {
       storyboard?.previewThumbnailUrl ??
       storyboard?.uploadedVideos?.find((item) => item.src === previewVideo)?.thumbnailSrc ??
       "";
-    return `<span class="episode-replica-shot-media-thumb has-video-preview active">${thumbnail ? `<img src="${escapeAttr(thumbnail)}" alt="" />` : ""}<i>▶</i></span>`;
+    return `
+      <span class="episode-replica-shot-video-preview active">
+        <video
+          src="${escapeAttr(previewVideo)}"
+          ${thumbnail ? `poster="${escapeAttr(thumbnail)}"` : ""}
+          preload="metadata"
+          controls
+        ></video>
+      </span>
+    `;
   }
   if (previewImage) {
     return `<span class="episode-replica-shot-media-thumb has-image-preview active"><img src="${escapeAttr(previewImage)}" alt="" /></span>`;
@@ -879,6 +911,23 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
   return [...historyEntries, generationResult];
 }
 
+function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, mediaKind = "image", generationResult = null) {
+  const key = `${mediaKind}:${storyboardId ?? ""}`;
+  const historyEntries = Array.isArray(historyMap?.[key]) ? historyMap[key].filter(Boolean) : [];
+  if (!generationResult) {
+    return historyEntries;
+  }
+  const resultStoryboardId = generationResult?.storyboardId ?? generationResult?.selectionContext?.selectedStoryboardId ?? null;
+  if (!storyboardId || resultStoryboardId !== storyboardId) {
+    return historyEntries;
+  }
+  const taskId = resolveGenerationTaskId(generationResult);
+  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+    return historyEntries;
+  }
+  return [...historyEntries, generationResult];
+}
+
 function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
   const entries = Array.isArray(generationHistory) && generationHistory.length
     ? generationHistory
@@ -908,7 +957,7 @@ function renderAssetConversationEntry(generationResult, assetKind = "character")
   return `
     <section class="episode-replica-asset-conversation-entry">
       <div class="episode-replica-message-thread">
-        ${promptPreview ? renderUserMessage(promptPreview, userMeta, quickReferenceItems) : ""}
+        ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems) : ""}
       </div>
       ${renderFixedImageResults(generationResult, assetKind)}
     </section>
@@ -1006,14 +1055,76 @@ function renderQuickAsset(asset, active) {
   `;
 }
 
-function renderStoryboardStage(selectedStoryboard, currentMode, imageGenerationResult, videoGenerationResult) {
+function renderStoryboardStage(
+  selectedStoryboard,
+  currentMode,
+  imageGenerationResult,
+  videoGenerationResult,
+  conversationEntries = [],
+) {
+  const isVideoMode = currentMode === "video" || currentMode === "lip-sync";
+  const mediaKind = isVideoMode ? "video" : "image";
+  const activeGenerationResult = isVideoMode ? videoGenerationResult : imageGenerationResult;
   if (currentMode === "lip-sync") {
-    return renderCurrentStoryboardMediaStage(selectedStoryboard, true);
+    return renderStoryboardConversationStage({
+      selectedStoryboard,
+      mediaKind,
+      generationResult: activeGenerationResult,
+      conversationEntries,
+      selectedConversationTaskId,
+      fallbackContent: renderCurrentStoryboardMediaStage(selectedStoryboard, true),
+    });
   }
   if (currentMode === "video") {
-    return renderGeneratedStage(selectedStoryboard, true, videoGenerationResult);
+    return renderStoryboardConversationStage({
+      selectedStoryboard,
+      mediaKind,
+      generationResult: activeGenerationResult,
+      conversationEntries,
+      fallbackContent: renderGeneratedStage(selectedStoryboard, true, activeGenerationResult),
+    });
   }
-  return renderGeneratedStage(selectedStoryboard, false, imageGenerationResult);
+  return renderStoryboardConversationStage({
+    selectedStoryboard,
+    mediaKind,
+    generationResult: activeGenerationResult,
+    conversationEntries,
+    fallbackContent: renderGeneratedStage(selectedStoryboard, false, activeGenerationResult),
+  });
+}
+
+export function renderStoryboardStageForPartialUpdate(
+  selectedStoryboard,
+  currentMode,
+  generationResult,
+  conversationEntries = [],
+) {
+  const isVideoMode = currentMode === "video" || currentMode === "lip-sync";
+  return renderStoryboardStage(
+    selectedStoryboard,
+    currentMode,
+    isVideoMode ? null : generationResult,
+    isVideoMode ? generationResult : null,
+    conversationEntries,
+  );
+}
+
+function renderStoryboardConversationStage({
+  selectedStoryboard,
+  mediaKind,
+  generationResult,
+  conversationEntries = [],
+  fallbackContent = "",
+} = {}) {
+  const entries = Array.isArray(conversationEntries) ? conversationEntries.filter(Boolean) : [];
+  if (!entries.length) {
+    return fallbackContent;
+  }
+  return `
+    <div class="episode-replica-storyboard-conversation-list">
+      ${entries.map((entry) => renderGeneratedStage(selectedStoryboard, mediaKind === "video", entry ?? generationResult)).join("")}
+    </div>
+  `;
 }
 
 function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
@@ -1032,27 +1143,83 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
       "",
     140,
   );
+  const taskId =
+    generationResult?.taskId ??
+    generationResult?.platform?.tasks?.[0]?.taskId ??
+    generationResult?.id ??
+    "";
+  const actionTaskAttr = taskId ? ` data-task-id="${escapeAttr(String(taskId))}"` : "";
   return `
     <div class="episode-replica-generated-stage visible">
       ${renderResultMessageThread({
         promptPreview,
+        quickReferenceItems,
+        attachmentItems,
+        generatedAudioItems:
+          generationResult?.generatedAudioItems ??
+          generationResult?.result?.generatedAudioItems ??
+          [],
+        createdAt:
+          generationResult?.createdAt ??
+          generationResult?.completedAt ??
+          selectedStoryboard?.generationState?.lastSubmission?.createdAt ??
+          "",
+        taskId:
+          taskId,
+        modelLabel: resolveGenerationModelLabel(generationResult?.selectedModelId),
         systemContent: `
+          ${isVideo ? renderFixedVideoResult(generationResult, null) : ""}
           <div class="episode-replica-stage-actions">
-            <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}">重新编辑</button>
+            <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>重新编辑</button>
             ${
               isVideo
-                ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video">设为分镜视频</button>`
-                : `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-image" data-media-kind="image">设为分镜图</button>`
+                ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video"${actionTaskAttr}>设为分镜视频</button>`
+                : `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-image" data-media-kind="image"${actionTaskAttr}>设为分镜图</button>`
             }
-            <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}">下载</button>
-            <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}">删除</button>
+            <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>下载</button>
+            <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>删除</button>
           </div>
-          ${renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
+          ${isVideo ? "" : renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
           ${isVideo ? "" : renderFixedImageResults(generationResult)}
         `,
       })}
     </div>
   `;
+}
+
+function renderFixedVideoResult(generationResult, selectedStoryboard = null) {
+  const videoUrl = resolveGeneratedVideoUrl(generationResult, selectedStoryboard);
+  if (!videoUrl) {
+    return "";
+  }
+  const posterUrl =
+    generationResult?.thumbnailUrl ??
+    generationResult?.result?.thumbnailUrl ??
+    selectedStoryboard?.previewThumbnailUrl ??
+    "";
+  return `
+    <div class="episode-replica-fixed-results video-result">
+      <article class="episode-replica-fixed-video-card">
+        <span class="episode-replica-fixed-image-badge">视频</span>
+        <video
+          src="${escapeAttr(videoUrl)}"
+          ${posterUrl ? `poster="${escapeAttr(posterUrl)}"` : ""}
+          controls
+          preload="metadata"
+        ></video>
+      </article>
+    </div>
+  `;
+}
+
+function resolveGeneratedVideoUrl(generationResult, selectedStoryboard = null) {
+  return (
+    generationResult?.result?.videoUrl ??
+    generationResult?.videoUrl ??
+    generationResult?.fixedVideos?.[0]?.url ??
+    selectedStoryboard?.previewVideo ??
+    ""
+  );
 }
 
 function renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems = [], attachmentItems = []) {
@@ -1123,10 +1290,31 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
   `;
 }
 
-function renderResultMessageThread({ promptPreview = "", systemContent = "" } = {}) {
+function renderResultMessageThread({
+  promptPreview = "",
+  quickReferenceItems = [],
+  attachmentItems = [],
+  generatedAudioItems = [],
+  createdAt = "",
+  taskId = "",
+  modelLabel = "",
+  systemContent = "",
+} = {}) {
   return `
     <div class="episode-replica-message-thread">
-      ${promptPreview ? renderUserMessage(promptPreview) : ""}
+      ${
+        promptPreview
+          ? renderEnhancedUserMessage({
+              promptPreview,
+              quickReferenceItems,
+              attachmentItems,
+              generatedAudioItems,
+              createdAt,
+              taskId,
+              modelLabel,
+            })
+          : ""
+      }
       <div class="episode-replica-message-row system">
         <article class="episode-replica-system-message">
           <span class="episode-replica-message-badge">系统</span>
@@ -1137,10 +1325,76 @@ function renderResultMessageThread({ promptPreview = "", systemContent = "" } = 
   `;
 }
 
-function renderUserMessage(promptPreview, metaText = "", quickReferenceItems = []) {
+function renderEnhancedUserMessage({
+  promptPreview = "",
+  quickReferenceItems = [],
+  attachmentItems = [],
+  generatedAudioItems = [],
+  createdAt = "",
+  taskId = "",
+  modelLabel = "",
+} = {}) {
+  const audioItems = [...(attachmentItems ?? []), ...(generatedAudioItems ?? [])].filter(
+    (item) => String(item?.type ?? item?.kind ?? "") === "audio",
+  );
+  const visualItems = [
+    ...(quickReferenceItems ?? []),
+    ...(attachmentItems ?? []).filter((item) => String(item?.type ?? item?.kind ?? "") !== "audio"),
+  ];
+  const compactVisualItems = visualItems.slice(0, 3);
+  const compactAudioItems = audioItems.slice(0, 1);
+  const taskMeta = [taskId ? `任务id:${taskId}` : null, modelLabel || null].filter(Boolean).join("/");
   return `
     <div class="episode-replica-message-row user">
       <article class="episode-replica-user-message">
+        <div class="episode-replica-user-message-copy clamp-3">${escapeHtml(promptPreview)}</div>
+        ${
+          compactAudioItems.length || compactVisualItems.length || taskMeta || createdAt
+            ? `<div class="episode-replica-user-message-footer">
+                ${
+                  compactAudioItems.length || compactVisualItems.length
+                    ? `<div class="episode-replica-user-message-refs">
+                        ${compactAudioItems.map((item) => renderCompactUserReferenceItem(item)).join("")}
+                        ${compactVisualItems.map((item) => renderCompactUserReferenceItem(item)).join("")}
+                      </div>`
+                    : ""
+                }
+                ${
+                  taskMeta || createdAt
+                    ? `<div class="episode-replica-user-message-meta">
+                        ${taskMeta ? `<span class="episode-replica-user-task-inline">${escapeHtml(taskMeta)}</span>` : ""}
+                        ${createdAt ? `<time class="episode-replica-user-time">${escapeHtml(createdAt)}</time>` : ""}
+                      </div>`
+                    : ""
+                }
+              </div>`
+            : ""
+        }
+      </article>
+    </div>
+  `;
+}
+
+function renderCompactUserReferenceItem(item) {
+  const previewUrl = resolveReferencePreview(item);
+  const isAudio = String(item?.type ?? item?.kind ?? "") === "audio";
+  return `
+    <span class="episode-replica-user-ref-chip ${isAudio ? "audio" : "visual"}" title="${escapeAttr(item?.name ?? "")}">
+      ${
+        isAudio
+          ? `<span class="episode-replica-user-ref-art audio"><span aria-hidden="true">◉</span></span>`
+          : previewUrl
+            ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" /></span>`
+            : ""
+      }
+    </span>
+  `;
+}
+
+function renderLegacyUserMessage(promptPreview, metaText = "", quickReferenceItems = []) {
+  return `
+    <div class="episode-replica-message-row user">
+      <article class="episode-replica-user-message legacy">
         <span class="episode-replica-message-badge">用户</span>
         <div class="episode-replica-user-message-copy">${escapeHtml(promptPreview)}</div>
         ${
@@ -1156,11 +1410,14 @@ function renderUserMessage(promptPreview, metaText = "", quickReferenceItems = [
 
 function renderUserReferenceItem(item) {
   const previewUrl = resolveReferencePreview(item);
+  const isAudio = String(item?.type ?? item?.kind ?? "") === "audio";
   const summary = truncateDisplayText(item.description ?? item.name ?? "", 60);
   return `
     <article class="episode-replica-user-ref-card">
       ${
-        previewUrl
+        isAudio
+          ? `<span class="episode-replica-user-ref-art audio"><span aria-hidden="true">◉</span></span>`
+          : previewUrl
           ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" /></span>`
           : ""
       }
@@ -1204,7 +1461,7 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
       `).join("")}
       <div class="episode-replica-fixed-actions">
         <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新编辑</button>
-        <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character" data-task-id="${escapeAttr(String(taskId))}">${escapeHtml(resolveAssetSetLabel(assetKind))}</button>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">${escapeHtml(resolveAssetSetLabel(assetKind))}</button>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="download" data-task-id="${escapeAttr(String(taskId))}">下载</button>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}">删除</button>
       </div>
@@ -1283,7 +1540,7 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
   `;
 }
 
-function renderPromptDock({
+export function renderPromptDock({
   selectedStoryboard,
   selectedAsset,
   selectedModelId = "tnb-pro",
@@ -1336,6 +1593,8 @@ function renderPromptDock({
   const attachmentCards = [...generationAttachmentCards, ...(attachments ?? [])].map((item, index) =>
     renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
   );
+  const audioAttachmentCards = attachmentCards.filter((card) => card.includes('episode-replica-ref-card attachment audio'));
+  const nonAudioAttachmentCards = attachmentCards.filter((card) => !card.includes('episode-replica-ref-card attachment audio'));
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
   const generateCost =
@@ -1353,13 +1612,14 @@ function renderPromptDock({
     <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
       ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       <div class="episode-replica-ref-strip">
-        ${quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
-        ${attachmentCards.join("")}
+        ${audioAttachmentCards.join("")}
         ${
           supportsAudioUpload
             ? '<button class="episode-replica-ref-card voice uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="audio"><span>+</span><strong>音频</strong></button>'
             : ""
         }
+        ${quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
+        ${nonAudioAttachmentCards.join("")}
         <button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image">
           <span>+</span><strong>图片</strong>
         </button>
@@ -1427,6 +1687,9 @@ function renderPromptDock({
 }
 
 function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
+  if (isVideo) {
+    return `<div class="episode-replica-generated-stage"></div>`;
+  }
   const mediaUrl = isVideo
     ? resolveSelectedVideoSource(selectedStoryboard)
     : resolveSelectedImageSource(selectedStoryboard);
@@ -1473,7 +1736,7 @@ function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
 
 function buildGenerationAttachmentCards(generationState = {}) {
   const cards = [];
-  if (generationState?.firstFrame) {
+  if (generationState?.firstFrame && generationState.firstFrame.fromQuickReference !== true) {
     cards.push({
       ...generationState.firstFrame,
       id: "first-frame",
@@ -1498,6 +1761,9 @@ function buildGenerationAttachmentCards(generationState = {}) {
     });
   }
   for (const [index, item] of (generationState?.referenceUploads ?? []).entries()) {
+    if (item?.fromQuickReference === true) {
+      continue;
+    }
     cards.push({
       ...item,
       id: item?.id ?? `reference-upload-${index + 1}`,
@@ -1509,26 +1775,7 @@ function buildGenerationAttachmentCards(generationState = {}) {
 }
 
 function renderUploadLimitHint(uploadLimits = {}, supportsAudioUpload = false) {
-  const image = uploadLimits.image ?? {};
-  const video = uploadLimits.video ?? {};
-  const audio = uploadLimits.audio ?? {};
-  const parts = [];
-  if (image.maxBytes) {
-    parts.push(`图片 ${formatLimitBytes(image.maxBytes)}`);
-  }
-  if (video.maxBytes) {
-    parts.push(`视频 ${formatLimitBytes(video.maxBytes)}`);
-  }
-  if (supportsAudioUpload && audio.maxBytes) {
-    parts.push(`音频 ${formatLimitBytes(audio.maxBytes)}`);
-  }
-  if (image.maxReferencesPerTask) {
-    parts.push(`最多 ${image.maxReferencesPerTask} 张参考图`);
-  }
-  if (!parts.length) {
-    return "";
-  }
-  return `<p class="episode-replica-upload-limits">${escapeHtml(parts.join(" · "))}</p>`;
+  return "";
 }
 
 function formatLimitBytes(value) {
@@ -1575,7 +1822,7 @@ function renderPromptMentionPreview(asset) {
   const previewUrl = resolveReferencePreview(asset);
   const name = asset?.name ?? asset?.label ?? "素材";
   return `
-    <div class="episode-replica-mention-preview" role="status">
+    <div class="episode-replica-mention-preview" data-floating="caret" role="status">
       <span class="episode-replica-mention-preview-thumb">
         ${
           previewUrl
@@ -1766,16 +2013,21 @@ function renderQuickReferenceItem(item) {
   const previewUrl = resolveReferencePreview(item);
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
   const kind = item.kind ?? "image";
+  const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
+  const voiceName = String(item?.voiceName ?? "").trim();
   return `
-    <article class="episode-replica-ref-card quick-reference" title="${escapeAttr(item.description ?? item.name ?? "")}">
+    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured" : ""}" title="${escapeAttr(item.description ?? item.name ?? "")}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(kind)}">
-        ${previewUrl
-          ? kind === "video"
-            ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
-            : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
+        ${storyboardReferences.length
+          ? renderStoryboardPreviewThumb(storyboardReferences)
+          : previewUrl
+            ? kind === "video"
+              ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+              : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
           : previewMarkup || renderQuickPlaceholder(kind || inferKind(item.name), item.name ?? "reference")}
       </span>
+      ${voiceName ? `<strong>${escapeHtml(voiceName)}</strong>` : ""}
     </article>
   `;
 }
@@ -2209,7 +2461,7 @@ function resolveAssetSetLabel(tab) {
 function renderAssetPreviewVisual(asset, kind) {
   const previewUrl = resolveReferencePreview(asset);
   if (previewUrl) {
-    return `<img src="${escapeAttr(resolveApiUrl(previewUrl))}" alt="${escapeAttr(asset?.name ?? "asset")}" />`;
+    return `<img src="${escapeAttr(resolveApiUrl(previewUrl))}" alt="${escapeAttr(asset?.name ?? "asset")}" loading="lazy" onerror="this.dataset.loadFailed='true';this.style.display='none';this.nextElementSibling&&this.nextElementSibling.classList.add('is-visible');" />${renderPlaceholderArt(kind, asset?.name ?? "")}`;
   }
   return renderPlaceholderArt(kind, asset?.name ?? "");
 }

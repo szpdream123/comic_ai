@@ -19,6 +19,7 @@ export function createStorageAdapterFromEnv(
 
   if (mode === "cos" || mode === "s3_compatible") {
     const region = env.STORAGE_REGION?.trim();
+    const bucket = env.STORAGE_BUCKET?.trim();
     const accessKeyId = (env.STORAGE_ACCESS_KEY_ID ?? env.STORAGE_COS_SECRET_ID)?.trim();
     const secretAccessKey =
       (env.STORAGE_SECRET_ACCESS_KEY ?? env.STORAGE_COS_SECRET_KEY)?.trim();
@@ -29,15 +30,19 @@ export function createStorageAdapterFromEnv(
       throw new Error("storage_credentials_required");
     }
 
-    const endpoint = env.STORAGE_ENDPOINT?.trim() || (
-      mode === "cos" ? `https://cos.${region}.myqcloud.com` : ""
-    );
+    const configuredEndpoint = env.STORAGE_ENDPOINT?.trim() || "";
+    const endpoint = mode === "cos"
+      ? `https://cos.${region}.myqcloud.com`
+      : configuredEndpoint;
+    const forcePathStyle = mode === "cos"
+      ? false
+      : String(env.STORAGE_FORCE_PATH_STYLE ?? "").trim() === "true";
     return new S3CompatibleStorageAdapter({
       endpoint,
       region,
       accessKeyId,
       secretAccessKey,
-      forcePathStyle: String(env.STORAGE_FORCE_PATH_STYLE ?? "").trim() === "true",
+      forcePathStyle,
     });
   }
 

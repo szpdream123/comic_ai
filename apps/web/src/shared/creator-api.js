@@ -628,6 +628,7 @@ export const creatorApi = {
           },
           storageObject: completed.storageObject,
           urls: completed.urls,
+          uploadRecord: completed.uploadRecord ?? null,
         };
       } catch (error) {
         if (prepared?.uploadSessionId) {
@@ -837,6 +838,29 @@ export const creatorApi = {
     return postJson(
       `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation/messages`,
       input,
+    );
+  },
+
+  getStoryboardConversationHistory(episodeId, storyboardId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation?${query}`,
+    );
+  },
+
+  saveStoryboardConversationMessages(episodeId, storyboardId, input) {
+    return postJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation/messages`,
+      input,
+    );
+  },
+
+  deleteStoryboardConversationTurn(episodeId, storyboardId, taskId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    return deleteJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation/messages/${encodeURIComponent(taskId)}?${query}`,
     );
   },
 

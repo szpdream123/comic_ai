@@ -18,7 +18,7 @@ export async function createDevDb(): Promise<DevDatabase> {
     if (process.env.NODE_ENV === "test" && !process.env.LOCAL_DATABASE_DIR?.trim()) {
       return createMigratedTestDb();
     }
-    return createLocalDevDb();
+    throw new Error("DATABASE_URL is required for dev server; PGlite fallback is disabled.");
   }
 
   const pool = new Pool({
@@ -29,10 +29,9 @@ export async function createDevDb(): Promise<DevDatabase> {
     await ensureFoundationSchema(pool);
   } catch (error) {
     await pool.end().catch(() => undefined);
-    console.warn(
-      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
+    throw new Error(
+      `[dev-db] DATABASE_URL is configured but unavailable. ${error instanceof Error ? error.message : String(error)}`,
     );
-    return createLocalDevDb();
   }
 
   return {
@@ -126,5 +125,19 @@ async function ensureFoundationSchema(db: SqlDatabase) {
   );
   if (!assetConversationTableCheck.rows[0]?.exists) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0005_episode_asset_conversations.sql" });
+  }
+
+  const projectUploadRecordTableCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'project_upload_records'
+      ) AS exists
+    `,
+  );
+  if (!projectUploadRecordTableCheck.rows[0]?.exists) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0006_project_upload_records.sql" });
   }
 }

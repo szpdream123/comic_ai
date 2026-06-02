@@ -257,13 +257,30 @@ export async function buildSignedObjectUrls(
   },
 ) {
   const signed = await createSignedReadUrl(db, input);
+  const publicBaseUrl =
+    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
+    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
+    "";
+  const publicUrl = publicBaseUrl
+    ? `${publicBaseUrl}/${signed.object.objectKey}`
+    : signed.object.bucket && process.env.STORAGE_REGION?.trim()
+      ? `https://${signed.object.bucket}.cos.${process.env.STORAGE_REGION.trim()}.myqcloud.com/${signed.object.objectKey}`
+      : signed.url;
+  console.log("[storage] buildSignedObjectUrls", {
+    storageObjectId: signed.object.id,
+    bucket: signed.object.bucket,
+    objectKey: signed.object.objectKey,
+    adapterUrl: signed.url,
+    publicBaseUrl,
+    publicUrl,
+  });
   return {
     storageObjectId: signed.object.id,
     bucket: signed.object.bucket,
     objectKey: signed.object.objectKey,
-    previewUrl: signed.url,
-    sourceUrl: signed.url,
-    downloadUrl: signed.url,
+    previewUrl: publicUrl,
+    sourceUrl: publicUrl,
+    downloadUrl: publicUrl,
     expiresAt: signed.expiresAt,
   };
 }
