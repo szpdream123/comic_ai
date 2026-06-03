@@ -37,6 +37,7 @@ import {
   validateVideoGeneration,
   videoModels,
 } from "../src/features/production-workbench/video-generation-panel.js";
+import { getLibraryAssetsForImport } from "../src/features/library-team/asset-library-page.js";
 
 describe("production workbench home shell", () => {
   it("parses episode deep links as project child routes", () => {
@@ -4126,6 +4127,182 @@ describe("production workbench project tab", () => {
     assert.equal(membersCalls, 1);
     assert.match(root.innerHTML, /library-team-page/);
     assert.match(root.innerHTML, /open-team-dashboard/);
+  });
+
+  it("opens the independent official asset library from the rail tab", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#team" } };
+    const root = {
+      innerHTML: "",
+      querySelector() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      root,
+      api: {
+        async getLibraryAssets() {
+          return {
+            categories: [{ id: "character", label: "角色" }],
+            folders: ["国内仿真人-现代都市"],
+            assets: [],
+            entitlement: { hasTeamAssetLibrary: false },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        libraryCategory: "character",
+        libraryFolder: "国内仿真人-现代都市",
+        libraryAssets: [],
+        libraryCategories: [],
+        libraryFolders: [],
+        libraryEntitlement: { hasTeamAssetLibrary: false },
+        teamMembers: [],
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 5, used: 5, remaining: 0 },
+          permissions: { canCreateMember: true },
+        },
+        teamError: "",
+      }),
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-nav-tab", tab: "library" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.activeNavTab, "library");
+    assert.equal(workbench.ui.libraryTeamRoute, "assets");
+    assert.match(root.innerHTML, /official-library-page/);
+    assert.match(root.innerHTML, /官方资产库/);
+    assert.match(root.innerHTML, /团队资产库/);
+    assert.doesNotMatch(root.innerHTML, /个人资产库/);
+    assert.doesNotMatch(root.innerHTML, /资产沉淀台/);
+    assert.match(root.innerHTML, /data-action="set-library-asset-scope"/);
+    assert.doesNotMatch(root.innerHTML, /open-team-dashboard/);
+  });
+
+  it("keeps official and team asset library interactions wired to all reusable asset types", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#library" } };
+    const root = {
+      innerHTML: "",
+      querySelector() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const libraryAssets = [
+      { id: "library-character-ancient", name: "皇帝", category: "character", folder: "国内仿真人-东方古代" },
+      { id: "library-scene-modern", name: "别墅", category: "scene", folder: "国内仿真人-现代都市" },
+      { id: "library-prop-ancient", name: "圣旨", category: "prop", folder: "国内仿真人-东方古代" },
+    ];
+    const calls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      root,
+      api: {
+        async getLibraryAssets(params = {}) {
+          calls.push(params);
+          const category = params.category ?? "character";
+          const folder = params.folder ?? "";
+          return {
+            categories: [
+              { id: "character", label: "角色" },
+              { id: "scene", label: "场景" },
+              { id: "prop", label: "道具" },
+            ],
+            folders: ["国内仿真人-现代都市", "国内仿真人-东方古代"],
+            assets: libraryAssets.filter(
+              (asset) => asset.category === category && (!folder || asset.folder === folder),
+            ),
+            entitlement: { hasTeamAssetLibrary: true },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "library",
+        libraryTeamRoute: "assets",
+        libraryTeamAssetScope: "official",
+        libraryCategory: "character",
+        libraryFolder: "国内仿真人-东方古代",
+        libraryQuery: "",
+        libraryAssets: [libraryAssets[0]],
+        libraryCategories: [
+          { id: "character", label: "角色" },
+          { id: "scene", label: "场景" },
+          { id: "prop", label: "道具" },
+        ],
+        libraryFolders: ["国内仿真人-现代都市", "国内仿真人-东方古代"],
+        libraryEntitlement: { hasTeamAssetLibrary: true },
+      }),
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-library-category", libraryCategory: "scene" },
+      });
+      assert.equal(workbench.ui.libraryCategory, "scene");
+      assert.equal(calls.at(-1)?.category, "scene");
+      assert.equal(calls.at(-1)?.folder, "");
+      assert.equal(workbench.ui.libraryFolder, "国内仿真人-现代都市");
+      assert.match(root.innerHTML, /别墅/);
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-library-folder", libraryFolder: "国内仿真人-现代都市" },
+      });
+      assert.equal(workbench.ui.libraryFolder, "国内仿真人-现代都市");
+      assert.equal(calls.at(-1)?.folder, "国内仿真人-现代都市");
+      assert.match(root.innerHTML, /别墅/);
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-library-category", libraryCategory: "prop" },
+      });
+      assert.equal(workbench.ui.libraryCategory, "prop");
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-library-folder", libraryFolder: "国内仿真人-东方古代" },
+      });
+      assert.match(root.innerHTML, /圣旨/);
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-library-asset-scope", assetScope: "team" },
+      });
+      assert.equal(workbench.ui.libraryTeamAssetScope, "team");
+      assert.match(root.innerHTML, /团队资产库/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    const folders = [
+      "国内仿真人-现代都市",
+      "国内仿真人-东方古代",
+      "3D漫-现代都市",
+      "3D漫-东方修仙",
+      "2D漫-现代都市",
+      "2D漫-东方修仙",
+    ];
+    for (const assetKind of ["character", "scene", "prop"]) {
+      for (const folder of folders) {
+        assert.ok(
+          getLibraryAssetsForImport({ assetKind, folder }).length > 0,
+          `${assetKind} ${folder} should include reusable official assets`,
+        );
+      }
+    }
   });
 
   it("keeps team member creation behind the membership gate", () => {

@@ -2485,7 +2485,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         searchQuery: ui.libraryAssetSearchQuery ?? "",
         typeFilter: ui.libraryAssetTypeFilter ?? "all",
         libraryCategory: ui.libraryCategory ?? "角色",
-        libraryFolder: ui.libraryFolder ?? "国内仿真人·现代都市",
+        libraryFolder: ui.libraryFolder ?? "国内仿真人-现代都市",
         selectedLibraryAssetId: ui.selectedLibraryAssetId ?? null,
         selectedLibraryImportIds: ui.selectedLibraryImportIds ?? [],
         members: ui.projectMembers ?? [],

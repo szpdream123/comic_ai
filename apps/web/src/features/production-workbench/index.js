@@ -601,9 +601,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       activeNavTab: deriveInitialNavTab(window.location.hash),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
       libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
-      libraryTeamAssetScope: "personal",
-      libraryCategory: "角色",
-      libraryFolder: "国内仿真人·现代都市",
+      libraryTeamAssetScope: "official",
+      libraryCategory: "character",
+      libraryFolder: "国内仿真人-现代都市",
       selectedLibraryAssetId: null,
       selectedLibraryImportIds: [],
       isLibraryPricingModalOpen: false,
@@ -1229,23 +1229,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
-    if (target?.matches?.('[data-action="search-library-assets"]')) {
-      workbench.ui.libraryAssetSearchQuery = target.value;
-      if (workbench.ui.libraryTeamAssetScope === "official" || workbench.ui.libraryTeamAssetScope === "team") {
-        const scopedAssets = getLibraryAssetsForImport({
-          assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色"),
-          folder: workbench.ui.libraryFolder ?? "国内仿真人·现代都市",
-          searchQuery: target.value,
-        });
-        const selectedAssetId = workbench.ui.selectedLibraryAssetId ?? "";
-        if (!scopedAssets.some((asset) => asset.id === selectedAssetId)) {
-          workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
-        }
-      }
-      render(workbench);
-      return;
-    }
-
     if (target?.matches?.('[data-action="set-script-type-filter"]')) {
       workbench.ui.scriptTypeFilter = target.value || "all";
       render(workbench);
@@ -1746,8 +1729,38 @@ function restoreLibraryScrollState(root, libraryScrollState) {
   }
 }
 
+function scheduleAssetLibrarySearch(workbench) {
+  if (workbench.librarySearchTimer) {
+    clearTimeout(workbench.librarySearchTimer);
+  }
+
+  const requestId = (workbench.librarySearchRequestId ?? 0) + 1;
+  workbench.librarySearchRequestId = requestId;
+  workbench.librarySearchTimer = setTimeout(async () => {
+    workbench.librarySearchTimer = null;
+    await syncAssetLibraryFromApi(workbench, { requestId });
+    if (workbench.librarySearchRequestId === requestId) {
+      render(workbench, { focusLibrarySearch: true });
+    }
+  }, 250);
+}
+
+function cancelAssetLibrarySearch(workbench) {
+  if (workbench.librarySearchTimer) {
+    clearTimeout(workbench.librarySearchTimer);
+    workbench.librarySearchTimer = null;
+  }
+  workbench.librarySearchRequestId = (workbench.librarySearchRequestId ?? 0) + 1;
+}
+
 function restoreLibrarySearchFocus(root) {
-  root?.querySelector?.('[data-action="search-library-assets"]')?.focus?.();
+  const input = root?.querySelector?.("[data-library-search-input]");
+  if (!input) {
+    return;
+  }
+  input.focus({ preventScroll: true });
+  const position = input.value.length;
+  input.setSelectionRange?.(position, position);
 }
 
 function renderPreservingEpisodeAssetScroll(workbench) {
@@ -2074,26 +2087,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.activeNavTab = "library";
     workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "official";
     if (
-      workbench.ui.libraryTeamAssetScope === "official" &&
+      (workbench.ui.libraryTeamAssetScope === "official" || !workbench.ui.libraryTeamAssetScope) &&
       !isApiBackedLibraryCategory(workbench.ui.libraryCategory)
     ) {
       workbench.ui.libraryCategory = "character";
     }
-    workbench.ui.libraryFolder = workbench.ui.libraryFolder || "国内仿真人-现代都市";
+    workbench.ui.libraryCategory = workbench.ui.libraryCategory || "character";
+    workbench.ui.libraryFolder = workbench.ui.libraryFolder || "";
     workbench.ui.libraryQuery = "";
+    workbench.ui.libraryAssetSearchQuery = "";
     workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
-    if (workbench.ui.libraryTeamAssetScope === "official" || workbench.ui.libraryTeamAssetScope === "team") {
-      workbench.ui.libraryCategory = workbench.ui.libraryCategory ?? "角色";
-      workbench.ui.libraryFolder = workbench.ui.libraryFolder ?? "国内仿真人·现代都市";
-      const scopedAssets = getLibraryAssetsForImport({
-        assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory),
-        folder: workbench.ui.libraryFolder,
-        searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
-      });
-      workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
-      workbench.ui.selectedLibraryImportIds = workbench.ui.selectedLibraryImportIds ?? [];
-    }
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
     workbench.ui.toast = `已切换到${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}资产库。`;
     window.location.hash = "library";
     render(workbench);
@@ -2103,32 +2109,34 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-library-category") {
-    const category = target.dataset.category ?? "角色";
+    cancelAssetLibrarySearch(workbench);
+    const category = target.dataset.libraryCategory ?? target.dataset.category ?? "character";
+    workbench.ui.activeNavTab = "library";
     workbench.ui.libraryCategory = category;
-    const type = getLibraryTypeByCategory(category);
-    if (type !== "character" && type !== "scene" && type !== "prop") {
-      workbench.ui.libraryFolder = "国内仿真人·现代都市";
-    }
-    const scopedAssets = getLibraryAssetsForImport({
-      assetKind: type,
-      folder: workbench.ui.libraryFolder,
-      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
-    });
-    workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
-    workbench.ui.toast = `已切换到${category}素材。`;
+    workbench.ui.libraryFolder = "";
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryAssetSearchQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
     render(workbench);
     return;
   }
 
   if (action === "set-library-folder") {
+    cancelAssetLibrarySearch(workbench);
+    workbench.ui.activeNavTab = "library";
     const folder = target.dataset.libraryFolder ?? "";
     workbench.ui.libraryFolder = folder;
-    const scopedAssets = getLibraryAssetsForImport({
-      assetKind: getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色"),
-      folder,
-      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
-    });
-    workbench.ui.selectedLibraryAssetId = scopedAssets[0]?.id ?? null;
+    workbench.ui.libraryQuery = "";
+    workbench.ui.libraryAssetSearchQuery = "";
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    workbench.ui.libraryDetailAssetId = "";
+    workbench.ui.libraryDetailView = "turnaround";
+    render(workbench);
+    await syncAssetLibraryFromApi(workbench);
     render(workbench);
     return;
   }
@@ -2166,13 +2174,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectAssetTab = getLibraryTypeByCategory(workbench.ui.libraryCategory ?? "角色");
     workbench.ui.assetImportModal = workbench.ui.projectAssetTab;
     workbench.ui.assetImportModalTab = "official";
-    workbench.ui.assetImportCategory = workbench.ui.libraryFolder ?? "国内仿真人·现代都市";
+    workbench.ui.assetImportCategory = workbench.ui.libraryFolder ?? "国内仿真人-现代都市";
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = selectedIds;
     workbench.ui.assetImportOfficialAssets = getLibraryAssetsForImport({
       assetKind: workbench.ui.projectAssetTab,
       folder: workbench.ui.assetImportCategory,
-      searchQuery: workbench.ui.libraryAssetSearchQuery ?? "",
+      searchQuery: workbench.ui.libraryQuery ?? "",
     });
     workbench.ui.toast = `已带入 ${selectedIds.length} 项资产，可继续确认导入。`;
     window.location.hash = "project-workspace";
@@ -2189,24 +2197,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "set-library-folder") {
-    cancelAssetLibrarySearch(workbench);
-    workbench.ui.activeNavTab = "library";
-    workbench.ui.libraryFolder = target.dataset.libraryFolder ?? "";
-    workbench.ui.libraryQuery = "";
-    workbench.ui.libraryLoading = true;
-    workbench.ui.libraryDetailAssetId = "";
-    workbench.ui.libraryDetailView = "turnaround";
-    render(workbench);
-    await syncAssetLibraryFromApi(workbench);
-    render(workbench);
-    return;
-  }
-
   if (action === "clear-library-search") {
     cancelAssetLibrarySearch(workbench);
     workbench.ui.activeNavTab = "library";
     workbench.ui.libraryQuery = "";
+    workbench.ui.libraryAssetSearchQuery = "";
     workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
