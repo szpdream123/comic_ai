@@ -168,6 +168,21 @@ export async function processGptImageSubmitJob(
       },
       now: input.now,
     });
+    await markGenerationTaskSnapshotFailed(db, {
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      providerRequestId,
+      failure: {
+        failureCode,
+        displayMessage: failureCode,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      creditSummary: {
+        released: Number(row.amount_reserved ?? 0),
+        settledAt: input.now.toISOString(),
+      },
+      now: input.now,
+    });
     return { status: "failed", failureCode };
   }
 }

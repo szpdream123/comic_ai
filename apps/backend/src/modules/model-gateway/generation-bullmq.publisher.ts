@@ -52,7 +52,7 @@ export function buildGenerationBullMQJob(
   const queueName =
     readString(event.payload.queueName) ||
     (mediaType === "video" ? config.queues.submitVideo : config.queues.submitImage);
-  const jobId = `generation.task.created:${taskId}:submit`;
+  const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit");
 
   return {
     queueName,
@@ -95,7 +95,7 @@ function buildGenerationFinalizeBullMQJob(
   const mediaType = readMediaType(event.payload.mediaType);
   const artifactKind = readMediaType(event.payload.artifactKind ?? event.payload.mediaType);
   const finalizeMode = readFinalizeMode(event.payload.finalizeMode);
-  const jobId = `generation.task.finalize_requested:${taskId}:${finalizeMode}`;
+  const jobId = buildGenerationBullMQJobId("generation.task.finalize_requested", taskId, finalizeMode);
 
   return {
     queueName: config.queues.finalizeArtifact,
@@ -142,6 +142,10 @@ export async function publishGenerationTaskCreatedToBullMQ(
   const job = buildGenerationBullMQJob(event, input.config);
   await input.publisher.add(job.queueName, job.jobName, job.data, job.options);
   return job;
+}
+
+export function buildGenerationBullMQJobId(...parts: Array<string | number>) {
+  return parts.map((part) => String(part).replaceAll(":", "_")).join("__");
 }
 
 export function createBullMQGenerationPublisher(

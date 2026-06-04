@@ -4588,6 +4588,128 @@ async function createEpisodeAssetFixedImageVersionFromUrl(
   };
 }
 
+async function createEpisodeStoryboardImageVersionFromGeneratedResult(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    storyboardId: string;
+    sourceUrl: string;
+    storageObjectId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const shot = await queryOne<{ id: string; episode_id: string | null; project_id: string }>(
+    db,
+    `
+      SELECT id, episode_id, project_id
+      FROM shots
+      WHERE id = $1
+        AND episode_id = $2
+        AND project_id = $3
+      LIMIT 1
+    `,
+    [input.storyboardId, input.episodeId, context.project.id],
+  );
+  if (!shot) {
+    return null;
+  }
+  let storageObjectKey = String(input.body.storageObjectKey ?? "").trim();
+  let contentType = String(input.body.mimeType ?? "").trim() || inferImageContentTypeFromUrl(input.sourceUrl);
+  let resolvedSourceUrl = input.sourceUrl;
+  if (input.storageObjectId) {
+    if (!isUuid(input.storageObjectId)) {
+      return null;
+    }
+    const objectRow = await queryOne<{
+      id: string;
+      object_key: string;
+      status: string;
+      content_type: string | null;
+    }>(
+      db,
+      `
+        SELECT id, object_key, status, content_type
+        FROM storage_objects
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+        LIMIT 1
+      `,
+      [context.actor.organizationId, context.project.id, input.storageObjectId],
+    );
+    if (!objectRow) {
+      return null;
+    }
+    if (objectRow.status !== "available") {
+      return null;
+    }
+    storageObjectKey = objectRow.object_key;
+    contentType = objectRow.content_type || contentType;
+    const urls = await signedUrlsForStorageObject(db, {
+      sessionToken: input.authenticated.sessionToken,
+      storageObjectId: input.storageObjectId,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      now: input.now,
+    });
+    resolvedSourceUrl = urls.previewUrl ?? urls.sourceUrl ?? resolvedSourceUrl;
+  }
+  if (!resolvedSourceUrl && !input.storageObjectId) {
+    return null;
+  }
+  const snapshot = await createAssetVersionSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    projectId: context.project.id,
+    assetType: "shot_image",
+    assetKey: `storyboard-image:${input.episodeId}:${input.storyboardId}`,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId: input.storageObjectId || null,
+    storageObjectKey: storageObjectKey || `episodes/${input.episodeId}/storyboards/${input.storyboardId}/${randomUUID()}`,
+    metadata: {
+      mimeType: contentType,
+      episodeId: input.episodeId,
+      targetType: "storyboard",
+      targetId: input.storyboardId,
+      storyboardId: input.storyboardId,
+      source: "generated-result-manual-set",
+      sourceUrl: resolvedSourceUrl,
+      previewUrl: resolvedSourceUrl,
+      downloadUrl: resolvedSourceUrl,
+    },
+    sourceTaskId: typeof input.body.taskId === "string" && isUuid(input.body.taskId) ? input.body.taskId : null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  return {
+    context,
+    assetVersion: {
+      assetId: snapshot.asset.id,
+      assetType: snapshot.asset.assetType,
+      assetKey: snapshot.asset.assetKey,
+      versionId: snapshot.version.id,
+      storageObjectId: snapshot.version.storageObjectId,
+      storageObjectKey: snapshot.version.storageObjectKey,
+      metadata: snapshot.version.metadata,
+      contentType,
+      objectStatus: input.storageObjectId ? "available" : null,
+    },
+  };
+}
+
 function inferImageContentTypeFromUrl(value: string) {
   const path = value.split("?")[0]?.toLowerCase() ?? "";
   if (path.endsWith(".avif")) {
@@ -4718,15 +4840,34 @@ async function setEpisodeStoryboardMedia(
     now: Date;
   },
 ) {
-  const resolved = await resolveEpisodeAssetVersion(db, {
+  const sourceUrl =
+    readMediaReferenceUrl(input.body.sourceUrl) ||
+    readMediaReferenceUrl(input.body.previewUrl) ||
+    readMediaReferenceUrl(input.body.downloadUrl) ||
+    readMediaReferenceUrl(input.body.url);
+  const storageObjectId = String(input.body.storageObjectId ?? "").trim();
+  let resolved = await resolveEpisodeAssetVersion(db, {
     episodeId: input.episodeId,
     assetVersionId: String(input.body.assetVersionId ?? input.body.fileId ?? ""),
-    storageObjectId: String(input.body.storageObjectId ?? ""),
+    storageObjectId,
     sessionToken: input.authenticated.sessionToken,
     userId: input.authenticated.user.id,
     capability: capabilities.generationStart,
     now: input.now,
   });
+  if (!resolved && input.mediaKind === "image" && (sourceUrl || storageObjectId)) {
+    resolved = await createEpisodeStoryboardImageVersionFromGeneratedResult(db, {
+      episodeId: input.episodeId,
+      storyboardId: input.storyboardId,
+      sourceUrl,
+      storageObjectId,
+      body: input.body,
+      authenticated: input.authenticated,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      now: input.now,
+    });
+  }
   if (!resolved) {
     return null;
   }

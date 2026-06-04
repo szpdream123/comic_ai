@@ -1333,7 +1333,7 @@ const GENERATION_PROGRESS_STEPS = [
   { id: "queued", label: "排队中" },
   { id: "provider", label: "模型生成中" },
   { id: "storage", label: "保存到云存储" },
-  { id: "persist", label: "写入资产" },
+  { id: "persist", label: "保存结果" },
   { id: "done", label: "完成" },
 ];
 

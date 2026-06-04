@@ -1,6 +1,5 @@
 import { Readable, Transform } from "node:stream";
 
-import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
@@ -113,35 +112,9 @@ export async function persistGptImageArtifact(
     const urls = input.resolveUrls
       ? await input.resolveUrls(available)
       : buildDefaultArtifactUrls(input.runtime, available);
-    const created = await createAssetVersionSnapshot(db, {
-      organizationId: input.task.organizationId,
-      projectId: input.task.projectId,
-      assetType: input.assetType,
-      assetKey: input.assetKey,
-      createdByUserId: input.task.createdByUserId ?? "",
-      storageObjectId: available.id,
-      storageObjectKey: available.objectKey,
-      metadata: {
-        ...(input.assetMetadata ?? {}),
-        mimeType: uploaded.contentType,
-        label: input.label ?? "GPT Image 2 episode image",
-        episodeId: readString(input.snapshot.episodeId) ?? null,
-        taskId: input.task.taskId,
-        targetType: readString(input.snapshot.targetType) ?? "episode",
-        targetId: readString(input.snapshot.targetId) ?? readString(input.snapshot.episodeId) ?? null,
-        previewUrl: urls.previewUrl,
-        sourceUrl: urls.sourceUrl,
-        downloadUrl: urls.downloadUrl,
-        provider: "gpt-image-2",
-        externalRequestId: input.externalRequestId,
-      },
-      sourceTaskId: input.task.taskId,
-      sourceAttemptId: input.task.attemptId,
-      now: input.now,
-    });
     return {
-      assetId: created.asset.id,
-      assetVersionId: created.version.id,
+      assetId: null,
+      assetVersionId: null,
       storageObjectId: available.id,
       storageObjectKey: available.objectKey,
       mediaKind: "image",

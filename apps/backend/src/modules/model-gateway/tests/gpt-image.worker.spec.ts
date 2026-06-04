@@ -8,7 +8,6 @@ import { createScopedStorageObject } from "../../storage/storage.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import {
   finalizeGptImageArtifactJob,
-  persistGptImageArtifactJob,
   processGptImageSubmitJob,
 } from "../gpt-image.worker.ts";
 
@@ -158,12 +157,26 @@ describe("GPT Image 2 BullMQ worker service", () => {
         status: string;
         progress_stage: string;
         credit_status: string;
-        result_assets_json: Array<{ url?: string; mediaKind?: string }>;
+        result_assets_json: Array<{
+          assetId?: string | null;
+          assetVersionId?: string | null;
+          storageObjectId?: string | null;
+          url?: string;
+          mediaKind?: string;
+        }>;
       }>(
         `
           SELECT status, progress_stage, credit_status, result_assets_json
           FROM ai_generation_task_snapshots
           WHERE task_id = $1
+        `,
+        [imageTask.taskId],
+      );
+      const autoCreatedAssetVersions = await db.query<{ id: string }>(
+        `
+          SELECT id
+          FROM asset_versions
+          WHERE source_task_id = $1
         `,
         [imageTask.taskId],
       );
@@ -203,6 +216,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(completedSnapshot.rows[0]?.credit_status, "consumed");
       assert.equal(completedSnapshot.rows[0]?.result_assets_json[0]?.mediaKind, "image");
       assert.match(completedSnapshot.rows[0]?.result_assets_json[0]?.url ?? "", /platform-storage\.example\.test/);
+      assert.ok(completedSnapshot.rows[0]?.result_assets_json[0]?.storageObjectId);
+      assert.equal(completedSnapshot.rows[0]?.result_assets_json[0]?.assetId ?? null, null);
+      assert.equal(completedSnapshot.rows[0]?.result_assets_json[0]?.assetVersionId ?? null, null);
+      assert.equal(autoCreatedAssetVersions.rows.length, 0);
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 77);
       assert.equal(reservation.rows[0]?.status, "settled");
@@ -376,7 +393,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("keeps uploaded GPT Image 2 storage objects in manual review when asset persistence fails", async () => {
+  it("keeps GPT Image 2 finalization storage-only instead of auto-persisting an asset version", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -490,9 +507,15 @@ describe("GPT Image 2 BullMQ worker service", () => {
         status: string;
         credit_status: string;
         failure_json: { failureCode?: string; noticeType?: string; storageObjectKey?: string } | null;
+        result_assets_json: Array<{
+          assetId?: string | null;
+          assetVersionId?: string | null;
+          storageObjectId?: string | null;
+          url?: string;
+        }>;
       }>(
         `
-          SELECT status, credit_status, failure_json
+          SELECT status, credit_status, failure_json, result_assets_json
           FROM ai_generation_task_snapshots
           WHERE task_id = $1
         `,
@@ -500,76 +523,149 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
       const reservation = await db.query<{
         amount_reserved: number | string;
+        amount_consumed: number | string;
         amount_released: number | string;
         status: string;
       }>(
-        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        "SELECT amount_reserved, amount_consumed, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [imageTask.taskId],
+      );
+      const autoCreatedAssetVersions = await db.query<{ id: string }>(
+        `
+          SELECT id
+          FROM asset_versions
+          WHERE source_task_id = $1
+        `,
         [imageTask.taskId],
       );
 
-      assert.deepEqual(finalizeResult, {
-        status: "failed",
-        failureCode: "provider_output_persist_failed",
-      });
-      assert.equal(snapshot.rows[0]?.status, "manual_review_required");
-      assert.equal(snapshot.rows[0]?.credit_status, "manual_review_required");
-      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_output_persist_failed");
-      assert.equal(snapshot.rows[0]?.failure_json?.noticeType, "manual_review");
-      assert.match(snapshot.rows[0]?.failure_json?.storageObjectKey ?? "", /gpt-image/);
-      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 77);
+      assert.deepEqual(finalizeResult, { status: "succeeded" });
+      assert.equal(snapshot.rows[0]?.status, "succeeded");
+      assert.equal(snapshot.rows[0]?.credit_status, "consumed");
+      assert.equal(snapshot.rows[0]?.failure_json, null);
+      assert.ok(snapshot.rows[0]?.result_assets_json[0]?.storageObjectId);
+      assert.match(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /platform-storage\.example\.test/);
+      assert.equal(snapshot.rows[0]?.result_assets_json[0]?.assetId ?? null, null);
+      assert.equal(snapshot.rows[0]?.result_assets_json[0]?.assetVersionId ?? null, null);
+      assert.equal(autoCreatedAssetVersions.rows.length, 0);
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 77);
       assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 0);
-      assert.equal(reservation.rows[0]?.status, "manual_review_required");
+      assert.equal(reservation.rows[0]?.status, "settled");
+    } finally {
+      await server.close();
+    }
+  });
 
-      await db.query(
-        `
-          UPDATE tasks
-          SET project_id = $2,
-              input_snapshot_json = input_snapshot_json || $3::jsonb
-          WHERE id = $1
-        `,
-        [
-          imageTask.taskId,
-          created.projectId,
-          JSON.stringify({ targetType: "episode", targetId: created.episodeId, assetType: null }),
-        ],
-      );
-      const retryRuntime: UploadSessionRuntime = {
-        ...runtime,
-        adapter: {
-          async createSignedReadUrl(input) {
-            return {
-              url: `https://platform-storage.example.test/${input.objectKey}`,
-              expiresAt: new Date("2026-06-03T05:01:00.000Z"),
-            };
-          },
-          async putObject() {
-            throw new Error("persist-only retry must not upload again");
-          },
+  it("marks the generation snapshot failed when GPT Image 2 provider submission is ambiguous", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
         },
-      };
-      const retryResult = await persistGptImageArtifactJob(db, {
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+    const fetchImpl = (async () => {
+      throw new Error("provider socket closed after submit");
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138012");
+      const created = await createProjectAndEpisode(server.origin, cookie, "gpt-image-submit-ambiguous-project");
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "gpt-image-submit-ambiguous-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            prompt: "draw the ambiguous provider result",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "9:16",
+              quality: "high",
+            },
+          }),
+        },
+      );
+      const imageTask = (await imageTaskResponse.json()).data;
+
+      const submitResult = await processGptImageSubmitJob(db, {
         taskId: imageTask.taskId,
-        runtime: retryRuntime,
+        runtime,
         env,
-        now: new Date("2026-06-03T04:32:00.000Z"),
+        fetchImpl,
+        now: new Date("2026-06-03T04:35:00.000Z"),
       });
-      const persisted = await db.query<{ status: string; asset_version_id: string | null }>(
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        credit_status: string;
+        failure_json: { failureCode?: string; errorMessage?: string } | null;
+      }>(
         `
-          SELECT t.status, av.id AS asset_version_id
-          FROM tasks t
-          LEFT JOIN asset_versions av
-            ON av.organization_id = t.organization_id
-           AND av.source_task_id = t.id
-          WHERE t.id = $1
-          ORDER BY av.created_at DESC NULLS LAST
-          LIMIT 1
+          SELECT status, progress_stage, credit_status, failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
         `,
         [imageTask.taskId],
       );
+      const providerRequest = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE task_id = $1",
+        [imageTask.taskId],
+      );
 
-      assert.deepEqual(retryResult, { status: "succeeded" });
-      assert.equal(persisted.rows[0]?.status, "succeeded");
-      assert.ok(persisted.rows[0]?.asset_version_id);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
+      assert.equal(providerRequest.rows[0]?.status, "result_unknown");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_ambiguous");
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(snapshot.rows[0]?.credit_status, "released");
+      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
+      assert.match(snapshot.rows[0]?.failure_json?.errorMessage ?? "", /provider socket closed/);
     } finally {
       await server.close();
     }

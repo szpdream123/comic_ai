@@ -2038,7 +2038,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.toast.includes("Please confirm the required assets first."), false);
   });
 
-  it("submits storyboard image-to-video through Seedance and polls the queued task every 30 seconds", async () => {
+  it("submits storyboard image-to-video through Seedance and immediately polls the queued task", async () => {
     const previousWindow = globalThis.window;
     const timers = [];
     globalThis.window = {
@@ -2166,7 +2166,7 @@ describe("workbench generation payloads and inspectors", () => {
       assert.equal(workbench.ui.videoGenerationResult.taskId, "seedance-video-task-queued");
       assert.equal(workbench.ui.videoGenerationResult.selectedModelId, "seedance-i2v-pro");
       assert.equal(timers.length, 1);
-      assert.equal(timers[0].delayMs, 30000);
+      assert.equal(timers[0].delayMs, 0);
 
       await timers[0].callback();
 
@@ -2175,6 +2175,138 @@ describe("workbench generation payloads and inspectors", () => {
       assert.equal(workbench.ui.videoGenerationResult.status, "completed");
       const updatedStoryboard = workbench.ui.episodeStoryboardMap["episode-new"][0];
       assert.equal(updatedStoryboard.previewVideo, "https://example.com/seedance-result.mp4");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("immediately updates Seedance storyboard video tasks when provider submission fails", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimeout() {},
+    };
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-seedance-i2v-failed",
+      linkedShotId: "10000000-0000-4000-8000-000000000124",
+      description: "分镜文案：角色从雨夜街口抬头",
+      previewImageUrl: "/uploads/storyboard-seedance-first-frame.png",
+      currentImageAssetVersionId: "storyboard-first-image",
+      uploadedImages: [
+        {
+          id: "storyboard-first-image",
+          src: "/uploads/storyboard-seedance-first-frame.png",
+          status: "ready",
+        },
+      ],
+    };
+    const pollCalls = [];
+    const workbench = {
+      state: {
+        project: {
+          id: "project-1",
+          name: "Seedance I2V Failure",
+          phase: "shot_generation",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        },
+        assetReview: { readyForGeneration: true },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: { status: "ready" },
+        shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        episodes: [{ id: "episode-new", title: "第1集" }],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "Seedance I2V Failure" },
+          episodes: [{ id: "episode-new", title: "第1集", status: "draft" }],
+          shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        },
+      },
+      api: {
+        async createVideoTask() {
+          return {
+            taskId: "seedance-video-task-failed",
+            status: "queued",
+            workflowStatus: "queued",
+            result: {},
+          };
+        },
+        async getGenerationTask(taskId) {
+          pollCalls.push(taskId);
+          return {
+            taskId,
+            status: "failed",
+            workflowStatus: "failed",
+            failureCode: "provider_submission_failed",
+            failure: {
+              failureCode: "provider_submission_failed",
+              displayMessage: "The model seedance-2-0-i2v does not exist.",
+            },
+            result: {},
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        selectedModelId: "gpt-image-2-cn",
+        prompt: "让角色慢慢抬头，雨水从衣袖滑落。",
+        busy: false,
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        validationMessage: "",
+        toast: "",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        videoResolution: "1080p",
+        videoDurationSec: 5,
+        videoCount: 1,
+        videoAudioEnabled: false,
+        videoMusicEnabled: false,
+        videoLipSyncEnabled: false,
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "storyboard-image-to-video",
+          storyboardId: storyboard.id,
+        },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "generate-videos",
+        },
+      });
+
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(pollCalls, ["seedance-video-task-failed"]);
+      assert.equal(workbench.ui.generationPollingActive, false);
+      assert.equal(workbench.ui.videoGenerationResult.status, "failed");
+      assert.equal(workbench.ui.videoGenerationResult.failureCode, "provider_submission_failed");
+      assert.match(workbench.ui.toast, /seedance-2-0-i2v/);
     } finally {
       globalThis.window = previousWindow;
     }
@@ -5946,6 +6078,67 @@ describe("production workbench project tab", () => {
     assert.match(workbench.ui.toast, /First frame violates provider policy/);
   });
 
+  it("replaces queued storyboard conversation entries with provider rejection failures", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-seedance-rejected-1",
+      generationState: {
+        lastSubmission: {
+          status: "queued",
+        },
+      },
+    };
+    const taskId = "seedance-provider-rejected-task";
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [],
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        storyboardConversationHistory: {
+          [`video:${storyboard.id}`]: [{
+            taskId,
+            storyboardId: storyboard.id,
+            mediaKind: "video",
+            status: "queued",
+            promptPreview: "camera slowly pushes in",
+            selectedModelId: "seedance-i2v-pro",
+          }],
+        },
+        videoGenerationResult: {},
+        toast: "",
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        status: "failed",
+        taskId,
+        kind: "video",
+        failureCode: "provider_submission_failed",
+        failure: {
+          failureCode: "provider_submission_failed",
+          displayMessage: "The model or endpoint Doubao-Seedance-2.0-fast does not exist or you do not have access to it.",
+          providerFailureCode: "provider_submission_ambiguous",
+        },
+      },
+      storyboard.id,
+      "video",
+    );
+
+    const entries = workbench.ui.storyboardConversationHistory[`video:${storyboard.id}`];
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].taskId, taskId);
+    assert.equal(entries[0].status, "failed");
+    assert.equal(entries[0].failureCode, "provider_submission_failed");
+    assert.match(entries[0].failure.displayMessage, /Doubao-Seedance-2\.0-fast/);
+    assert.equal(workbench.ui.videoGenerationResult.status, "failed");
+  });
+
   it("uses backend notice type and display message for generation task failures", () => {
     const storyboard = {
       ...addStoryboard([])[0],
@@ -6123,6 +6316,152 @@ describe("production workbench project tab", () => {
       "https://example.com/generated-character-1.png",
     );
     assert.equal(workbench.ui.episodeWorkbenchConversationScrollMode, "latest");
+  });
+
+  it("updates storyboard conversation results without auto-setting the storyboard image", () => {
+    const runningEntry = {
+      taskId: "storyboard-image-task-running",
+      status: "running",
+      promptPreview: "一个草地场景，有树木",
+      storyboardId: "storyboard-scene-1",
+      selectionContext: {
+        selectedStoryboardId: "storyboard-scene-1",
+      },
+      fixedImages: [],
+      mediaKind: "image",
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: "storyboard-scene-1",
+        storyboards: [],
+        episodeStoryboardMap: {
+          "episode-new": [
+            {
+              id: "storyboard-scene-1",
+              title: "场景123",
+              previewImageUrl: "/uploads/old-scene.png",
+              previewUrl: "/uploads/old-scene.png",
+              currentImageAssetVersionId: "old-image-version",
+              uploadedImages: [
+                { id: "old-image-version", src: "/uploads/old-scene.png", status: "ready" },
+              ],
+              generationState: {
+                lastSubmission: {
+                  status: "running",
+                },
+              },
+            },
+          ],
+        },
+        imageGenerationResult: runningEntry,
+        storyboardConversationHistory: {
+          "image:storyboard-scene-1": [runningEntry],
+        },
+        episodeWorkbenchConversationScrollMode: null,
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        status: "succeeded",
+        taskId: "storyboard-image-task-running",
+        result: {
+          mediaKind: "image",
+          imageUrl: "https://example.com/generated-scene.png",
+          assetVersionId: "generated-image-version",
+          storageObjectId: "generated-storage-object",
+        },
+      },
+      "storyboard-scene-1",
+      "image",
+    );
+
+    const storyboard = workbench.ui.episodeStoryboardMap["episode-new"][0];
+    assert.equal(workbench.ui.imageGenerationResult?.status, "completed");
+    assert.equal(
+      workbench.ui.storyboardConversationHistory["image:storyboard-scene-1"][0]?.status,
+      "completed",
+    );
+    assert.equal(
+      workbench.ui.storyboardConversationHistory["image:storyboard-scene-1"][0]?.fixedImages?.[0]?.url,
+      "https://example.com/generated-scene.png",
+    );
+    assert.equal(storyboard.previewImageUrl, "/uploads/old-scene.png");
+    assert.equal(storyboard.currentImageAssetVersionId, "old-image-version");
+    assert.equal(storyboard.generationState.lastSubmission.status, "completed");
+    assert.equal(workbench.ui.episodeWorkbenchConversationScrollMode, "latest");
+  });
+
+  it("keeps generated asset images as conversation-only storage results", () => {
+    const runningEntry = {
+      taskId: "asset-image-storage-only-running",
+      status: "running",
+      promptPreview: "一个人在草地上，张开双手拥抱大自然",
+      selectionContext: {
+        assetTab: "scene",
+        selectedAssetId: "scene-1",
+        selectedAssetName: "饿123",
+      },
+      fixedImages: [],
+      mediaKind: "image",
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-new",
+        selectedEpisodeAssetId: "scene-1",
+        selectedEpisodeCardId: "scene-1",
+        storyboards: [],
+        episodeStoryboardMap: {},
+        imageGenerationResult: runningEntry,
+        assetConversationHistory: {
+          "image:scene-1": [runningEntry],
+        },
+        importedAssets: {
+          character: [],
+          scene: [
+            {
+              id: "scene-1",
+              name: "饿123",
+              description: "这是刚添加的场景选项",
+              previewUrl: "https://example.com/original-scene.png",
+            },
+          ],
+          prop: [],
+        },
+        episodeWorkbenchConversationScrollMode: null,
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        status: "succeeded",
+        taskId: "asset-image-storage-only-running",
+        result: {
+          mediaKind: "image",
+          imageUrl: "https://example.com/generated-grass.png",
+          assetId: "auto-created-asset-id-from-old-backend",
+          assetVersionId: "auto-created-version-id-from-old-backend",
+          storageObjectId: "storage-generated-grass",
+        },
+      },
+      "",
+      "image",
+    );
+
+    const fixedImage = workbench.ui.assetConversationHistory["image:scene-1"][0]?.fixedImages?.[0];
+    assert.equal(fixedImage?.url, "https://example.com/generated-grass.png");
+    assert.equal(fixedImage?.storageObjectId, "storage-generated-grass");
+    assert.equal(fixedImage?.assetVersionId, null);
+    assert.equal(fixedImage?.id, "storage-generated-grass");
+    assert.equal(workbench.ui.importedAssets.scene.length, 1);
+    assert.equal(workbench.ui.importedAssets.scene[0]?.previewUrl, "https://example.com/original-scene.png");
   });
 
   it("restores generation task results without reposting conversation messages", () => {
@@ -6919,7 +7258,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult.fixedImages[0]?.storageObjectId, "10000000-0000-4000-8000-000000000123");
   });
 
-  it("polls the selected asset queued image task every 30 seconds until it finishes", async () => {
+  it("immediately polls the selected asset queued image task, then polls every 25 seconds", async () => {
     const calls = [];
     const pollCalls = [];
     const timers = [];
@@ -7003,6 +7342,15 @@ describe("production workbench project tab", () => {
           },
           async getGenerationTask(taskId) {
             pollCalls.push(taskId);
+            if (pollCalls.length === 1) {
+              return {
+                taskId,
+                status: "running",
+                workflowStatus: "running",
+                assetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+                result: {},
+              };
+            }
             return {
               taskId,
               status: "succeeded",
@@ -7028,12 +7376,19 @@ describe("production workbench project tab", () => {
 
       assert.equal(calls.length, 1);
       assert.equal(timers.length, 1);
-      assert.equal(timers[0].delayMs, 30000);
+      assert.equal(timers[0].delayMs, 0);
       assert.equal(workbench.ui.imageGenerationResult.status, "queued");
 
       await timers[0].callback();
 
       assert.deepEqual(pollCalls, ["asset-image-task-queued"]);
+      assert.equal(workbench.ui.imageGenerationResult.status, "running");
+      assert.equal(timers.length, 2);
+      assert.equal(timers[1].delayMs, 25000);
+
+      await timers[1].callback();
+
+      assert.deepEqual(pollCalls, ["asset-image-task-queued", "asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "completed");
       assert.equal(
         workbench.ui.assetConversationHistory["image:a71c2367-d9fd-42ec-a2df-78b30c72f753"][0]?.fixedImages?.[0]?.url,

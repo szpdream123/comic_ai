@@ -57,7 +57,7 @@ describe("generation BullMQ worker handlers", () => {
       artifactKind: "image",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.image.finalize:task-image-1",
+      jobId: "generation.image.finalize__task-image-1",
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
@@ -110,7 +110,7 @@ describe("generation BullMQ worker handlers", () => {
       pollAttempt: 1,
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll:task-1:1",
+      jobId: "generation.video.poll__task-1__1",
       delay: 5000,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
@@ -165,7 +165,7 @@ describe("generation BullMQ worker handlers", () => {
       organizationId: "org-1",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.submit.retry:task-1:1780444800000",
+      jobId: "generation.video.submit.retry__task-1__1780444800000",
       delay: 2500,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
@@ -218,7 +218,7 @@ describe("generation BullMQ worker handlers", () => {
       pollAttempt: 3,
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll:task-1:3",
+      jobId: "generation.video.poll__task-1__3",
       delay: 7000,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
@@ -274,7 +274,7 @@ describe("generation BullMQ worker handlers", () => {
       pollAttempt: 2,
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll.rate-limit-retry:task-1:2:1780444800000",
+      jobId: "generation.video.poll.rate-limit-retry__task-1__2__1780444800000",
       delay: 2500,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
@@ -374,7 +374,7 @@ describe("generation BullMQ worker handlers", () => {
       artifactKind: "video",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.finalize:task-1",
+      jobId: "generation.video.finalize__task-1",
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },

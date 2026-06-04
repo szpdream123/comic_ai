@@ -114,7 +114,7 @@ describe("generation Redis dispatch repair", () => {
           pollAttempt: 1,
         },
         options: {
-          jobId: "generation.video.poll.repair:50000000-0000-4000-8000-000000000104:1780466400000",
+          jobId: "generation.video.poll.repair__50000000-0000-4000-8000-000000000104__1780466400000",
           delay: 0,
           attempts: 1,
           removeOnComplete: { age: 86400, count: 10000 },

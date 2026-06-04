@@ -31,7 +31,14 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     });
 
     if (!response.ok) {
-      throw new Error(`seedance_video_${response.status}`);
+      const error = await readProviderError(response);
+      throw new Error(
+        [
+          `seedance_video_${response.status}`,
+          error.providerErrorCode,
+          error.providerMessage,
+        ].filter(Boolean).join(":"),
+      );
     }
 
     const payload = (await response.json()) as Record<string, unknown>;
@@ -90,7 +97,14 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     );
 
     if (!response.ok) {
-      throw new Error(`seedance_video_poll_${response.status}`);
+      const error = await readProviderError(response);
+      throw new Error(
+        [
+          `seedance_video_poll_${response.status}`,
+          error.providerErrorCode,
+          error.providerMessage,
+        ].filter(Boolean).join(":"),
+      );
     }
 
     const payload = (await response.json()) as Record<string, unknown>;
@@ -146,17 +160,42 @@ function buildCreateTaskPayload(
     payload.parameters && typeof payload.parameters === "object"
       ? (payload.parameters as Record<string, unknown>)
       : {};
+  const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
+  const firstFrameUrl =
+    readString(payload.firstFrameUrl) ??
+    readString(payload.imageUrl) ??
+    readString(payload.referenceImageUrl);
 
   return {
     model: model ?? defaultModel,
-    prompt: readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "",
-    firstFrameUrl:
-      readString(payload.firstFrameUrl) ??
-      readString(payload.imageUrl) ??
-      readString(payload.referenceImageUrl),
-    parameters,
-    requestKey: input.requestKey,
+    content: buildContent(prompt, firstFrameUrl),
+    ...optionalPayloadField("ratio", readString(parameters.aspectRatio)),
+    ...optionalPayloadField("resolution", readString(parameters.resolution)),
+    ...optionalPayloadField("duration", readInteger(parameters.durationSec)),
+    watermark: readBoolean(parameters.watermark) ?? false,
   };
+}
+
+function buildContent(prompt: string, firstFrameUrl: string | undefined) {
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: prompt,
+    },
+  ];
+  if (firstFrameUrl) {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: firstFrameUrl,
+      },
+    });
+  }
+  return content;
+}
+
+function optionalPayloadField(key: string, value: unknown) {
+  return value === undefined ? {} : { [key]: value };
 }
 
 function normalizeProviderStatus(
@@ -217,4 +256,44 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function readInteger(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+async function readProviderError(response: Response) {
+  try {
+    const payload = (await response.json()) as Record<string, unknown>;
+    return {
+      providerErrorCode:
+        findFirstString(payload, [
+          ["code"],
+          ["error", "code"],
+          ["data", "code"],
+          ["data", "error", "code"],
+          ["result", "error", "code"],
+        ]) ?? null,
+      providerMessage:
+        findFirstString(payload, [
+          ["message"],
+          ["error", "message"],
+          ["data", "message"],
+          ["data", "error", "message"],
+          ["result", "message"],
+          ["result", "error", "message"],
+        ]) ?? null,
+    };
+  } catch {
+    const body = await response.text().catch(() => "");
+    return {
+      providerErrorCode: null,
+      providerMessage: body.trim().slice(0, 500) || null,
+    };
+  }
 }

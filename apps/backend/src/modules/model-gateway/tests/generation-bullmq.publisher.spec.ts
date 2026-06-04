@@ -25,7 +25,7 @@ describe("generation BullMQ publisher", () => {
     assert.deepEqual(job, {
       queueName: "generation-submit-video",
       jobName: "generation.task.created",
-      jobId: "generation.task.created:task-1:submit",
+      jobId: "generation.task.created__task-1__submit",
       data: {
         outboxEventId: "outbox-1",
         organizationId: "org-1",
@@ -36,7 +36,7 @@ describe("generation BullMQ publisher", () => {
         providerExecutor: "seedance",
       },
       options: {
-        jobId: "generation.task.created:task-1:submit",
+        jobId: "generation.task.created__task-1__submit",
         attempts: 3,
         backoff: { type: "exponential", delay: 1000 },
         removeOnComplete: {
@@ -106,7 +106,7 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-finalize-artifact");
     assert.equal(job.jobName, "generation.task.finalize_requested");
-    assert.equal(job.jobId, "generation.task.finalize_requested:task-3:retry_persist_asset");
+    assert.equal(job.jobId, "generation.task.finalize_requested__task-3__retry_persist_asset");
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
       organizationId: "org-1",

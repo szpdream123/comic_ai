@@ -163,11 +163,34 @@ export async function processSeedanceVideoSubmitJob(
       externalRequestId: submitted.request.externalRequestId,
     };
   } catch (error) {
+    const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     await failSeedanceTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
       failureCode: "provider_submission_failed",
-      providerRequestId: null,
-      redactedResponse: { errorMessage: error instanceof Error ? error.message : String(error) },
+      providerRequestId: providerRequest?.provider_request_id ?? null,
+      redactedResponse: { errorMessage },
+      now: input.now,
+    });
+    await markGenerationTaskSnapshotFailed(db, {
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      providerRequestId: providerRequest?.provider_request_id ?? null,
+      providerStatus: {
+        errorMessage,
+        failureCode: providerRequest?.failure_code ?? "provider_submission_failed",
+      },
+      failure: {
+        failureCode: "provider_submission_failed",
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        providerFailureCode: providerRequest?.failure_code ?? null,
+        errorMessage,
+        displayMessage: errorMessage,
+      },
+      creditSummary: {
+        released: Number(row.amount_reserved ?? 0),
+        settledAt: input.now.toISOString(),
+      },
       now: input.now,
     });
     return { status: "skipped" };
@@ -176,6 +199,23 @@ export async function processSeedanceVideoSubmitJob(
       await permit.release();
     }
   }
+}
+
+async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string) {
+  return queryOne<{
+    provider_request_id: string;
+    failure_code: string | null;
+  }>(
+    db,
+    `
+      SELECT id AS provider_request_id, failure_code
+      FROM provider_requests
+      WHERE task_id = $1
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [taskId],
+  );
 }
 
 export async function processSeedanceVideoPollJob(

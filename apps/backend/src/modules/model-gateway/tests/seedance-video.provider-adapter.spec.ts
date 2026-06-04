@@ -59,9 +59,25 @@ describe("seedance video provider adapter", () => {
       authorization: "Bearer seedance-key",
       "content-type": "application/json",
     });
-    assert.match(capturedBody, /"model":"seedance-1-0-pro"/);
-    assert.match(capturedBody, /camera slowly pushes in/);
-    assert.match(capturedBody, /https:\/\/cdn\.example\.com\/frame\.png/);
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "seedance-1-0-pro",
+      content: [
+        {
+          type: "text",
+          text: "camera slowly pushes in",
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://cdn.example.com/frame.png",
+          },
+        },
+      ],
+      ratio: "16:9",
+      resolution: "1080p",
+      duration: 5,
+      watermark: false,
+    });
     assert.equal(result.externalRequestId, "seedance-task-123");
     assert.equal(result.status, "accepted");
     assert.deepEqual(result.redactedResponse?.providerStatus, "queued");
@@ -145,6 +161,44 @@ describe("seedance video provider adapter", () => {
       },
     });
 
-    assert.match(capturedBody, /"model":"seedance-2-0-i2v"/);
+    assert.equal(JSON.parse(capturedBody).model, "seedance-2-0-i2v");
+  });
+
+  it("includes provider response details when Seedance rejects a submission", async () => {
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      model: "seedance-1-0-pro",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "InvalidParameter",
+              message: "content field is required",
+            },
+          }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        )) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-rejected",
+          providerName: "volcengine",
+          providerOperation: "shot.video.generate",
+          requestKey: "workflow-rejected:task-rejected",
+          payloadRef: "creator://payload-rejected",
+          payloadHash: "hash-rejected",
+          redactedPayload: {
+            prompt: "slow orbit",
+            firstFrameUrl: "https://cdn.example.com/frame-rejected.png",
+          },
+        }),
+      /seedance_video_400:InvalidParameter:content field is required/,
+    );
   });
 });

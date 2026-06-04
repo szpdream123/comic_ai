@@ -361,7 +361,7 @@ export function buildAssetConversationEntries(
           (userRequest.generatedAudioItems as unknown[] | undefined) ??
           (systemPayload.generatedAudioItems as unknown[] | undefined) ??
           [],
-        fixedImages: (systemPayload.fixedImages as unknown[] | undefined) ?? [],
+        fixedImages: normalizeGeneratedConversationImages(systemPayload.fixedImages as unknown[] | undefined),
         fixedVideos: (systemPayload.fixedVideos as unknown[] | undefined) ?? [],
         selectionContext,
         taskId:
@@ -374,6 +374,33 @@ export function buildAssetConversationEntries(
           "running",
       };
     });
+}
+
+function normalizeGeneratedConversationImages(images: unknown[] | undefined) {
+  if (!Array.isArray(images)) {
+    return [];
+  }
+  return images.map((image) => {
+    if (!image || typeof image !== "object" || Array.isArray(image)) {
+      return image;
+    }
+    const record = image as Record<string, unknown>;
+    const storageObjectId = typeof record.storageObjectId === "string" && record.storageObjectId.trim()
+      ? record.storageObjectId.trim()
+      : null;
+    const url = typeof record.url === "string" && record.url.trim()
+      ? record.url.trim()
+      : typeof record.previewUrl === "string" && record.previewUrl.trim()
+        ? record.previewUrl.trim()
+        : typeof record.src === "string" && record.src.trim()
+          ? record.src.trim()
+          : null;
+    return {
+      ...record,
+      id: storageObjectId ?? url ?? record.id ?? null,
+      assetVersionId: null,
+    };
+  });
 }
 
 function assetConversationThreadFromRow(row: AssetConversationThreadRow): AssetConversationThread {

@@ -1,6 +1,9 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
-import type { GenerationBullMQPublisher } from "./generation-bullmq.publisher.ts";
+import {
+  buildGenerationBullMQJobId,
+  type GenerationBullMQPublisher,
+} from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
 import { appendGenerationTaskCreatedOutboxEvent } from "./generation-outbox.service.ts";
 
@@ -165,7 +168,11 @@ export async function repairRunningSeedancePollJobs(
         pollAttempt: 1,
       },
       {
-        jobId: `generation.video.poll.repair:${candidate.task_id}:${input.now.getTime()}`,
+        jobId: buildGenerationBullMQJobId(
+          "generation.video.poll.repair",
+          candidate.task_id,
+          input.now.getTime(),
+        ),
         delay: 0,
         attempts: 1,
         removeOnComplete: {

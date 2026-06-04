@@ -1,6 +1,9 @@
 import type { JobsOptions } from "bullmq";
 
-import type { GenerationBullMQPublisher } from "./generation-bullmq.publisher.ts";
+import {
+  buildGenerationBullMQJobId,
+  type GenerationBullMQPublisher,
+} from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
 
 type SubmitVideoResult =
@@ -322,7 +325,12 @@ async function enqueueVideoPollRateLimitRetryJob(
       pollAttempt: input.job.data.pollAttempt,
     },
     {
-      jobId: `generation.video.poll.rate-limit-retry:${input.job.data.taskId}:${input.job.data.pollAttempt}:${input.now.getTime()}`,
+      jobId: buildGenerationBullMQJobId(
+        "generation.video.poll.rate-limit-retry",
+        input.job.data.taskId,
+        input.job.data.pollAttempt,
+        input.now.getTime(),
+      ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
       attempts: 1,
       removeOnComplete: {
@@ -379,7 +387,11 @@ async function enqueueFinalizeRateLimitRetryJob(
     "generation.artifact.finalize.rate-limit-retry",
     jobData,
     {
-      jobId: `generation.artifact.finalize.rate-limit-retry:${input.job.data.taskId}:${input.now.getTime()}`,
+      jobId: buildGenerationBullMQJobId(
+        "generation.artifact.finalize.rate-limit-retry",
+        input.job.data.taskId,
+        input.now.getTime(),
+      ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
       attempts: 1,
       removeOnComplete: {
@@ -444,7 +456,11 @@ async function enqueueVideoSubmitRetryJob(
       organizationId: input.job.data.organizationId ?? null,
     },
     {
-      jobId: `generation.video.submit.retry:${input.job.data.taskId}:${input.now.getTime()}`,
+      jobId: buildGenerationBullMQJobId(
+        "generation.video.submit.retry",
+        input.job.data.taskId,
+        input.now.getTime(),
+      ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
       attempts: 1,
       removeOnComplete: {
@@ -495,7 +511,7 @@ async function enqueueVideoFinalizeJob(
     "generation.video.finalize",
     jobData,
     {
-      jobId: `generation.video.finalize:${input.job.data.taskId}`,
+      jobId: buildGenerationBullMQJobId("generation.video.finalize", input.job.data.taskId),
       attempts: 1,
       removeOnComplete: {
         age: 86400,
@@ -545,7 +561,7 @@ async function enqueueImageFinalizeJob(
     "generation.image.finalize",
     jobData,
     {
-      jobId: `generation.image.finalize:${input.job.data.taskId}`,
+      jobId: buildGenerationBullMQJobId("generation.image.finalize", input.job.data.taskId),
       attempts: 1,
       removeOnComplete: {
         age: 86400,
@@ -565,7 +581,7 @@ function buildVideoPollJobOptions(
   config: GenerationQueueConfig,
 ): JobsOptions {
   return {
-    jobId: `generation.video.poll:${taskId}:${pollAttempt}`,
+    jobId: buildGenerationBullMQJobId("generation.video.poll", taskId, pollAttempt),
     delay: config.poll.video.intervalMs,
     attempts: 1,
     removeOnComplete: {

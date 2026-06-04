@@ -2698,7 +2698,7 @@ function renderToolsPanel({ state, ui }) {
       storyboard?.videoStatus === "ready",
   );
   const timeoutMinutes = 15;
-  const pollSeconds = 15;
+  const pollSeconds = 25;
 
   return `
     <section class="overview-strip" aria-label="工具箱总览">
@@ -2728,7 +2728,7 @@ function renderToolsPanel({ state, ui }) {
         </div>
         <div class="asset-library-empty">
           <h3>当前链路按真实规则运行</h3>
-          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 15 秒轮询一次，超过 15 分钟标记失败。</p>
+          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 ${pollSeconds} 秒轮询一次，超过 15 分钟标记失败。</p>
           <ul class="project-empty-points">
             <li>图片默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultImageModelCode ?? "nano_banana_2")}</li>
             <li>视频默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultVideoModelCode ?? "video_mock_1")}</li>

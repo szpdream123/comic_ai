@@ -247,6 +247,128 @@ describe("Seedance video BullMQ worker services", () => {
     }
   });
 
+  it("marks the task snapshot failed when Seedance rejects submission", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2-0-i2v',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+    };
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "InvalidParameter",
+            message: "content field is required",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138007");
+      const created = await createProjectAndEpisode(server.origin, cookie, "seedance-submit-rejected-project");
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-submit-rejected-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTask = (await videoTaskResponse.json()).data;
+
+      const submitResult = await processSeedanceVideoSubmitJob(db, {
+        taskId: videoTask.taskId,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:05:00.000Z"),
+      });
+      const failedSnapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        credit_status: string;
+        provider_request_id: string | null;
+        provider_status_json: { errorMessage?: string; failureCode?: string };
+        failure_json: {
+          failureCode?: string;
+          providerFailureCode?: string;
+          errorMessage?: string;
+        } | null;
+      }>(
+        `
+          SELECT status, progress_stage, credit_status, provider_request_id,
+                 provider_status_json, failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [videoTask.taskId],
+      );
+
+      assert.deepEqual(submitResult, { status: "skipped" });
+      assert.equal(failedSnapshot.rows[0]?.status, "failed");
+      assert.equal(failedSnapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(failedSnapshot.rows[0]?.credit_status, "released");
+      assert.match(failedSnapshot.rows[0]?.provider_status_json.errorMessage ?? "", /seedance_video_400/);
+      assert.equal(failedSnapshot.rows[0]?.provider_status_json.failureCode, "provider_submission_ambiguous");
+      assert.equal(failedSnapshot.rows[0]?.failure_json?.failureCode, "provider_submission_failed");
+      assert.equal(failedSnapshot.rows[0]?.failure_json?.providerFailureCode, "provider_submission_ambiguous");
+      assert.match(failedSnapshot.rows[0]?.failure_json?.errorMessage ?? "", /content field is required/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("marks Seedance video tasks result unknown and keeps credits in manual review when polling expires", async () => {
     const db = await createMigratedTestDb();
     await db.query(
