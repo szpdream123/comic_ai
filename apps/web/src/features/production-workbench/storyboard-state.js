@@ -39,6 +39,23 @@ function resolveImageVersionSource(version) {
   return resolved ? resolveApiUrl(resolved) : "";
 }
 
+function resolveVideoVersionThumbnail(version) {
+  if (!version || typeof version !== "object") {
+    return "";
+  }
+
+  const candidates = [
+    version.thumbnailUrl,
+    version.metadata?.thumbnailUrl,
+    version.metadata?.coverImageUrl,
+    version.metadata?.previewImageUrl,
+  ];
+
+  const resolved = candidates.find((candidate) => typeof candidate === "string" && candidate.trim()) ?? "";
+  return resolved ? resolveApiUrl(resolved) : "";
+}
+
+
 export const projectDetailFixture = {
   project: {
     id: "try",
@@ -140,13 +157,18 @@ export function createStoryboardList(state) {
     episodeId: shot.episodeId ?? null,
     description: shot.description || shot.title,
     previewImageUrl: shot.previewImageUrl ? resolveApiUrl(shot.previewImageUrl) : null,
-    previewVideo: shot.previewVideoUrl ? resolveApiUrl(shot.previewVideoUrl) : null,
-    previewUrl: shot.previewVideoUrl
-      ? resolveApiUrl(shot.previewVideoUrl)
-      : shot.previewImageUrl
-        ? resolveApiUrl(shot.previewImageUrl)
-        : null,
-    previewThumbnailUrl: null,
+    previewVideo:
+      (shot.previewVideoUrl ? resolveApiUrl(shot.previewVideoUrl) : null) ||
+      resolveVideoVersionSource(
+        (shot.videoVersions ?? []).find((version) => version.id === shot.currentVideoAssetVersionId) ?? null,
+      ) ||
+      null,
+    previewUrl:
+      ((shot.previewVideoUrl ? resolveApiUrl(shot.previewVideoUrl) : null) ||
+        resolveVideoVersionSource(
+          (shot.videoVersions ?? []).find((version) => version.id === shot.currentVideoAssetVersionId) ?? null,
+        )) ||
+      (shot.previewImageUrl ? resolveApiUrl(shot.previewImageUrl) : null),
     uploadedImageName:
       shot.imageVersions?.find((version) => version.id === shot.currentImageAssetVersionId)?.metadata?.label ??
       shot.imageVersions?.[0]?.metadata?.label ??
@@ -165,12 +187,18 @@ export function createStoryboardList(state) {
       storageObjectId: version.storageObjectId ?? version.metadata?.storageObjectId ?? null,
       fileName: version.metadata?.label ?? "video",
       src: resolveVideoVersionSource(version),
+      thumbnailSrc: resolveVideoVersionThumbnail(version) || null,
       durationLabel: formatDurationLabelFromMs(version.metadata?.durationMs),
       status: "ready",
       createdAt: Date.parse(version.createdAt ?? "") || Date.now(),
     })),
     currentImageAssetVersionId: shot.currentImageAssetVersionId ?? null,
+    currentVideoAssetVersionId: shot.currentVideoAssetVersionId ?? null,
     selectedUploadedVideoId: shot.currentVideoAssetVersionId ?? null,
+    previewThumbnailUrl:
+      resolveVideoVersionThumbnail(
+        (shot.videoVersions ?? []).find((version) => version.id === shot.currentVideoAssetVersionId) ?? null,
+      ) || null,
     references: shot.references ?? [],
     generationState: createEmptyGenerationState(),
   }));

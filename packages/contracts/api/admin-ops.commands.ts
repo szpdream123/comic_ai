@@ -40,6 +40,40 @@ export const adminRetryTaskCommand: ApiCommandContract = {
   verificationIds: ["R-020"],
 };
 
+export const adminRetryFinalizeCommand: ApiCommandContract = {
+  name: "AdminRetryFinalize",
+  operationName: operationNames.opsRetryFinalize,
+  capability: capabilities.opsSettle,
+  idempotencyRequired: true,
+  requestSchema: { taskId: "uuid", reason: "required text" },
+  responseSchema: { taskId: "uuid", taskStatus: "running|manual_review_required" },
+  resourceScope: "task:{task_id}",
+  statePreconditions: [
+    "task.failure_code = provider_output_download_failed|provider_output_upload_failed",
+    "actor has ops settlement capability",
+  ],
+  businessErrors: ["task_not_retryable", "reason_required", "ops_forbidden"],
+  auditEvent: "ops.task_finalize_retry_requested",
+  verificationIds: ["AI-finalize-retry"],
+};
+
+export const adminRetryPersistAssetCommand: ApiCommandContract = {
+  name: "AdminRetryPersistAsset",
+  operationName: operationNames.opsRetryPersistAsset,
+  capability: capabilities.opsSettle,
+  idempotencyRequired: true,
+  requestSchema: { taskId: "uuid", reason: "required text" },
+  responseSchema: { taskId: "uuid", taskStatus: "manual_review_required|running" },
+  resourceScope: "task:{task_id}",
+  statePreconditions: [
+    "task.failure_code = provider_output_persist_failed",
+    "actor has ops settlement capability",
+  ],
+  businessErrors: ["task_not_retryable", "reason_required", "ops_forbidden"],
+  auditEvent: "ops.task_persist_asset_retry_requested",
+  verificationIds: ["AI-persist-asset-retry"],
+};
+
 export const markPaymentRiskReviewedCommand: ApiCommandContract = {
   name: "MarkPaymentRiskReviewed",
   operationName: operationNames.opsMarkPaymentRiskReviewed,
@@ -98,6 +132,8 @@ export const repairPaidWithoutCreditCommand: ApiCommandContract = {
 export const adminOpsCommandContracts = [
   manualSettleUnknownTaskCommand,
   adminRetryTaskCommand,
+  adminRetryFinalizeCommand,
+  adminRetryPersistAssetCommand,
   markPaymentRiskReviewedCommand,
   repairPaidWithoutCreditCommand,
 ];

@@ -1590,6 +1590,16 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (
+        input.body.episodeId &&
+        !(await episodeExistsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+          episodeId: input.body.episodeId,
+        }))
+      ) {
+        return { status: 404, body: { error: "episode_not_found" } };
+      }
       const result = await creatorApp.createShot(input.body);
       await upsertShotsForProject(deps.db, {
         organizationId: actor.organizationId,
@@ -4246,6 +4256,43 @@ async function deleteProjectRecord(
     input.projectId,
   ]);
   await db.query(
+    `
+      DELETE FROM shot_reference_assets
+      WHERE organization_id = $1
+        AND (
+          project_id = $2
+          OR shot_id IN (
+            SELECT id
+            FROM shots
+            WHERE organization_id = $1
+              AND episode_id IN (
+                SELECT id
+                FROM episodes
+                WHERE organization_id = $1
+                  AND project_id = $2
+              )
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query(
+    `
+      DELETE FROM project_upload_records
+      WHERE organization_id = $1
+        AND (
+          project_id = $2
+          OR upload_session_id IN (
+            SELECT id
+            FROM storage_upload_sessions
+            WHERE organization_id = $1
+              AND project_id = $2
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query(
     "DELETE FROM storage_upload_sessions WHERE organization_id = $1 AND project_id = $2",
     [input.organizationId, input.projectId],
   );
@@ -4259,10 +4306,6 @@ async function deleteProjectRecord(
     `,
     [input.organizationId, input.projectId],
   );
-  await db.query("DELETE FROM shot_reference_assets WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
   await db.query("DELETE FROM assets WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -4275,8 +4318,21 @@ async function deleteProjectRecord(
     `
       DELETE FROM calibration_items
       WHERE organization_id = $1
-        AND calibration_session_id IN (
-          SELECT id FROM calibration_sessions WHERE organization_id = $1 AND project_id = $2
+        AND (
+          calibration_session_id IN (
+            SELECT id FROM calibration_sessions WHERE organization_id = $1 AND project_id = $2
+          )
+          OR shot_id IN (
+            SELECT id
+            FROM shots
+            WHERE organization_id = $1
+              AND episode_id IN (
+                SELECT id
+                FROM episodes
+                WHERE organization_id = $1
+                  AND project_id = $2
+              )
+          )
         )
     `,
     [input.organizationId, input.projectId],
@@ -4297,10 +4353,22 @@ async function deleteProjectRecord(
     "DELETE FROM episode_asset_conversation_threads WHERE organization_id = $1 AND project_id = $2",
     [input.organizationId, input.projectId],
   );
-  await db.query("DELETE FROM shots WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query(
+    `
+      DELETE FROM shots
+      WHERE organization_id = $1
+        AND (
+          project_id = $2
+          OR episode_id IN (
+            SELECT id
+            FROM episodes
+            WHERE organization_id = $1
+              AND project_id = $2
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
   await db.query("DELETE FROM episodes WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -4317,6 +4385,29 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
+}
+
+async function episodeExistsForProject(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+  },
+) {
+  const result = await db.query<{ id: string }>(
+    `
+      SELECT id
+      FROM episodes
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND id = $3
+      LIMIT 1
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+
+  return Boolean(result.rows[0]);
 }
 
 async function buildProjectDetail(
@@ -4510,8 +4601,9 @@ async function buildProjectDetail(
       videoStatus: shot.videoStatus,
       currentImageAssetVersionId: shot.currentImageAssetVersionId,
       currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
-      previewImageUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentImageAssetVersionId),
-      previewVideoUrl: findVersionPreviewUrl(signedAssetVersions, shot.currentVideoAssetVersionId),
+      previewImageUrl: findVersionDisplayUrl(signedAssetVersions, shot.currentImageAssetVersionId, "image"),
+      previewVideoUrl: findVersionDisplayUrl(signedAssetVersions, shot.currentVideoAssetVersionId, "video"),
+      previewVideoThumbnailUrl: findVersionThumbnailUrl(signedAssetVersions, shot.currentVideoAssetVersionId),
       imageVersions: signedVersionsByShotId.get(shot.id)?.image ?? [],
       videoVersions: signedVersionsByShotId.get(shot.id)?.video ?? [],
       references: signedReferencesByShotId.get(shot.id) ?? [],
@@ -4567,26 +4659,29 @@ async function listAssetsForProject(
   );
 
   return result.rows
-    .map((row) => ({
-      id: row.id,
-      assetType: row.asset_type,
-      assetKey: row.asset_key,
-      label: row.metadata_json?.label ?? row.asset_key,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at),
-      previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
-      latestVersion: row.version_id
-        ? {
-            id: row.version_id,
-            versionNumber: Number(row.version_number),
-            storageObjectId: row.storage_object_id,
-            storageObjectKey: row.storage_object_key,
-            metadata: row.metadata_json,
-            previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json),
-            createdAt: row.version_created_at ? new Date(row.version_created_at) : null,
-          }
-        : null,
-    }))
+    .map((row) => {
+      const metadata = parseMetadataJson(row.metadata_json);
+      return {
+        id: row.id,
+        assetType: row.asset_type,
+        assetKey: row.asset_key,
+        label: metadata?.label ?? row.asset_key,
+        createdAt: new Date(row.created_at),
+        updatedAt: new Date(row.updated_at),
+        previewUrl: getAssetPreviewUrl(row.storage_object_key, metadata),
+        latestVersion: row.version_id
+          ? {
+              id: row.version_id,
+              versionNumber: Number(row.version_number),
+              storageObjectId: row.storage_object_id,
+              storageObjectKey: row.storage_object_key,
+              metadata,
+              previewUrl: getAssetPreviewUrl(row.storage_object_key, metadata),
+              createdAt: row.version_created_at ? new Date(row.version_created_at) : null,
+            }
+          : null,
+      };
+    })
     .filter((asset) => {
       const metadata = asset.latestVersion?.metadata;
       return !(metadata && typeof metadata === "object" && typeof metadata.episodeId === "string" && metadata.episodeId);
@@ -4636,20 +4731,23 @@ async function listAssetVersionsForProject(
     [input.organizationId, input.projectId],
   );
 
-  return result.rows.map((row) => ({
-    assetId: row.asset_id,
-    assetType: row.asset_type,
-    assetKey: row.asset_key,
-    id: row.version_id,
-    versionNumber: Number(row.version_number),
-    storageObjectId: row.storage_object_id,
-    storageObjectKey: row.storage_object_key,
-    metadata: row.metadata_json ?? {},
-    sourceTaskId: row.source_task_id,
-    sourceAttemptId: row.source_attempt_id,
-    previewUrl: getAssetPreviewUrl(row.storage_object_key, row.metadata_json ?? {}),
-    createdAt: new Date(row.created_at),
-  }));
+  return result.rows.map((row) => {
+    const metadata = parseMetadataJson(row.metadata_json) ?? {};
+    return {
+      assetId: row.asset_id,
+      assetType: row.asset_type,
+      assetKey: row.asset_key,
+      id: row.version_id,
+      versionNumber: Number(row.version_number),
+      storageObjectId: row.storage_object_id,
+      storageObjectKey: row.storage_object_key,
+      metadata,
+      sourceTaskId: row.source_task_id,
+      sourceAttemptId: row.source_attempt_id,
+      previewUrl: getAssetPreviewUrl(row.storage_object_key, metadata),
+      createdAt: new Date(row.created_at),
+    };
+  });
 }
 
 type ListedAssetVersion = Awaited<ReturnType<typeof listAssetVersionsForProject>>[number];
@@ -4741,14 +4839,52 @@ function groupReferencesByShotId(
   return grouped;
 }
 
-function findVersionPreviewUrl(
+function findVersionDisplayUrl(
+  versions: ListedAssetVersion[],
+  assetVersionId: string | null,
+  mediaKind: "image" | "video",
+) {
+  if (!assetVersionId) {
+    return null;
+  }
+  const version = versions.find((item) => item.id === assetVersionId);
+  if (!version) {
+    return null;
+  }
+  if (mediaKind === "video") {
+    const metadata = version.metadata ?? {};
+    return (
+      readNonEmptyString(metadata.sourceUrl) ??
+      readNonEmptyString(metadata.downloadUrl) ??
+      readNonEmptyString(metadata.videoUrl) ??
+      readNonEmptyString(metadata.previewUrl) ??
+      version.previewUrl ??
+      null
+    );
+  }
+  return version.previewUrl ?? readNonEmptyString(version.metadata?.previewUrl) ?? null;
+}
+
+function readNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function findVersionThumbnailUrl(
   versions: ListedAssetVersion[],
   assetVersionId: string | null,
 ) {
   if (!assetVersionId) {
     return null;
   }
-  return versions.find((version) => version.id === assetVersionId)?.previewUrl ?? null;
+  const version = versions.find((item) => item.id === assetVersionId);
+  if (!version) {
+    return null;
+  }
+  return (
+    readNonEmptyString(version.metadata?.thumbnailUrl) ??
+    readNonEmptyString(version.metadata?.coverImageUrl) ??
+    null
+  );
 }
 
 function findEpisodePreviewUrl(shots: ShotRecord[], assets: ListedAsset[]) {
@@ -4777,6 +4913,23 @@ function getAssetPreviewUrl(
     return storageObjectKey;
   }
   return null;
+}
+
+function parseMetadataJson(value: Record<string, unknown> | string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return value;
 }
 
 async function resolveStorageBackedPreviewUrl(

@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
 import { createAdminOpsService } from "../modules/admin-ops/admin-ops.service.ts";
@@ -20,11 +23,12 @@ import {
   type PaymentProvider,
 } from "../modules/commerce-payment/payment-provider-adapter.ts";
 import {
-  createPersistentLoginChallenge,
   findPersistentAuthSessionByToken,
+  requestPersistentLoginCode,
   revokePersistentAuthSession,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
+import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
   createCreatorApplication,
@@ -41,7 +45,14 @@ import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingEr
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
 import { createLocalUploadStore } from "../modules/shared/uploads/upload-store.ts";
 import { createStorageAdapterFromEnv } from "../modules/storage/storage-adapter.factory.ts";
-import { buildSignedObjectUrls, createScopedStorageObject, deleteStorageObjectRecord } from "../modules/storage/storage.service.ts";
+import {
+  buildSignedObjectUrls,
+  createScopedStorageObject,
+  deleteStorageObjectRecord,
+  markStorageObjectAvailable,
+  markStorageObjectFailed,
+  type StorageObjectRecord,
+} from "../modules/storage/storage.service.ts";
 import {
   abortUploadSession,
   buildStorageObjectPublicUrl,
@@ -73,6 +84,37 @@ import {
   createWorkflowWithTasks,
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
+import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
+import {
+  markProviderRequestFailed,
+  markProviderRequestSucceeded,
+  submitProviderRequest,
+} from "../modules/model-gateway/provider-request.service.ts";
+import {
+  findActiveAiModelConfigByCode,
+  listActiveAiModelConfigs,
+  type AiModelConfigRecord,
+} from "../modules/model-catalog/ai-model-config.store.ts";
+import { appendGenerationTaskCreatedOutboxEvent } from "../modules/model-gateway/generation-outbox.service.ts";
+import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
+import { createBullMQGenerationQueueHealthService } from "../modules/model-gateway/generation-queue-health.service.ts";
+import {
+  createBullMQGenerationQueueJobOpsService,
+  type GenerationQueueJobAction,
+  type GenerationQueueJobOpsService,
+} from "../modules/model-gateway/generation-queue-job-ops.service.ts";
+import type { MediaGenerationArtifact } from "../modules/model-gateway/provider-adapter.contract.ts";
+import {
+  persistGptImageArtifact,
+  serializeGptImageArtifactForProviderResponse,
+} from "../modules/model-gateway/gpt-image.artifact-finalizer.ts";
+import {
+  markGenerationTaskSnapshotFailed,
+  markGenerationTaskSnapshotSucceeded,
+  upsertQueuedGenerationTaskSnapshot,
+} from "../modules/model-gateway/generation-task-snapshot.service.ts";
+import { runIdempotentCommand } from "../modules/shared/command/platform-command-runtime.ts";
 import { capabilities } from "../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 
@@ -179,6 +221,21 @@ interface AuthHttpResponse<T> {
   cookies?: string[];
 }
 
+class GenerationQueueJobOpsRouteError extends Error {
+  constructor(readonly response: AuthHttpResponse<unknown>) {
+    super("generation_queue_job_ops_failed");
+  }
+}
+
+class GenerationRequestValidationError extends Error {
+  constructor(
+    readonly code: string,
+    readonly message: string,
+  ) {
+    super(code);
+  }
+}
+
 interface AuthenticatedUser {
   id: string;
   phone: string;
@@ -198,8 +255,12 @@ export interface PhoneAuthDevServerRepairSchedulerOptions {
 
 export interface PhoneAuthDevServerOptions {
   db?: Awaited<ReturnType<typeof createDevDb>>;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
   repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
+  storageRuntime?: Partial<UploadSessionRuntime>;
   seedTeamEntitlements?: boolean;
+  generationQueueJobOpsService?: GenerationQueueJobOpsService;
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -244,12 +305,23 @@ async function readMultipartFormData(
   return webRequest.formData();
 }
 
+const sessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
+
 function sessionCookie(token: string): string {
-  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax`;
+  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionCookieMaxAgeSeconds}`;
 }
 
 function clearSessionCookie(): string {
   return "auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+}
+
+function requestIpAddress(request: {
+  headers: Record<string, string | string[] | undefined>;
+  socket?: { remoteAddress?: string };
+}): string | undefined {
+  const forwarded = request.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  return raw?.split(",")[0]?.trim() || request.socket?.remoteAddress;
 }
 
 function requiredIdempotencyKeyFromRequest(request: {
@@ -312,6 +384,11 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
           ? "资源不存在或无权限访问"
           : "没有权限执行该操作，请确认项目成员角色";
     writeJson(response, envelopedError(status, errorCode, message, { reason: error.code }));
+    return true;
+  }
+
+  if (error instanceof GenerationRequestValidationError) {
+    writeJson(response, envelopedError(400, error.code, error.message));
     return true;
   }
 
@@ -385,6 +462,22 @@ function parsePositiveInt(value: string | null, fallback: number, max: number) {
   return Math.min(Math.floor(parsed), max);
 }
 
+function parseRuntimePositiveInt(value: string | undefined, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
+}
+
+function parseRuntimeNonNegativeInt(value: string | undefined, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
+}
+
 function paginateItems<T>(items: T[], page: number, pageSize: number) {
   const start = (page - 1) * pageSize;
   return {
@@ -419,6 +512,14 @@ function hashJson(value: unknown) {
     .digest("hex");
 }
 
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function joinProviderUrl(baseURL: string, endpoint: string) {
+  return `${baseURL.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+}
+
 function normalizeTaskStatus(status: unknown) {
   const normalized = String(status ?? "").toLowerCase();
   if (normalized === "completed" || normalized === "success") {
@@ -427,9 +528,61 @@ function normalizeTaskStatus(status: unknown) {
   if (normalized === "cancel_requested") {
     return "canceled";
   }
-  return ["queued", "running", "succeeded", "failed", "canceled"].includes(normalized)
+  return [
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "result_unknown",
+    "manual_review_required",
+  ].includes(normalized)
     ? normalized
     : "running";
+}
+
+function isEnabled(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
+function requestModelCode(value: unknown) {
+  const modelCode = String(value ?? "").trim();
+  if (modelCode === "seedance-2-0-vip" || modelCode === "seedance-2.0") {
+    return "seedance-i2v-pro";
+  }
+  return modelCode;
+}
+
+function readMediaReferenceUrl(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["url", "sourceUrl", "downloadUrl", "previewUrl", "publicUrl", "src"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return "";
+}
+
+function resolveFirstFrameUrl(body: Record<string, unknown>): string {
+  const parameters = body.parameters && typeof body.parameters === "object"
+    ? body.parameters as Record<string, unknown>
+    : {};
+  return (
+    readMediaReferenceUrl(body.firstFrameUrl) ||
+    readMediaReferenceUrl(body.imageUrl) ||
+    readMediaReferenceUrl(body.referenceImageUrl) ||
+    readMediaReferenceUrl(body.firstFrame) ||
+    readMediaReferenceUrl(parameters.firstFrame) ||
+    readMediaReferenceUrl(parameters.imageReference)
+  );
 }
 
 function classifyEpisodeAssetType(input: {
@@ -567,6 +720,122 @@ function normalizeGenerationKind(kind: "image" | "video") {
         objectNamePrefix: "mock-image",
         cost: Number(process.env.EPISODE_IMAGE_GENERATION_COST ?? 90),
       };
+}
+
+function generationCostFromModelConfig(
+  fallbackCost: number,
+  modelConfig?: AiModelConfigRecord,
+) {
+  const baseCredits = Number(modelConfig?.pricing.baseCredits);
+  return Number.isFinite(baseCredits) && baseCredits >= 0
+    ? Math.round(baseCredits)
+    : fallbackCost;
+}
+
+function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
+  const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
+  const schemaRatios = readEnumValues(modelConfig.parameterSchema.aspectRatio);
+  const defaultRatios = readStringArray(modelConfig.defaultParams.aspectRatio);
+  const schemaQuality =
+    readEnumValues(modelConfig.parameterSchema.quality).length
+      ? readEnumValues(modelConfig.parameterSchema.quality)
+      : readEnumValues(modelConfig.parameterSchema.resolution);
+  const supportedRatios = schemaRatios.length ? schemaRatios : defaultRatios;
+  return {
+    modelCode: modelConfig.modelCode,
+    modelLabel: modelConfig.displayName,
+    providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
+    pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
+    supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
+    supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
+    supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
+    displayBaseCost: generationCostFromModelConfig(0, modelConfig),
+    disabled: modelConfig.status !== "active",
+  };
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function readJsonRecord(value: unknown): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+  if (typeof value === "string") {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  }
+  return typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!value) {
+    return [];
+  }
+  const parsed = typeof value === "string"
+    ? JSON.parse(value) as unknown
+    : value;
+  return Array.isArray(parsed)
+    ? parsed.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item && typeof item === "object" && !Array.isArray(item)),
+      )
+    : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => readString(item)).filter(Boolean)
+    : [];
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readEnumValues(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  return readStringArray((value as Record<string, unknown>).enum);
+}
+
+function createSeedancePollAdapterFromModelConfig(
+  modelConfig: AiModelConfigRecord | undefined,
+  env: NodeJS.ProcessEnv,
+  fetchImpl?: typeof fetch,
+) {
+  if (modelConfig) {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: modelConfig.providerProtocol,
+        providerModel: modelConfig.providerModel,
+        providerConfig: modelConfig.providerConfig,
+      },
+      env,
+      fetchImpl,
+    );
+    if (adapter instanceof SeedanceVideoProviderAdapter) {
+      return adapter;
+    }
+  }
+
+  return new SeedanceVideoProviderAdapter({
+    apiKey: env[env.SEEDANCE_API_KEY_ENV?.trim() || "VOLCENGINE_ARK_API_KEY"]?.trim() ?? "",
+    model: env.SEEDANCE_PROVIDER_MODEL?.trim() || "seedance-1-0-pro",
+    createTaskEndpoint: "unused://create",
+    queryTaskEndpoint: joinProviderUrl(
+      env.SEEDANCE_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com",
+      env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() ||
+        "/api/v3/contents/generations/tasks/{taskId}",
+    ),
+    fetchImpl,
+  });
 }
 
 async function readMockGenerationMedia(config: {
@@ -937,6 +1206,12 @@ async function mapGenerationTaskResponse(
     storage_object_id: string | null;
     storage_object_key: string | null;
     metadata_json: Record<string, unknown> | string | null;
+    provider_request_id: string | null;
+    provider_request_status: string | null;
+    provider_failure_code: string | null;
+    provider_response_redacted_json: Record<string, unknown> | string | null;
+    snapshot_failure_json: Record<string, unknown> | string | null;
+    snapshot_result_assets_json: Record<string, unknown>[] | string | null;
     credit_balance_cached: number | string | null;
   }>(
     db,
@@ -964,6 +1239,12 @@ async function mapGenerationTaskResponse(
         v.storage_object_id,
         v.storage_object_key,
         v.metadata_json,
+        pr.id AS provider_request_id,
+        pr.status AS provider_request_status,
+        pr.failure_code AS provider_failure_code,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        s.failure_json AS snapshot_failure_json,
+        s.result_assets_json AS snapshot_result_assets_json,
         o.credit_balance_cached
       FROM tasks t
       JOIN workflows w
@@ -980,6 +1261,21 @@ async function mapGenerationTaskResponse(
       LEFT JOIN assets a
         ON a.organization_id = v.organization_id
        AND a.id = v.asset_id
+      LEFT JOIN LATERAL (
+        SELECT
+          pr_latest.id,
+          pr_latest.status,
+          pr_latest.failure_code,
+          pr_latest.response_redacted_json
+        FROM provider_requests pr_latest
+        WHERE pr_latest.organization_id = t.organization_id
+          AND pr_latest.task_id = t.id
+        ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
+        LIMIT 1
+      ) pr ON true
+      LEFT JOIN ai_generation_task_snapshots s
+        ON s.organization_id = t.organization_id
+       AND s.task_id = t.id
       WHERE t.id = $1
       ORDER BY v.created_at DESC NULLS LAST
       LIMIT 1
@@ -999,6 +1295,34 @@ async function mapGenerationTaskResponse(
       ? JSON.parse(row.metadata_json) as Record<string, unknown>
       : row.metadata_json ?? {};
   const kind = String(snapshot.kind ?? (row.task_type.includes("video") ? "video" : "image"));
+  const providerResponse = readJsonRecord(row.provider_response_redacted_json);
+  const snapshotFailure = readJsonRecord(row.snapshot_failure_json);
+  const snapshotResultAssets = readRecordArray(row.snapshot_result_assets_json);
+  const snapshotResultAsset =
+    snapshotResultAssets.find((asset) => readString(asset.mediaKind) === kind) ??
+    snapshotResultAssets[0] ??
+    null;
+  const failureCode =
+    readString(snapshotFailure.failureCode) ||
+    readString(snapshotFailure.code) ||
+    row.failure_code;
+  const providerMessage =
+    readString(snapshotFailure.providerMessage) ||
+    readString(providerResponse.providerMessage) ||
+    readString(providerResponse.errorMessage) ||
+    readString(providerResponse.message) ||
+    null;
+  const providerErrorCode =
+    readString(snapshotFailure.providerErrorCode) ||
+    readString(providerResponse.providerErrorCode) ||
+    readString(providerResponse.errorCode) ||
+    readString(row.provider_failure_code) ||
+    null;
+  const providerStatus =
+    readString(snapshotFailure.providerStatus) ||
+    readString(providerResponse.providerStatus) ||
+    readString(row.provider_request_status) ||
+    null;
   let urls: Awaited<ReturnType<typeof signedUrlsForStorageObject>> | null = null;
   if (row.storage_object_id) {
     urls = await signedUrlsForStorageObject(db, {
@@ -1038,8 +1362,13 @@ async function mapGenerationTaskResponse(
   const mockImageUrl = kind === "image" ? pickMockEpisodeImageUrl(row.task_id) : null;
   const storyboardVideoUrl = kind === "video" ? mockEpisodeStoryboardVideoUrl : null;
 
+  const snapshotResult = snapshotResultAsset
+    ? generationResultFromSnapshotAsset(snapshotResultAsset, kind, generatedAudioItems)
+    : null;
+
   const result =
-    row.asset_version_id && urls
+    snapshotResult ??
+    (row.asset_version_id && urls
       ? {
           assetId: row.asset_id,
           assetVersionId: row.asset_version_id,
@@ -1047,16 +1376,37 @@ async function mapGenerationTaskResponse(
           fileId: row.storage_object_id,
           storageObjectKey: row.storage_object_key,
           mediaKind: kind,
-          imageUrl: mockImageUrl,
-          videoUrl: storyboardVideoUrl,
-          thumbnailUrl: metadata.thumbnailUrl ?? (kind === "image" ? mockImageUrl : null),
-          coverImageUrl: metadata.coverImageUrl ?? (kind === "image" ? mockImageUrl : null),
-          sourceUrl: kind === "image" ? mockImageUrl : storyboardVideoUrl,
-          downloadUrl: kind === "image" ? mockImageUrl : storyboardVideoUrl,
+          imageUrl:
+            kind === "image" && typeof metadata.sourceUrl === "string"
+              ? metadata.sourceUrl
+              : mockImageUrl,
+          videoUrl: typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : storyboardVideoUrl,
+          thumbnailUrl:
+            metadata.thumbnailUrl ??
+            (kind === "image" && typeof metadata.previewUrl === "string" ? metadata.previewUrl : kind === "image" ? mockImageUrl : null),
+          coverImageUrl:
+            metadata.coverImageUrl ??
+            (kind === "image" && typeof metadata.previewUrl === "string" ? metadata.previewUrl : kind === "image" ? mockImageUrl : null),
+          sourceUrl:
+            kind === "image"
+              ? typeof metadata.sourceUrl === "string"
+                ? metadata.sourceUrl
+                : mockImageUrl
+              : typeof metadata.sourceUrl === "string"
+                ? metadata.sourceUrl
+                : storyboardVideoUrl,
+          downloadUrl:
+            kind === "image"
+              ? typeof metadata.downloadUrl === "string"
+                ? metadata.downloadUrl
+                : mockImageUrl
+              : typeof metadata.downloadUrl === "string"
+                ? metadata.downloadUrl
+                : storyboardVideoUrl,
           expiresAt: urls.expiresAt,
           generatedAudioItems,
         }
-      : null;
+      : null);
 
   return {
     taskId: row.task_id,
@@ -1064,7 +1414,31 @@ async function mapGenerationTaskResponse(
     kind,
     status: normalizeTaskStatus(row.status),
     workflowStatus: normalizeTaskStatus(row.workflow_status),
-    failureCode: row.failure_code,
+    failureCode,
+    failure: failureCode
+      ? {
+          code: failureCode,
+          failureCode,
+          noticeType: readString(snapshotFailure.noticeType) || generationFailureNoticeType(failureCode),
+          displayMessage: generationFailureDisplayMessage({
+            failureCode,
+            snapshotFailure,
+            providerMessage,
+            providerErrorCode,
+          }),
+          storageObjectKey: readString(snapshotFailure.storageObjectKey) || null,
+          providerRequestId: row.provider_request_id,
+          providerStatus,
+          providerErrorCode,
+          providerMessage,
+          details:
+            snapshotFailure.details &&
+            typeof snapshotFailure.details === "object" &&
+            !Array.isArray(snapshotFailure.details)
+              ? snapshotFailure.details
+              : providerResponse,
+        }
+      : null,
     episodeId: snapshot.episodeId ?? null,
     projectId: row.project_id,
     targetType: snapshot.targetType ?? row.target_entity_type,
@@ -1087,6 +1461,35 @@ async function mapGenerationTaskResponse(
     result,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function generationResultFromSnapshotAsset(
+  asset: Record<string, unknown>,
+  kind: string,
+  generatedAudioItems: Array<Record<string, unknown>>,
+) {
+  const url =
+    readString(asset.sourceUrl) ||
+    readString(asset.url) ||
+    readString(asset.previewUrl) ||
+    readString(asset.downloadUrl);
+  const previewUrl = readString(asset.previewUrl) || url || null;
+  const downloadUrl = readString(asset.downloadUrl) || url || null;
+  return {
+    assetId: readString(asset.assetId) || null,
+    assetVersionId: readString(asset.assetVersionId) || null,
+    storageObjectId: readString(asset.storageObjectId) || null,
+    fileId: readString(asset.storageObjectId) || null,
+    storageObjectKey: readString(asset.storageObjectKey) || null,
+    mediaKind: readString(asset.mediaKind) || kind,
+    imageUrl: kind === "image" ? url || null : null,
+    videoUrl: kind === "video" ? url || null : null,
+    thumbnailUrl: readString(asset.thumbnailUrl) || previewUrl,
+    coverImageUrl: readString(asset.coverImageUrl) || previewUrl,
+    sourceUrl: url || null,
+    downloadUrl,
+    generatedAudioItems,
   };
 }
 
@@ -1136,6 +1539,362 @@ function pickMockEpisodeImageUrl(taskId: string) {
 
 function isMockEpisodeImageUrl(value: unknown) {
   return /mock-image-[^?]+\.(?:avif|png|webp)(?:\?|$)/i.test(String(value ?? "").trim());
+}
+
+function readErrorFailureCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const value = (error as { failureCode?: unknown }).failureCode;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function readErrorStorageObjectId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const value = (error as { storageObjectId?: unknown }).storageObjectId;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function generationFailureNoticeType(failureCode: string | null | undefined): string {
+  const code = String(failureCode ?? "").trim();
+  if (
+    code === "provider_output_persist_failed" ||
+    code === "provider_result_unknown" ||
+    code === "worker_crashed_after_external_start"
+  ) {
+    return "manual_review";
+  }
+  if (
+    code === "provider_api_key_env_required" ||
+    code === "provider_api_key_missing" ||
+    code === "provider_adapter_missing" ||
+    code === "provider_circuit_open" ||
+    code === "storage_put_object_required"
+  ) {
+    return "admin_action_required";
+  }
+  if (code === "insufficient_credits" || code.startsWith("model_")) {
+    return "warning";
+  }
+  return "error";
+}
+
+function generationFailureDisplayMessage(input: {
+  failureCode: string | null | undefined;
+  snapshotFailure?: Record<string, unknown>;
+  providerMessage?: string | null;
+  providerErrorCode?: string | null;
+}): string {
+  const failureCode = String(input.failureCode ?? "").trim();
+  const explicit = readString(input.snapshotFailure?.displayMessage);
+  if (explicit && explicit !== failureCode && !/^[a-z0-9_:-]+$/i.test(explicit)) {
+    return explicit;
+  }
+  const providerMessage = String(input.providerMessage ?? "").trim();
+  if (failureCode === "provider_failed" && providerMessage) {
+    return generationProviderFailureDisplayMessage(providerMessage) ||
+      `模型供应商返回失败：${providerMessage}`;
+  }
+  const providerErrorCode = String(input.providerErrorCode ?? "").trim();
+  if (failureCode === "provider_failed" && providerErrorCode) {
+    return generationProviderFailureDisplayMessage(providerErrorCode) ||
+      `模型供应商返回失败：${providerErrorCode}`;
+  }
+  return generationFailureDisplayMessageByCode(failureCode);
+}
+
+function generationProviderFailureDisplayMessage(value: string): string {
+  const code = value.trim();
+  if (code === "provider_submission_ambiguous") {
+    return "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。";
+  }
+  const openAiImagesStatus = /^openai_images_(\d{3})$/i.exec(code)?.[1];
+  if (openAiImagesStatus === "504") {
+    return "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。";
+  }
+  if (openAiImagesStatus === "429") {
+    return "GPT Image 2 中转站或供应商触发限流（HTTP 429），积分已返还。请稍后重试。";
+  }
+  if (openAiImagesStatus === "401" || openAiImagesStatus === "403") {
+    return "GPT Image 2 中转站或供应商鉴权失败，请联系管理员检查 API Key 和中转站权限。";
+  }
+  if (openAiImagesStatus === "400") {
+    return "GPT Image 2 中转站或供应商拒绝了本次请求，请检查提示词、参考图或模型参数。";
+  }
+  if (openAiImagesStatus && Number(openAiImagesStatus) >= 500) {
+    return `GPT Image 2 中转站或供应商服务异常（HTTP ${openAiImagesStatus}），积分已返还。请稍后重试。`;
+  }
+  return "";
+}
+
+function generationFailureDisplayMessageByCode(failureCode: string): string {
+  return (
+    {
+      task_timeout: "生成任务超过 15 分钟未完成，已自动标记失败并返还积分。",
+      provider_failed: "模型供应商返回失败，积分已返还。请调整提示词或稍后重试。",
+      provider_submission_ambiguous: "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。",
+      openai_images_504: "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
+      provider_poll_timeout: "模型生成结果查询超时，任务已失败并返还积分。",
+      provider_result_unknown: "模型生成状态暂不确定，请稍后刷新或联系后台复核。",
+      provider_output_download_failed: "模型已生成结果，但从供应商下载产物失败，积分已返还。",
+      provider_output_upload_failed: "模型已生成结果，但上传到平台存储失败，积分已返还。",
+      provider_output_persist_failed: "产物已上传到平台存储，但写入资产记录或绑定分镜失败，正在等待后台补写。",
+      provider_api_key_env_required: "模型供应商密钥环境变量未配置，请联系管理员。",
+      provider_api_key_missing: "模型供应商密钥为空，请联系管理员检查环境配置。",
+      provider_adapter_missing: "当前模型供应商适配器不可用，请联系管理员检查模型配置。",
+      provider_circuit_open: "模型供应商熔断保护中，请稍后重试或联系管理员。",
+      worker_crashed_after_external_start: "任务已提交到模型供应商，但本地 worker 中断，结果需要后台复核。",
+      storage_put_object_required: "平台存储上传能力未启用，请联系管理员检查 COS 配置。",
+      model_not_configured: "当前模型未配置，请切换模型或联系管理员。",
+      model_disabled: "当前模型维护中，请切换模型后重试。",
+      model_task_mode_unsupported: "当前模型不支持这类生成方式，请切换模型或生成模式。",
+      model_media_type_mismatch: "当前模型类型与生成内容不匹配，请切换模型。",
+      model_reference_limit_exceeded: "参考素材数量超出模型限制，请减少参考图后重试。",
+      model_reference_not_found: "参考素材不存在或无权访问，请重新选择参考图。",
+      model_reference_unavailable: "参考素材尚未准备好，请重新选择或稍后重试。",
+      model_reference_mime_not_allowed: "当前模型不支持该参考素材格式，请更换参考图。",
+      model_prompt_too_long: "提示词过长，请缩短后重试。",
+      insufficient_credits: "积分不足，任务未提交到模型供应商。",
+    }[failureCode] ?? `生成任务失败：${failureCode || "unknown_failure"}`
+  );
+}
+
+function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
+  return {
+    retryAttempts: parseRuntimePositiveInt(
+      env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS,
+      3,
+      10,
+    ),
+    retryDelayMs: parseRuntimeNonNegativeInt(
+      env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS,
+      1000,
+      60_000,
+    ),
+  };
+}
+
+function parseContentLength(value: string | null) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
+}
+
+function delay(ms: number) {
+  return ms > 0 ? new Promise((resolvePromise) => setTimeout(resolvePromise, ms)) : Promise.resolve();
+}
+
+function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
+  let sizeBytes = 0;
+  const counter = new Transform({
+    transform(chunk, _encoding, callback) {
+      sizeBytes += Buffer.isBuffer(chunk)
+        ? chunk.byteLength
+        : Buffer.byteLength(chunk);
+      callback(null, chunk);
+    },
+  });
+  return {
+    stream: Readable.fromWeb(body as never).pipe(counter),
+    getSizeBytes: () => sizeBytes,
+  };
+}
+
+async function uploadProviderArtifactToStorage(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    artifactUrl: string;
+    objectName: string;
+    organizationId: string;
+    workspaceId: string | null;
+    projectId: string | null;
+    runtime: UploadSessionRuntime;
+    metadata: Record<string, unknown>;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    createdByUserId?: string | null;
+    now: Date;
+  },
+): Promise<{
+  storageObject: StorageObjectRecord;
+  contentType: string;
+  sizeBytes: number | null;
+  uploadResult?: { eTag?: string | null; versionId?: string | null } | undefined;
+}> {
+  const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
+  const fetchImpl = input.fetchImpl ?? fetch;
+  let storageObject: StorageObjectRecord | null = null;
+  let contentType = "application/octet-stream";
+  let knownSizeBytes: number | null = null;
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    const artifactResponse = await fetchImpl(input.artifactUrl);
+    if (!artifactResponse.ok || !artifactResponse.body) {
+      throw Object.assign(new Error(`provider_artifact_download_${artifactResponse.status}`), {
+        failureCode: "provider_output_download_failed",
+        storageObjectId: storageObject?.id,
+      });
+    }
+
+    contentType =
+      artifactResponse.headers.get("content-type")?.split(";")[0]?.trim() ||
+      contentType;
+    knownSizeBytes =
+      parseContentLength(artifactResponse.headers.get("content-length")) ??
+      knownSizeBytes;
+
+    if (!storageObject) {
+      storageObject = await createScopedStorageObject(db, {
+        organizationId: input.organizationId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        bucket: input.runtime.bucket,
+        objectName: input.objectName,
+        contentType,
+        sizeBytes: knownSizeBytes,
+        provider: input.runtime.provider,
+        status: "pending_upload",
+        metadata: input.metadata,
+        createdByUserId: input.createdByUserId ?? null,
+        now: input.now,
+      });
+    }
+
+    const counted = createCountingUploadStream(artifactResponse.body);
+    try {
+      let uploadResult: { eTag?: string | null; versionId?: string | null } | undefined;
+      if (
+        (input.runtime.mode === "cos" || input.runtime.mode === "s3_compatible") &&
+        typeof input.runtime.adapter.putObject === "function"
+      ) {
+        uploadResult = await input.runtime.adapter.putObject({
+          bucket: storageObject.bucket,
+          objectKey: storageObject.objectKey,
+          body: counted.stream,
+          contentType,
+        });
+      } else {
+        await writeLocalStorageObjectFromStream({
+          bucket: storageObject.bucket,
+          objectKey: storageObject.objectKey,
+          body: counted.stream,
+        });
+      }
+
+      return {
+        storageObject,
+        contentType,
+        sizeBytes: knownSizeBytes ?? counted.getSizeBytes(),
+        uploadResult,
+      };
+    } catch (error) {
+      if (attempt >= retryAttempts) {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          failureCode: "provider_output_upload_failed",
+          storageObjectId: storageObject.id,
+        });
+      }
+      await delay(retryDelayMs);
+    }
+  }
+
+  throw Object.assign(new Error("provider_artifact_upload_retry_exhausted"), {
+    failureCode: "provider_output_upload_failed",
+    storageObjectId: storageObject?.id,
+  });
+}
+
+async function uploadProviderArtifactBytesToStorage(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    bytes: Uint8Array;
+    contentType: string;
+    objectName: string;
+    organizationId: string;
+    workspaceId: string | null;
+    projectId: string | null;
+    runtime: UploadSessionRuntime;
+    metadata: Record<string, unknown>;
+    env: NodeJS.ProcessEnv;
+    createdByUserId?: string | null;
+    now: Date;
+  },
+): Promise<{
+  storageObject: StorageObjectRecord;
+  contentType: string;
+  sizeBytes: number;
+  uploadResult?: { eTag?: string | null; versionId?: string | null } | undefined;
+}> {
+  const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
+  const storageObject = await createScopedStorageObject(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    bucket: input.runtime.bucket,
+    objectName: input.objectName,
+    contentType: input.contentType,
+    sizeBytes: input.bytes.byteLength,
+    provider: input.runtime.provider,
+    status: "pending_upload",
+    metadata: input.metadata,
+    createdByUserId: input.createdByUserId ?? null,
+    now: input.now,
+  });
+
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    try {
+      let uploadResult: { eTag?: string | null; versionId?: string | null } | undefined;
+      if (
+        (input.runtime.mode === "cos" || input.runtime.mode === "s3_compatible") &&
+        typeof input.runtime.adapter.putObject === "function"
+      ) {
+        uploadResult = await input.runtime.adapter.putObject({
+          bucket: storageObject.bucket,
+          objectKey: storageObject.objectKey,
+          body: input.bytes,
+          contentType: input.contentType,
+        });
+      } else {
+        await writeLocalStorageObject({
+          bucket: storageObject.bucket,
+          objectKey: storageObject.objectKey,
+          bytes: input.bytes,
+        });
+      }
+
+      return {
+        storageObject,
+        contentType: input.contentType,
+        sizeBytes: input.bytes.byteLength,
+        uploadResult,
+      };
+    } catch (error) {
+      if (attempt >= retryAttempts) {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          failureCode: "provider_output_upload_failed",
+          storageObjectId: storageObject.id,
+        });
+      }
+      await delay(retryDelayMs);
+    }
+  }
+
+  throw Object.assign(new Error("provider_artifact_upload_retry_exhausted"), {
+    failureCode: "provider_output_upload_failed",
+    storageObjectId: storageObject.id,
+  });
+}
+
+function decodeImageArtifactBytes(artifact: MediaGenerationArtifact) {
+  if (artifact.b64Json && artifact.b64Json.trim()) {
+    return new Uint8Array(Buffer.from(artifact.b64Json, "base64"));
+  }
+  return null;
 }
 
 function resolvePreferredEpisodeImageUrl(...candidates: unknown[]) {
@@ -1255,6 +2014,19 @@ async function settleTimedOutEpisodeGenerationTask(
       now: input.now,
     });
   }
+  await markGenerationTaskSnapshotFailed(db, {
+    taskId: row.task_id,
+    attemptId: row.current_attempt_id,
+    failure: {
+      failureCode: "task_timeout",
+      displayMessage: generationFailureDisplayMessageByCode("task_timeout"),
+    },
+    creditSummary: {
+      released: amount,
+      settledAt: input.now.toISOString(),
+    },
+    now: input.now,
+  });
   return true;
 }
 
@@ -1305,6 +2077,307 @@ async function repairTimedOutEpisodeGenerationTasks(
   return { timedOutTaskIds };
 }
 
+async function syncSeedanceVideoTaskOnRead(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    taskId: string;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    now: Date;
+  },
+) {
+  if (!isEnabled(input.env.SEEDANCE_PROVIDER_ENABLED)) {
+    return false;
+  }
+
+  const row = await queryOne<{
+    task_id: string;
+    workflow_id: string;
+    attempt_id: string | null;
+    organization_id: string;
+    workspace_id: string;
+    project_id: string;
+    input_snapshot_json: Record<string, unknown> | string;
+    provider_request_id: string | null;
+    external_request_id: string | null;
+    reservation_id: string | null;
+    amount_reserved: number | string | null;
+  }>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.workflow_id,
+        t.current_attempt_id AS attempt_id,
+        t.organization_id,
+        t.workspace_id,
+        t.project_id,
+        t.input_snapshot_json,
+        pr.id AS provider_request_id,
+        pr.external_request_id,
+        r.id AS reservation_id,
+        r.amount_reserved
+      FROM tasks t
+      LEFT JOIN provider_requests pr
+        ON pr.organization_id = t.organization_id
+       AND pr.task_id = t.id
+       AND pr.provider_name = 'volcengine'
+      LEFT JOIN credit_reservations r
+        ON r.organization_id = t.organization_id
+       AND r.task_id = t.id
+      WHERE t.id = $1
+        AND t.task_type = 'episode_generate_video'
+        AND t.status = 'running'
+        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+      LIMIT 1
+    `,
+    [input.taskId],
+  );
+  if (!row?.provider_request_id || !row.external_request_id) {
+    return false;
+  }
+
+  const snapshot =
+    typeof row.input_snapshot_json === "string"
+      ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
+      : row.input_snapshot_json;
+  const modelConfig = await findActiveAiModelConfigByCode(db, "seedance-i2v-pro");
+  const adapter = createSeedancePollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
+  const poll = await adapter.poll({ externalRequestId: row.external_request_id });
+
+  if (poll.status === "running" || poll.status === "accepted") {
+    return false;
+  }
+
+  if (poll.status === "failed") {
+    await markProviderRequestFailed(db, {
+      providerRequestId: row.provider_request_id,
+      failureCode: "provider_failed",
+      redactedResponse: poll.redactedResponse,
+      now: input.now,
+    });
+    await finalizeTaskAttempt(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id!,
+      status: "failed",
+      failureCode: "provider_failed",
+      now: input.now,
+    });
+    await aggregateWorkflowStatus(db, row.workflow_id);
+    const amount = Number(row.amount_reserved ?? 0);
+    if (row.reservation_id && amount > 0) {
+      await settleReservationAllocation(db, {
+        reservationId: row.reservation_id,
+        allocationKey: "seedance-provider-failed",
+        amount,
+        outcome: "released",
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        metadata: poll.redactedResponse,
+        now: input.now,
+      });
+    }
+    await markGenerationTaskSnapshotFailed(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      providerStatus: poll.redactedResponse,
+      failure: {
+        failureCode: "provider_failed",
+        providerStatus: readString(poll.redactedResponse.providerStatus),
+        providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
+        providerMessage: readString(poll.redactedResponse.providerMessage),
+        displayMessage: generationFailureDisplayMessage({
+          failureCode: "provider_failed",
+          providerMessage: readString(poll.redactedResponse.providerMessage),
+          providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
+        }),
+      },
+      creditSummary: {
+        released: amount,
+        settledAt: input.now.toISOString(),
+      },
+      now: input.now,
+    });
+    return true;
+  }
+
+  if (!poll.videoUrl) {
+    return false;
+  }
+
+  await markProviderRequestSucceeded(db, {
+    providerRequestId: row.provider_request_id,
+    externalRequestId: row.external_request_id,
+    redactedResponse: poll.redactedResponse,
+    now: input.now,
+  });
+
+  const artifactMetadata = {
+    episodeId: snapshot.episodeId ?? null,
+    taskId: row.task_id,
+    provider: "seedance",
+    externalRequestId: row.external_request_id,
+  };
+  let pendingStorageObjectId: string | null = null;
+  try {
+    const objectName = `episodes/${String(snapshot.episodeId ?? row.task_id)}/seedance/seedance-video-${row.task_id}.mp4`;
+    const uploadedArtifact = await uploadProviderArtifactToStorage(db, {
+      artifactUrl: poll.videoUrl,
+      objectName,
+      organizationId: row.organization_id,
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      runtime: input.runtime,
+      metadata: artifactMetadata,
+      env: input.env,
+      fetchImpl: input.fetchImpl,
+      now: input.now,
+    });
+    const storageObject = uploadedArtifact.storageObject;
+    pendingStorageObjectId = storageObject.id;
+    const availableStorageObject = await markStorageObjectAvailable(db, {
+      storageObjectId: storageObject.id,
+      contentType: uploadedArtifact.contentType,
+      sizeBytes: uploadedArtifact.sizeBytes,
+      eTag: uploadedArtifact.uploadResult?.eTag ?? null,
+      versionId: uploadedArtifact.uploadResult?.versionId ?? null,
+      metadata: artifactMetadata,
+      now: input.now,
+    });
+    if (!availableStorageObject) {
+      throw Object.assign(new Error("seedance_storage_object_missing_after_upload"), {
+        failureCode: "provider_output_persist_failed",
+      });
+    }
+    const urls = await signedUrlsForStorageObject(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: availableStorageObject.id,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: 900,
+      now: input.now,
+    });
+    const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
+      organizationId: row.organization_id,
+      projectId: row.project_id,
+      episodeId: String(snapshot.episodeId ?? ""),
+      targetType: String(snapshot.targetType ?? "episode"),
+      targetId: String(snapshot.targetId ?? snapshot.episodeId ?? row.task_id),
+      assetType: "shot_video",
+    });
+    await createAssetVersionSnapshot(db, {
+      organizationId: row.organization_id,
+      projectId: row.project_id,
+      assetType: "shot_video",
+      assetKey: targetAsset?.assetKey ?? `video:${String(snapshot.episodeId ?? row.project_id)}:${row.task_id}`,
+      createdByUserId: null,
+      storageObjectId: availableStorageObject.id,
+      storageObjectKey: availableStorageObject.objectKey,
+      metadata: {
+        ...(targetAsset?.metadata ?? {}),
+        mimeType: uploadedArtifact.contentType,
+        label: "Seedance episode video",
+        episodeId: snapshot.episodeId ?? null,
+        taskId: row.task_id,
+        targetType: snapshot.targetType ?? "episode",
+        targetId: snapshot.targetId ?? snapshot.episodeId ?? null,
+        previewUrl: urls.previewUrl,
+        sourceUrl: urls.sourceUrl,
+        downloadUrl: urls.downloadUrl,
+        provider: "seedance",
+        externalRequestId: row.external_request_id,
+      },
+      sourceTaskId: row.task_id,
+      sourceAttemptId: row.attempt_id,
+      now: input.now,
+    });
+  } catch (error) {
+    const failedStorageObjectId = pendingStorageObjectId ?? readErrorStorageObjectId(error) ?? null;
+    if (failedStorageObjectId) {
+      await markStorageObjectFailed(db, {
+        storageObjectId: failedStorageObjectId,
+        status: "failed",
+        now: input.now,
+      });
+    }
+    const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
+    await finalizeTaskAttempt(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id!,
+      status: "failed",
+      failureCode,
+      now: input.now,
+    });
+    await aggregateWorkflowStatus(db, row.workflow_id);
+    const amount = Number(row.amount_reserved ?? 0);
+    if (row.reservation_id && amount > 0) {
+      await settleReservationAllocation(db, {
+        reservationId: row.reservation_id,
+        allocationKey: failureCode,
+        amount,
+        outcome: "released",
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        metadata: {
+          provider: "seedance",
+          externalRequestId: row.external_request_id,
+          failureCode,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+        now: input.now,
+      });
+    }
+    await markGenerationTaskSnapshotFailed(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      failure: {
+        failureCode,
+        displayMessage: generationFailureDisplayMessage({
+          failureCode,
+          providerMessage: error instanceof Error ? error.message : String(error),
+        }),
+        providerMessage: error instanceof Error ? error.message : String(error),
+      },
+      creditSummary: {
+        released: amount,
+        settledAt: input.now.toISOString(),
+      },
+      now: input.now,
+    });
+    return true;
+  }
+  await finalizeTaskAttempt(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id!,
+    status: "succeeded",
+    now: input.now,
+  });
+  await aggregateWorkflowStatus(db, row.workflow_id);
+  const amount = Number(row.amount_reserved ?? 0);
+  if (row.reservation_id && amount > 0) {
+    await settleReservationAllocation(db, {
+      reservationId: row.reservation_id,
+      allocationKey: "seedance-result",
+      amount,
+      outcome: "consumed",
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      metadata: {
+        provider: "seedance",
+        externalRequestId: row.external_request_id,
+      },
+      now: input.now,
+    });
+  }
+  return true;
+}
+
 async function runCreatorRepairMaintenance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -1336,6 +2409,8 @@ async function createEpisodeGenerationTask(
     idempotencyKey: string;
     authenticated: { sessionToken: string; user: AuthenticatedUser };
     runtime: UploadSessionRuntime;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
     signedUrlExpiresInSeconds: number;
     now: Date;
   },
@@ -1352,16 +2427,59 @@ async function createEpisodeGenerationTask(
   }
 
   const config = normalizeGenerationKind(input.kind);
+  const requestedModelCode = requestModelCode(input.body.model);
+  const modelConfig = requestedModelCode
+    ? await findActiveAiModelConfigByCode(db, requestedModelCode)
+    : undefined;
+  const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig);
+  const generationQueueConfig = loadGenerationQueueConfig(input.env);
+  const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
+  const bullMqSubmitQueueName = input.kind === "video"
+    ? generationQueueConfig.queues.submitVideo
+    : generationQueueConfig.queues.submitImage;
+  const shouldUseSeedanceProvider =
+    input.kind === "video" &&
+    requestedModelCode === "seedance-i2v-pro" &&
+    isEnabled(input.env.SEEDANCE_PROVIDER_ENABLED);
+  const shouldUseGptImageProvider =
+    input.kind === "image" &&
+    requestedModelCode === "gpt-image-2-cn" &&
+    isEnabled(input.env.GPT_IMAGE2_PROVIDER_ENABLED);
+  const rawParameters = input.body.parameters && typeof input.body.parameters === "object"
+    ? input.body.parameters as Record<string, unknown>
+    : {};
+  const referenceAssetVersionIds = input.kind === "image"
+    ? readGenerationReferenceAssetVersionIds(input.body, rawParameters)
+    : [];
+  validateGenerationReferenceLimit(referenceAssetVersionIds, modelConfig);
+  const resolvedReferenceImages = input.kind === "image"
+    ? await resolveGenerationReferenceImages(db, {
+        organizationId: context.actor.organizationId,
+        projectId: context.project.id,
+        assetVersionIds: referenceAssetVersionIds,
+        modelConfig,
+        runtime: input.runtime,
+      })
+    : [];
+  const parameters = resolvedReferenceImages.length
+    ? {
+        ...rawParameters,
+        referenceImages: [
+          ...readArray(rawParameters.referenceImages),
+          ...resolvedReferenceImages,
+        ],
+      }
+    : rawParameters;
   const requestSnapshot = {
     kind: input.kind,
     episodeId: input.episodeId,
     targetType: String(input.body.targetType ?? (input.body.shotId ? "storyboard" : "episode")),
     targetId: String(input.body.targetId ?? input.body.shotId ?? input.episodeId),
     prompt: String(input.body.prompt ?? input.body.promptOverride ?? input.body.motionPrompt ?? ""),
-    model: String(input.body.model ?? ""),
-    parameters: input.body.parameters && typeof input.body.parameters === "object"
-      ? input.body.parameters as Record<string, unknown>
-      : {},
+    model: requestedModelCode,
+    referenceAssetVersionIds,
+    firstFrameUrl: resolveFirstFrameUrl(input.body),
+    parameters,
     audioEnabled: Boolean(input.body.audioEnabled),
     musicEnabled: Boolean(input.body.musicEnabled),
     lipSyncEnabled: Boolean(input.body.lipSyncEnabled),
@@ -1406,21 +2524,23 @@ async function createEpisodeGenerationTask(
       ...requestSnapshot,
       requestedAt: input.now.toISOString(),
       timeoutAt: timeoutAt.toISOString(),
-      mockExecutor: true,
+      mockExecutor: !(shouldUseSeedanceProvider || shouldUseGptImageProvider),
+      providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
     },
     createdByUserId: context.userId,
     tasks: [
       {
         taskType: config.taskType,
-        queueName: config.queueName,
+        queueName: shouldUseBullMQDispatch ? bullMqSubmitQueueName : config.queueName,
         targetEntityType,
         targetEntityId,
         inputSnapshot: {
           ...requestSnapshot,
-          cost: config.cost,
+          cost: estimatedCost,
           requestedAt: input.now.toISOString(),
           timeoutAt: timeoutAt.toISOString(),
-          mockExecutor: true,
+          mockExecutor: !(shouldUseSeedanceProvider || shouldUseGptImageProvider),
+          providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
         },
       },
     ],
@@ -1452,7 +2572,7 @@ async function createEpisodeGenerationTask(
     projectId: context.project.id,
     workflowId: workflow.workflow.id,
     taskId: task.id,
-    amount: config.cost,
+    amount: estimatedCost,
     sourceType: "episode_generation_task",
     sourceId: task.id,
     reason: `${input.kind} generation`,
@@ -1463,6 +2583,388 @@ async function createEpisodeGenerationTask(
     createdByUserId: context.userId,
     now: input.now,
   });
+
+  await upsertQueuedGenerationTaskSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    workspaceId: context.actor.workspaceId,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    targetType: requestSnapshot.targetType,
+    targetId: requestSnapshot.targetId,
+    workflowId: workflow.workflow.id,
+    taskId: task.id,
+    modelConfigId: modelConfig?.id ?? null,
+    creditReservationId: reservation.reservation.id,
+    modelCode: requestedModelCode || (input.kind === "video" ? "mock-video" : "mock-image"),
+    mediaType: input.kind,
+    taskMode: input.kind === "video" ? "video.image_to_video" : "image.generate",
+    estimatedCredits: estimatedCost,
+    requestSummary: {
+      prompt: requestSnapshot.prompt,
+      parameters: requestSnapshot.parameters,
+      targetType: requestSnapshot.targetType,
+      targetId: requestSnapshot.targetId,
+      referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+    },
+    creditSummary: {
+      reservationId: reservation.reservation.id,
+      reserved: estimatedCost,
+    },
+    now: input.now,
+  });
+
+  if (shouldUseBullMQDispatch) {
+    await appendGenerationTaskCreatedOutboxEvent(db, {
+      organizationId: context.actor.organizationId,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      kind: input.kind,
+      modelCode: requestedModelCode || null,
+      queueName: bullMqSubmitQueueName,
+      targetType: requestSnapshot.targetType,
+      targetId: requestSnapshot.targetId,
+      providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
+      availableAt: input.now,
+    });
+
+    const responseBody = await mapGenerationTaskResponse(db, {
+      taskId: task.id,
+      sessionToken: input.authenticated.sessionToken,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      now: input.now,
+    });
+    await store.update({
+      ...started.record,
+      responseResourceType: "generation_task",
+      responseResourceId: task.id,
+      responseSnapshot: responseBody as Record<string, unknown>,
+      status: "succeeded",
+      updatedAt: input.now,
+    });
+
+    return { status: 200 as const, body: responseBody };
+  }
+
+  if (shouldUseGptImageProvider) {
+    const claim = await claimQueuedTask(db, {
+      taskId: task.id,
+      workerId: "episode-gpt-image-submit-worker",
+      now: input.now,
+      leaseMs: 5 * 60_000,
+    });
+    if (!claim) {
+      throw new Error("task_claim_failed");
+    }
+
+    let providerRequestId: string | null = null;
+    try {
+      if (!modelConfig) {
+        throw new Error("gpt_image_model_config_missing");
+      }
+      const payloadRef = `creator://episodes/${input.episodeId}/image/${task.id}`;
+      const payloadHash = sha256(`${payloadRef}:${requestSnapshot.prompt}`);
+      const adapter = createProviderAdapterFromModelConfig(
+        {
+          providerProtocol: modelConfig.providerProtocol,
+          providerModel: modelConfig.providerModel,
+          providerConfig: modelConfig.providerConfig,
+        },
+        input.env,
+        input.fetchImpl,
+      );
+      const submitted = await submitProviderRequest(db, {
+        organizationId: context.actor.organizationId,
+        workspaceId: context.actor.workspaceId,
+        projectId: context.project.id,
+        workflowId: workflow.workflow.id,
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        providerName: modelConfig.providerName,
+        providerOperation: operationNames.episodeImageGenerate,
+        requestKey: `${workflow.workflow.id}:${task.id}`,
+        requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
+        payloadRef,
+        payloadHash,
+        redactedPayload: {
+          prompt: requestSnapshot.prompt,
+          parameters: requestSnapshot.parameters,
+          episodeId: input.episodeId,
+          targetType: requestSnapshot.targetType,
+          targetId: requestSnapshot.targetId,
+        },
+        createdByUserId: context.userId,
+        now: input.now,
+        adapter,
+      });
+      providerRequestId = submitted.request.id;
+      if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
+        throw Object.assign(new Error("gpt_image_artifact_missing"), {
+          failureCode: "provider_output_download_failed",
+        });
+      }
+
+      const artifact = submitted.artifacts.find((item) => item.mediaType === "image");
+      if (!artifact) {
+        throw Object.assign(new Error("gpt_image_image_artifact_missing"), {
+          failureCode: "provider_output_download_failed",
+        });
+      }
+      await markProviderRequestSucceeded(db, {
+        providerRequestId,
+        externalRequestId: submitted.request.externalRequestId,
+        redactedResponse: {
+          ...(submitted.request.redactedResponse ?? {}),
+          artifact: serializeGptImageArtifactForProviderResponse(artifact),
+        },
+        now: input.now,
+      });
+      const resultAssetType = resolveEpisodeGenerationAssetType({
+        kind: "image",
+        targetType: requestSnapshot.targetType,
+        assetType: input.body.assetType,
+      });
+      const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
+        organizationId: context.actor.organizationId,
+        projectId: context.project.id,
+        episodeId: input.episodeId,
+        targetType: requestSnapshot.targetType,
+        targetId: requestSnapshot.targetId,
+        assetType: resultAssetType,
+      });
+      const persisted = await persistGptImageArtifact(db, {
+        task: {
+          organizationId: context.actor.organizationId,
+          workspaceId: context.actor.workspaceId,
+          projectId: context.project.id,
+          taskId: task.id,
+          attemptId: claim.attempt.id,
+          createdByUserId: context.userId,
+        },
+        snapshot: {
+          episodeId: input.episodeId,
+          targetType: requestSnapshot.targetType,
+          targetId: requestSnapshot.targetId,
+        },
+        artifact,
+        externalRequestId: submitted.request.externalRequestId,
+        runtime: input.runtime,
+        env: input.env,
+        fetchImpl: input.fetchImpl,
+        now: input.now,
+        assetType: resultAssetType,
+        assetKey: targetAsset?.assetKey ?? `image:${input.episodeId}:${task.id}`,
+        assetMetadata: targetAsset?.metadata ?? {},
+        label: "GPT Image 2 episode image",
+        resolveUrls: async (storageObject) =>
+          signedUrlsForStorageObject(db, {
+            sessionToken: input.authenticated.sessionToken,
+            storageObjectId: storageObject.id,
+            runtime: input.runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+            now: input.now,
+          }),
+      });
+
+      await finalizeTaskAttempt(db, {
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        status: "succeeded",
+        now: input.now,
+      });
+      await aggregateWorkflowStatus(db, workflow.workflow.id);
+      await settleReservationAllocation(db, {
+        reservationId: reservation.reservation.id,
+        allocationKey: "gpt-image-2-result",
+        amount: estimatedCost,
+        outcome: "consumed",
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        providerRequestId,
+        metadata: {
+          provider: "gpt-image-2",
+          episodeId: input.episodeId,
+        },
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotSucceeded(db, {
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        providerRequestId,
+        resultAssets: [persisted],
+        providerStatus: {
+          provider: "gpt-image-2",
+          externalRequestId: submitted.request.externalRequestId,
+        },
+        creditSummary: {
+          consumed: estimatedCost,
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+
+      const responseBody = await mapGenerationTaskResponse(db, {
+        taskId: task.id,
+        sessionToken: input.authenticated.sessionToken,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      });
+      await store.update({
+        ...started.record,
+        responseResourceType: "generation_task",
+        responseResourceId: task.id,
+        responseSnapshot: responseBody as Record<string, unknown>,
+        status: "succeeded",
+        updatedAt: input.now,
+      });
+
+      return { status: 200 as const, body: responseBody };
+    } catch (error) {
+      const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+      await finalizeTaskAttempt(db, {
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        status: "failed",
+        failureCode,
+        now: input.now,
+      });
+      await aggregateWorkflowStatus(db, workflow.workflow.id);
+      await settleReservationAllocation(db, {
+        reservationId: reservation.reservation.id,
+        allocationKey: failureCode,
+        amount: estimatedCost,
+        outcome: "released",
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        providerRequestId,
+        metadata: {
+          provider: "gpt-image-2",
+          failureCode,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        providerRequestId,
+        failure: {
+          failureCode,
+          displayMessage: generationFailureDisplayMessage({
+            failureCode,
+            providerMessage: error instanceof Error ? error.message : String(error),
+          }),
+          providerMessage: error instanceof Error ? error.message : String(error),
+        },
+        creditSummary: {
+          released: estimatedCost,
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      const responseBody = await mapGenerationTaskResponse(db, {
+        taskId: task.id,
+        sessionToken: input.authenticated.sessionToken,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      });
+      await store.update({
+        ...started.record,
+        responseResourceType: "generation_task",
+        responseResourceId: task.id,
+        responseSnapshot: responseBody as Record<string, unknown>,
+        status: "succeeded",
+        updatedAt: input.now,
+      });
+
+      return { status: 200 as const, body: responseBody };
+    }
+  }
+
+  if (shouldUseSeedanceProvider && !shouldUseBullMQDispatch) {
+    const claim = await claimQueuedTask(db, {
+      taskId: task.id,
+      workerId: "episode-seedance-submit-worker",
+      now: input.now,
+      leaseMs: 15 * 60_000,
+    });
+    if (!claim) {
+      throw new Error("task_claim_failed");
+    }
+
+    const payloadRef = `creator://episodes/${input.episodeId}/video/${task.id}`;
+    const payloadHash = sha256(`${payloadRef}:${requestSnapshot.prompt}:${requestSnapshot.firstFrameUrl}`);
+    const adapter = createProviderAdapterFromModelConfig(
+      modelConfig
+        ? {
+            providerProtocol: modelConfig.providerProtocol,
+            providerModel: modelConfig.providerModel,
+            providerConfig: modelConfig.providerConfig,
+          }
+        : {
+            providerProtocol: "volcengine_ark_video",
+            providerModel: input.env.SEEDANCE_PROVIDER_MODEL?.trim() || "seedance-1-0-pro",
+            providerConfig: {
+              baseURL: input.env.SEEDANCE_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com",
+              createTaskEndpoint:
+                input.env.SEEDANCE_CREATE_TASK_ENDPOINT?.trim() ||
+                "/api/v3/contents/generations/tasks",
+              queryTaskEndpoint:
+                input.env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() ||
+                "/api/v3/contents/generations/tasks/{taskId}",
+              apiKeyEnv: input.env.SEEDANCE_API_KEY_ENV?.trim() || "VOLCENGINE_ARK_API_KEY",
+            },
+          },
+      input.env,
+      input.fetchImpl,
+    );
+    await submitProviderRequest(db, {
+      organizationId: context.actor.organizationId,
+      workspaceId: context.actor.workspaceId,
+      projectId: context.project.id,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      attemptId: claim.attempt.id,
+      providerName: "volcengine",
+      providerOperation: operationNames.episodeVideoGenerate,
+      requestKey: `${workflow.workflow.id}:${task.id}`,
+      requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
+      payloadRef,
+      payloadHash,
+      redactedPayload: {
+        prompt: requestSnapshot.prompt,
+        motionPrompt: requestSnapshot.prompt,
+        firstFrameUrl: requestSnapshot.firstFrameUrl,
+        parameters: requestSnapshot.parameters,
+        episodeId: input.episodeId,
+        targetType: requestSnapshot.targetType,
+        targetId: requestSnapshot.targetId,
+      },
+      createdByUserId: context.userId,
+      now: input.now,
+      adapter,
+    });
+
+    const responseBody = await mapGenerationTaskResponse(db, {
+      taskId: task.id,
+      sessionToken: input.authenticated.sessionToken,
+      runtime: input.runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+      now: input.now,
+    });
+    await store.update({
+      ...started.record,
+      responseResourceType: "generation_task",
+      responseResourceId: task.id,
+      responseSnapshot: responseBody as Record<string, unknown>,
+      status: "succeeded",
+      updatedAt: input.now,
+    });
+
+    return { status: 200 as const, body: responseBody };
+  }
 
   const claim = await claimQueuedTask(db, {
     taskId: task.id,
@@ -1507,7 +3009,7 @@ async function createEpisodeGenerationTask(
     assetType: resultAssetType,
   });
   const targetMetadata = targetAsset?.metadata ?? {};
-  await createAssetVersionSnapshot(db, {
+  const createdAssetVersion = await createAssetVersionSnapshot(db, {
     organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType: resultAssetType,
@@ -1547,13 +3049,39 @@ async function createEpisodeGenerationTask(
   await settleReservationAllocation(db, {
     reservationId: reservation.reservation.id,
     allocationKey: "mock-result",
-    amount: config.cost,
+    amount: estimatedCost,
     outcome: "consumed",
     taskId: task.id,
     attemptId: claim.attempt.id,
     metadata: {
       episodeId: input.episodeId,
       kind: input.kind,
+    },
+    now: input.now,
+  });
+  await markGenerationTaskSnapshotSucceeded(db, {
+    taskId: task.id,
+    attemptId: claim.attempt.id,
+    resultAssets: [
+      {
+        assetId: createdAssetVersion.asset.id,
+        assetVersionId: createdAssetVersion.version.id,
+        storageObjectId: storageObject.id,
+        storageObjectKey: storageObject.object_key,
+        mediaKind: input.kind,
+        mimeType: config.contentType,
+        url: urls.previewUrl,
+        previewUrl: urls.previewUrl,
+        sourceUrl: urls.sourceUrl,
+        downloadUrl: urls.downloadUrl,
+      },
+    ],
+    providerStatus: {
+      provider: "mock",
+    },
+    creditSummary: {
+      consumed: estimatedCost,
+      settledAt: input.now.toISOString(),
     },
     now: input.now,
   });
@@ -1575,6 +3103,150 @@ async function createEpisodeGenerationTask(
   });
 
   return { status: 200 as const, body: responseBody };
+}
+
+function readGenerationReferenceAssetVersionIds(
+  body: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+) {
+  return Array.from(new Set([
+    ...readStringArray(body.referenceAssetVersionIds),
+    ...readStringArray(parameters.referenceAssetVersionIds),
+  ])).filter(isUuid);
+}
+
+function validateGenerationReferenceLimit(
+  assetVersionIds: string[],
+  modelConfig: AiModelConfigRecord | undefined,
+) {
+  const maxReferences = Number(modelConfig?.limits.maxReferences);
+  if (
+    Number.isFinite(maxReferences) &&
+    maxReferences >= 0 &&
+    assetVersionIds.length > Math.floor(maxReferences)
+  ) {
+    throw new GenerationRequestValidationError(
+      "model_reference_limit_exceeded",
+      "参考素材数量超出模型限制",
+    );
+  }
+}
+
+async function resolveGenerationReferenceImages(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    assetVersionIds: string[];
+    modelConfig: AiModelConfigRecord | undefined;
+    runtime: UploadSessionRuntime;
+  },
+) {
+  if (!input.assetVersionIds.length) {
+    return [];
+  }
+  const result = await db.query<{
+    id: string;
+    storage_object_key: string;
+    metadata_json: Record<string, unknown> | string;
+    storage_bucket: string | null;
+    storage_object_key_from_object: string | null;
+    storage_content_type: string | null;
+    storage_status: string | null;
+  }>(
+    `
+      SELECT
+        av.id,
+        av.storage_object_key,
+        av.metadata_json,
+        so.bucket AS storage_bucket,
+        so.object_key AS storage_object_key_from_object,
+        so.content_type AS storage_content_type,
+        so.status AS storage_status
+      FROM asset_versions av
+      JOIN assets a
+        ON a.organization_id = av.organization_id
+       AND a.id = av.asset_id
+      LEFT JOIN storage_objects so
+        ON so.organization_id = av.organization_id
+       AND so.id = av.storage_object_id
+      WHERE av.organization_id = $1
+        AND a.project_id = $2
+        AND av.id = ANY($3::uuid[])
+    `,
+    [input.organizationId, input.projectId, input.assetVersionIds],
+  );
+  const rowsById = new Map(result.rows.map((row) => [row.id, row]));
+  const allowedMimeTypes = new Set(
+    readStringArray(input.modelConfig?.limits.allowedMimeTypes).map((mimeType) =>
+      mimeType.toLowerCase(),
+    ),
+  );
+
+  return input.assetVersionIds.flatMap((assetVersionId) => {
+    const row = rowsById.get(assetVersionId);
+    if (!row) {
+      throw new GenerationRequestValidationError(
+        "model_reference_not_found",
+        "参考素材不存在或无权访问",
+      );
+    }
+    if (row.storage_status && row.storage_status !== "available") {
+      throw new GenerationRequestValidationError(
+        "model_reference_unavailable",
+        "参考素材尚未可用或已失效",
+      );
+    }
+    const metadata = parseMetadataJson(row.metadata_json);
+    const mimeType =
+      readString(row.storage_content_type) ||
+      readString(metadata.mimeType) ||
+      "image/png";
+    const normalizedMimeType = mimeType.toLowerCase();
+    if (
+      !normalizedMimeType.startsWith("image/") ||
+      (allowedMimeTypes.size > 0 && !allowedMimeTypes.has(normalizedMimeType))
+    ) {
+      throw new GenerationRequestValidationError(
+        "model_reference_mime_not_allowed",
+        "参考素材格式不符合当前模型配置",
+      );
+    }
+    const objectKey = readString(row.storage_object_key_from_object) || row.storage_object_key;
+    const bucket = readString(row.storage_bucket) || input.runtime.bucket;
+    return [{
+      assetVersionId,
+      url: buildGenerationReferenceObjectUrl(input.runtime, bucket, objectKey),
+      mimeType,
+      name: readString(metadata.label) || `reference-${assetVersionId}.png`,
+    }];
+  });
+}
+
+function parseMetadataJson(value: Record<string, unknown> | string): Record<string, unknown> {
+  if (typeof value !== "string") {
+    return value ?? {};
+  }
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function buildGenerationReferenceObjectUrl(
+  runtime: UploadSessionRuntime,
+  bucket: string,
+  objectKey: string,
+) {
+  const publicBaseUrl = runtime.publicBaseUrl?.trim().replace(/\/+$/g, "") || "";
+  if (publicBaseUrl) {
+    return `${publicBaseUrl}/${objectKey}`;
+  }
+  if (bucket && runtime.region) {
+    return `https://${bucket}.cos.${runtime.region}.myqcloud.com/${objectKey}`;
+  }
+  return objectKey;
 }
 
 async function resolveEpisodeAssetVersion(
@@ -1698,6 +3370,19 @@ async function signedAssetVersionFragment(
         now: input.now,
       })
     : null;
+  const preferMetadataUrl = input.version.assetType === "shot_video";
+  const metadataSourceUrl =
+    typeof input.version.metadata.sourceUrl === "string" && input.version.metadata.sourceUrl.trim()
+      ? input.version.metadata.sourceUrl.trim()
+      : null;
+  const metadataDownloadUrl =
+    typeof input.version.metadata.downloadUrl === "string" && input.version.metadata.downloadUrl.trim()
+      ? input.version.metadata.downloadUrl.trim()
+      : null;
+  const metadataPreviewUrl =
+    typeof input.version.metadata.previewUrl === "string" && input.version.metadata.previewUrl.trim()
+      ? input.version.metadata.previewUrl.trim()
+      : null;
   return {
     assetId: input.version.assetId,
     assetType: input.version.assetType,
@@ -1713,17 +3398,23 @@ async function signedAssetVersionFragment(
       input.version.metadata.fixedImageUrl ??
       null,
     sourceUrl:
+      (preferMetadataUrl ? metadataSourceUrl : null) ??
       urls?.sourceUrl ??
-      input.version.metadata.sourceUrl ??
+      metadataSourceUrl ??
       input.version.metadata.imageUrl ??
-      input.version.metadata.previewUrl ??
+      metadataPreviewUrl ??
       null,
     downloadUrl:
+      (preferMetadataUrl ? metadataDownloadUrl ?? metadataSourceUrl : null) ??
       urls?.downloadUrl ??
-      input.version.metadata.downloadUrl ??
-      input.version.metadata.sourceUrl ??
+      metadataDownloadUrl ??
+      metadataSourceUrl ??
       input.version.metadata.imageUrl ??
-      input.version.metadata.previewUrl ??
+      metadataPreviewUrl ??
+      null,
+    thumbnailUrl:
+      input.version.metadata.thumbnailUrl ??
+      input.version.metadata.coverImageUrl ??
       null,
   };
 }
@@ -3046,6 +4737,48 @@ async function setEpisodeStoryboardMedia(
   if (resolved.assetVersion.objectStatus && resolved.assetVersion.objectStatus !== "available") {
     return { error: "storage_object_not_available" as const };
   }
+  let assetVersion = resolved.assetVersion;
+  if (input.mediaKind === "video") {
+    const submittedVideoUrl =
+      readMediaReferenceUrl(input.body.sourceUrl) ||
+      readMediaReferenceUrl(input.body.videoUrl) ||
+      readMediaReferenceUrl(input.body.url);
+    const submittedThumbnailUrl =
+      readMediaReferenceUrl(input.body.thumbnailUrl) ||
+      readMediaReferenceUrl(input.body.coverImageUrl);
+    const metadataPatch: Record<string, unknown> = {};
+    if (submittedVideoUrl) {
+      metadataPatch.sourceUrl = submittedVideoUrl;
+      metadataPatch.downloadUrl = submittedVideoUrl;
+      metadataPatch.videoUrl = submittedVideoUrl;
+    }
+    if (submittedThumbnailUrl) {
+      metadataPatch.thumbnailUrl = submittedThumbnailUrl;
+      metadataPatch.coverImageUrl = submittedThumbnailUrl;
+    }
+    if (Object.keys(metadataPatch).length > 0) {
+      await db.query(
+        `
+          UPDATE asset_versions
+          SET metadata_json = metadata_json || $3::jsonb
+          WHERE organization_id = $1
+            AND id = $2
+        `,
+        [
+          resolved.context.actor.organizationId,
+          assetVersion.versionId,
+          JSON.stringify(metadataPatch),
+        ],
+      );
+      assetVersion = {
+        ...assetVersion,
+        metadata: {
+          ...assetVersion.metadata,
+          ...metadataPatch,
+        },
+      };
+    }
+  }
   const shot = await queryOne<{
     id: string;
     episode_id: string | null;
@@ -3087,7 +4820,7 @@ async function setEpisodeStoryboardMedia(
       input.storyboardId,
       input.episodeId,
       resolved.context.project.id,
-      resolved.assetVersion.versionId,
+      assetVersion.versionId,
       input.now,
     ],
   );
@@ -3095,7 +4828,7 @@ async function setEpisodeStoryboardMedia(
     return null;
   }
   const file = await signedAssetVersionFragment(db, {
-    version: resolved.assetVersion,
+    version: assetVersion,
     sessionToken: input.authenticated.sessionToken,
     runtime: input.runtime,
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
@@ -3111,7 +4844,11 @@ async function setEpisodeStoryboardMedia(
       currentImageFileId: shot.current_image_asset_version_id,
       currentImageUrl: input.mediaKind === "image" ? file.previewUrl : null,
       currentVideoFileId: shot.current_video_asset_version_id,
-      currentVideoUrl: input.mediaKind === "video" ? mockEpisodeStoryboardVideoUrl : null,
+      currentVideoUrl:
+        input.mediaKind === "video"
+          ? file.sourceUrl ?? file.downloadUrl ?? file.previewUrl ?? null
+          : null,
+      currentVideoThumbnailUrl: input.mediaKind === "video" ? file.thumbnailUrl ?? null : null,
       imageStatus: normalizeTaskStatus(shot.image_status),
       videoStatus: normalizeTaskStatus(shot.video_status),
     },
@@ -3688,6 +5425,17 @@ async function writeLocalStorageObject(input: {
   return absolutePath;
 }
 
+async function writeLocalStorageObjectFromStream(input: {
+  bucket: string;
+  objectKey: string;
+  body: NodeJS.ReadableStream;
+}) {
+  const absolutePath = resolveLocalStorageObjectPath(input.bucket, input.objectKey);
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await pipeline(input.body, createWriteStream(absolutePath));
+  return absolutePath;
+}
+
 async function headLocalStorageObject(input: {
   bucket: string;
   objectKey: string;
@@ -3937,9 +5685,13 @@ function parseRepairSchedulerOptions(
 export function createPhoneAuthDevServer(
   options: PhoneAuthDevServerOptions = {},
 ): PhoneAuthDevServer {
+  const runtimeEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(options.env ?? {}),
+  };
   const dbPromise = options.db
     ? Promise.resolve(options.db)
-    : process.env.NODE_ENV === "test"
+    : runtimeEnv.NODE_ENV === "test"
       ? createMigratedTestDb()
       : createDevDb();
   let resolvedDb: Awaited<typeof dbPromise> | null = null;
@@ -3952,54 +5704,61 @@ export function createPhoneAuthDevServer(
   let repairSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   let repairSchedulerRunning = false;
   const debugChallengeCodes = new Map<string, string>();
+  const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
     string,
     { projectId: string | null; scriptId: string | null }
   >();
   const uploadStore = createLocalUploadStore({ rootDir: uploadRoot });
-  const storageMode = (process.env.STORAGE_ADAPTER_MODE ?? "dev").trim();
-  const storageRegion = (process.env.STORAGE_REGION ?? "ap-shanghai").trim();
+  const storageMode = (runtimeEnv.STORAGE_ADAPTER_MODE ?? "dev").trim();
+  const storageRegion = (runtimeEnv.STORAGE_REGION ?? "ap-shanghai").trim();
   const storageBucket = (
-    process.env.STORAGE_BUCKET?.trim() ||
+    runtimeEnv.STORAGE_BUCKET?.trim() ||
     (storageMode === "dev" ? "creator-dev" : `creator-${storageMode}`)
   );
   const signedUrlExpiresInSeconds = Number(
-    process.env.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
-    process.env.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
+    runtimeEnv.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
+    runtimeEnv.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
     900,
   );
   const storageAdapter = (() => {
     try {
-      return createStorageAdapterFromEnv(process.env);
+      return createStorageAdapterFromEnv(runtimeEnv);
     } catch (error) {
       console.warn(
         `[storage] Falling back to dev adapter. ${error instanceof Error ? error.message : String(error)}`,
       );
       return createStorageAdapterFromEnv({
-        ...process.env,
+        ...runtimeEnv,
         STORAGE_ADAPTER_MODE: "dev",
       });
     }
   })();
-  const storageRuntime: UploadSessionRuntime = {
+  const defaultStorageRuntime: UploadSessionRuntime = {
     mode: storageMode,
     provider: storageMode === "cos" ? "tencent_cos" : storageMode === "s3_compatible" ? "s3_compatible" : "creator-dev",
     bucket: storageBucket,
     region: storageRegion,
     publicBaseUrl:
-      process.env.STORAGE_PUBLIC_BASE_URL?.trim() ||
-      process.env.STORAGE_ENDPOINT?.trim() ||
+      runtimeEnv.STORAGE_PUBLIC_BASE_URL?.trim() ||
+      runtimeEnv.STORAGE_ENDPOINT?.trim() ||
       null,
     adapter: storageAdapter,
-    stsSecretId: process.env.STORAGE_COS_SECRET_ID?.trim() ?? null,
-    stsSecretKey: process.env.STORAGE_COS_SECRET_KEY?.trim() ?? null,
-    stsDurationSeconds: Number(process.env.STORAGE_COS_STS_DURATION_SECONDS ?? 1800),
+    stsSecretId: runtimeEnv.STORAGE_COS_SECRET_ID?.trim() ?? null,
+    stsSecretKey: runtimeEnv.STORAGE_COS_SECRET_KEY?.trim() ?? null,
+    stsDurationSeconds: Number(runtimeEnv.STORAGE_COS_STS_DURATION_SECONDS ?? 1800),
     localUploadUrlPath: "/api/storage/upload-sessions",
     localObjectStore: {
       headObject: headLocalStorageObject,
       deleteObject: deleteLocalStorageObject,
     },
+  };
+  const storageRuntime: UploadSessionRuntime = {
+    ...defaultStorageRuntime,
+    ...(options.storageRuntime ?? {}),
+    localObjectStore:
+      options.storageRuntime?.localObjectStore ?? defaultStorageRuntime.localObjectStore,
   };
   const httpServer = createServer(async (request, response) => {
     try {
@@ -4043,18 +5802,37 @@ export function createPhoneAuthDevServer(
 
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
-        const challenge = await createPersistentLoginChallenge(db, {
+        const result = await requestPersistentLoginCode(db, {
           phone: body.phone,
           now: new Date(),
+          ipAddress: requestIpAddress(request),
+          userAgent: String(request.headers["user-agent"] ?? ""),
+          smsProvider,
         });
-        debugChallengeCodes.set(challenge.challengeId, challenge.plainCode);
+
+        if (result.kind !== "sent") {
+          return writeJson(response, {
+            status: result.kind === "sms_send_failed" ? 502 : 429,
+            body: {
+              error: result.kind,
+              retryAfterSeconds:
+                "retryAfterSeconds" in result ? result.retryAfterSeconds : 60,
+            },
+          });
+        }
+
+        debugChallengeCodes.set(result.challengeId, result.plainCode);
         return writeJson(response, {
           status: 200,
           body: {
-            challengeId: challenge.challengeId,
-            maskedPhone: maskCnPhone(challenge.phoneE164),
-            expiresAt: challenge.expiresAt.toISOString(),
-            retryAfterSeconds: 60,
+            challengeId: result.challengeId,
+            maskedPhone: maskCnPhone(result.phoneE164),
+            expiresAt: result.expiresAt.toISOString(),
+            retryAfterSeconds: result.retryAfterSeconds,
+            remainingToday: result.remainingToday,
+            ...(smsProvider.providerName === "dev"
+              ? { devCode: result.plainCode }
+              : {}),
           },
         });
       }
@@ -5114,21 +6892,41 @@ export function createPhoneAuthDevServer(
             .map((shot) => shot && typeof shot === "object" ? shot as Record<string, unknown> : {})
             .filter((shot) => shot.episodeId === episodeId)
             .sort((left, right) => Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0))
-            .map((shot, index) => ({
-              storyboardId: shot.id ?? null,
-              episodeId,
-              indexNo: index + 1,
-              sceneAnalysis: shot.sceneAnalysis ?? shot.description ?? "",
-              plotPreview: shot.plotPreview ?? shot.title ?? "",
-              currentImageFileId: shot.currentImageAssetVersionId ?? null,
-              currentImageUrl: shot.previewImageUrl ?? null,
-              currentVideoFileId: shot.currentVideoAssetVersionId ?? null,
-              currentVideoUrl: shot.currentVideoAssetVersionId ? mockEpisodeStoryboardVideoUrl : shot.previewVideoUrl ?? null,
-              imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
-              videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
-              assetRefs: Array.isArray(shot.references) ? shot.references : [],
-              sortOrder: shot.sortOrder ?? index,
-            }));
+            .map((shot, index) => {
+              const videoVersions = Array.isArray(shot.videoVersions) ? shot.videoVersions : [];
+              const currentVideoFileId = shot.currentVideoAssetVersionId ?? null;
+              const currentVideoVersion = currentVideoFileId
+                ? videoVersions.find((version) => version?.id === currentVideoFileId) ?? null
+                : null;
+              return {
+                storyboardId: shot.id ?? null,
+                episodeId,
+                indexNo: index + 1,
+                sceneAnalysis: shot.sceneAnalysis ?? shot.description ?? "",
+                plotPreview: shot.plotPreview ?? shot.title ?? "",
+                currentImageFileId: shot.currentImageAssetVersionId ?? null,
+                currentImageUrl: shot.previewImageUrl ?? null,
+                currentVideoFileId,
+                currentVideoUrl:
+                  currentVideoVersion?.metadata?.sourceUrl ??
+                  currentVideoVersion?.metadata?.downloadUrl ??
+                  currentVideoVersion?.metadata?.previewUrl ??
+                  currentVideoVersion?.sourceUrl ??
+                  currentVideoVersion?.downloadUrl ??
+                  currentVideoVersion?.previewUrl ??
+                  shot.previewVideoUrl ??
+                  null,
+                currentVideoThumbnailUrl:
+                  currentVideoVersion?.metadata?.thumbnailUrl ??
+                  currentVideoVersion?.thumbnailUrl ??
+                  shot.previewVideoThumbnailUrl ??
+                  null,
+                imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
+                videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
+                assetRefs: Array.isArray(shot.references) ? shot.references : [],
+                sortOrder: shot.sortOrder ?? index,
+              };
+            });
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
@@ -5164,10 +6962,14 @@ export function createPhoneAuthDevServer(
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
           }
-          return writeJson(
-            response,
-            enveloped(200, {
-              models: [
+          const seedanceEnabled = isEnabled(runtimeEnv.SEEDANCE_PROVIDER_ENABLED);
+          const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
+          const seedanceModelConfig = seedanceEnabled
+            ? await findActiveAiModelConfigByCode(db, "seedance-i2v-pro")
+            : undefined;
+          const imageModels = activeImageModels.length
+            ? activeImageModels.map(modelConfigToGenerationConfigModel)
+            : [
                 {
                   modelCode: "nano_banana_2",
                   modelLabel: "nano banana 2（链路G）",
@@ -5179,22 +6981,31 @@ export function createPhoneAuthDevServer(
                   displayBaseCost: 90,
                   disabled: false,
                 },
-                {
-                  modelCode: "video_mock_1",
-                  modelLabel: "固定视频 Mock",
-                  providerGroup: "Mock",
-                  pipeline: "mock",
-                  supportedModes: ["video"],
-                  supportedRatios: ["16:9", "9:16"],
-                  supportedQuality: ["720p"],
-                  displayBaseCost: 120,
-                  disabled: false,
-                },
+              ];
+          const videoModel = seedanceEnabled && seedanceModelConfig
+            ? modelConfigToGenerationConfigModel(seedanceModelConfig)
+            : {
+                modelCode: "video_mock_1",
+                modelLabel: "固定视频 Mock",
+                providerGroup: "Mock",
+                pipeline: "mock",
+                supportedModes: ["video"],
+                supportedRatios: ["16:9", "9:16"],
+                supportedQuality: ["720p"],
+                displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
+                disabled: false,
+              };
+          return writeJson(
+            response,
+            enveloped(200, {
+              models: [
+                ...imageModels,
+                videoModel,
               ],
               presets: [],
               uploadLimits: episodeUploadLimits,
-              defaultImageModelCode: "nano_banana_2",
-              defaultVideoModelCode: "video_mock_1",
+              defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
+              defaultVideoModelCode: videoModel.modelCode,
               creditBalance: context.creditBalance,
             }),
           );
@@ -5220,6 +7031,8 @@ export function createPhoneAuthDevServer(
               idempotencyKey,
               authenticated,
               runtime: storageRuntime,
+              env: runtimeEnv,
+              fetchImpl: options.fetchImpl,
               signedUrlExpiresInSeconds,
               now: new Date(),
             });
@@ -5634,6 +7447,17 @@ export function createPhoneAuthDevServer(
             taskId,
             now,
           });
+          const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
+          if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
+            await syncSeedanceVideoTaskOnRead(db, {
+              taskId,
+              sessionToken: authenticated.sessionToken,
+              runtime: storageRuntime,
+              env: runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              now,
+            });
+          }
           const task = await mapGenerationTaskResponse(db, {
             taskId,
             sessionToken: authenticated.sessionToken,
@@ -6833,6 +8657,145 @@ export function createPhoneAuthDevServer(
         }
 
         if (
+          request.method === "GET" &&
+          pathname === "/api/admin/ops/generation-queues"
+        ) {
+          const authorized = await adminOps.listItems({
+            user: { sessionToken: authenticated.sessionToken },
+            now: new Date(),
+          });
+          if (authorized.status !== 200) {
+            return writeJson(response, authorized);
+          }
+
+          const queueHealth = createBullMQGenerationQueueHealthService(
+            loadGenerationQueueConfig(runtimeEnv),
+          );
+          let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;
+          try {
+            healthSnapshot = await queueHealth.inspect();
+          } finally {
+            await queueHealth.close().catch(() => undefined);
+          }
+          return writeJson(response, {
+            status: 200,
+            body: healthSnapshot,
+          });
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname === "/api/admin/ops/generation-queues/jobs"
+        ) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            queueName?: string;
+            jobId?: string;
+            action?: GenerationQueueJobAction;
+            reason?: string;
+          };
+          const reason = body.reason?.trim() ?? "";
+          if (!reason) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "reason_required" },
+            });
+          }
+
+          try {
+            const operated = await runIdempotentCommand({
+              db,
+              operationName: operationNames.opsGenerationQueueJobOperate,
+              capability: capabilities.opsSettle,
+              idempotencyKey,
+              requestHash: hashJson({
+                queueName: body.queueName,
+                jobId: body.jobId,
+                action: body.action,
+                reason,
+              }),
+              now: new Date(),
+              resolveActor: (commandDb) =>
+                resolveActorContext(commandDb, {
+                  sessionToken: authenticated.sessionToken,
+                  workspaceId: devWorkspaceId,
+                  capability: capabilities.opsSettle,
+                  now: new Date(),
+                }),
+              replay: async ({ idempotencyRecord }) => {
+                if (!idempotencyRecord.responseSnapshot) {
+                  throw new IdempotencyProcessingError(idempotencyRecord);
+                }
+                return idempotencyRecord.responseSnapshot;
+              },
+              execute: async () => {
+                const queueJobOps =
+                  options.generationQueueJobOpsService ??
+                  createBullMQGenerationQueueJobOpsService(
+                    loadGenerationQueueConfig(runtimeEnv),
+                  );
+                const queueResult = await queueJobOps.operate({
+                  queueName: body.queueName ?? "",
+                  jobId: body.jobId ?? "",
+                  action: body.action ?? "retry",
+                });
+                if (queueResult.status !== 200) {
+                  throw new GenerationQueueJobOpsRouteError(queueResult);
+                }
+
+                const operationId = randomUUID();
+                return {
+                  result: queueResult.body,
+                  responseResourceType: "generation_queue_job",
+                  responseResourceId: operationId,
+                  responseSnapshot: queueResult.body,
+                  audit: {
+                    eventType: "ops.generation_queue_job_operated",
+                    targetType: "generation_queue_job",
+                    targetId: operationId,
+                    workspaceId: devWorkspaceId,
+                    reason,
+                    sensitive: true,
+                    metadata: queueResult.body,
+                  },
+                };
+              },
+            });
+
+            return writeJson(response, {
+              status: 200,
+              body: operated.result,
+            });
+          } catch (error) {
+            if (error instanceof GenerationQueueJobOpsRouteError) {
+              return writeJson(response, error.response);
+            }
+            if (error instanceof AuthorizationError) {
+              return writeJson(response, {
+                status: error.code === "unauthenticated" ? 401 : 403,
+                body: { error: "ops_forbidden" },
+              });
+            }
+            if (error instanceof IdempotencyConflictError) {
+              return writeJson(response, {
+                status: 409,
+                body: { error: error.code },
+              });
+            }
+            if (error instanceof IdempotencyProcessingError) {
+              return writeJson(response, {
+                status: 202,
+                body: { error: error.code },
+              });
+            }
+            throw error;
+          }
+        }
+
+        if (
           request.method === "POST" &&
           pathname === "/api/admin/ops/tasks/manual-settle"
         ) {
@@ -6868,6 +8831,46 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryTask({
+              user: { sessionToken: authenticated.sessionToken },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/admin/ops/tasks/retry-finalize") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            taskId: string;
+            reason: string;
+          };
+          return writeJson(
+            response,
+            await adminOps.retryFinalize({
+              user: { sessionToken: authenticated.sessionToken },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/admin/ops/tasks/retry-persist-asset") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            taskId: string;
+            reason: string;
+          };
+          return writeJson(
+            response,
+            await adminOps.retryPersistAsset({
               user: { sessionToken: authenticated.sessionToken },
               body,
               idempotencyKey,

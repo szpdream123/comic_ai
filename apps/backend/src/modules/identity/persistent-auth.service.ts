@@ -4,12 +4,18 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { createLoginChallenge, verifyLoginChallengeCode } from "./login-challenge.service.ts";
 import type { LoginChallenge, VerifyLoginChallengeResult } from "./phone-auth.types.ts";
-import { hashSecret, normalizeCnPhone } from "./phone-auth.utils.ts";
+import {
+  hashRequestMetadata,
+  hashSecret,
+  normalizeCnPhone,
+  shanghaiDayWindow,
+} from "./phone-auth.utils.ts";
 import {
   createAuthSession,
   type AuthSession,
   verifySessionToken,
 } from "./session.service.ts";
+import type { SmsProvider } from "./sms-provider.ts";
 
 interface LoginChallengeRow {
   id: string;
@@ -51,6 +57,148 @@ export type PersistentLoginVerifyResult =
   | Exclude<VerifyLoginChallengeResult, { kind: "verified" }>
   | { kind: "challenge_not_found" }
   | { kind: "user_disabled"; challenge: LoginChallenge };
+
+export type PersistentLoginCodeRequestResult =
+  | {
+      kind: "sent";
+      challengeId: string;
+      phoneE164: string;
+      plainCode: string;
+      expiresAt: Date;
+      retryAfterSeconds: number;
+      remainingToday: number;
+    }
+  | { kind: "sms_cooldown_active"; retryAfterSeconds: number }
+  | { kind: "daily_sms_limit_exceeded"; retryAfterSeconds: 0 }
+  | { kind: "sms_send_failed"; errorCode: string };
+
+export async function requestPersistentLoginCode(
+  db: SqlDatabase,
+  input: {
+    phone: string;
+    now: Date;
+    ipAddress?: string;
+    userAgent?: string;
+    code?: string;
+    smsProvider: SmsProvider;
+  },
+): Promise<PersistentLoginCodeRequestResult> {
+  const phoneE164 = normalizeCnPhone(input.phone);
+  const day = shanghaiDayWindow(input.now);
+  const sentToday = await queryOne<{ count: number }>(
+    db,
+    `
+      SELECT count(*)::int AS count
+      FROM sms_send_records
+      WHERE phone_e164 = $1
+        AND status = 'sent'
+        AND created_at >= $2
+        AND created_at < $3
+    `,
+    [phoneE164, day.start, day.end],
+  );
+
+  if ((sentToday?.count ?? 0) >= 3) {
+    await recordSmsSend(db, {
+      phoneE164,
+      provider: input.smsProvider.providerName,
+      status: "rate_limited",
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      errorCode: "daily_sms_limit_exceeded",
+      now: input.now,
+    });
+    return { kind: "daily_sms_limit_exceeded", retryAfterSeconds: 0 };
+  }
+
+  const latestSent = await queryOne<{ created_at: Date }>(
+    db,
+    `
+      SELECT created_at
+      FROM sms_send_records
+      WHERE phone_e164 = $1
+        AND status = 'sent'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [phoneE164],
+  );
+
+  if (latestSent) {
+    const elapsedSeconds = Math.floor(
+      (input.now.getTime() - latestSent.created_at.getTime()) / 1000,
+    );
+    if (elapsedSeconds < 60) {
+      const retryAfterSeconds = 60 - elapsedSeconds;
+      await recordSmsSend(db, {
+        phoneE164,
+        provider: input.smsProvider.providerName,
+        status: "rate_limited",
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        errorCode: "sms_cooldown_active",
+        now: input.now,
+      });
+      return { kind: "sms_cooldown_active", retryAfterSeconds };
+    }
+  }
+
+  const challenge = await createPersistentLoginChallenge(db, {
+    phone: input.phone,
+    now: input.now,
+    code: input.code,
+  });
+  const sent = await input.smsProvider.sendVerificationCode({
+    phoneE164: challenge.phoneE164,
+    code: challenge.plainCode,
+    expiresInMinutes: 5,
+  });
+
+  if (sent.kind === "failed") {
+    await db.query(
+      `
+        UPDATE login_challenges
+        SET status = 'revoked',
+            revoked_at = $2,
+            updated_at = $2
+        WHERE id = $1
+      `,
+      [challenge.challengeId, input.now],
+    );
+    await recordSmsSend(db, {
+      phoneE164,
+      challengeId: challenge.challengeId,
+      provider: input.smsProvider.providerName,
+      status: "failed",
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      errorCode: sent.errorCode,
+      now: input.now,
+    });
+    return { kind: "sms_send_failed", errorCode: sent.errorCode };
+  }
+
+  await recordSmsSend(db, {
+    phoneE164,
+    challengeId: challenge.challengeId,
+    provider: input.smsProvider.providerName,
+    status: "sent",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    providerRequestId: sent.providerRequestId,
+    now: input.now,
+  });
+
+  return {
+    kind: "sent",
+    challengeId: challenge.challengeId,
+    phoneE164: challenge.phoneE164,
+    plainCode: challenge.plainCode,
+    expiresAt: challenge.expiresAt,
+    retryAfterSeconds: 60,
+    remainingToday: Math.max(0, 3 - ((sentToday?.count ?? 0) + 1)),
+  };
+}
 
 export async function createPersistentLoginChallenge(
   db: SqlDatabase,
@@ -309,6 +457,51 @@ async function findOrCreateUserByPhone(
   );
 
   return user!;
+}
+
+async function recordSmsSend(
+  db: SqlDatabase,
+  input: {
+    phoneE164: string;
+    challengeId?: string;
+    provider: "tencent" | "dev";
+    status: "sent" | "failed" | "rate_limited";
+    ipAddress?: string;
+    userAgent?: string;
+    providerRequestId?: string;
+    errorCode?: string;
+    now: Date;
+  },
+): Promise<void> {
+  await db.query(
+    `
+      INSERT INTO sms_send_records (
+        id,
+        phone_e164,
+        challenge_id,
+        provider,
+        status,
+        ip_address_hash,
+        user_agent_hash,
+        provider_request_id,
+        error_code,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `,
+    [
+      randomUUID(),
+      input.phoneE164,
+      input.challengeId ?? null,
+      input.provider,
+      input.status,
+      hashRequestMetadata(input.ipAddress),
+      hashRequestMetadata(input.userAgent),
+      input.providerRequestId ?? null,
+      input.errorCode ?? null,
+      input.now,
+    ],
+  );
 }
 
 async function consumeIssuedChallenge(

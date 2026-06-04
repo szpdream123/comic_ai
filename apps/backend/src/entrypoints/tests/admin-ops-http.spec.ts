@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
+import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("admin ops HTTP routes", { concurrency: false }, () => {
@@ -90,6 +91,329 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
     } finally {
       await server.close();
+    }
+  });
+
+  it("exposes generation queue health for ops admins", async () => {
+    const server = createPhoneAuthDevServer({
+      env: {
+        NODE_ENV: "test",
+        REDIS_URL: "redis://127.0.0.1:1/0",
+        BULLMQ_QUEUE_PREFIX: "admin-ops-http-test",
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const creatorCookie = await login(server.origin, "13800138000");
+      const adminCookie = await login(server.origin, "13800138001");
+
+      const forbidden = await fetch(`${server.origin}/api/admin/ops/generation-queues`, {
+        headers: { cookie: creatorCookie },
+      });
+      const forbiddenPayload = await forbidden.json();
+      const allowed = await fetch(`${server.origin}/api/admin/ops/generation-queues`, {
+        headers: { cookie: adminCookie },
+      });
+      const allowedPayload = await allowed.json();
+
+      assert.equal(forbidden.status, 403);
+      assert.deepEqual(forbiddenPayload, { error: "ops_forbidden" });
+      assert.equal(allowed.status, 200);
+      assert.equal(allowedPayload.status, "unavailable");
+      assert.equal(allowedPayload.redis.status, "unavailable");
+      assert.equal(allowedPayload.queuePrefix, "admin-ops-http-test");
+      assert.deepEqual(allowedPayload.queues, []);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets ops admins operate BullMQ generation jobs by queue and job id with audit", async () => {
+    const db = await createMigratedTestDb();
+    const calls: Array<Record<string, unknown>> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      generationQueueJobOpsService: {
+        async operate(input: Record<string, unknown>) {
+          calls.push(input);
+          return {
+            status: 200,
+            body: {
+              queueName: input.queueName,
+              jobId: input.jobId,
+              jobName: "generation.video.submit",
+              action: input.action,
+              previousState: "failed",
+              attemptsMade: 3,
+              failedReason: "provider timeout",
+            },
+          };
+        },
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const creatorCookie = await login(server.origin, "13800138000");
+      const adminCookie = await login(server.origin, "13800138001");
+      const body = {
+        queueName: "generation-submit-video",
+        jobId: "generation.video.submit:task-1",
+        action: "retry",
+        reason: "Seedance worker recovered.",
+      };
+
+      const forbidden = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-forbidden",
+          cookie: creatorCookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const forbiddenPayload = await forbidden.json();
+      const missingIdempotency = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const missingIdempotencyPayload = await missingIdempotency.json();
+      const operated = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-retry",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const operatedPayload = await operated.json();
+      const replay = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-retry",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const replayPayload = await replay.json();
+      const audit = await db.query<{ event_type: string; reason: string | null; metadata_json: Record<string, unknown> }>(
+        "SELECT event_type, reason, metadata_json FROM audit_events WHERE event_type = 'ops.generation_queue_job_operated'",
+      );
+
+      assert.equal(forbidden.status, 403);
+      assert.deepEqual(forbiddenPayload, { error: "ops_forbidden" });
+      assert.equal(missingIdempotency.status, 400);
+      assert.deepEqual(missingIdempotencyPayload, { error: "idempotency_key_required" });
+      assert.equal(operated.status, 200);
+      assert.equal(replay.status, 200);
+      assert.deepEqual(replayPayload, operatedPayload);
+      assert.deepEqual(operatedPayload, {
+        queueName: "generation-submit-video",
+        jobId: "generation.video.submit:task-1",
+        jobName: "generation.video.submit",
+        action: "retry",
+        previousState: "failed",
+        attemptsMade: 3,
+        failedReason: "provider timeout",
+      });
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0], {
+        queueName: "generation-submit-video",
+        jobId: "generation.video.submit:task-1",
+        action: "retry",
+      });
+      assert.deepEqual(audit.rows, [
+        {
+          event_type: "ops.generation_queue_job_operated",
+          reason: "Seedance worker recovered.",
+          metadata_json: {
+            queueName: "generation-submit-video",
+            jobId: "generation.video.submit:task-1",
+            jobName: "generation.video.submit",
+            action: "retry",
+            previousState: "failed",
+            attemptsMade: 3,
+            failedReason: "provider timeout",
+          },
+        },
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets ops admins request finalize-only generation retries over HTTP", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const creatorCookie = await login(server.origin, "13800138000");
+      const adminCookie = await login(server.origin, "13800138001");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-finalize-retry-project",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({
+          name: "HTTP finalize retries",
+          scriptInput: "Episode 1: Ops retry staged finalization.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const episodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: adminCookie,
+          },
+          body: JSON.stringify({ title: "Finalize Retry Episode" }),
+        },
+      );
+      const episodeId = (await episodeResponse.json()).data.episode.id;
+      const uploadTask = await createImageGenerationTask(
+        server.origin,
+        adminCookie,
+        episodeId,
+        "http-finalize-retry-upload-task",
+      );
+      const persistTask = await createImageGenerationTask(
+        server.origin,
+        adminCookie,
+        episodeId,
+        "http-finalize-retry-persist-task",
+      );
+
+      await markTaskForFinalizeRetry(db, {
+        taskId: uploadTask.taskId,
+        status: "failed",
+        failureCode: "provider_output_upload_failed",
+        failure: {
+          failureCode: "provider_output_upload_failed",
+          providerExecutor: "gpt-image-2",
+          storageBucket: "creator-test",
+        },
+      });
+      await markTaskForFinalizeRetry(db, {
+        taskId: persistTask.taskId,
+        status: "manual_review_required",
+        failureCode: "provider_output_persist_failed",
+        failure: {
+          failureCode: "provider_output_persist_failed",
+          providerExecutor: "gpt-image-2",
+          storageBucket: "creator-test",
+          storageObjectKey: "generations/task/image.png",
+        },
+      });
+
+      const forbidden = await fetch(`${server.origin}/api/admin/ops/tasks/retry-finalize`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-finalize-retry-forbidden",
+          cookie: creatorCookie,
+        },
+        body: JSON.stringify({
+          taskId: uploadTask.taskId,
+          reason: "Upload outage recovered.",
+        }),
+      });
+      const missingIdempotency = await fetch(`${server.origin}/api/admin/ops/tasks/retry-finalize`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({
+          taskId: uploadTask.taskId,
+          reason: "Upload outage recovered.",
+        }),
+      });
+      const retriedFinalize = await fetch(`${server.origin}/api/admin/ops/tasks/retry-finalize`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-finalize-retry-upload",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({
+          taskId: uploadTask.taskId,
+          reason: "Upload outage recovered.",
+        }),
+      });
+      const retriedPersist = await fetch(`${server.origin}/api/admin/ops/tasks/retry-persist-asset`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-finalize-retry-persist",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({
+          taskId: persistTask.taskId,
+          reason: "Storage object exists; retry DB binding.",
+        }),
+      });
+      const retriedFinalizePayload = await retriedFinalize.json();
+      const retriedPersistPayload = await retriedPersist.json();
+      const outbox = await db.query<{
+        payload_json: { taskId: string; finalizeMode: string; providerExecutor: string };
+      }>(
+        `
+          SELECT payload_json
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+          ORDER BY created_at ASC
+        `,
+      );
+
+      assert.equal(forbidden.status, 403);
+      assert.equal(missingIdempotency.status, 400);
+      assert.equal(retriedFinalize.status, 200);
+      assert.equal(retriedFinalizePayload.task.id, uploadTask.taskId);
+      assert.equal(retriedPersist.status, 200);
+      assert.equal(retriedPersistPayload.task.id, persistTask.taskId);
+      assert.deepEqual(
+        outbox.rows.map((row) => row.payload_json),
+        [
+          {
+            workflowId: uploadTask.workflowId,
+            taskId: uploadTask.taskId,
+            mediaType: "image",
+            modelCode: "gpt-image-2-cn",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+            storageBucket: "creator-test",
+            finalizeMode: "retry_finalize",
+          },
+          {
+            workflowId: persistTask.workflowId,
+            taskId: persistTask.taskId,
+            mediaType: "image",
+            modelCode: "gpt-image-2-cn",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+            storageBucket: "creator-test",
+            finalizeMode: "retry_persist_asset",
+          },
+        ],
+      );
+    } finally {
+      await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 
@@ -311,6 +635,74 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
     }
   });
 });
+
+async function createImageGenerationTask(
+  origin: string,
+  cookie: string,
+  episodeId: string,
+  idempotencyKey: string,
+) {
+  const response = await fetch(`${origin}/api/episodes/${episodeId}/generation/image-tasks`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": idempotencyKey,
+      cookie,
+    },
+    body: JSON.stringify({
+      targetType: "episode",
+      targetId: episodeId,
+      prompt: "ops staged retry source",
+      model: "nano_banana_2",
+    }),
+  });
+  const envelope = await response.json();
+
+  assert.equal(response.status, 200);
+  return envelope.data as { taskId: string; workflowId: string };
+}
+
+async function markTaskForFinalizeRetry(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: {
+    taskId: string;
+    status: "failed" | "manual_review_required";
+    failureCode: string;
+    failure: Record<string, unknown>;
+  },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET status = $2,
+          failure_code = $3,
+          input_snapshot_json = input_snapshot_json
+            || '{"model":"gpt-image-2-cn","providerExecutor":"gpt-image-2"}'::jsonb,
+          updated_at = now()
+      WHERE id = $1
+    `,
+    [input.taskId, input.status, input.failureCode],
+  );
+  await db.query(
+    `
+      UPDATE ai_generation_task_snapshots
+      SET model_code = 'gpt-image-2-cn',
+          media_type = 'image',
+          task_mode = 'image.generate',
+          status = $2,
+          progress_stage = $2,
+          failure_json = $3::jsonb,
+          credit_status = CASE
+            WHEN $2 = 'manual_review_required' THEN 'manual_review_required'
+            ELSE 'released'
+          END,
+          failed_at = now(),
+          updated_at = now()
+      WHERE task_id = $1
+    `,
+    [input.taskId, input.status, JSON.stringify(input.failure)],
+  );
+}
 
 async function login(origin: string, phone: string) {
   const requestResponse = await fetch(`${origin}/api/auth/code/request`, {

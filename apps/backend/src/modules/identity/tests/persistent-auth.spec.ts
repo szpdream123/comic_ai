@@ -5,6 +5,7 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   createPersistentLoginChallenge,
   findPersistentAuthSessionByToken,
+  requestPersistentLoginCode,
   revokePersistentAuthSession,
   verifyPersistentLoginChallenge,
 } from "../persistent-auth.service.ts";
@@ -196,6 +197,162 @@ describe("persistent phone auth", { concurrency: false }, () => {
         }),
         undefined,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("records successful SMS sends with hashed request metadata", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const challenge = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:00:00.000+08:00"),
+        ipAddress: "203.0.113.10",
+        userAgent: "UnitTest/1.0",
+        smsProvider: {
+          providerName: "dev",
+          async sendVerificationCode() {
+            return { kind: "sent", providerRequestId: "dev-request-1" };
+          },
+        },
+      });
+      const records = await db.query<{
+        status: string;
+        phone_e164: string;
+        ip_address_hash: string;
+        user_agent_hash: string;
+        provider_request_id: string;
+      }>("SELECT * FROM sms_send_records");
+
+      assert.equal(challenge.kind, "sent");
+      assert.equal(records.rows.length, 1);
+      assert.equal(records.rows[0]?.status, "sent");
+      assert.equal(records.rows[0]?.phone_e164, "+8613800138000");
+      assert.notEqual(records.rows[0]?.ip_address_hash, "203.0.113.10");
+      assert.notEqual(records.rows[0]?.user_agent_hash, "UnitTest/1.0");
+      assert.equal(records.rows[0]?.provider_request_id, "dev-request-1");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not count provider failures toward the daily SMS limit", async () => {
+    const db = await createMigratedTestDb();
+    let attempts = 0;
+    try {
+      const smsProvider = {
+        providerName: "tencent" as const,
+        async sendVerificationCode() {
+          attempts += 1;
+          if (attempts === 1) {
+            return { kind: "failed" as const, errorCode: "provider_down" };
+          }
+          return { kind: "sent" as const, providerRequestId: `sent-${attempts}` };
+        },
+      };
+
+      const failed = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:00:00.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+      const firstSent = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:01:01.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+      const secondSent = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:02:02.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+      const thirdSent = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:03:03.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      assert.equal(failed.kind, "sms_send_failed");
+      assert.equal(firstSent.kind, "sent");
+      assert.equal(secondSent.kind, "sent");
+      assert.equal(thirdSent.kind, "sent");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("limits each phone to three successful SMS sends per Shanghai day", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const smsProvider = {
+        providerName: "dev" as const,
+        async sendVerificationCode() {
+          return { kind: "sent" as const, providerRequestId: "dev" };
+        },
+      };
+
+      for (const now of [
+        "2026-06-04T10:00:00.000+08:00",
+        "2026-06-04T10:01:01.000+08:00",
+        "2026-06-04T10:02:02.000+08:00",
+      ]) {
+        const result = await requestPersistentLoginCode(db, {
+          phone: "13800138000",
+          now: new Date(now),
+          ipAddress: "203.0.113.10",
+          smsProvider,
+        });
+        assert.equal(result.kind, "sent");
+      }
+
+      const limited = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:03:03.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      assert.deepEqual(limited, {
+        kind: "daily_sms_limit_exceeded",
+        retryAfterSeconds: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects another SMS request within 60 seconds after a successful send", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const smsProvider = {
+        providerName: "dev" as const,
+        async sendVerificationCode() {
+          return { kind: "sent" as const, providerRequestId: "dev" };
+        },
+      };
+
+      await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:00:00.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+      const limited = await requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-04T10:00:30.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      assert.deepEqual(limited, {
+        kind: "sms_cooldown_active",
+        retryAfterSeconds: 30,
+      });
     } finally {
       await db.close();
     }

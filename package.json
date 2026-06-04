@@ -4,14 +4,19 @@
   "type": "module",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
-    "dev:phone-auth": "node --import tsx scripts/run-phone-auth-dev-server.mjs"
+    "dev:phone-auth": "node --import tsx scripts/run-phone-auth-dev-server.mjs",
+    "worker:generation-outbox": "node --import tsx scripts/run-generation-outbox-dispatcher.mjs",
+    "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1054.0",
     "@aws-sdk/s3-request-presigner": "^3.1054.0",
+    "bullmq": "^5.78.0",
     "cos-js-sdk-v5": "^1.10.1",
+    "ioredis": "^5.10.1",
     "openai": "^6.39.1",
     "qcloud-cos-sts": "^3.1.3",
+    "tencentcloud-sdk-nodejs-sms": "^4.1.240",
     "three": "^0.184.0"
   },
   "devDependencies": {

@@ -139,6 +139,18 @@ function resolveLatestConversationPreview(historyMap = {}, assetId) {
   }
   return "";
 }
+
+function resolveImportedAssetPreview(asset) {
+  return resolvePreferredPreviewUrl(
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.fixedImageUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+    asset?.sourceUrl,
+  );
+}
 export function renderProjectDetail(context = {}) {
   const { state = {}, ui = {}, session = { user: { phone: "" } } } = context;
   const detailState = getProjectDetailState(state);
@@ -246,6 +258,7 @@ export function renderProjectDetail(context = {}) {
       projectName:
         ui.projectLibrary?.find((project) => project.id === ui.deleteProjectId)?.name ?? "",
     })}
+    ${renderGenerationQueueJobConfirmModal(ui)}
   `;
 }
 
@@ -365,6 +378,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           multiImageStrategy: ui.multiImageStrategy,
           uploadLimits: ui.episodeGenerationConfig?.uploadLimits ?? null,
         },
+        episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
         generationUiState: {
           isVideoModelMenuOpen: Boolean(ui.isVideoModelMenuOpen),
           openGenerationSelectMenu: ui.openGenerationSelectMenu ?? null,
@@ -1385,7 +1399,7 @@ function renderOtherAssetLibrary(mediaType, importedAssets, ui) {
 }
 
 function renderImportedAssetCard(asset, ui) {
-  const preview = asset.preview || asset.previewUrl || asset.latestVersion?.previewUrl || "";
+  const preview = resolveImportedAssetPreview(asset);
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, asset.kind, "image", asset.id);
@@ -1396,7 +1410,7 @@ function renderImportedAssetCard(asset, ui) {
       tabindex="-1"
     >
       <div class="imported-asset-preview">
-        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
       </div>
       <div class="imported-asset-meta asset-card-meta-row">
         <div class="asset-card-copy">
@@ -1419,7 +1433,7 @@ function renderImportedAssetCard(asset, ui) {
 }
 
 function renderOtherImportedAssetCard(asset, mediaType, ui) {
-  const preview = asset.preview || asset.previewUrl || asset.latestVersion?.previewUrl || "";
+  const preview = resolveImportedAssetPreview(asset);
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, "other", mediaType, asset.id);
@@ -1430,7 +1444,7 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
       tabindex="-1"
     >
       <div class="other-imported-preview">
-        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
         ${mediaType === "video" ? '<span class="other-imported-play" aria-hidden="true">▶</span>' : ""}
         <span class="other-imported-badge">审核中</span>
       </div>
@@ -1901,7 +1915,12 @@ function mapDetailAssets(assets, kind) {
   return assets.map((asset) => ({
     id: asset.id,
     name: asset.label ?? asset.assetKey ?? "未命名资产",
-    preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
+    preview: resolvePreferredPreviewUrl(
+      asset.previewUrl,
+      asset.latestVersion?.metadata?.fixedImageUrl,
+      asset.latestVersion?.previewUrl,
+      asset.latestVersion?.metadata?.previewUrl,
+    ),
     description: asset.latestVersion?.metadata?.description ?? asset.assetKey ?? "",
     kind,
     isMain: Boolean(asset.latestVersion?.metadata?.isMain),
@@ -2618,6 +2637,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         imageAspectRatio: ui.imageAspectRatio,
         multiImageStrategy: ui.multiImageStrategy,
       },
+      episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
       generationUiState: {
         isVideoModelMenuOpen: Boolean(ui.isVideoModelMenuOpen),
         openGenerationSelectMenu: ui.openGenerationSelectMenu ?? null,
@@ -2743,7 +2763,144 @@ function renderToolsPanel({ state, ui }) {
         <p>真实生成服务接入后，只替换任务执行与结果来源；前端调用、任务状态、写库与资源绑定契约保持不变。</p>
       </article>
     </section>
+    ${renderGenerationQueueOpsPanel(ui.generationQueueHealth)}
   `;
+}
+
+function renderGenerationQueueOpsPanel(snapshot) {
+  const hasSnapshot = Boolean(snapshot);
+  const queues = Array.isArray(snapshot?.queues) ? snapshot.queues : [];
+  const failedJobs = queues.flatMap((queue) =>
+    (Array.isArray(queue.failedJobs) ? queue.failedJobs : []).map((job) => ({
+      queue,
+      job,
+    })),
+  );
+
+  return `
+    <section class="episode-overview generation-queue-ops" aria-label="BullMQ 队列运维">
+      <article class="episode-list-card generation-queue-overview">
+        <div class="episode-list-header">
+          <div>
+            <p class="section-kicker">BullMQ 队列</p>
+            <h2>生成队列健康</h2>
+          </div>
+          <button class="secondary-action compact" type="button" data-action="refresh-generation-queues">刷新</button>
+        </div>
+        <div class="asset-library-empty">
+          <h3>${escapeHtml(queueHealthTitle(snapshot))}</h3>
+          <p>Redis：${escapeHtml(snapshot?.redis?.status ?? "unknown")} · Prefix：${escapeHtml(snapshot?.queuePrefix ?? "未配置")}</p>
+        </div>
+        <div class="generation-queue-list">
+          ${
+            queues.length
+              ? queues.map(renderGenerationQueueRow).join("")
+              : `<div class="generation-queue-empty">${hasSnapshot ? "当前没有队列数据。" : "点击刷新读取 Redis 与 BullMQ 队列状态。"}</div>`
+          }
+        </div>
+      </article>
+      <article class="episode-launch-card generation-queue-failed-jobs">
+        <p class="section-kicker">失败样本</p>
+        <h2>按 jobId 运维</h2>
+        ${
+          failedJobs.length
+            ? failedJobs.map(({ queue, job }) => renderGenerationQueueFailedJob(queue, job)).join("")
+            : `<p>${hasSnapshot ? "当前没有 failed job 样本。" : "刷新后显示可重试或移除的 failed job 样本。"}</p>`
+        }
+      </article>
+    </section>
+  `;
+}
+
+function renderGenerationQueueRow(queue) {
+  const counts = queue?.counts ?? {};
+  return `
+    <div class="generation-queue-row">
+      <div>
+        <strong>${escapeHtml(queue?.name ?? "unknown")}</strong>
+        <span>${escapeHtml(queue?.role ?? "queue")} · ${escapeHtml(queue?.status ?? "unknown")}</span>
+      </div>
+      <div class="generation-queue-counts">
+        <span>等待 ${numberOrZero(counts.waiting)}</span>
+        <span>延迟 ${numberOrZero(counts.delayed)}</span>
+        <span>执行 ${numberOrZero(counts.active)}</span>
+        <span>失败 ${numberOrZero(counts.failed)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderGenerationQueueFailedJob(queue, job) {
+  const queueName = String(queue?.name ?? "");
+  const jobId = String(job?.id ?? "");
+  const taskId = String(job?.data?.taskId ?? "");
+  const failureCode = String(job?.data?.failureCode ?? job?.data?.failure_code ?? "");
+  return `
+    <div class="generation-queue-failed-job">
+      <strong>${escapeHtml(job?.name ?? "unknown job")}</strong>
+      <span>${escapeHtml(jobId)} · attempts ${numberOrZero(job?.attemptsMade)}</span>
+      <p>${escapeHtml(job?.failureReason ?? "无失败原因")}</p>
+      <div class="generation-queue-job-actions">
+        ${renderGenerationQueueJobButton("retry", "重试", queueName, jobId)}
+        ${renderGenerationQueueJobButton("remove", "移除", queueName, jobId)}
+        ${renderGenerationStagedRetryButton("retry_finalize", "重试保存", taskId, failureCode)}
+        ${renderGenerationStagedRetryButton("retry_persist_asset", "补写资产", taskId, failureCode)}
+      </div>
+    </div>
+  `;
+}
+
+function renderGenerationQueueJobButton(action, label, queueName, jobId) {
+  return `
+    <button
+      class="secondary-action compact"
+      type="button"
+      data-action="operate-generation-queue-job"
+      data-queue-name="${escapeAttr(queueName)}"
+      data-job-id="${escapeAttr(jobId)}"
+      data-job-action="${escapeAttr(action)}"
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function renderGenerationStagedRetryButton(action, label, taskId, failureCode) {
+  if (!taskId || !shouldShowGenerationStagedRetry(action, failureCode)) {
+    return "";
+  }
+  return `
+    <button
+      class="secondary-action compact"
+      type="button"
+      data-action="operate-generation-staged-retry"
+      data-task-id="${escapeAttr(taskId)}"
+      data-staged-action="${escapeAttr(action)}"
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function shouldShowGenerationStagedRetry(action, failureCode) {
+  if (action === "retry_persist_asset") {
+    return failureCode === "provider_output_persist_failed";
+  }
+  return failureCode === "provider_output_download_failed" || failureCode === "provider_output_upload_failed";
+}
+
+function queueHealthTitle(snapshot) {
+  if (!snapshot) {
+    return "尚未加载队列状态";
+  }
+  if (snapshot.status === "healthy") {
+    return "队列健康";
+  }
+  if (snapshot.status === "degraded") {
+    return "队列部分降级";
+  }
+  return "队列不可用";
+}
+
+function numberOrZero(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
 }
 
 function renderUploadLimitLine(rule = {}, includeReferenceLimit = false) {
@@ -3174,6 +3331,36 @@ function renderProjectDeleteModal({ show, projectName }) {
         <div class="delete-project-actions">
           <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-project-modal">取消</button>
           <button class="delete-confirm-button" type="button" data-action="confirm-delete-project-card">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderGenerationQueueJobConfirmModal(ui) {
+  const operation = ui.generationQueueJobOperationConfirm ?? null;
+  if (!operation) {
+    return "";
+  }
+  const queueName = String(operation.queueName ?? "");
+  const jobId = String(operation.jobId ?? "");
+  const jobAction = String(operation.jobAction ?? "");
+  const isRemove = jobAction === "remove";
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认队列任务操作">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>${isRemove ? "确认移除队列任务" : "确认队列任务操作"}</h2>
+            <p>${escapeHtml(queueName)} · ${escapeHtml(jobId)}</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-generation-queue-job-confirm" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-generation-queue-job-confirm">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-generation-queue-job-operation">${isRemove ? "确认移除" : "确认执行"}</button>
         </div>
       </div>
     </section>

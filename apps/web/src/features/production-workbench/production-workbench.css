@@ -1919,6 +1919,72 @@
   gap: 0.75rem;
 }
 
+.generation-queue-ops {
+  grid-template-columns: minmax(0, 1.45fr) minmax(18rem, 0.8fr);
+  align-items: start;
+}
+
+.generation-queue-list,
+.generation-queue-failed-jobs {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.generation-queue-row,
+.generation-queue-failed-job,
+.generation-queue-empty {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 8px;
+  padding: 0.78rem;
+  background: oklch(8% 0.01 260 / 0.42);
+}
+
+.generation-queue-row > div:first-child,
+.generation-queue-failed-job {
+  min-width: 0;
+}
+
+.generation-queue-row strong,
+.generation-queue-failed-job strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.generation-queue-row span,
+.generation-queue-failed-job span,
+.generation-queue-failed-job p,
+.generation-queue-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.generation-queue-counts,
+.generation-queue-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.generation-queue-counts span {
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 9999px;
+  padding: 0.24rem 0.48rem;
+  background: oklch(100% 0 0 / 0.04);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 960px) {
+  .generation-queue-ops {
+    grid-template-columns: 1fr;
+  }
+}
+
 .episode-card {
   display: flex;
   align-items: center;
@@ -6687,10 +6753,12 @@
 
 .imported-asset-preview img,
 .other-imported-preview img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
+  background: transparent;
+  color: transparent;
 }
 
 .asset-card-menu-button {
@@ -6812,15 +6880,22 @@
 }
 
 .asset-card-meta-row strong {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .asset-card-copy span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
   color: rgba(255, 255, 255, 0.56);
   font-size: 0.78rem;
   line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-info-panel {
@@ -11508,6 +11583,7 @@
 
 .episode-replica-center {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   border-right: 2px solid #2a2a2c;
@@ -14158,6 +14234,130 @@
   color: #ff9a9a;
 }
 
+.episode-replica-progress-box {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.85rem;
+  background: rgba(18, 19, 22, 0.56);
+}
+
+.episode-replica-progress-track {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.episode-replica-progress-step {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 0.28rem;
+  justify-items: center;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.episode-replica-progress-step:not(:last-child)::after {
+  position: absolute;
+  top: 0.34rem;
+  left: calc(50% + 0.62rem);
+  width: calc(100% - 0.78rem);
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  content: "";
+}
+
+.episode-replica-progress-step.completed:not(:last-child)::after {
+  background: rgba(103, 214, 159, 0.55);
+}
+
+.episode-replica-progress-dot {
+  z-index: 1;
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: #252527;
+}
+
+.episode-replica-progress-step.completed,
+.episode-replica-progress-step.active {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.episode-replica-progress-step.completed .episode-replica-progress-dot {
+  border-color: rgba(103, 214, 159, 0.72);
+  background: #67d69f;
+}
+
+.episode-replica-progress-step.active .episode-replica-progress-dot {
+  border-color: #ffd08a;
+  background: #ffd08a;
+  box-shadow: 0 0 0 4px rgba(255, 208, 138, 0.13);
+}
+
+.episode-replica-progress-step.failed .episode-replica-progress-dot {
+  border-color: #ff9a9a;
+  background: #ff6b6b;
+  box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.13);
+}
+
+.episode-replica-progress-label {
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.episode-replica-progress-message {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.episode-replica-shot-status-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.45rem;
+  max-width: 5.2rem;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.episode-replica-shot-status-badge.queued,
+.episode-replica-shot-status-badge.generating {
+  background: rgba(255, 183, 77, 0.16);
+  color: #ffd08a;
+}
+
+.episode-replica-shot-status-badge.saving {
+  background: rgba(145, 214, 255, 0.14);
+  color: #bfe7ff;
+}
+
+.episode-replica-shot-status-badge.completed {
+  background: rgba(103, 214, 159, 0.16);
+  color: #8df0b8;
+}
+
+.episode-replica-shot-status-badge.failed {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff9a9a;
+}
+
 .episode-replica-selection-pill {
   display: inline-flex;
   align-items: center;
@@ -16552,6 +16752,9 @@
 
 .episode-replica-prompt {
   align-self: end;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow: visible;
 }
 
@@ -16563,6 +16766,16 @@
 .episode-replica-prompt-footer,
 .episode-replica-validation {
   flex-shrink: 0;
+}
+
+.episode-replica-prompt-footer {
+  min-width: 0;
+}
+
+.episode-replica-prompt-selects {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
 }
 
 /* Match transient action buttons to the quick-reference chip height without locking containers. */
@@ -16580,6 +16793,14 @@
   display: inline-block;
   min-width: 2.5rem;
   text-align: center;
+}
+
+.episode-replica-prompt-footer .episode-replica-generate {
+  flex: 0 0 auto;
+  margin-left: auto;
+  background: #98d6ff;
+  color: #081018;
+  box-shadow: 0 0.75rem 1.6rem rgba(68, 161, 226, 0.22);
 }
 
 @media (max-width: 1280px) {
@@ -16773,7 +16994,28 @@
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-prompt-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.65rem;
     flex-shrink: 0;
+    min-width: 0;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt-selects {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt-selects .episode-replica-control {
+    min-width: 0;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-prompt-footer .episode-replica-generate {
+    justify-self: end;
   }
 
   .episode-replica-right {
@@ -17111,6 +17353,9 @@
 @media (min-width: 961px) {
   .episode-replica-layout.assets-mode .episode-replica-prompt,
   .episode-replica-layout.storyboard-mode .episode-replica-prompt {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     max-height: 26.8rem;
   }
 }

@@ -19,6 +19,7 @@ const creditPackageId = "90000000-0000-4000-8000-000000000001";
 const paidOrderId = "91000000-0000-4000-8000-000000000001";
 const paymentIntentId = "92000000-0000-4000-8000-000000000001";
 const paymentRiskEventId = "93000000-0000-4000-8000-000000000001";
+const retryEpisodeId = "94000000-0000-4000-8000-000000000001";
 
 describe("admin ops service", { concurrency: false }, () => {
   it("lists stuck tasks for ops users and rejects ordinary creators", async () => {
@@ -295,6 +296,251 @@ describe("admin ops service", { concurrency: false }, () => {
         {
           event_type: "ops.task_retry_requested",
           reason: "Transient provider timeout fixed.",
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recreates one generation outbox event when retrying a failed Seedance video task", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const { adminSession } = await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_video',
+              queue_name = 'generation-submit-video',
+              input_snapshot_json = $2::jsonb,
+              target_entity_type = 'episode',
+              target_entity_id = $3
+          WHERE id = $1
+        `,
+        [
+          failedTaskId,
+          JSON.stringify({
+            kind: "video",
+            model: "seedance-i2v-pro",
+            providerExecutor: "seedance",
+            targetType: "episode",
+            targetId: retryEpisodeId,
+          }),
+          retryEpisodeId,
+        ],
+      );
+      const service = createAdminOpsService({ db, workspaceId });
+
+      const retried = await service.retryTask({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-retry-seedance-video",
+        body: {
+          taskId: failedTaskId,
+          reason: "Seedance provider timeout recovered.",
+        },
+        now: new Date("2026-05-19T10:08:00.000Z"),
+      });
+      const replay = await service.retryTask({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-retry-seedance-video",
+        body: {
+          taskId: failedTaskId,
+          reason: "Seedance provider timeout recovered.",
+        },
+        now: new Date("2026-05-19T10:09:00.000Z"),
+      });
+      const outbox = await db.query<{
+        event_type: string;
+        payload_json: {
+          workflowId: string;
+          taskId: string;
+          mediaType: string;
+          modelCode: string;
+          queueName: string;
+          targetType: string;
+          targetId: string;
+          providerExecutor: string;
+        };
+        status: string;
+      }>(
+        `
+          SELECT event_type, payload_json, status
+          FROM outbox_events
+          WHERE event_type = 'generation.task.created'
+          ORDER BY created_at ASC
+        `,
+      );
+
+      assert.equal(retried.status, 200);
+      assert.equal(retried.body.task.status, "queued");
+      assert.equal(replay.status, 200);
+      assert.equal(outbox.rows.length, 1);
+      assert.deepEqual(outbox.rows[0], {
+        event_type: "generation.task.created",
+        payload_json: {
+          workflowId,
+          taskId: failedTaskId,
+          mediaType: "video",
+          modelCode: "seedance-i2v-pro",
+          queueName: "generation-submit-video",
+          targetType: "episode",
+          targetId: retryEpisodeId,
+          providerExecutor: "seedance",
+        },
+        status: "pending",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("queues only finalize work when retrying provider output persistence", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const { adminSession } = await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_video',
+              status = 'manual_review_required',
+              failure_code = 'provider_output_persist_failed',
+              input_snapshot_json = $2::jsonb,
+              target_entity_type = 'episode',
+              target_entity_id = $3
+          WHERE id = $1
+        `,
+        [
+          failedTaskId,
+          JSON.stringify({
+            kind: "video",
+            model: "seedance-i2v-pro",
+            providerExecutor: "seedance",
+          }),
+          retryEpisodeId,
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            episode_id,
+            target_type,
+            target_id,
+            workflow_id,
+            task_id,
+            model_code,
+            media_type,
+            task_mode,
+            status,
+            progress_stage,
+            failure_json,
+            credit_status,
+            submitted_at
+          )
+          VALUES (
+            '96000000-0000-4000-8000-000000000001',
+            $1,
+            $2,
+            NULL,
+            NULL,
+            'episode',
+            $3,
+            $4,
+            $5,
+            'seedance-i2v-pro',
+            'video',
+            'video.image_to_video',
+            'manual_review_required',
+            'manual_review_required',
+            '{"failureCode":"provider_output_persist_failed","providerExecutor":"seedance","storageBucket":"creator-test","storageObjectKey":"generations/task/video.mp4"}'::jsonb,
+            'manual_review_required',
+            '2026-05-19T10:09:00.000Z'
+          )
+        `,
+        [organizationId, workspaceId, retryEpisodeId, workflowId, failedTaskId],
+      );
+      const service = createAdminOpsService({ db, workspaceId });
+
+      const missingReason = await service.retryPersistAsset({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-retry-persist-missing-reason",
+        body: {
+          taskId: failedTaskId,
+          reason: " ",
+        },
+        now: new Date("2026-05-19T10:10:00.000Z"),
+      });
+      const retried = await service.retryPersistAsset({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-retry-persist-asset",
+        body: {
+          taskId: failedTaskId,
+          reason: "Uploaded object exists; retry DB asset binding.",
+        },
+        now: new Date("2026-05-19T10:11:00.000Z"),
+      });
+      const replay = await service.retryPersistAsset({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-retry-persist-asset",
+        body: {
+          taskId: failedTaskId,
+          reason: "Uploaded object exists; retry DB asset binding.",
+        },
+        now: new Date("2026-05-19T10:12:00.000Z"),
+      });
+      const outbox = await db.query<{
+        event_type: string;
+        payload_json: {
+          workflowId: string;
+          taskId: string;
+          mediaType: string;
+          modelCode: string;
+          providerExecutor: string;
+          artifactKind: string;
+          finalizeMode: string;
+          storageBucket: string;
+        };
+        status: string;
+      }>(
+        `
+          SELECT event_type, payload_json, status
+          FROM outbox_events
+          ORDER BY created_at ASC
+        `,
+      );
+      const audit = await db.query<{ event_type: string; reason: string | null }>(
+        "SELECT event_type, reason FROM audit_events ORDER BY created_at ASC",
+      );
+
+      assert.equal(missingReason.status, 400);
+      assert.deepEqual(missingReason.body, { error: "reason_required" });
+      assert.equal(retried.status, 200);
+      assert.equal(retried.body.task.status, "manual_review_required");
+      assert.equal(replay.status, 200);
+      assert.equal(outbox.rows.length, 1);
+      assert.deepEqual(outbox.rows[0], {
+        event_type: "generation.task.finalize_requested",
+        payload_json: {
+          workflowId,
+          taskId: failedTaskId,
+          mediaType: "video",
+          modelCode: "seedance-i2v-pro",
+          providerExecutor: "seedance",
+          artifactKind: "video",
+          storageBucket: "creator-test",
+          finalizeMode: "retry_persist_asset",
+        },
+        status: "pending",
+      });
+      assert.deepEqual(audit.rows, [
+        {
+          event_type: "ops.task_persist_asset_retry_requested",
+          reason: "Uploaded object exists; retry DB asset binding.",
         },
       ]);
     } finally {

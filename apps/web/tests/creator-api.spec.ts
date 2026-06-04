@@ -187,6 +187,96 @@ test("billing read routes target explicit order and payment intent resources", a
   assert.equal(calls[1].options.credentials, "include");
 });
 
+test("generation queue health targets the admin ops queue endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ status: "healthy", queues: [] }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getGenerationQueueHealth();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/admin/ops/generation-queues");
+  assert.equal(calls[0].options.credentials, "include");
+});
+
+test("generation queue job ops targets the admin ops queue job endpoint with idempotency", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        queueName: "generation-submit-video",
+        jobId: "job-1",
+        action: "retry",
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.operateGenerationQueueJob(
+    {
+      queueName: "generation-submit-video",
+      jobId: "job-1",
+      action: "retry",
+      reason: "Seedance worker recovered.",
+    },
+    { idempotencyKey: "queue-job-key" },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/admin/ops/generation-queues/jobs");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[0].options.headers["idempotency-key"], "queue-job-key");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    queueName: "generation-submit-video",
+    jobId: "job-1",
+    action: "retry",
+    reason: "Seedance worker recovered.",
+  });
+});
+
+test("staged generation retries target admin ops task endpoints with idempotency", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ task: { id: "task-1" } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.retryGenerationFinalize(
+    { taskId: "task-1", reason: "retry finalize" },
+    { idempotencyKey: "retry-finalize-key" },
+  );
+  await creatorApi.retryGenerationPersistAsset(
+    { taskId: "task-1", reason: "retry persist" },
+    { idempotencyKey: "retry-persist-key" },
+  );
+
+  assert.equal(calls[0].url, "/api/admin/ops/tasks/retry-finalize");
+  assert.equal(calls[0].options.headers["idempotency-key"], "retry-finalize-key");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    taskId: "task-1",
+    reason: "retry finalize",
+  });
+  assert.equal(calls[1].url, "/api/admin/ops/tasks/retry-persist-asset");
+  assert.equal(calls[1].options.headers["idempotency-key"], "retry-persist-key");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    taskId: "task-1",
+    reason: "retry persist",
+  });
+});
+
 test("deleteShotMedia targets explicit shot media resource when assetVersionId is provided", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

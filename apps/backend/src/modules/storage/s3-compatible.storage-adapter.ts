@@ -65,7 +65,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
   async putObject(input: {
     bucket: string;
     objectKey: string;
-    body: Uint8Array;
+    body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
   }) {
     let result;
@@ -74,7 +74,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
         new PutObjectCommand({
           Bucket: input.bucket,
           Key: input.objectKey,
-          Body: input.body,
+          Body: input.body as never,
           ContentType: input.contentType ?? undefined,
         }),
       );
@@ -83,7 +83,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
         bucket: input.bucket,
         objectKey: input.objectKey,
         contentType: input.contentType ?? null,
-        sizeBytes: input.body.byteLength,
+        sizeBytes: input.body instanceof Uint8Array ? input.body.byteLength : null,
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;

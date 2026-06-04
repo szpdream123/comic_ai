@@ -16,8 +16,11 @@ export const operationNames = {
   billingRequestRefund: "billing.request_refund",
   opsManualSettleTask: "ops.manual_settle_task",
   opsRetryTask: "ops.retry_task",
+  opsRetryFinalize: "ops.retry_finalize",
+  opsRetryPersistAsset: "ops.retry_persist_asset",
   opsMarkPaymentRiskReviewed: "ops.mark_payment_risk_reviewed",
   opsRepairPaidWithoutCredit: "ops.repair_paid_without_credit",
+  opsGenerationQueueJobOperate: "ops.generation_queue_job_operate",
 } as const;
 
 export type OperationName = (typeof operationNames)[keyof typeof operationNames];

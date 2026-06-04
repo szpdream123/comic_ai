@@ -1,5 +1,5 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
-import { initProductionWorkbench } from "./src/features/production-workbench/index.js?liquid-ether=3";
+import { initProductionWorkbench } from "./src/features/production-workbench/index.js?liquid-ether=4";
 
 const root = document.querySelector("#creator-app");
 const loginUrl =

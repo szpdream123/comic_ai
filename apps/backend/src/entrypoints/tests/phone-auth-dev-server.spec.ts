@@ -8,6 +8,7 @@ describe.configure?.({ concurrency: 1 });
 
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
+import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
 describe("phone auth dev server", () => {
   it("serves the login page and static assets", async () => {
@@ -85,7 +86,8 @@ describe("phone auth dev server", () => {
   });
 
   it("supports the full request -> debug -> verify -> session flow", async () => {
-    const server = createPhoneAuthDevServer();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -108,7 +110,7 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           challengeId: requested.challengeId,
           phone: "13800138000",
-          code: debug.code,
+          code: requested.devCode,
         }),
       });
       const verifyPayload = await verifyResponse.json();
@@ -120,11 +122,50 @@ describe("phone auth dev server", () => {
       const sessionPayload = await sessionResponse.json();
 
       assert.equal(requestResponse.status, 200);
+      assert.match(requested.devCode, /^\d{6}$/);
+      assert.equal(requested.devCode, debug.code);
       assert.equal(debugResponse.status, 200);
       assert.equal(verifyResponse.status, 200);
       assert.equal(sessionResponse.status, 200);
       assert.equal(verifyPayload.user.phone, "+8613800138000");
       assert.equal(sessionPayload.authenticated, true);
+      assert.match(cookie, /Max-Age=2592000/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns SMS send metadata and records cooldown through the auth request route", async () => {
+    const server = createPhoneAuthDevServer();
+    try {
+      await server.listen(0);
+
+      const firstResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "user-agent": "UnitTest/1.0",
+          "x-forwarded-for": "203.0.113.20",
+        },
+        body: JSON.stringify({ phone: "13800138000" }),
+      });
+      const first = await firstResponse.json();
+      const secondResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "user-agent": "UnitTest/1.0",
+          "x-forwarded-for": "203.0.113.20",
+        },
+        body: JSON.stringify({ phone: "13800138000" }),
+      });
+      const second = await secondResponse.json();
+
+      assert.equal(firstResponse.status, 200);
+      assert.equal(first.remainingToday, 2);
+      assert.equal(secondResponse.status, 429);
+      assert.equal(second.error, "sms_cooldown_active");
+      assert.equal(typeof second.retryAfterSeconds, "number");
     } finally {
       await server.close();
     }
@@ -1817,7 +1858,7 @@ describe("phone auth dev server", () => {
         assert.equal(tasksResponse.status, 200);
         assert.deepEqual(tasksEnvelope.data.items, []);
         assert.equal(generationConfigResponse.status, 200);
-        assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "nano_banana_2");
+        assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "gpt-image-2-cn");
         assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "video_mock_1");
         assert.equal(generationConfigEnvelope.data.creditBalance, 10000);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
@@ -2549,6 +2590,269 @@ describe("phone auth dev server", () => {
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes a project even when a shot references one of its episodes through another project id", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138018");
+
+      const createProjectOneResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "delete-project-mismatched-shot-project-1",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Delete project with mismatched shot project",
+          scriptInput: "Episode 1: create a storyboard before deleting the project.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProjectOne = await createProjectOneResponse.json();
+      const projectOneId = createdProjectOne.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectOneId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode with mismatched shot project" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "Mismatched project shot",
+          episodeId,
+        }),
+      });
+      const createdShot = await createShotResponse.json();
+      const shotId = createdShot.shot.id;
+
+      const createProjectTwoResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "delete-project-mismatched-shot-project-2",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Sibling project for mismatched shot",
+          scriptInput: "Episode 1: this project only exists to hold a mismatched shot row.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProjectTwo = await createProjectTwoResponse.json();
+      const projectTwoId = createdProjectTwo.project.id;
+
+      await db.query(
+        `
+          UPDATE shots
+          SET project_id = $4
+          WHERE id = $1
+            AND organization_id = $2
+            AND project_id = $3
+        `,
+        [shotId, "10000000-0000-4000-8000-000000000001", projectOneId, projectTwoId],
+      );
+
+      const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId: projectOneId }),
+      });
+      const deletedProject = await deleteProjectResponse.json();
+
+      const remainingShotRows = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM shots
+          WHERE id = $1
+        `,
+        [shotId],
+      );
+
+      assert.equal(createProjectOneResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createShotResponse.status, 200);
+      assert.equal(createProjectTwoResponse.status, 200);
+      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(deletedProject.deleted, true);
+      assert.equal(deletedProject.projectId, projectOneId);
+      assert.equal(Number(remainingShotRows.rows[0]?.count ?? 0), 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects creating a shot when the episode belongs to another selected project", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138019");
+
+      const createProjectOneResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "create-shot-foreign-episode-project-1",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Source episode project",
+          scriptInput: "Episode 1: keep this episode in another project.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProjectOne = await createProjectOneResponse.json();
+      const projectOneId = createdProjectOne.project.id;
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectOneId}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Foreign episode" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const createProjectTwoResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "create-shot-foreign-episode-project-2",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Selected project",
+          scriptInput: "Episode 1: this becomes the active selected project.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      await createProjectTwoResponse.json();
+
+      const createShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "Should not be created",
+          episodeId,
+        }),
+      });
+      const createShotBody = await createShotResponse.json();
+
+      assert.equal(createProjectOneResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createProjectTwoResponse.status, 200);
+      assert.equal(createShotResponse.status, 404);
+      assert.equal(createShotBody.error, "episode_not_found");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes a project that has a completed upload session record", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138020");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "delete-project-with-upload-record-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Delete project with upload record",
+          scriptInput: "Episode 1: upload something then delete the project.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+
+      const upload = await prepareDirectUpload(server.origin, cookie, projectId, {
+        purpose: "asset-import/scene",
+        fileName: "project-delete-upload.png",
+        contentType: "image/png",
+        body: Buffer.from([1, 2, 3, 4]),
+      });
+
+      const uploadRowsBeforeDelete = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM project_upload_records
+          WHERE project_id = $1
+            AND upload_session_id = $2
+        `,
+        [projectId, upload.uploadSessionId],
+      );
+
+      const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      const deletedProject = await deleteProjectResponse.json();
+
+      const remainingUploadRows = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM project_upload_records
+          WHERE project_id = $1
+        `,
+        [projectId],
+      );
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(Number(uploadRowsBeforeDelete.rows[0]?.count ?? 0), 1);
+      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(deletedProject.deleted, true);
+      assert.equal(deletedProject.projectId, projectId);
+      assert.equal(Number(remainingUploadRows.rows[0]?.count ?? 0), 0);
     } finally {
       await server.close();
     }
@@ -3354,6 +3658,8 @@ describe("phone auth dev server", () => {
       );
       const setImageEnvelope = await setImageResponse.json();
 
+      const displayedVideoUrl = "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/660b682f-d13a-49d0-b15b-1e6c57ffdd0e-storyboard-ui-video.mp4";
+      const displayedVideoThumbnailUrl = "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/660b682f-d13a-49d0-b15b-1e6c57ffdd0e-storyboard-ui-video.jpg";
       const setVideoResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/storyboards/${storyboardId}/set-current-video`,
         {
@@ -3366,6 +3672,8 @@ describe("phone auth dev server", () => {
           body: JSON.stringify({
             assetVersionId: videoTask.result.assetVersionId,
             storageObjectId: videoTask.result.storageObjectId,
+            sourceUrl: displayedVideoUrl,
+            thumbnailUrl: displayedVideoThumbnailUrl,
           }),
         },
       );
@@ -3436,6 +3744,9 @@ describe("phone auth dev server", () => {
       assert.equal(setImageEnvelope.data.file.storageObjectId, imageTask.result.storageObjectId);
       assert.equal(setVideoResponse.status, 200);
       assert.equal(setVideoEnvelope.data.storyboard.currentVideoFileId, videoTask.result.assetVersionId);
+      assert.equal(setVideoEnvelope.data.storyboard.currentVideoUrl, displayedVideoUrl);
+      assert.equal(setVideoEnvelope.data.storyboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
+      assert.equal(setVideoEnvelope.data.storyboard.currentVideoUrl, setVideoEnvelope.data.file.sourceUrl);
       assert.equal(setVideoEnvelope.data.file.storageObjectId, videoTask.result.storageObjectId);
       assert.equal(storyboardsAfterSetResponse.status, 200);
       const updatedStoryboard = storyboardsAfterSetEnvelope.data.items.find(
@@ -3443,10 +3754,1293 @@ describe("phone auth dev server", () => {
       );
       assert.equal(updatedStoryboard.currentImageFileId, imageTask.result.assetVersionId);
       assert.equal(updatedStoryboard.currentVideoFileId, videoTask.result.assetVersionId);
+      assert.equal(updatedStoryboard.currentVideoUrl, displayedVideoUrl);
+      assert.equal(updatedStoryboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
+      assert.equal(updatedStoryboard.currentVideoUrl, setVideoEnvelope.data.storyboard.currentVideoUrl);
       assert.equal(exportOriginalResponse.status, 200);
       assert.equal(exportOriginalEnvelope.data.exportTask.status, "succeeded");
       assert.equal(exportOriginalEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
       assert.match(exportOriginalEnvelope.data.exportTask.downloadUrl, /\/uploads\/storage\//);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rehydrates generation task polling responses from persisted task snapshots", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "snapshot-polling-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Snapshot polling",
+          scriptInput: "Episode 1: Snapshot task polling.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Snapshot Polling Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "snapshot-polling-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "snapshot source should win",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskId = imageTaskEnvelope.data.taskId;
+      const snapshotUrl = "https://platform-storage.example.test/snapshots/final-image.png";
+
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'succeeded',
+              progress_stage = 'completed',
+              progress_percent = 100,
+              result_assets_json = $2::jsonb,
+              credit_status = 'consumed',
+              updated_at = now()
+          WHERE task_id = $1
+        `,
+        [
+          taskId,
+          JSON.stringify([
+            {
+              assetId: "snapshot-asset",
+              assetVersionId: "snapshot-version",
+              storageObjectId: "snapshot-storage",
+              storageObjectKey: "snapshots/final-image.png",
+              mediaKind: "image",
+              mimeType: "image/png",
+              url: snapshotUrl,
+              previewUrl: snapshotUrl,
+              sourceUrl: snapshotUrl,
+              downloadUrl: snapshotUrl,
+            },
+          ]),
+        ],
+      );
+
+      const taskResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const taskEnvelope = await taskResponse.json();
+      const listResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-tasks?page=1&pageSize=10`,
+        { headers: { cookie } },
+      );
+      const listEnvelope = await listResponse.json();
+      const listedTask = listEnvelope.data.items.find(
+        (task: { taskId?: string }) => task.taskId === taskId,
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(taskResponse.status, 200);
+      assert.equal(taskEnvelope.data.status, "succeeded");
+      assert.equal(taskEnvelope.data.result.imageUrl, snapshotUrl);
+      assert.equal(taskEnvelope.data.result.assetVersionId, "snapshot-version");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listedTask.result.imageUrl, snapshotUrl);
+      assert.equal(listedTask.result.assetVersionId, "snapshot-version");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns snapshot notice type and display message for manual review generation tasks", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138011");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "snapshot-manual-review-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Snapshot manual review",
+          scriptInput: "Episode 1: Manual review task polling.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Manual Review Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "snapshot-manual-review-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "manual review snapshot",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const imageTask = (await imageTaskResponse.json()).data;
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'manual_review_required',
+              failure_code = 'provider_output_persist_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [imageTask.taskId, new Date("2026-06-03T07:00:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'manual_review_required',
+              progress_stage = 'asset_persist_failed',
+              credit_status = 'manual_review_required',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          imageTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_output_persist_failed",
+            noticeType: "manual_review",
+            displayMessage: "已保存到平台存储，正在等待后台补写资产记录",
+            storageObjectKey: "AIManhuaDrama/manual-review/image.png",
+          }),
+          new Date("2026-06-03T07:01:00.000Z"),
+        ],
+      );
+
+      const taskResponse = await fetch(`${server.origin}/api/generation-tasks/${imageTask.taskId}`, {
+        headers: { cookie },
+      });
+      const taskEnvelope = await taskResponse.json();
+
+      assert.equal(taskResponse.status, 200);
+      assert.equal(taskEnvelope.data.status, "manual_review_required");
+      assert.deepEqual(taskEnvelope.data.failure, {
+        code: "provider_output_persist_failed",
+        failureCode: "provider_output_persist_failed",
+        noticeType: "manual_review",
+        displayMessage: "已保存到平台存储，正在等待后台补写资产记录",
+        storageObjectKey: "AIManhuaDrama/manual-review/image.png",
+        providerRequestId: null,
+        providerStatus: null,
+        providerErrorCode: null,
+        providerMessage: null,
+        details: {},
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns friendly display messages for GPT Image provider gateway failures", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138012");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "provider-gateway-message-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Provider gateway messages",
+          scriptInput: "Episode 1: Provider gateway failed.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Provider Gateway Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const ambiguousTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-ambiguous-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "submission ambiguous",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const ambiguousTask = (await ambiguousTaskResponse.json()).data;
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [ambiguousTask.taskId, new Date("2026-06-03T07:02:00.000Z")],
+      );
+      await db.query(
+        `
+          WITH task_row AS (
+            SELECT id, organization_id, workspace_id, project_id, workflow_id
+            FROM tasks
+            WHERE id = $1
+          )
+          INSERT INTO provider_requests (
+            id, organization_id, workspace_id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            external_submission_started_at, failure_code, created_at, updated_at
+          )
+          SELECT
+            '80000000-0000-4000-8000-000000009912',
+            organization_id,
+            workspace_id,
+            project_id,
+            workflow_id,
+            id,
+            NULL,
+            'openai-images',
+            'episode.image.generate',
+            'provider-gateway-ambiguous',
+            'provider-gateway-ambiguous',
+            'payloads/provider-gateway-ambiguous.json',
+            'provider-gateway-ambiguous',
+            '{}'::jsonb,
+            'result_unknown',
+            $2,
+            'provider_submission_ambiguous',
+            $2,
+            $2
+          FROM task_row
+        `,
+        [ambiguousTask.taskId, new Date("2026-06-03T07:02:01.000Z")],
+      );
+
+      const timeoutTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-timeout-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "gateway timeout",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const timeoutTask = (await timeoutTaskResponse.json()).data;
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [timeoutTask.taskId, new Date("2026-06-03T07:03:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          timeoutTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            providerMessage: "openai_images_504",
+          }),
+          new Date("2026-06-03T07:03:01.000Z"),
+        ],
+      );
+
+      const ambiguousLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${ambiguousTask.taskId}`, {
+        headers: { cookie },
+      });
+      const ambiguousEnvelope = await ambiguousLookupResponse.json();
+      const timeoutLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${timeoutTask.taskId}`, {
+        headers: { cookie },
+      });
+      const timeoutEnvelope = await timeoutLookupResponse.json();
+
+      assert.equal(ambiguousLookupResponse.status, 200);
+      assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
+      assert.equal(timeoutLookupResponse.status, 200);
+      assert.equal(timeoutEnvelope.data.failure.displayMessage, "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("submits Seedance video tasks through the configured provider instead of mock finalization", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-db-model',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const providerCalls: Array<{
+      url: string;
+      headers: HeadersInit | undefined;
+      body: string;
+    }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        SEEDANCE_PROVIDER_ENABLED: "true",
+        VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      },
+      fetchImpl: (async (url, init) => {
+        providerCalls.push({
+          url: String(url),
+          headers: init?.headers,
+          body: String(init?.body ?? ""),
+        });
+        if (String(url).includes("/db/query/seedance-external-task-1")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                task_id: "seedance-external-task-1",
+                status: "succeeded",
+                result: {
+                  video_url: "https://cdn.example.test/seedance-result.mp4",
+                },
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (String(url) === "https://cdn.example.test/seedance-result.mp4") {
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: { "content-type": "video/mp4" },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-external-task-1",
+              status: "queued",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "seedance-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Seedance episode provider",
+          scriptInput: "Episode 1: Seedance provider handles video.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Seedance Task" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-config`,
+        { headers: { cookie } },
+      );
+      const generationConfigEnvelope = await generationConfigResponse.json();
+
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-video-task-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      const taskId = videoTaskEnvelope.data.taskId;
+      const providerRequest = await db.query<{
+        status: string;
+        external_request_id: string | null;
+      }>(
+        `
+          SELECT status, external_request_id
+          FROM provider_requests
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_consumed: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_consumed, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        credit_status: string;
+        result_assets_json: Array<{ url?: string; mediaKind?: string }>;
+      }>(
+        `
+          SELECT status, progress_stage, credit_status, result_assets_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      const completedTaskResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const completedTaskEnvelope = await completedTaskResponse.json();
+      const completedListResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-tasks?page=1&pageSize=10`,
+        { headers: { cookie } },
+      );
+      const completedListEnvelope = await completedListResponse.json();
+      const completedReservation = await db.query<{
+        amount_reserved: number | string;
+        amount_consumed: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_consumed, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
+      assert.ok(
+        generationConfigEnvelope.data.models.some(
+          (model: { modelCode?: string }) => model.modelCode === "seedance-i2v-pro",
+        ),
+      );
+      assert.equal(videoTaskResponse.status, 200);
+      assert.equal(videoTaskEnvelope.data.kind, "video");
+      assert.equal(videoTaskEnvelope.data.status, "running");
+      assert.equal(videoTaskEnvelope.data.result, null);
+      assert.equal(providerCalls.length, 3);
+      assert.equal(
+        providerCalls[0]?.url,
+        "https://ark-db.example.test/db/create",
+      );
+      assert.deepEqual(providerCalls[0]?.headers, {
+        authorization: "Bearer seedance-test-key",
+        "content-type": "application/json",
+      });
+      assert.match(providerCalls[0]?.body ?? "", /"model":"seedance-db-model"/);
+      assert.match(providerCalls[0]?.body ?? "", /camera slowly pushes in/);
+      assert.match(providerCalls[0]?.body ?? "", /first-frame\.png/);
+      assert.equal(
+        providerCalls[1]?.url,
+        "https://ark-db.example.test/db/query/seedance-external-task-1",
+      );
+      assert.equal(providerCalls[2]?.url, "https://cdn.example.test/seedance-result.mp4");
+      assert.equal(providerRequest.rows[0]?.status, "accepted");
+      assert.equal(providerRequest.rows[0]?.external_request_id, "seedance-external-task-1");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? 0), 135);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
+      assert.equal(reservation.rows[0]?.status, "active");
+      assert.equal(completedTaskResponse.status, 200);
+      assert.equal(completedTaskEnvelope.data.status, "succeeded");
+      assert.equal(completedTaskEnvelope.data.result.mediaKind, "video");
+      assert.match(completedTaskEnvelope.data.result.videoUrl, /\/uploads\/storage\//);
+      assert.equal(completedListResponse.status, 200);
+      const restoredTask = completedListEnvelope.data.items.find(
+        (task: { taskId?: string }) => task.taskId === taskId,
+      );
+      assert.equal(restoredTask.status, "succeeded");
+      assert.match(restoredTask.result.videoUrl, /\/uploads\/storage\//);
+      assert.doesNotMatch(restoredTask.result.videoUrl, /cdn\.example\.test/);
+      assert.equal(Number(completedReservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(completedReservation.rows[0]?.amount_consumed ?? -1), 135);
+      assert.equal(completedReservation.rows[0]?.status, "settled");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("streams Seedance provider output to storage and retries transient upload failures", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-db-model',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    let uploadAttempts = 0;
+    const uploadedBodies: unknown[] = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        SEEDANCE_PROVIDER_ENABLED: "true",
+        VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+        GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
+        GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return {
+              url: `https://platform-storage.example.test/${input.objectKey}`,
+              expiresAt: input.expiresAt,
+            };
+          },
+          async putObject(input) {
+            uploadAttempts += 1;
+            uploadedBodies.push(input.body);
+            if (uploadAttempts < 3) {
+              throw new Error("transient_cos_upload_failed");
+            }
+            return { eTag: "seedance-stream-etag" };
+          },
+        },
+      },
+      fetchImpl: (async (url, init) => {
+        if (String(url).includes("/db/query/seedance-external-task-1")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                task_id: "seedance-external-task-1",
+                status: "succeeded",
+                result: {
+                  video_url: "https://cdn.example.test/seedance-result.mp4",
+                },
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (String(url) === "https://cdn.example.test/seedance-result.mp4") {
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: {
+              "content-type": "video/mp4",
+              "content-length": "8",
+            },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-external-task-1",
+              status: "queued",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "seedance-stream-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Seedance stream upload",
+          scriptInput: "Episode 1: Stream provider output into COS.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Seedance Stream Task" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-stream-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      const taskId = videoTaskEnvelope.data.taskId;
+
+      const completedTaskResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const completedTaskEnvelope = await completedTaskResponse.json();
+      const completedReservation = await db.query<{
+        amount_consumed: number | string;
+        status: string;
+      }>(
+        "SELECT amount_consumed, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(completedTaskResponse.status, 200);
+      assert.equal(completedTaskEnvelope.data.status, "succeeded");
+      assert.equal(uploadAttempts, 3);
+      assert.equal(uploadedBodies.every((body) => !(body instanceof Uint8Array)), true);
+      assert.match(completedTaskEnvelope.data.result.videoUrl, /platform-storage\.example\.test/);
+      assert.equal(Number(completedReservation.rows[0]?.amount_consumed ?? -1), 135);
+      assert.equal(completedReservation.rows[0]?.status, "settled");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("queues Seedance generation through outbox when BullMQ dispatch is enabled", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-db-model',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const providerCalls: string[] = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        SEEDANCE_PROVIDER_ENABLED: "true",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+        VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      },
+      fetchImpl: (async (url) => {
+        providerCalls.push(String(url));
+        return new Response(JSON.stringify({ data: { task_id: "should-not-submit" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "seedance-bullmq-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Seedance BullMQ",
+          scriptInput: "Episode 1: Queue Seedance provider calls.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Seedance BullMQ Task" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-bullmq-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      const taskId = videoTaskEnvelope.data.taskId;
+      const outbox = await db.query<{
+        event_type: string;
+        status: string;
+        payload_json: {
+          taskId?: string;
+          modelCode?: string;
+          mediaType?: string;
+          queueName?: string;
+        };
+      }>(
+        "SELECT event_type, status, payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
+      );
+      const providerRequests = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM provider_requests WHERE task_id = $1",
+        [taskId],
+      );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(videoTaskResponse.status, 200);
+      assert.equal(videoTaskEnvelope.data.status, "queued");
+      assert.equal(providerCalls.length, 0);
+      assert.equal(providerRequests.rows[0]?.count, 0);
+      assert.equal(outbox.rows.length, 1);
+      assert.equal(outbox.rows[0]?.status, "pending");
+      assert.equal(outbox.rows[0]?.payload_json.taskId, taskId);
+      assert.equal(outbox.rows[0]?.payload_json.modelCode, "seedance-i2v-pro");
+      assert.equal(outbox.rows[0]?.payload_json.mediaType, "video");
+      assert.equal(outbox.rows[0]?.payload_json.queueName, "generation-submit-video");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 135);
+      assert.equal(reservation.rows[0]?.status, "active");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("generates GPT Image 2 images and persists provider artifacts to platform storage", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":45}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const providerCalls: Array<{ url: string; body: string }> = [];
+    const uploadedBodies: unknown[] = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        GPT_IMAGE2_PROVIDER_ENABLED: "true",
+        GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+        STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return {
+              url: `https://platform-storage.example.test/${input.objectKey}`,
+              expiresAt: input.expiresAt,
+            };
+          },
+          async putObject(input) {
+            uploadedBodies.push(input.body);
+            return { eTag: "gpt-image-etag" };
+          },
+        },
+      },
+      fetchImpl: (async (url, init) => {
+        providerCalls.push({ url: String(url), body: String(init?.body ?? "") });
+        return new Response(
+          JSON.stringify({
+            created: 1716026400,
+            data: [{ b64_json: Buffer.from("fake-png-bytes").toString("base64") }],
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "x-request-id": "req_gpt_image_123",
+            },
+          },
+        );
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "gpt-image-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "GPT Image 2",
+          scriptInput: "Episode 1: Generate a real provider image.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "GPT Image Task" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "gpt-image-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "Vertical comic frame of a rainlit city gate.",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "standard",
+            },
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskId = imageTaskEnvelope.data.taskId;
+      const providerRequest = await db.query<{
+        status: string;
+        external_request_id: string | null;
+        response_redacted_json: Record<string, unknown> | null;
+      }>(
+        "SELECT status, external_request_id, response_redacted_json FROM provider_requests WHERE task_id = $1",
+        [taskId],
+      );
+      const storageObjects = await db.query<{ status: string; content_type: string }>(
+        "SELECT status, content_type FROM storage_objects WHERE metadata_json->>'taskId' = $1",
+        [taskId],
+      );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_consumed: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_consumed, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        credit_status: string;
+        result_assets_json: Array<{ url?: string; mediaKind?: string }>;
+      }>(
+        `
+          SELECT status, progress_stage, credit_status, result_assets_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(imageTaskEnvelope.data.status, "succeeded");
+      assert.equal(imageTaskEnvelope.data.kind, "image");
+      assert.equal(imageTaskEnvelope.data.result.mediaKind, "image");
+      assert.match(imageTaskEnvelope.data.result.imageUrl, /^https:\/\/platform-storage\.example\.test\//);
+      assert.doesNotMatch(JSON.stringify(imageTaskEnvelope.data), /ZmFrZQ|fake-png|relay\.example\.test/);
+      assert.equal(providerCalls.length, 1);
+      assert.equal(providerCalls[0]?.url, "https://relay.example.test/v1/images/generations");
+      assert.match(providerCalls[0]?.body ?? "", /rainlit city gate/);
+      assert.equal(uploadedBodies.length, 1);
+      assert.equal(uploadedBodies[0] instanceof Uint8Array, true);
+      assert.equal(providerRequest.rows[0]?.status, "succeeded");
+      assert.equal(providerRequest.rows[0]?.external_request_id, "req_gpt_image_123");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json?.artifact?.mediaType, "image");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json?.artifact?.mimeType, "image/png");
+      assert.match(String(providerRequest.rows[0]?.response_redacted_json?.artifact?.b64Json ?? ""), /^ZmFrZS1w/);
+      assert.deepEqual(storageObjects.rows.map((row) => row.status), ["available"]);
+      assert.equal(storageObjects.rows[0]?.content_type, "image/png");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 45);
+      assert.equal(reservation.rows[0]?.status, "settled");
+      assert.equal(snapshot.rows[0]?.status, "succeeded");
+      assert.equal(snapshot.rows[0]?.progress_stage, "completed");
+      assert.equal(snapshot.rows[0]?.credit_status, "consumed");
+      assert.equal(snapshot.rows[0]?.result_assets_json[0]?.mediaKind, "image");
+      assert.match(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /^https:\/\/platform-storage\.example\.test\//);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails Seedance tasks when provider output cannot be uploaded to platform storage", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-db-model',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    let uploadAttempts = 0;
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        SEEDANCE_PROVIDER_ENABLED: "true",
+        VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+        STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+        GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
+        GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return {
+              url: `https://platform-storage.example.test/${input.objectKey}`,
+              expiresAt: input.expiresAt,
+            };
+          },
+          async putObject() {
+            uploadAttempts += 1;
+            throw new Error("cos_upload_failed");
+          },
+        },
+      },
+      fetchImpl: (async (url, init) => {
+        if (String(url).includes("/db/query/seedance-external-task-1")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                task_id: "seedance-external-task-1",
+                status: "succeeded",
+                result: {
+                  video_url: "https://cdn.example.test/seedance-result.mp4",
+                },
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        if (String(url) === "https://cdn.example.test/seedance-result.mp4") {
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: { "content-type": "video/mp4" },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-external-task-1",
+              status: "queued",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "seedance-storage-failure-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Seedance storage failure",
+          scriptInput: "Episode 1: Seedance provider succeeds but storage fails.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Seedance Storage Failure Task" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-storage-failure-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      const taskId = videoTaskEnvelope.data.taskId;
+
+      const completedTaskResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const completedTaskEnvelope = await completedTaskResponse.json();
+      const completedReservation = await db.query<{
+        amount_reserved: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+      const storageObjects = await db.query<{ status: string }>(
+        "SELECT status FROM storage_objects WHERE metadata_json->>'taskId' = $1",
+        [taskId],
+      );
+
+      assert.equal(videoTaskResponse.status, 200);
+      assert.equal(completedTaskResponse.status, 200);
+      assert.equal(completedTaskEnvelope.data.status, "failed");
+      assert.equal(completedTaskEnvelope.data.failureCode, "provider_output_upload_failed");
+      assert.equal(completedTaskEnvelope.data.result, null);
+      assert.equal(uploadAttempts, 3);
+      assert.doesNotMatch(JSON.stringify(completedTaskEnvelope.data), /cdn\.example\.test/);
+      assert.equal(Number(completedReservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(completedReservation.rows[0]?.amount_released ?? -1), 135);
+      assert.equal(completedReservation.rows[0]?.status, "released");
+      assert.deepEqual(storageObjects.rows.map((row) => row.status), ["failed"]);
     } finally {
       await server.close();
     }
@@ -3742,6 +5336,8 @@ describe("phone auth dev server", () => {
       assert.equal(timeoutLookupResponse.status, 200);
       assert.equal(timeoutLookupEnvelope.data.status, "failed");
       assert.equal(timeoutLookupEnvelope.data.failureCode, "task_timeout");
+      assert.equal(timeoutLookupEnvelope.data.failure.noticeType, "error");
+      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过 15 分钟未完成，已自动标记失败并返还积分。");
       assert.equal(timeoutLookupEnvelope.data.credit.released, 90);
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);

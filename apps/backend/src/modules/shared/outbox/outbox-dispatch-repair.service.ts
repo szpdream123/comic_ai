@@ -35,31 +35,44 @@ export async function claimOutboxEventsForDispatch(
     now: Date;
     limit: number;
     staleProcessingMs?: number;
+    eventTypes?: string[];
   },
 ): Promise<OutboxEventRecord[]> {
   const staleCutoff = new Date(
     input.now.getTime() - (input.staleProcessingMs ?? defaultStaleProcessingMs),
   );
+  const eventTypes = input.eventTypes?.filter((eventType) => eventType.trim());
+  const eventTypeWhere = eventTypes?.length ? "AND event_type = ANY($4::text[])" : "";
+  const queryParams = eventTypes?.length
+    ? [input.now, staleCutoff, input.limit, eventTypes]
+    : [input.now, staleCutoff, input.limit];
   const candidates = await db.query<OutboxEventRow>(
     `
       SELECT *
       FROM outbox_events
       WHERE (
-          status IN ('pending', 'failed')
-          AND available_at <= $1
+          (
+            status IN ('pending', 'failed')
+            AND available_at <= $1
+          )
+          OR (
+            status = 'processing'
+            AND updated_at < $2
+          )
         )
-        OR (
-          status = 'processing'
-          AND updated_at < $2
-        )
+        ${eventTypeWhere}
       ORDER BY available_at ASC, created_at ASC
       LIMIT $3
     `,
-    [input.now, staleCutoff, input.limit],
+    queryParams,
   );
 
   const claimed: OutboxEventRecord[] = [];
   for (const candidate of candidates.rows) {
+    const updateEventTypeWhere = eventTypes?.length ? "AND event_type = ANY($4::text[])" : "";
+    const updateParams = eventTypes?.length
+      ? [candidate.id, input.now, staleCutoff, eventTypes]
+      : [candidate.id, input.now, staleCutoff];
     const row = await queryOne<OutboxEventRow>(
       db,
       `
@@ -78,9 +91,10 @@ export async function claimOutboxEventsForDispatch(
               AND updated_at < $3
             )
           )
+          ${updateEventTypeWhere}
         RETURNING *
       `,
-      [candidate.id, input.now, staleCutoff],
+      updateParams,
     );
 
     if (row) {

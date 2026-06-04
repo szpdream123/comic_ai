@@ -14,6 +14,15 @@ export interface ProviderSubmissionResult {
   externalRequestId: string;
   status: Extract<ProviderRequestStatus, "accepted" | "running" | "succeeded">;
   redactedResponse?: Record<string, unknown>;
+  artifacts?: MediaGenerationArtifact[];
+}
+
+export interface MediaGenerationArtifact {
+  mediaType: "image" | "video" | "audio";
+  mimeType?: string | null;
+  fileExtension?: string | null;
+  url?: string;
+  b64Json?: string;
 }
 
 export interface ProviderAdapter {

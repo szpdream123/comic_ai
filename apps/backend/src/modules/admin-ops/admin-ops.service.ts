@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import {
+  adminRetryFinalizeCommand,
+  adminRetryPersistAssetCommand,
   adminRetryTaskCommand,
   manualSettleUnknownTaskCommand,
   markPaymentRiskReviewedCommand,
@@ -23,6 +25,10 @@ import {
   IdempotencyConflictError,
   IdempotencyProcessingError,
 } from "../shared/idempotency/idempotency.service.ts";
+import {
+  appendGenerationTaskCreatedOutboxEvent,
+  appendGenerationTaskFinalizeRequestedOutboxEvent,
+} from "../model-gateway/generation-outbox.service.ts";
 import { aggregateWorkflowStatus } from "../workflow-task/workflow-task.service.ts";
 
 type AdminOpsResponse<T> = {
@@ -64,6 +70,24 @@ interface AdminTaskRow {
   provider_name: string | null;
   provider_operation: string | null;
   external_request_id: string | null;
+}
+
+interface AdminTaskSnapshotRow {
+  model_code: string | null;
+  media_type: string | null;
+  failure_json: Record<string, unknown> | string | null;
+  result_assets_json: unknown;
+}
+
+interface GenerationRetryTaskRow {
+  id: string;
+  organization_id: string;
+  workflow_id: string;
+  task_type: string;
+  queue_name: string;
+  input_snapshot_json: Record<string, unknown> | string;
+  target_entity_type: string;
+  target_entity_id: string;
 }
 
 interface AdminTaskView {
@@ -180,6 +204,147 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
       capability: capabilities.opsSettle,
       now: input.now,
     });
+  }
+
+  async function retryFinalizeStage(input: {
+    command: typeof adminRetryFinalizeCommand | typeof adminRetryPersistAssetCommand;
+    finalizeMode: "retry_finalize" | "retry_persist_asset";
+    retryableFailureCodes: Set<string>;
+    input: {
+      user: AuthenticatedAdminOpsUser;
+      idempotencyKey: string;
+      body: {
+        taskId: string;
+        reason: string;
+      };
+      now: Date;
+    };
+  }): Promise<AdminOpsResponse<{ task: AdminTaskView } | { error: AdminOpsError }>> {
+    const reason = input.input.body.reason.trim();
+    if (!reason) {
+      return { status: 400, body: { error: "reason_required" } };
+    }
+
+    try {
+      const executed = await runIdempotentCommand({
+        db: deps.db,
+        operationName: input.command.operationName,
+        capability: input.command.capability,
+        idempotencyKey: input.input.idempotencyKey,
+        requestHash: hashJson(input.input.body),
+        now: input.input.now,
+        resolveActor: (db) =>
+          resolveActorContext(db, {
+            sessionToken: input.input.user.sessionToken,
+            workspaceId: deps.workspaceId,
+            capability: input.command.capability,
+            now: input.input.now,
+          }),
+        replay: async ({ actor, idempotencyRecord }) => {
+          const task = await getTaskForOps(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: deps.workspaceId,
+            taskId: idempotencyRecord.responseResourceId,
+          });
+          if (!task) {
+            throw new Error("ops_finalize_retry_replay_missing_task");
+          }
+          return { task };
+        },
+        execute: async ({ actor }) => {
+          const task = await getTaskForOps(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: deps.workspaceId,
+            taskId: input.input.body.taskId,
+          });
+          if (!task) {
+            throw new AdminOpsBusinessError("task_not_found");
+          }
+          if (!task.failureCode || !input.retryableFailureCodes.has(task.failureCode)) {
+            throw new AdminOpsBusinessError("task_not_retryable");
+          }
+
+          const snapshot = await getGenerationSnapshotForTask(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: deps.workspaceId,
+            taskId: task.id,
+          });
+          const mediaType = readGenerationKind(snapshot?.media_type, task.taskType);
+          const providerExecutor = providerExecutorForRetry(task, snapshot);
+          if (!mediaType || !providerExecutor) {
+            throw new AdminOpsBusinessError("task_not_retryable");
+          }
+          if (
+            input.finalizeMode === "retry_persist_asset" &&
+            !storageObjectKeyFromSnapshot(snapshot)
+          ) {
+            throw new AdminOpsBusinessError("task_not_retryable");
+          }
+
+          await deps.db.query(
+            `
+              UPDATE tasks
+              SET status = 'manual_review_required',
+                  locked_by = NULL,
+                  locked_until = NULL,
+                  heartbeat_at = NULL,
+                  scheduled_at = $4,
+                  updated_at = $4
+              WHERE organization_id = $1
+                AND workspace_id = $2
+                AND id = $3
+                AND status IN ('failed', 'manual_review_required', 'result_unknown')
+            `,
+            [actor.organizationId, deps.workspaceId, task.id, input.input.now],
+          );
+          await appendGenerationTaskFinalizeRequestedOutboxEvent(deps.db, {
+            organizationId: actor.organizationId,
+            workflowId: task.workflowId,
+            taskId: task.id,
+            kind: mediaType,
+            modelCode: snapshot?.model_code ?? null,
+            providerExecutor,
+            storageBucket: storageBucketFromSnapshot(snapshot),
+            finalizeMode: input.finalizeMode,
+            availableAt: input.input.now,
+          });
+
+          const updated = await getTaskForOps(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: deps.workspaceId,
+            taskId: task.id,
+          });
+          if (!updated) {
+            throw new Error("ops_finalize_retry_missing_updated_task");
+          }
+
+          return {
+            result: { task: updated },
+            responseResourceType: "task",
+            responseResourceId: updated.id,
+            responseSnapshot: { task: updated },
+            audit: {
+              eventType: input.command.auditEvent,
+              targetType: "task",
+              targetId: updated.id,
+              workspaceId: deps.workspaceId,
+              projectId: updated.projectId,
+              reason,
+              sensitive: true,
+              metadata: {
+                previousStatus: task.status,
+                failureCode: task.failureCode,
+                finalizeMode: input.finalizeMode,
+              },
+            },
+          };
+        },
+      });
+
+      return { status: 200, body: executed.result };
+    } catch (error) {
+      return authErrorResponse(error);
+    }
   }
 
   return {
@@ -539,6 +704,12 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               `,
               [actor.organizationId, task.workflowId, input.now],
             );
+            await appendRetryGenerationOutboxIfNeeded(deps.db, {
+              organizationId: actor.organizationId,
+              workspaceId: deps.workspaceId,
+              taskId: task.id,
+              availableAt: input.now,
+            });
 
             const updated = await getTaskForOps(deps.db, {
               organizationId: actor.organizationId,
@@ -575,6 +746,47 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
       } catch (error) {
         return authErrorResponse(error);
       }
+    },
+
+    async retryFinalize(input: {
+      user: AuthenticatedAdminOpsUser;
+      idempotencyKey: string;
+      body: {
+        taskId: string;
+        reason: string;
+      };
+      now: Date;
+    }): Promise<
+      AdminOpsResponse<{ task: AdminTaskView } | { error: AdminOpsError }>
+    > {
+      return retryFinalizeStage({
+        command: adminRetryFinalizeCommand,
+        finalizeMode: "retry_finalize",
+        retryableFailureCodes: new Set([
+          "provider_output_download_failed",
+          "provider_output_upload_failed",
+        ]),
+        input,
+      });
+    },
+
+    async retryPersistAsset(input: {
+      user: AuthenticatedAdminOpsUser;
+      idempotencyKey: string;
+      body: {
+        taskId: string;
+        reason: string;
+      };
+      now: Date;
+    }): Promise<
+      AdminOpsResponse<{ task: AdminTaskView } | { error: AdminOpsError }>
+    > {
+      return retryFinalizeStage({
+        command: adminRetryPersistAssetCommand,
+        finalizeMode: "retry_persist_asset",
+        retryableFailureCodes: new Set(["provider_output_persist_failed"]),
+        input,
+      });
     },
 
     async markPaymentRiskReviewed(input: {
@@ -905,6 +1117,68 @@ async function getActiveReservationForTask(
   );
 }
 
+async function getGenerationSnapshotForTask(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    taskId: string;
+  },
+) {
+  return queryOne<AdminTaskSnapshotRow>(
+    db,
+    `
+      SELECT model_code, media_type, failure_json, result_assets_json
+      FROM ai_generation_task_snapshots
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND task_id = $3
+      LIMIT 1
+    `,
+    [input.organizationId, input.workspaceId, input.taskId],
+  );
+}
+
+function providerExecutorForRetry(
+  task: AdminTaskView,
+  snapshot: AdminTaskSnapshotRow | undefined,
+) {
+  const failure = normalizeJson(snapshot?.failure_json ?? null);
+  return (
+    readNonEmptyString(failure.providerExecutor) ??
+    readNonEmptyString(failure.provider_executor) ??
+    providerExecutorFromTask(task)
+  );
+}
+
+function providerExecutorFromTask(task: AdminTaskView) {
+  if (task.providerName?.includes("seedance") || task.taskType.includes("video")) {
+    return "seedance";
+  }
+  if (task.providerName?.includes("gpt") || task.taskType.includes("image")) {
+    return "gpt-image-2";
+  }
+  return undefined;
+}
+
+function storageBucketFromSnapshot(snapshot: AdminTaskSnapshotRow | undefined) {
+  const failure = normalizeJson(snapshot?.failure_json ?? null);
+  return (
+    readNonEmptyString(failure.storageBucket) ??
+    readNonEmptyString(failure.storage_bucket) ??
+    null
+  );
+}
+
+function storageObjectKeyFromSnapshot(snapshot: AdminTaskSnapshotRow | undefined) {
+  const failure = normalizeJson(snapshot?.failure_json ?? null);
+  return (
+    readNonEmptyString(failure.storageObjectKey) ??
+    readNonEmptyString(failure.storage_object_key) ??
+    null
+  );
+}
+
 function settlementOutcomeForDecision(
   decision: "consume" | "release" | "mark_abnormal_cost",
 ): CreditAllocationOutcome {
@@ -1113,6 +1387,88 @@ function normalizeJson(value: Record<string, unknown> | string | null) {
     return {};
   }
   return typeof value === "string" ? JSON.parse(value) : value;
+}
+
+async function appendRetryGenerationOutboxIfNeeded(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    taskId: string;
+    availableAt: Date;
+  },
+) {
+  const row = await queryOne<GenerationRetryTaskRow>(
+    db,
+    `
+      SELECT
+        id,
+        organization_id,
+        workflow_id,
+        task_type,
+        queue_name,
+        input_snapshot_json,
+        target_entity_type,
+        target_entity_id
+      FROM tasks
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+        AND status = 'queued'
+        AND task_type IN ('episode_generate_image', 'episode_generate_video')
+      LIMIT 1
+    `,
+    [input.organizationId, input.workspaceId, input.taskId],
+  );
+  if (!row) {
+    return;
+  }
+
+  const snapshot = normalizeJson(row.input_snapshot_json);
+  const providerExecutor = readNonEmptyString(snapshot.providerExecutor);
+  if (!providerExecutor || providerExecutor === "mock") {
+    return;
+  }
+
+  const kind = readGenerationKind(snapshot.kind, row.task_type);
+  if (!kind) {
+    return;
+  }
+
+  await appendGenerationTaskCreatedOutboxEvent(db, {
+    organizationId: row.organization_id,
+    workflowId: row.workflow_id,
+    taskId: row.id,
+    kind,
+    modelCode: readNonEmptyString(snapshot.model) ?? null,
+    queueName: row.queue_name,
+    targetType: readNonEmptyString(snapshot.targetType) ?? row.target_entity_type,
+    targetId: readNonEmptyString(snapshot.targetId) ?? row.target_entity_id,
+    providerExecutor,
+    availableAt: input.availableAt,
+  });
+}
+
+function readGenerationKind(
+  value: unknown,
+  taskType: string,
+): "image" | "video" | undefined {
+  if (value === "image" || value === "video") {
+    return value;
+  }
+  if (taskType === "episode_generate_image") {
+    return "image";
+  }
+  if (taskType === "episode_generate_video") {
+    return "video";
+  }
+  return undefined;
+}
+
+function readNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 function hashJson(value: unknown) {

@@ -25,7 +25,7 @@ export async function createAuthSession(input: {
   ttlMs?: number;
 }): Promise<{ token: string; session: AuthSession }> {
   const token = input.token ?? generateSessionToken();
-  const ttlMs = input.ttlMs ?? 7 * 24 * 60 * 60 * 1000;
+  const ttlMs = input.ttlMs ?? 30 * 24 * 60 * 60 * 1000;
 
   return {
     token,

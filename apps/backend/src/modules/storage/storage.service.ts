@@ -44,7 +44,7 @@ export interface StorageAdapter {
   putObject?(input: {
     bucket: string;
     objectKey: string;
-    body: Uint8Array;
+    body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
   }): Promise<{
     eTag?: string | null;
@@ -293,6 +293,29 @@ export async function findStorageObject(
     db,
     "SELECT * FROM storage_objects WHERE id = $1",
     [storageObjectId],
+  );
+
+  return row ? storageObjectFromRow(row) : undefined;
+}
+
+export async function findStorageObjectByKey(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    objectKey: string;
+  },
+): Promise<StorageObjectRecord | undefined> {
+  const row = await queryOne<StorageObjectRow>(
+    db,
+    `
+      SELECT *
+      FROM storage_objects
+      WHERE organization_id = $1
+        AND object_key = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [input.organizationId, input.objectKey],
   );
 
   return row ? storageObjectFromRow(row) : undefined;

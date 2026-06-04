@@ -43,10 +43,22 @@ describe("login page client flow", () => {
     assert.match(js, /\/api\/auth\/code\/request/);
     assert.match(js, /\/api\/auth\/code\/verify/);
     assert.match(js, /\/api\/auth\/session/);
+    assert.match(js, /devCode/);
     assert.match(js, /\/api\/auth\/dev\/challenges\//);
     assert.match(js, /debug-panel/);
     assert.match(js, /\/app\.html/);
     assert.match(js, /window\.location\.protocol === "file:"/);
+  });
+
+  it("maps SMS delivery and limit errors to Chinese copy", async () => {
+    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+
+    assert.match(js, /sms_cooldown_active/);
+    assert.match(js, /验证码已发送，请稍后再试/);
+    assert.match(js, /daily_sms_limit_exceeded/);
+    assert.match(js, /今日验证码发送次数已达上限，请明天再试/);
+    assert.match(js, /sms_send_failed/);
+    assert.match(js, /短信发送失败，请稍后再试/);
   });
 
   it("wires the creator workspace to the mock creator APIs", async () => {

@@ -6,6 +6,12 @@ import {
   createLoginChallenge,
   verifyLoginChallengeCode,
 } from "../login-challenge.service.ts";
+import {
+  createMigratedTestDb,
+  listColumnNames,
+  listIndexNames,
+  listTableNames,
+} from "../../shared/db/test-db.ts";
 
 describe("login challenge schema assumptions", () => {
   it("adds phone auth tables and relaxed user email requirement to the foundation migration", async () => {
@@ -21,6 +27,33 @@ describe("login challenge schema assumptions", () => {
     assert.match(sql, /CREATE TABLE auth_sessions \(/);
     assert.match(sql, /phone_e164 text UNIQUE NULL/);
     assert.doesNotMatch(sql, /email text NOT NULL UNIQUE/);
+  });
+
+  it("adds SMS send records for provider delivery auditing", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const tables = await listTableNames(db);
+      const columns = await listColumnNames(db, "sms_send_records");
+      const indexes = await listIndexNames(db, "sms_send_records");
+
+      assert.ok(tables.includes("sms_send_records"));
+      assert.deepEqual(columns, [
+        "id",
+        "phone_e164",
+        "challenge_id",
+        "provider",
+        "status",
+        "ip_address_hash",
+        "user_agent_hash",
+        "provider_request_id",
+        "error_code",
+        "created_at",
+      ]);
+      assert.ok(indexes.includes("sms_send_records_phone_created_idx"));
+      assert.ok(indexes.includes("sms_send_records_phone_status_created_idx"));
+    } finally {
+      await db.close();
+    }
   });
 });
 

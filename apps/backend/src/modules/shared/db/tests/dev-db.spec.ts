@@ -130,6 +130,7 @@ describe("createDevDb", () => {
       await rm(localDatabaseDir, { recursive: true, force: true });
     }
   });
+
 });
 
 function restoreEnv(key: string, value: string | undefined) {

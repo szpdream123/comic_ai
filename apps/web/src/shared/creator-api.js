@@ -736,6 +736,31 @@ export const creatorApi = {
     return fetchJson(`/api/billing/payment-intents/${encodeURIComponent(paymentIntentId)}`, { unwrapEnvelope: false });
   },
 
+  getGenerationQueueHealth() {
+    return fetchJson("/api/admin/ops/generation-queues", { unwrapEnvelope: false });
+  },
+
+  operateGenerationQueueJob(input, options = {}) {
+    return postJsonWithIdempotency("/api/admin/ops/generation-queues/jobs", input, {
+      action: "ops.generation-queue-job",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  retryGenerationFinalize(input, options = {}) {
+    return postJsonWithIdempotency("/api/admin/ops/tasks/retry-finalize", input, {
+      action: "ops.retry-finalize",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  retryGenerationPersistAsset(input, options = {}) {
+    return postJsonWithIdempotency("/api/admin/ops/tasks/retry-persist-asset", input, {
+      action: "ops.retry-persist-asset",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
   createEpisode(input) {
     return postJson("/api/creator/episodes", input);
   },

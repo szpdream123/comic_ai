@@ -18,8 +18,7 @@ const ASSET_TABS = [
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
 
 const IMAGE_MODELS = [
-  { id: "tnb-pro", label: "nano banana 2（链路G）" },
-  { id: "jimeng-4-5", label: "gpt image 2（链路G）" },
+  { id: "gpt-image-2-cn", label: "GPT Image 2" },
 ];
 
 const VIDEO_MODELS = [
@@ -170,7 +169,7 @@ export function renderEpisodeWorkbench({
   episodeWorkbenchSelectedAttachmentIds = [],
   isStoryboardDescriptionModalOpen = false,
   storyboardDescriptionDraft = "",
-  selectedModelId = "tnb-pro",
+  selectedModelId = "gpt-image-2-cn",
   prompt = "",
   busy = false,
   canGenerateImages = true,
@@ -178,6 +177,7 @@ export function renderEpisodeWorkbench({
   validationMessage = "",
   mediaMode = "image",
   generationControls = {},
+  episodeGenerationConfig = null,
   generationUiState = {},
   storyboardDeleteTarget = null,
   storyboardImageDeleteTarget = null,
@@ -221,7 +221,7 @@ export function renderEpisodeWorkbench({
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
     scopeMode === "assets" && effectiveMediaMode === "image"
-      ? "jimeng-4-5"
+      ? selectedModelId
       : selectedModelId;
   const assetGroups = {
     character: mergeAssetGroup(assetLibrary.character ?? []),
@@ -373,6 +373,7 @@ export function renderEpisodeWorkbench({
             canGenerateCurrentMode,
             validationMessage,
             generationControls,
+            episodeGenerationConfig,
             generationUiState,
             mediaMode: effectiveMediaMode,
             attachments: episodeWorkbenchAttachments,
@@ -680,12 +681,14 @@ function renderStoryboardCard(storyboard, active, checked = false, assetGroups =
   const linkedRefs = groupStoryboardReferences((storyboard.references ?? []).slice(0, 6));
   const previewVideo = resolveSelectedVideoSource(storyboard);
   const previewImage = resolveSelectedImageSource(storyboard);
+  const generationBadge = renderStoryboardGenerationBadge(storyboard);
   return `
     <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""}">
       <div class="episode-replica-shot-card ${active ? "active" : ""}" data-storyboard-id="${escapeAttr(storyboard.id)}">
         <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="选择分镜"></button>
         <span class="episode-replica-shot-card-head">
           <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(displayTitle)}</strong>
+          ${generationBadge}
         </span>
         <span class="episode-replica-shot-card-body">
           <span class="episode-replica-shot-card-column assets">
@@ -724,6 +727,38 @@ function renderStoryboardCard(storyboard, active, checked = false, assetGroups =
       </div>
     </article>
   `;
+}
+
+function renderStoryboardGenerationBadge(storyboard) {
+  const submission = storyboard?.generationState?.lastSubmission ?? null;
+  const status = String(submission?.status ?? "").toLowerCase();
+  if (!status) {
+    return "";
+  }
+  const badge = resolveStoryboardGenerationBadge(status);
+  if (!badge) {
+    return "";
+  }
+  return `<span class="episode-replica-shot-status-badge ${escapeAttr(badge.kind)}">${escapeHtml(badge.label)}</span>`;
+}
+
+function resolveStoryboardGenerationBadge(status) {
+  if (status === "completed" || status === "succeeded") {
+    return { kind: "completed", label: "已完成" };
+  }
+  if (status === "failed" || status === "canceled") {
+    return { kind: "failed", label: "失败" };
+  }
+  if (status === "manual_review_required" || status === "result_unknown") {
+    return { kind: "failed", label: "失败" };
+  }
+  if (status.includes("upload") || status.includes("storage") || status.includes("persist") || status.includes("finaliz")) {
+    return { kind: "saving", label: "保存中" };
+  }
+  if (status === "queued" || status === "pending" || status === "accepted") {
+    return { kind: "queued", label: "排队中" };
+  }
+  return { kind: "generating", label: "生成中" };
 }
 
 function groupStoryboardReferences(refs = []) {
@@ -954,11 +989,13 @@ function renderAssetConversationEntry(generationResult, assetKind = "character")
   const promptPreview = truncateDisplayText(generationResult?.promptPreview ?? "", 140);
   const userMeta = buildAssetGenerationUserMeta(generationResult);
   const quickReferenceItems = generationResult?.quickReferenceItems ?? [];
+  const failureMessage = resolveGenerationResultFailureMessage(generationResult);
   return `
     <section class="episode-replica-asset-conversation-entry">
       <div class="episode-replica-message-thread">
         ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems) : ""}
       </div>
+      ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
       ${renderFixedImageResults(generationResult, assetKind)}
     </section>
   `;
@@ -1179,7 +1216,7 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
             <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>下载</button>
             <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>删除</button>
           </div>
-          ${isVideo ? "" : renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
+          ${renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
           ${isVideo ? "" : renderFixedImageResults(generationResult)}
         `,
       })}
@@ -1265,8 +1302,8 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       selectedStoryboard?.generationState?.lastSubmission?.status ??
       "pending",
   ).toLowerCase();
-  const failureCode = String(generationResult?.failureCode ?? generationResult?.result?.failureCode ?? "");
-  const failureMessage = resolveGenerationFailureMessage(workflowStatus, failureCode);
+  const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
+  const progressState = resolveGenerationProgressState(generationResult, selectedStoryboard, workflowStatus, failureMessage);
   return `
     <article class="episode-replica-result-panel visible">
       <div class="assets task-card">
@@ -1284,9 +1321,134 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
           </div>
         </div>
       </div>
+      ${renderGenerationProgressTrack(progressState)}
       ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
       <time>${escapeHtml(String(createdAt))}</time>
     </article>
+  `;
+}
+
+const GENERATION_PROGRESS_STEPS = [
+  { id: "submitted", label: "已提交" },
+  { id: "queued", label: "排队中" },
+  { id: "provider", label: "模型生成中" },
+  { id: "storage", label: "保存到云存储" },
+  { id: "persist", label: "写入资产" },
+  { id: "done", label: "完成" },
+];
+
+function resolveGenerationProgressState(generationResult, selectedStoryboard, workflowStatus, failureMessage = "") {
+  const submissionStatus = String(selectedStoryboard?.generationState?.lastSubmission?.status ?? "").toLowerCase();
+  const status = String(workflowStatus || submissionStatus || "pending").toLowerCase();
+  const failureCode = String(
+    generationResult?.failureCode ??
+      generationResult?.failure?.failureCode ??
+      generationResult?.result?.failureCode ??
+      "",
+  );
+  const activeStep = resolveGenerationProgressStep(status, failureCode);
+  const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
+  const message = resolveGenerationProgressMessage({
+    status,
+    activeStep,
+    failureCode,
+    failureMessage,
+  });
+  return {
+    activeStep,
+    failed,
+    message,
+  };
+}
+
+function resolveGenerationProgressStep(status, failureCode = "") {
+  if (status === "completed" || status === "succeeded") {
+    return "done";
+  }
+  if (failureCode === "provider_output_upload_failed") {
+    return "storage";
+  }
+  if (failureCode === "provider_output_persist_failed" || status === "manual_review_required") {
+    return "persist";
+  }
+  if (failureCode === "provider_output_download_failed") {
+    return "provider";
+  }
+  if (status === "queued" || status === "pending" || status === "accepted") {
+    return "queued";
+  }
+  if (status.includes("upload") || status.includes("storage")) {
+    return "storage";
+  }
+  if (status.includes("persist") || status.includes("asset") || status.includes("finaliz")) {
+    return "persist";
+  }
+  if (status === "submitted" || status === "external_submitted") {
+    return "submitted";
+  }
+  return "provider";
+}
+
+function resolveGenerationProgressMessage({ status, activeStep, failureCode, failureMessage }) {
+  if (failureMessage) {
+    return failureMessage;
+  }
+  if (status === "manual_review_required") {
+    return "任务需要后台处理，请等待管理员补写资产记录或重试最终化。";
+  }
+  if (status === "result_unknown") {
+    return "暂时无法确认模型结果，后台会继续核对，先不要重复提交同一任务。";
+  }
+  if (failureCode === "provider_output_download_failed") {
+    return "模型可能已生成，但从供应商下载结果失败，积分已按失败策略处理。";
+  }
+  if (failureCode === "provider_output_upload_failed") {
+    return "视频已生成，但保存到平台云存储失败，积分已返还。";
+  }
+  if (failureCode === "provider_output_persist_failed") {
+    return "已保存到平台存储，正在等待后台补写资产记录。";
+  }
+  if (activeStep === "submitted") {
+    return "任务已提交，后端正在记录任务并准备预扣积分。";
+  }
+  if (activeStep === "queued") {
+    return "任务已进入队列，等待 worker 接单。";
+  }
+  if (activeStep === "provider") {
+    return "模型正在生成，请保持页面打开，前端会定时刷新结果。";
+  }
+  if (activeStep === "storage") {
+    return "模型结果已返回，正在保存到平台云存储。";
+  }
+  if (activeStep === "persist") {
+    return "云存储已完成，正在写入资产记录并绑定当前分镜。";
+  }
+  if (activeStep === "done") {
+    return "生成已完成，可下载或设为当前分镜结果。";
+  }
+  return "任务处理中，前端会定时刷新最新状态。";
+}
+
+function renderGenerationProgressTrack(progressState) {
+  const activeIndex = GENERATION_PROGRESS_STEPS.findIndex((step) => step.id === progressState.activeStep);
+  const safeActiveIndex = activeIndex >= 0 ? activeIndex : 0;
+  return `
+    <div class="episode-replica-progress-box" aria-label="生成进度">
+      <div class="episode-replica-progress-track">
+        ${GENERATION_PROGRESS_STEPS.map((step, index) => {
+          const completed = index < safeActiveIndex || progressState.activeStep === "done";
+          const active = index === safeActiveIndex;
+          const failed = active && progressState.failed;
+          return `
+            <span class="episode-replica-progress-step ${completed ? "completed" : ""} ${active ? "active" : ""} ${failed ? "failed" : ""}">
+              <span class="episode-replica-progress-dot" aria-hidden="true"></span>
+              <span class="episode-replica-progress-label">${escapeHtml(step.label)}</span>
+            </span>
+          `;
+        }).join("")}
+      </div>
+      <p class="episode-replica-progress-message">${escapeHtml(progressState.message)}</p>
+    </div>
   `;
 }
 
@@ -1445,6 +1607,37 @@ function resolveGenerationFailureMessage(status, failureCode) {
   return "生成失败，请重新编辑后再试，失败记录会保留在当前结果区。";
 }
 
+function resolveGenerationResultFailureMessage(generationResult, statusOverride = null) {
+  const workflowStatus = String(
+    statusOverride ??
+      generationResult?.status ??
+      generationResult?.platform?.workflowStatus ??
+      "",
+  ).toLowerCase();
+  if (!["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus)) {
+    return "";
+  }
+  const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
+  if (displayMessage) {
+    return displayMessage;
+  }
+  const providerMessage = String(generationResult?.failure?.providerMessage ?? "").trim();
+  if (providerMessage) {
+    return providerMessage;
+  }
+  const providerErrorCode = String(generationResult?.failure?.providerErrorCode ?? "").trim();
+  if (providerErrorCode) {
+    return providerErrorCode;
+  }
+  const failureCode = String(
+    generationResult?.failureCode ??
+      generationResult?.failure?.failureCode ??
+      generationResult?.result?.failureCode ??
+      "",
+  );
+  return resolveGenerationFailureMessage(workflowStatus, failureCode);
+}
+
 function renderFixedImageResults(generationResult, assetKind = "character") {
   const taskId = resolveGenerationTaskId(generationResult);
   const images = Array.isArray(generationResult?.fixedImages) ? generationResult.fixedImages : [];
@@ -1488,6 +1681,7 @@ function renderSelectionContextInline(selectionContext) {
 
 function resolveGenerationModelLabel(modelId) {
   const catalog = {
+    "gpt-image-2-cn": "GPT Image 2",
     "vidu-q3-pro": "Vidu Q3 Pro",
     "jimeng-4-5": "gpt image 2（链路G）",
     "jimeng-4-5-vip": "gpt image 2 VIP（链路G）",
@@ -1543,12 +1737,13 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
 export function renderPromptDock({
   selectedStoryboard,
   selectedAsset,
-  selectedModelId = "tnb-pro",
+  selectedModelId = "gpt-image-2-cn",
   prompt,
   busy,
   canGenerateCurrentMode = true,
   validationMessage,
   generationControls,
+  episodeGenerationConfig = null,
   generationUiState,
   mediaMode,
   attachments = [],
@@ -1588,7 +1783,8 @@ export function renderPromptDock({
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
-  const models = isVideoMode ? VIDEO_MODELS : IMAGE_MODELS;
+  const configuredModels = buildConfiguredPromptDockModels(episodeGenerationConfig, isVideoMode ? "video" : "image");
+  const models = configuredModels.length ? configuredModels : (isVideoMode ? VIDEO_MODELS : IMAGE_MODELS);
   const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
   const attachmentCards = [...generationAttachmentCards, ...(attachments ?? [])].map((item, index) =>
     renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
@@ -2198,6 +2394,58 @@ function resolveGenerateCost(mediaMode, generationControls = {}) {
     return Number(generationControls.multiReferenceCreditCost ?? 50);
   }
   return Number(generationControls.imageCreditCost ?? 90);
+}
+
+function buildConfiguredPromptDockModels(config, mediaType) {
+  const models = Array.isArray(config?.models) ? config.models : [];
+  return models
+    .filter((model) => {
+      const configuredMediaType = String(model?.mediaType ?? "").trim();
+      if (configuredMediaType) {
+        return configuredMediaType === mediaType;
+      }
+      return modelMatchesPromptDockMediaType(model, mediaType);
+    })
+    .map((model) => {
+      const id = String(model?.modelCode ?? model?.id ?? "").trim();
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        label: String(model?.modelLabel ?? model?.displayName ?? id).trim() || id,
+        credits: Number(model?.displayBaseCost ?? model?.credits ?? 0),
+      };
+    })
+    .filter(Boolean);
+}
+
+function modelMatchesPromptDockMediaType(model, mediaType) {
+  const supportedModes = Array.isArray(model?.supportedModes)
+    ? model.supportedModes.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  if (!supportedModes.length) {
+    return true;
+  }
+  if (mediaType === "video") {
+    return supportedModes.some((mode) => {
+      const normalized = mode.replaceAll("-", "_");
+      return normalized.includes("video") || normalized === "image_to_video" || normalized === "lip_sync";
+    });
+  }
+  if (mediaType === "image") {
+    return supportedModes.some((mode) => {
+      const normalized = mode.replaceAll("-", "_");
+      return (
+        normalized.includes("image") ||
+        normalized === "text_to_image" ||
+        normalized === "multi_reference" ||
+        normalized === "single_image" ||
+        normalized === "multi_image"
+      );
+    });
+  }
+  return true;
 }
 
 function renderAssetInspectorModal(inspector) {

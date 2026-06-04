@@ -67,77 +67,52 @@ async function createLocalDevDb(): Promise<DevDatabase> {
   return db;
 }
 
-async function ensureFoundationSchema(db: SqlDatabase) {
+export async function ensureFoundationSchema(db: SqlDatabase) {
+  const hasUsersTable = await tableExists(db, "users");
+
+  if (!hasUsersTable) {
+    await applySqlMigrations(db);
+    await ensurePaymentProviderConstraints(db);
+    return;
+  }
+
+  if (!(await tableExists(db, "sms_send_records"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0009_sms_send_records_backfill.sql" });
+  }
+
+  if (!(await tableExists(db, "storage_upload_sessions"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
+  }
+
+  if (!(await tableExists(db, "episode_generation_drafts"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+  }
+
+  if (!(await tableExists(db, "episode_asset_conversation_threads"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0005_episode_asset_conversations.sql" });
+  }
+
+  if (!(await tableExists(db, "project_upload_records"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0006_project_upload_records.sql" });
+  }
+
+  if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0008_ai_generation_task_snapshots.sql" });
+  }
+}
+
+async function tableExists(db: SqlDatabase, tableName: string) {
   const tableCheck = await db.query<{ exists: boolean }>(
     `
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.tables
         WHERE table_schema = 'public'
-          AND table_name = 'users'
+          AND table_name = $1
       ) AS exists
     `,
+    [tableName],
   );
 
-  if (!tableCheck.rows[0]?.exists) {
-    await applySqlMigrations(db);
-    await ensurePaymentProviderConstraints(db);
-    return;
-  }
-
-  const sessionTableCheck = await db.query<{ exists: boolean }>(
-    `
-      SELECT EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'storage_upload_sessions'
-      ) AS exists
-    `,
-  );
-  if (!sessionTableCheck.rows[0]?.exists) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
-  }
-
-  const hardeningTableCheck = await db.query<{ exists: boolean }>(
-    `
-      SELECT EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'episode_generation_drafts'
-      ) AS exists
-    `,
-  );
-  if (!hardeningTableCheck.rows[0]?.exists) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
-  }
-
-  const assetConversationTableCheck = await db.query<{ exists: boolean }>(
-    `
-      SELECT EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'episode_asset_conversation_threads'
-      ) AS exists
-    `,
-  );
-  if (!assetConversationTableCheck.rows[0]?.exists) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0005_episode_asset_conversations.sql" });
-  }
-
-  const projectUploadRecordTableCheck = await db.query<{ exists: boolean }>(
-    `
-      SELECT EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'project_upload_records'
-      ) AS exists
-    `,
-  );
-  if (!projectUploadRecordTableCheck.rows[0]?.exists) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0006_project_upload_records.sql" });
-  }
+  return tableCheck.rows[0]?.exists === true;
 }

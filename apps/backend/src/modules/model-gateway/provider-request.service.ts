@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ProviderRequestStatus } from "../../../../../packages/contracts/domain/states.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
-import type { ProviderAdapter } from "./provider-adapter.contract.ts";
+import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
 
 export interface ProviderRequestRecord {
   id: string;
@@ -164,7 +164,7 @@ export async function submitProviderRequest(
     adapter: ProviderAdapter;
   },
 ): Promise<
-  | { kind: "submitted"; request: ProviderRequestRecord }
+  | { kind: "submitted"; request: ProviderRequestRecord; artifacts?: MediaGenerationArtifact[] }
   | { kind: "already_started"; request: ProviderRequestRecord }
 > {
   const prepared = await createOrReuseProviderRequest(db, input);
@@ -211,6 +211,7 @@ export async function submitProviderRequest(
     return {
       kind: "submitted",
       request: accepted,
+      artifacts: submitted.artifacts,
     };
   } catch (error) {
     await markProviderRequestResultUnknown(db, {

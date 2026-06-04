@@ -271,6 +271,20 @@ function setStatus(message) {
   statusMessage.textContent = message;
 }
 
+const errorCopy = {
+  invalid_phone: "请输入正确的中国大陆手机号",
+  sms_cooldown_active: "验证码已发送，请稍后再试",
+  daily_sms_limit_exceeded: "今日验证码发送次数已达上限，请明天再试",
+  sms_send_failed: "短信发送失败，请稍后再试",
+  code_invalid: "验证码不正确",
+  challenge_expired: "验证码已过期，请重新获取",
+  verify_locked: "尝试次数过多，请重新获取验证码",
+};
+
+function authErrorMessage(payload, fallback) {
+  return errorCopy[payload?.error] ?? fallback;
+}
+
 function showDebug(message) {
   debugPanel.hidden = false;
   debugPanel.textContent = message;
@@ -289,12 +303,21 @@ requestCodeButton?.addEventListener("click", async () => {
   const requestPayload = await requestResponse.json();
 
   if (!requestResponse.ok) {
-    setStatus(requestPayload.error ?? "验证码请求失败");
+    setStatus(authErrorMessage(requestPayload, "验证码请求失败"));
     return;
   }
 
   activeChallengeId = requestPayload.challengeId;
-  setStatus(`验证码已发送至 ${requestPayload.maskedPhone}`);
+  const remainingText =
+    typeof requestPayload.remainingToday === "number"
+      ? `，今日还可发送 ${requestPayload.remainingToday} 次`
+      : "";
+  setStatus(`验证码已发送至 ${requestPayload.maskedPhone}${remainingText}`);
+
+  if (requestPayload.devCode) {
+    showDebug(`开发验证码：${requestPayload.devCode}`);
+    return;
+  }
 
   const debugResponse = await fetch(
     resolveApiUrl(`/api/auth/dev/challenges/${requestPayload.challengeId}`),
@@ -334,7 +357,7 @@ form?.addEventListener("submit", async (event) => {
   const verifyPayload = await verifyResponse.json();
 
   if (!verifyResponse.ok) {
-    setStatus(verifyPayload.error ?? "登录失败");
+    setStatus(authErrorMessage(verifyPayload, "登录失败"));
     return;
   }
 

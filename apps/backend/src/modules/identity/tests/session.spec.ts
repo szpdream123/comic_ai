@@ -70,4 +70,34 @@ describe("auth sessions", () => {
       false,
     );
   });
+
+  it("uses a 30-day default session TTL", async () => {
+    const now = new Date("2026-06-04T10:00:00.000Z");
+    const created = await createAuthSession({
+      userId: "user_1",
+      now,
+      token: "plain-token",
+    });
+
+    assert.equal(
+      created.session.expiresAt.toISOString(),
+      "2026-07-04T10:00:00.000Z",
+    );
+    assert.equal(
+      verifySessionToken(
+        created.session,
+        "plain-token",
+        new Date("2026-07-04T09:59:59.000Z"),
+      ),
+      true,
+    );
+    assert.equal(
+      verifySessionToken(
+        created.session,
+        "plain-token",
+        new Date("2026-07-04T10:00:00.000Z"),
+      ),
+      false,
+    );
+  });
 });

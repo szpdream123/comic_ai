@@ -23,6 +23,11 @@ export function hashSecret(value: string): string {
   return hmacSha256(value);
 }
 
+export function hashRequestMetadata(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? hmacSha256(`request-metadata:${trimmed}`) : null;
+}
+
 export function hashVerificationCode(input: {
   challengeId: string;
   code: string;
@@ -56,6 +61,21 @@ export function generateIdentityId(): string {
 export function maskCnPhone(phoneE164: string): string {
   const mainland = phoneE164.slice(3);
   return `${mainland.slice(0, 3)}****${mainland.slice(-4)}`;
+}
+
+export function shanghaiDayWindow(now: Date): { start: Date; end: Date } {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const date = formatter.format(now);
+  const start = new Date(`${date}T00:00:00.000+08:00`);
+  return {
+    start,
+    end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
+  };
 }
 
 function hmacSha256(value: string): string {
