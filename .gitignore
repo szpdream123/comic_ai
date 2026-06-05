@@ -1,9 +1,14 @@
 .DS_Store
 node_modules
+.npm-cache/
 .idea/
 tmp-ui-screenshots/
 artifacts/worker-c-preview/
 .local/
+.tmp/
+.tmp-logs/
+.logs/
+.codex-logs/
 *.log
 .env
 .env.local

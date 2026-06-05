@@ -10,7 +10,9 @@ import {
 } from "../../../../../packages/contracts/api/admin-ops.commands.ts";
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
+  assertCapability,
   AuthorizationError,
+  type ActorContext,
   resolveActorContext,
 } from "../organization/actor-context.service.ts";
 import {
@@ -50,7 +52,8 @@ type AdminOpsError =
   | "idempotency_processing";
 
 interface AuthenticatedAdminOpsUser {
-  sessionToken: string;
+  sessionToken?: string;
+  actor?: ActorContext;
 }
 
 interface AdminTaskRow {
@@ -90,7 +93,7 @@ interface GenerationRetryTaskRow {
   target_entity_id: string;
 }
 
-interface AdminTaskView {
+export interface AdminTaskView {
   id: string;
   workflowId: string;
   projectId: string | null;
@@ -123,7 +126,7 @@ interface AdminPaymentRiskRow {
   updated_at: Date | string;
 }
 
-interface AdminPaymentRiskView {
+export interface AdminPaymentRiskView {
   id: string;
   orderId: string | null;
   paymentIntentId: string | null;
@@ -149,7 +152,7 @@ interface AdminPaymentIssueRow {
   credit_grant_ledger_entry_id: string | null;
 }
 
-interface AdminPaymentIssueView {
+export interface AdminPaymentIssueView {
   issueType: "paid_without_credit";
   orderId: string;
   orderNo: string;
@@ -198,10 +201,40 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
     user: AuthenticatedAdminOpsUser;
     now: Date;
   }) {
+    if (input.user.actor) {
+      assertCapability(input.user.actor, capabilities.opsSettle);
+      return input.user.actor;
+    }
+    if (!input.user.sessionToken) {
+      throw new AuthorizationError("unauthenticated");
+    }
     return resolveActorContext(deps.db, {
       sessionToken: input.user.sessionToken,
       workspaceId: deps.workspaceId,
       capability: capabilities.opsSettle,
+      now: input.now,
+    });
+  }
+
+  async function resolveCommandActor(
+    db: SqlDatabase,
+    input: {
+      user: AuthenticatedAdminOpsUser;
+      capability: typeof capabilities[keyof typeof capabilities];
+      now: Date;
+    },
+  ) {
+    if (input.user.actor) {
+      assertCapability(input.user.actor, input.capability);
+      return input.user.actor;
+    }
+    if (!input.user.sessionToken) {
+      throw new AuthorizationError("unauthenticated");
+    }
+    return resolveActorContext(db, {
+      sessionToken: input.user.sessionToken,
+      workspaceId: deps.workspaceId,
+      capability: input.capability,
       now: input.now,
     });
   }
@@ -234,9 +267,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
         requestHash: hashJson(input.input.body),
         now: input.input.now,
         resolveActor: (db) =>
-          resolveActorContext(db, {
-            sessionToken: input.input.user.sessionToken,
-            workspaceId: deps.workspaceId,
+          resolveCommandActor(db, {
+            user: input.input.user,
             capability: input.command.capability,
             now: input.input.now,
           }),
@@ -450,9 +482,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           requestHash: hashJson(input.body),
           now: input.now,
           resolveActor: (db) =>
-            resolveActorContext(db, {
-              sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
+            resolveCommandActor(db, {
+              user: input.user,
               capability: manualSettleUnknownTaskCommand.capability,
               now: input.now,
             }),
@@ -641,9 +672,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           requestHash: hashJson(input.body),
           now: input.now,
           resolveActor: (db) =>
-            resolveActorContext(db, {
-              sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
+            resolveCommandActor(db, {
+              user: input.user,
               capability: adminRetryTaskCommand.capability,
               now: input.now,
             }),
@@ -814,9 +844,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           requestHash: hashJson(input.body),
           now: input.now,
           resolveActor: (db) =>
-            resolveActorContext(db, {
-              sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
+            resolveCommandActor(db, {
+              user: input.user,
               capability: markPaymentRiskReviewedCommand.capability,
               now: input.now,
             }),
@@ -925,9 +954,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           requestHash: hashJson(input.body),
           now: input.now,
           resolveActor: (db) =>
-            resolveActorContext(db, {
-              sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
+            resolveCommandActor(db, {
+              user: input.user,
               capability: repairPaidWithoutCreditCommand.capability,
               now: input.now,
             }),
@@ -1021,6 +1049,68 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
         return authErrorResponse(error);
       }
     },
+  };
+}
+
+export async function listAdminOpsItemsForScope(
+  deps: AdminOpsServiceDeps & { organizationId: string },
+): Promise<{
+  tasks: AdminTaskView[];
+  paymentRisks: AdminPaymentRiskView[];
+  paymentIssues: AdminPaymentIssueView[];
+}> {
+  const result = await deps.db.query<AdminTaskRow>(
+    `
+      SELECT
+        t.id,
+        t.organization_id,
+        t.workspace_id,
+        t.project_id,
+        t.workflow_id,
+        t.task_type,
+        t.status,
+        t.queue_name,
+        t.attempt_count,
+        t.max_attempts,
+        t.failure_code,
+        t.updated_at,
+        pr.status AS provider_status,
+        pr.provider_name,
+        pr.provider_operation,
+        pr.external_request_id
+      FROM tasks t
+      LEFT JOIN LATERAL (
+        SELECT *
+        FROM provider_requests pr
+        WHERE pr.organization_id = t.organization_id
+          AND pr.task_id = t.id
+        ORDER BY pr.updated_at DESC, pr.id DESC
+        LIMIT 1
+      ) pr ON true
+      WHERE t.organization_id = $1
+        AND t.workspace_id = $2
+        AND t.status IN (
+          'result_unknown',
+          'manual_review_required',
+          'failed',
+          'canceled'
+        )
+      ORDER BY t.updated_at DESC, t.id ASC
+      LIMIT 50
+    `,
+    [deps.organizationId, deps.workspaceId],
+  );
+  const paymentRisks = await listPaymentRisksForOps(deps.db, {
+    organizationId: deps.organizationId,
+  });
+  const paymentIssues = await listPaymentIssuesForOps(deps.db, {
+    organizationId: deps.organizationId,
+  });
+
+  return {
+    tasks: result.rows.map(taskViewFromRow),
+    paymentRisks,
+    paymentIssues,
   };
 }
 

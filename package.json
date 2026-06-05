@@ -5,6 +5,11 @@
   "scripts": {
     "test": "node scripts/run-tests.mjs",
     "dev:phone-auth": "node --import tsx scripts/run-phone-auth-dev-server.mjs",
+    "admin:bootstrap": "node --import tsx scripts/bootstrap-admin-account.mjs",
+    "admin:qa": "node scripts/admin-browser-qa.mjs",
+    "test:admin:ui": "node --test apps/admin/index.test.mjs",
+    "test:admin:http": "node --import tsx --test apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts",
+    "test:admin:http:auth": "node --import tsx --test apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts --test-name-pattern \"admin shell|admin login|sessions|profile|password\"",
     "worker:generation-outbox": "node --import tsx scripts/run-generation-outbox-dispatcher.mjs",
     "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs"
   },

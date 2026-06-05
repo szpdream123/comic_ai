@@ -21,6 +21,9 @@ export const operationNames = {
   opsMarkPaymentRiskReviewed: "ops.mark_payment_risk_reviewed",
   opsRepairPaidWithoutCredit: "ops.repair_paid_without_credit",
   opsGenerationQueueJobOperate: "ops.generation_queue_job_operate",
+  adminAuthChangePassword: "admin.auth.change_password",
+  adminAuthRevokeOtherSessions: "admin.auth.revoke_other_sessions",
+  adminAuthUpdateProfile: "admin.auth.update_profile",
 } as const;
 
 export type OperationName = (typeof operationNames)[keyof typeof operationNames];

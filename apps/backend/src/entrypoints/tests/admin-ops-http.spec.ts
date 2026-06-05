@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
@@ -7,7 +8,8 @@ import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("admin ops HTTP routes", { concurrency: false }, () => {
   it("requires idempotency keys for billing write routes", async () => {
-    const server = createPhoneAuthDevServer();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -61,16 +63,18 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.deepEqual(intent, { error: "idempotency_key_required" });
     } finally {
       await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 
-  it("rejects ordinary creators and allows the dev owner admin to inspect ops items", async () => {
-    const server = createPhoneAuthDevServer();
+  it("rejects creator sessions and allows backend admins to inspect ops items", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const creatorCookie = await login(server.origin, "13800138000");
-      const adminCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
 
       const forbidden = await fetch(`${server.origin}/api/admin/ops/items`, {
         headers: { cookie: creatorCookie },
@@ -81,8 +85,10 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
       const allowedPayload = await allowed.json();
 
-      assert.equal(forbidden.status, 403);
-      assert.deepEqual(forbiddenPayload, { error: "ops_forbidden" });
+      assert.equal(forbidden.status, 401);
+      assert.deepEqual(forbiddenPayload, {
+        error: { code: "admin_unauthenticated", message: "admin session expired" },
+      });
       assert.equal(allowed.status, 200);
       assert.deepEqual(allowedPayload, {
         tasks: [],
@@ -91,11 +97,48 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
     } finally {
       await server.close();
+      await db.close().catch(() => undefined);
+    }
+  });
+
+  it("requires backend admin sessions for legacy admin ops routes", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const creatorOwnerCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
+
+      const creatorOwnerResponse = await fetch(`${server.origin}/api/admin/ops/items`, {
+        headers: { cookie: creatorOwnerCookie },
+      });
+      const creatorOwnerPayload = await creatorOwnerResponse.json();
+      const adminResponse = await fetch(`${server.origin}/api/admin/ops/items`, {
+        headers: { cookie: adminCookie },
+      });
+      const adminPayload = await adminResponse.json();
+
+      assert.equal(creatorOwnerResponse.status, 401);
+      assert.deepEqual(creatorOwnerPayload, {
+        error: { code: "admin_unauthenticated", message: "admin session expired" },
+      });
+      assert.equal(adminResponse.status, 200);
+      assert.deepEqual(adminPayload, {
+        tasks: [],
+        paymentRisks: [],
+        paymentIssues: [],
+      });
+    } finally {
+      await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 
   it("exposes generation queue health for ops admins", async () => {
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
+      db,
       env: {
         NODE_ENV: "test",
         REDIS_URL: "redis://127.0.0.1:1/0",
@@ -106,7 +149,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const creatorCookie = await login(server.origin, "13800138000");
-      const adminCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
 
       const forbidden = await fetch(`${server.origin}/api/admin/ops/generation-queues`, {
         headers: { cookie: creatorCookie },
@@ -117,8 +160,10 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
       const allowedPayload = await allowed.json();
 
-      assert.equal(forbidden.status, 403);
-      assert.deepEqual(forbiddenPayload, { error: "ops_forbidden" });
+      assert.equal(forbidden.status, 401);
+      assert.deepEqual(forbiddenPayload, {
+        error: { code: "admin_unauthenticated", message: "admin session expired" },
+      });
       assert.equal(allowed.status, 200);
       assert.equal(allowedPayload.status, "unavailable");
       assert.equal(allowedPayload.redis.status, "unavailable");
@@ -126,6 +171,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.deepEqual(allowedPayload.queues, []);
     } finally {
       await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 
@@ -156,7 +202,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const creatorCookie = await login(server.origin, "13800138000");
-      const adminCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
       const body = {
         queueName: "generation-submit-video",
         jobId: "generation.video.submit:task-1",
@@ -204,11 +250,13 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
       const replayPayload = await replay.json();
       const audit = await db.query<{ event_type: string; reason: string | null; metadata_json: Record<string, unknown> }>(
-        "SELECT event_type, reason, metadata_json FROM audit_events WHERE event_type = 'ops.generation_queue_job_operated'",
+        "SELECT event_type, reason, metadata_json FROM audit_events WHERE event_type = 'admin.ops.generation_queue_job_operated'",
       );
 
-      assert.equal(forbidden.status, 403);
-      assert.deepEqual(forbiddenPayload, { error: "ops_forbidden" });
+      assert.equal(forbidden.status, 401);
+      assert.deepEqual(forbiddenPayload, {
+        error: { code: "admin_unauthenticated", message: "admin session expired" },
+      });
       assert.equal(missingIdempotency.status, 400);
       assert.deepEqual(missingIdempotencyPayload, { error: "idempotency_key_required" });
       assert.equal(operated.status, 200);
@@ -231,7 +279,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       });
       assert.deepEqual(audit.rows, [
         {
-          event_type: "ops.generation_queue_job_operated",
+          event_type: "admin.ops.generation_queue_job_operated",
           reason: "Seedance worker recovered.",
           metadata_json: {
             queueName: "generation-submit-video",
@@ -241,6 +289,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
             previousState: "failed",
             attemptsMade: 3,
             failedReason: "provider timeout",
+            actorAdminAccountId: audit.rows[0]?.metadata_json.actorAdminAccountId,
           },
         },
       ]);
@@ -256,14 +305,15 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const creatorCookie = await login(server.origin, "13800138000");
-      const adminCookie = await login(server.origin, "13800138001");
+      const ownerCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "idempotency-key": "http-finalize-retry-project",
-          cookie: adminCookie,
+          cookie: ownerCookie,
         },
         body: JSON.stringify({
           name: "HTTP finalize retries",
@@ -279,7 +329,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            cookie: adminCookie,
+            cookie: ownerCookie,
           },
           body: JSON.stringify({ title: "Finalize Retry Episode" }),
         },
@@ -287,13 +337,13 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       const episodeId = (await episodeResponse.json()).data.episode.id;
       const uploadTask = await createImageGenerationTask(
         server.origin,
-        adminCookie,
+        ownerCookie,
         episodeId,
         "http-finalize-retry-upload-task",
       );
       const persistTask = await createImageGenerationTask(
         server.origin,
-        adminCookie,
+        ownerCookie,
         episodeId,
         "http-finalize-retry-persist-task",
       );
@@ -380,7 +430,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         `,
       );
 
-      assert.equal(forbidden.status, 403);
+      assert.equal(forbidden.status, 401);
       assert.equal(missingIdempotency.status, 400);
       assert.equal(retriedFinalize.status, 200);
       assert.equal(retriedFinalizePayload.task.id, uploadTask.taskId);
@@ -418,14 +468,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
   });
 
   it("exposes billing payment risk routes for C10 admin ops review", async () => {
-    const server = createPhoneAuthDevServer();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
-      const adminCookie = await login(server.origin, "13800138001");
+      const ownerCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
 
       const packagesResponse = await fetch(`${server.origin}/api/billing/packages`, {
-        headers: { cookie: adminCookie },
+        headers: { cookie: ownerCookie },
       });
       const packages = await packagesResponse.json();
       const packageId = packages.packages[0].id;
@@ -435,7 +487,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: {
           "content-type": "application/json",
           "idempotency-key": "http-order-risk",
-          cookie: adminCookie,
+          cookie: ownerCookie,
         },
         body: JSON.stringify({ creditPackageId: packageId }),
       });
@@ -446,7 +498,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: {
           "content-type": "application/json",
           "idempotency-key": "http-intent-risk",
-          cookie: adminCookie,
+          cookie: ownerCookie,
         },
         body: JSON.stringify({
           orderId: order.order.id,
@@ -548,18 +600,21 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.deepEqual(missingRepair, { error: "payment_issue_not_found" });
     } finally {
       await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 
   it("exposes refund callbacks that require manual payment review", async () => {
-    const server = createPhoneAuthDevServer();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
-      const adminCookie = await login(server.origin, "13800138001");
+      const ownerCookie = await login(server.origin, "13800138001");
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
 
       const packagesResponse = await fetch(`${server.origin}/api/billing/packages`, {
-        headers: { cookie: adminCookie },
+        headers: { cookie: ownerCookie },
       });
       const packages = await packagesResponse.json();
       const packageId = packages.packages[0].id;
@@ -569,7 +624,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: {
           "content-type": "application/json",
           "idempotency-key": "http-order-refund-review",
-          cookie: adminCookie,
+          cookie: ownerCookie,
         },
         body: JSON.stringify({ creditPackageId: packageId }),
       });
@@ -580,7 +635,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: {
           "content-type": "application/json",
           "idempotency-key": "http-intent-refund-review",
-          cookie: adminCookie,
+          cookie: ownerCookie,
         },
         body: JSON.stringify({
           orderId: order.order.id,
@@ -632,6 +687,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       );
     } finally {
       await server.close();
+      await db.close().catch(() => undefined);
     }
   });
 });
@@ -727,4 +783,47 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
+}
+
+async function loginBackendAdmin(
+  origin: string,
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  role: string,
+) {
+  const loginName = `ops_admin_${randomUUID().slice(0, 8)}`;
+  const password = `Ops-${randomUUID()}-Pwd`;
+  await db.query(
+    `
+      INSERT INTO admin_accounts (
+        id, login_name, password_hash, display_name, status
+      ) VALUES (
+        $1,
+        $2,
+        'plain:' || $3,
+        'Ops Admin',
+        'active'
+      )
+    `,
+    [randomUUID(), loginName, password],
+  );
+  await db.query(
+    `
+      INSERT INTO admin_account_roles (
+        id, admin_account_id, role_code
+      )
+      SELECT $1, id, $3
+      FROM admin_accounts
+      WHERE login_name = $2
+    `,
+    [randomUUID(), loginName, role],
+  );
+
+  const loginResponse = await fetch(`${origin}/api/admin/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ loginName, password }),
+  });
+
+  assert.equal(loginResponse.status, 200);
+  return loginResponse.headers.get("set-cookie") ?? "";
 }

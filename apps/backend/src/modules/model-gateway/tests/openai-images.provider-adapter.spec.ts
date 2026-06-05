@@ -272,4 +272,21 @@ describe("openai images provider adapter", () => {
       /provider_api_key_missing/,
     );
   });
+
+  it("accepts hyphenated OpenAI image provider protocol aliases", () => {
+    assert.doesNotThrow(() => {
+      createProviderAdapterFromModelConfig(
+        {
+          providerProtocol: "openai-images",
+          providerModel: "gpt-image-2",
+          providerConfig: {
+            baseURL: "https://relay.example.com",
+            endpoint: "/v1/images/generations",
+            apiKeyEnv: "GPT_IMAGE2_API_KEY",
+          },
+        },
+        { GPT_IMAGE2_API_KEY: "relay-key" },
+      );
+    });
+  });
 });

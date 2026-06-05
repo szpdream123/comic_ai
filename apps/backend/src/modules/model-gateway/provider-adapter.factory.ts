@@ -50,7 +50,7 @@ export function createProviderAdapterFromModelConfig(
   env: NodeJS.ProcessEnv = process.env,
   fetchImpl?: typeof fetch,
 ): ProviderAdapter {
-  const providerProtocol = modelConfig.providerProtocol.trim();
+  const providerProtocol = modelConfig.providerProtocol.trim().replaceAll("-", "_");
   const providerConfig = modelConfig.providerConfig ?? {};
 
   if (providerProtocol === "openai_images") {

@@ -1,0 +1,2798 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>后台管理</title>
+    <style>
+      :root {
+        --navy: #12243d;
+        --navy-2: #1b3559;
+        --bg: #eef4f9;
+        --panel: #ffffff;
+        --line: #d9e3ee;
+        --text: #1f2d3d;
+        --muted: #6b7c90;
+        --primary: #246bfe;
+        --primary-soft: #e8f0ff;
+        --danger: #d92d20;
+        --warning: #b7791f;
+        --success: #15803d;
+        --radius: 8px;
+        font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      button, input, select, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .hidden { display: none !important; }
+
+      .login-page {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.72), rgba(238,244,249,.9)),
+          var(--bg);
+      }
+      .login-card {
+        width: min(420px, 100%);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 32px;
+        box-shadow: 0 20px 50px rgba(18, 36, 61, .12);
+      }
+      .login-card h1 { margin: 0 0 8px; font-size: 26px; }
+      .login-card p { margin: 0 0 28px; color: var(--muted); }
+      .field { display: grid; gap: 8px; margin-bottom: 16px; }
+      .field label { font-size: 13px; color: #30445f; font-weight: 600; }
+      .field input, .field select, .field textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: #fff;
+        outline: none;
+      }
+      .field input:focus, .field select:focus, .field textarea:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-soft);
+      }
+      .btn {
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 9px 12px;
+        background: #f7f9fc;
+        color: var(--text);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 36px;
+      }
+      .btn.primary { background: var(--primary); color: #fff; }
+      .btn.danger { color: var(--danger); background: #fff5f5; border-color: #ffd0d0; }
+      .btn.ghost { background: transparent; border-color: var(--line); }
+      .btn.full { width: 100%; }
+      .btn[disabled] { opacity: .58; cursor: not-allowed; }
+      .error-text { color: var(--danger); font-size: 13px; min-height: 18px; }
+      .toast-message {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 12;
+        max-width: min(360px, calc(100vw - 36px));
+        padding: 12px 14px;
+        border: 1px solid #bde8c8;
+        border-radius: 8px;
+        background: #f0fff4;
+        color: var(--success);
+        box-shadow: 0 18px 40px rgba(18, 36, 61, .14);
+      }
+
+      .admin-shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 236px minmax(0, 1fr);
+      }
+      .sidebar {
+        background: var(--navy);
+        color: #dce8f7;
+        padding: 18px 14px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .brand {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+        font-weight: 700;
+        color: #fff;
+      }
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        background: var(--primary);
+        display: grid;
+        place-items: center;
+      }
+      .nav { margin-top: 18px; display: grid; gap: 4px; }
+      .nav button {
+        width: 100%;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #dce8f7;
+        text-align: left;
+        padding: 11px 12px;
+      }
+      .nav button.active, .nav button:hover {
+        background: var(--navy-2);
+        color: #fff;
+      }
+      .main { min-width: 0; display: grid; grid-template-rows: 60px minmax(0, 1fr); }
+      .topbar {
+        background: rgba(255,255,255,.88);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 22px;
+        position: sticky;
+        top: 0;
+        z-index: 3;
+      }
+      .topbar h2 { margin: 0; font-size: 18px; }
+      .account-menu { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+      .content { padding: 20px; min-width: 0; }
+      .page-grid { min-width: 0; }
+      .state-panel {
+        min-height: 260px;
+        display: grid;
+        place-items: center;
+        gap: 8px;
+        text-align: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        color: var(--muted);
+      }
+      .state-panel strong { color: var(--text); font-size: 16px; }
+      .state-panel[data-state="forbidden"] { border-color: #ffd0d0; background: #fffafa; }
+
+      .grid { display: grid; gap: 14px; }
+      .cards { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px;
+      }
+      .metric-label { color: var(--muted); font-size: 13px; }
+      .metric-value { font-size: 26px; margin-top: 8px; font-weight: 700; }
+      .metric-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+      .trend-bars {
+        height: 156px;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(54px, 1fr));
+        gap: 10px;
+        align-items: end;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f8fbff;
+        padding: 12px;
+      }
+      .trend-bar {
+        min-width: 0;
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 5px;
+        align-items: end;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .trend-bar span,
+      .trend-bar em {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .trend-bar em {
+        color: var(--text);
+        font-style: normal;
+        font-weight: 700;
+      }
+      .trend-bar i { justify-self: start; font-style: normal; }
+      .trend-bar b {
+        display: block;
+        width: 100%;
+        min-height: 18px;
+        border-radius: 6px 6px 3px 3px;
+        background: linear-gradient(180deg, #246bfe, #8fb5ff);
+      }
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+      .toolbar input, .toolbar select {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        min-height: 36px;
+      }
+      .table-wrap {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: auto;
+        max-width: 100%;
+      }
+      table {
+        width: 100%;
+        min-width: 980px;
+        border-collapse: collapse;
+        font-size: 13px;
+        table-layout: fixed;
+      }
+      .table-wrap.compact table { min-width: 760px; font-size: 12px; }
+      .table-wrap.dense table { min-width: 900px; font-size: 12px; }
+      .table-wrap.models table { min-width: 1040px; }
+      .table-wrap.users table { min-width: 980px; }
+      .table-wrap.settings table { min-width: 820px; }
+      th, td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: middle;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .table-wrap.compact th,
+      .table-wrap.compact td,
+      .table-wrap.dense th,
+      .table-wrap.dense td { padding: 9px 10px; }
+      td .metric-note { overflow-wrap: anywhere; white-space: normal; }
+      th { background: #f6f9fd; color: #415672; font-weight: 700; }
+      td.actions, th.actions {
+        position: sticky;
+        right: 0;
+        background: #fff;
+        box-shadow: -8px 0 12px rgba(18, 36, 61, .05);
+        width: 164px;
+        min-width: 164px;
+        max-width: 164px;
+        overflow: visible;
+      }
+      .table-wrap.compact td.actions,
+      .table-wrap.compact th.actions { width: 84px; min-width: 84px; max-width: 84px; }
+      .table-wrap.dense td.actions,
+      .table-wrap.dense th.actions { width: 132px; min-width: 132px; max-width: 132px; }
+      .table-wrap.users td.actions,
+      .table-wrap.users th.actions { width: 184px; min-width: 184px; max-width: 184px; }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        border-radius: 999px;
+        padding: 2px 8px;
+        background: #eef3f8;
+        color: #3c526e;
+        font-size: 12px;
+      }
+      .tag.green { background: #e9f8ef; color: var(--success); }
+      .tag.blue { background: var(--primary-soft); color: var(--primary); }
+      .tag.warn { background: #fff5df; color: var(--warning); }
+      .actions-row { display: flex; gap: 6px; flex-wrap: nowrap; }
+      .table-wrap.dense .actions-row { gap: 4px; }
+      .icon-btn {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+      .table-wrap.users .icon-btn {
+        width: 22px;
+        height: 28px;
+        font-size: 12px;
+      }
+      .btn:disabled,
+      .icon-btn:disabled {
+        cursor: not-allowed;
+        opacity: .45;
+        filter: grayscale(.18);
+      }
+      .workbench {
+        display: grid;
+        grid-template-columns: 176px minmax(0, 1fr) minmax(220px, 248px);
+        gap: 14px;
+        align-items: start;
+      }
+      .workbench > * { min-width: 0; }
+      .workbench-aside { position: sticky; top: 76px; }
+      .anchor-list { display: grid; gap: 6px; }
+      .anchor-list a {
+        color: #405875;
+        text-decoration: none;
+        padding: 8px 10px;
+        border-radius: 6px;
+      }
+      .anchor-list a.active, .anchor-list a:hover { background: var(--primary-soft); color: var(--primary); }
+      .section { display: grid; gap: 14px; }
+      .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
+      .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
+      .json-box {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #0f172a;
+        color: #dbeafe;
+        padding: 12px;
+        min-height: 110px;
+        overflow: auto;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .check-list { display: grid; gap: 8px; }
+      .check-list div { display: flex; justify-content: space-between; gap: 12px; }
+      .check-list span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+      .drawer {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .32);
+        display: grid;
+        justify-items: end;
+        z-index: 10;
+      }
+      .drawer-panel {
+        width: min(460px, 100%);
+        background: #fff;
+        min-height: 100vh;
+        max-height: 100vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 20px;
+        box-shadow: -20px 0 50px rgba(15, 23, 42, .18);
+      }
+      .drawer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+      .drawer-head h3 { margin: 0; }
+      .deerflow-signature {
+        position: fixed;
+        right: 14px;
+        bottom: 10px;
+        z-index: 2;
+        color: rgba(64, 88, 117, .52);
+        text-decoration: none;
+        font-size: 11px;
+        letter-spacing: 0;
+        background: rgba(255,255,255,.72);
+        border: 1px solid rgba(217, 227, 238, .8);
+        border-radius: 6px;
+        padding: 4px 7px;
+        backdrop-filter: blur(8px);
+      }
+      .deerflow-signature:hover,
+      .deerflow-signature:focus {
+        color: var(--primary);
+        border-color: var(--primary-soft);
+      }
+
+      @media (max-width: 1100px) {
+        .admin-shell { grid-template-columns: 72px minmax(0, 1fr); }
+        .brand span, .nav span { display: none; }
+        .cards { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+        .workbench { grid-template-columns: minmax(0, 1fr); }
+        .workbench-aside { position: static; }
+        .anchor-list {
+          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        }
+        .form-grid { grid-template-columns: 1fr; }
+      }
+
+      @media (max-width: 920px) {
+        .content > .grid {
+          grid-template-columns: minmax(0, 1fr) !important;
+        }
+        .trend-bars {
+          grid-template-columns: repeat(5, minmax(42px, 1fr));
+          gap: 6px;
+          padding: 10px;
+        }
+        .topbar {
+          min-height: 72px;
+          height: auto;
+          align-items: flex-start;
+          flex-direction: column;
+          justify-content: center;
+          gap: 8px;
+          padding: 10px 14px;
+        }
+        .account-menu {
+          width: 100%;
+          flex-wrap: wrap;
+          justify-content: flex-start;
+        }
+        .toolbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .toolbar .filters,
+        .toolbar .filters input,
+        .toolbar .filters select,
+        .toolbar > .btn {
+          width: 100%;
+        }
+        .actions-row {
+          justify-content: flex-end;
+        }
+        table { min-width: 820px; }
+        .table-wrap.models table,
+        .table-wrap.users table,
+        .table-wrap.settings table { min-width: 820px; }
+        td.actions, th.actions { width: 132px; min-width: 132px; max-width: 132px; }
+        .table-wrap.dense td.actions,
+        .table-wrap.dense th.actions { width: 120px; min-width: 120px; max-width: 120px; }
+      }
+
+      @media (max-width: 560px) {
+        .admin-shell { grid-template-columns: 56px minmax(0, 1fr); }
+        .sidebar { padding: 12px 8px; }
+        .brand { padding: 0; justify-content: center; }
+        .nav button { padding: 10px 8px; text-align: center; }
+        .content { padding: 12px; }
+        .cards { grid-template-columns: 1fr; }
+        .login-card { padding: 24px; }
+        .drawer-panel {
+          width: 100%;
+          padding: 16px;
+        }
+        .deerflow-signature { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="admin-app"></div>
+    <a class="deerflow-signature" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a>
+    <script>
+      const pages = {
+        dashboard: "运营总览",
+        models: "模型配置",
+        "model-workbench": "模型参数详情",
+        users: "用户与积分",
+        risks: "风控与审计",
+        settings: "系统设置",
+        account: "管理员账户",
+      };
+
+      const state = {
+        session: null,
+        page: "dashboard",
+        models: [],
+        selectedModelId: null,
+        modelLoadError: "",
+        users: [],
+        teamPermissionAccounts: [],
+        userLoadError: "",
+        teamPermissionLoadError: "",
+        settings: { configs: [], secretReferences: [] },
+        adminAccounts: [],
+        settingsLoadError: "",
+        risks: { risks: [], taskExceptions: [], paymentIssues: [] },
+        auditEvents: [],
+        riskLoadError: "",
+        riskStatusFilter: "all",
+        dashboard: {
+          metrics: {
+            generationCountToday: 0,
+            generationSuccessRate: 0,
+            creditsConsumedToday: 0,
+            paidOrdersToday: 0,
+            riskPendingCount: 0,
+            failedTaskCount: 0,
+          },
+          modelHealth: [],
+          recentEvents: [],
+        },
+        dashboardLoadError: "",
+        dashboardRefreshNote: "",
+        adminSessions: [],
+        adminSessionLoadError: "",
+        loadingPages: {},
+        forbiddenPages: {},
+      };
+
+      const app = document.getElementById("admin-app");
+
+      function routeFromPath() {
+        const path = location.pathname;
+        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
+        if (path.includes("/models")) return "models";
+        if (path.includes("/users")) return "users";
+        if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
+        if (path.includes("/account")) return "account";
+        return "dashboard";
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          credentials: "include",
+          headers: { "content-type": "application/json", ...(options.headers || {}) },
+          ...options,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw Object.assign(new Error(payload.error?.message || "请求失败"), { payload, status: response.status });
+        return payload;
+      }
+
+      function hasPermission(permission) {
+        const permissions = state.session?.permissions || [];
+        return permissions.includes(permission);
+      }
+
+      function permissionAttrs(permission) {
+        if (hasPermission(permission)) {
+          return `data-required-permission="${permission}"`;
+        }
+        return `data-required-permission="${permission}" disabled aria-disabled="true" title="无权限执行该操作"`;
+      }
+
+      function setPageLoading(page, loading) {
+        state.loadingPages[page] = Boolean(loading);
+      }
+
+      function setPageForbidden(page, error) {
+        const code = error?.payload?.error?.code;
+        if (code === "admin_forbidden" || error?.status === 403) {
+          state.forbiddenPages[page] = error.payload?.error?.message || "无权限访问该页面";
+          return true;
+        }
+        delete state.forbiddenPages[page];
+        return false;
+      }
+
+      function clearPageForbidden(page) {
+        delete state.forbiddenPages[page];
+      }
+
+      function renderPageState(page) {
+        if (state.loadingPages[page]) {
+          return `<section class="state-panel" data-state="loading"><strong>正在加载后台数据</strong><span>${pages[page] || "后台页面"}</span></section>`;
+        }
+        if (state.forbiddenPages[page]) {
+          return `<section class="state-panel" data-state="forbidden"><strong>无权限访问该页面</strong><span>${state.forbiddenPages[page]}</span></section>`;
+        }
+        return "";
+      }
+
+      function setSubmitting(form, submitting, submittingText = "正在提交") {
+        form.setAttribute("data-submitting", submitting ? "true" : "false");
+        form.querySelectorAll("button").forEach((button) => {
+          if (submitting) {
+            button.disabled = true;
+            button.dataset.originalText = button.dataset.originalText || button.textContent;
+            button.textContent = submittingText;
+          } else if (button.dataset.originalText) {
+            button.disabled = false;
+            button.textContent = button.dataset.originalText;
+          } else {
+            button.disabled = false;
+          }
+        });
+      }
+
+      function showToast(message = "操作成功") {
+        const toast = document.getElementById("toast");
+        if (!toast) return;
+        toast.textContent = message || "操作成功";
+        toast.classList.remove("hidden");
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => toast.classList.add("hidden"), 2400);
+      }
+
+      async function runAdminMutation(form, errorElement, action, successMessage = "操作成功") {
+        if (form.dataset.submitting === "true") return;
+        errorElement.textContent = "";
+        setSubmitting(form, true);
+        try {
+          const result = await action();
+          showToast(successMessage || "操作成功");
+          return result;
+        } catch (err) {
+          errorElement.textContent = err.payload?.error?.message || err.message || "操作失败";
+          throw err;
+        } finally {
+          setSubmitting(form, false);
+        }
+      }
+
+      async function bootstrap() {
+        if (location.pathname === "/admin/login") {
+          await bootstrapAdminLoginRoute();
+          return;
+        }
+        try {
+          app.innerHTML = `<main class="content"><section class="state-panel" data-state="loading"><strong>正在加载后台数据</strong><span>正在校验后台登录态</span></section></main>`;
+          const me = await api("/api/admin/auth/me");
+          state.session = me.data;
+          state.page = routeFromPath();
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          renderShell();
+        } catch {
+          history.replaceState(null, "", "/admin/login");
+          renderLogin("后台登录已过期，请重新登录");
+        }
+      }
+
+      async function bootstrapAdminLoginRoute() {
+        app.innerHTML = `<main class="content"><section class="state-panel" data-state="loading"><strong>正在加载后台数据</strong><span>正在校验后台登录态</span></section></main>`;
+        try {
+          const me = await api("/api/admin/auth/me");
+          state.session = me.data;
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          history.replaceState(null, "", "/admin/dashboard");
+          state.page = "dashboard";
+          renderShell();
+        } catch {
+          renderLogin();
+        }
+      }
+
+      function renderLogin(message = "") {
+        app.innerHTML = `
+          <main class="login-page">
+            <section class="login-card">
+              <h1>后台管理</h1>
+              <p>请输入管理员账号进入运营后台</p>
+              <form id="login-form">
+                <div class="field">
+                  <label for="login-name">账号</label>
+                  <input id="login-name" name="loginName" autocomplete="username" required />
+                </div>
+                <div class="field">
+                  <label for="login-password">密码</label>
+                  <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+                </div>
+                <div class="error-text" id="login-error">${message}</div>
+                <button class="btn primary full" type="submit">登录</button>
+              </form>
+            </section>
+          </main>
+        `;
+        document.getElementById("login-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("login-error");
+          error.textContent = "";
+          setSubmitting(event.currentTarget, true, "正在登录");
+          try {
+            const result = await api("/api/admin/auth/login", {
+              method: "POST",
+              body: JSON.stringify({
+                loginName: form.get("loginName"),
+                password: form.get("password"),
+              }),
+            });
+            state.session = result.data;
+            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+            history.replaceState(null, "", "/admin/dashboard");
+            state.page = "dashboard";
+            renderShell();
+          } catch (err) {
+            error.textContent = err.payload?.error?.code === "admin_account_locked"
+              ? "账号已临时锁定，请稍后再试"
+              : err.payload?.error?.message || "登录失败";
+          } finally {
+            setSubmitting(event.currentTarget, false);
+          }
+        });
+      }
+
+      function renderShell() {
+        app.innerHTML = `
+          <div class="admin-shell">
+            <aside class="sidebar">
+              <div class="brand"><div class="brand-mark">管</div><span>后台管理</span></div>
+              <nav class="nav">
+                ${navButton("dashboard", "总览")}
+                ${navButton("models", "模型配置")}
+                ${navButton("model-workbench", "参数详情")}
+                ${navButton("users", "用户积分")}
+                ${navButton("risks", "风控审计")}
+                ${navButton("settings", "系统设置")}
+              </nav>
+            </aside>
+            <section class="main">
+              <header class="topbar">
+                <h2>${pages[state.page]}</h2>
+                <div class="account-menu">
+                  <span>${state.session?.account?.displayName || "管理员"}</span>
+                  <button class="btn ghost" data-page="account">账户</button>
+                  <button class="btn ghost" id="logout-btn">退出</button>
+                </div>
+              </header>
+              <main class="content">${renderPage()}</main>
+            </section>
+          </div>
+          <div id="drawer" class="drawer hidden"></div>
+          <div id="toast" class="toast-message hidden" role="status" aria-live="polite"></div>
+        `;
+        document.querySelectorAll("[data-page]").forEach((button) => {
+          button.addEventListener("click", () => navigate(button.dataset.page));
+        });
+        document.getElementById("logout-btn").addEventListener("click", logout);
+      }
+
+      async function loadModels() {
+        setPageLoading("models", true);
+        setPageLoading("model-workbench", true);
+        try {
+          const result = await api("/api/admin/models?pageSize=100");
+          state.models = result.data || [];
+          state.selectedModelId = state.selectedModelId || state.models[0]?.id || null;
+          state.modelLoadError = "";
+          clearPageForbidden("models");
+          clearPageForbidden("model-workbench");
+        } catch (error) {
+          setPageForbidden("models", error);
+          setPageForbidden("model-workbench", error);
+          state.modelLoadError = error.payload?.error?.message || "模型配置加载失败";
+          state.models = [];
+        } finally {
+          setPageLoading("models", false);
+          setPageLoading("model-workbench", false);
+        }
+      }
+
+      async function loadUsers() {
+        setPageLoading("users", true);
+        try {
+          const result = await api("/api/admin/users?pageSize=100");
+          state.users = result.data || [];
+          state.userLoadError = "";
+          clearPageForbidden("users");
+        } catch (error) {
+          setPageForbidden("users", error);
+          state.userLoadError = error.payload?.error?.message || "用户列表加载失败";
+          state.users = [];
+        } finally {
+          setPageLoading("users", false);
+        }
+      }
+
+      async function loadTeamPermissionAccounts() {
+        setPageLoading("users", true);
+        try {
+          const result = await api("/api/admin/team-permission-accounts?pageSize=100");
+          state.teamPermissionAccounts = result.data || [];
+          state.teamPermissionLoadError = "";
+          clearPageForbidden("users");
+        } catch (error) {
+          setPageForbidden("users", error);
+          state.teamPermissionLoadError = error.payload?.error?.message || "团队权限账户加载失败";
+          state.teamPermissionAccounts = [];
+        } finally {
+          setPageLoading("users", false);
+        }
+      }
+
+      async function loadSettings() {
+        setPageLoading("settings", true);
+        try {
+          const [settingsResult, accountsResult] = await Promise.all([
+            api("/api/admin/settings"),
+            api("/api/admin/admin-accounts"),
+          ]);
+          state.settings = settingsResult.data || { configs: [], secretReferences: [] };
+          state.adminAccounts = accountsResult.data || [];
+          state.settingsLoadError = "";
+          clearPageForbidden("settings");
+        } catch (error) {
+          setPageForbidden("settings", error);
+          state.settingsLoadError = error.payload?.error?.message || "系统设置加载失败";
+          state.settings = { configs: [], secretReferences: [] };
+          state.adminAccounts = [];
+        } finally {
+          setPageLoading("settings", false);
+        }
+      }
+
+      async function loadRiskAudit() {
+        setPageLoading("risks", true);
+        try {
+          const riskStatus = state.riskStatusFilter && state.riskStatusFilter !== "all"
+            ? `&riskStatus=${encodeURIComponent(state.riskStatusFilter)}`
+            : "";
+          const [risksResult, auditResult] = await Promise.all([
+            api(`/api/admin/risks?pageSize=50${riskStatus}`),
+            api("/api/admin/audit-events?pageSize=50"),
+          ]);
+          state.risks = risksResult.data || { risks: [], taskExceptions: [], paymentIssues: [] };
+          state.auditEvents = auditResult.data || [];
+          state.riskLoadError = "";
+          clearPageForbidden("risks");
+        } catch (error) {
+          setPageForbidden("risks", error);
+          state.riskLoadError = error.payload?.error?.message || "风控审计加载失败";
+          state.risks = { risks: [], taskExceptions: [], paymentIssues: [] };
+          state.auditEvents = [];
+        } finally {
+          setPageLoading("risks", false);
+        }
+      }
+
+      async function loadDashboard() {
+        setPageLoading("dashboard", true);
+        try {
+          const result = await api("/api/admin/dashboard/overview");
+          state.dashboard = result.data || state.dashboard;
+          state.dashboardLoadError = "";
+          state.dashboardRefreshNote = `总览已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+          clearPageForbidden("dashboard");
+        } catch (error) {
+          setPageForbidden("dashboard", error);
+          state.dashboardLoadError = error.payload?.error?.message || "运营总览加载失败";
+          state.dashboardRefreshNote = "总览刷新失败";
+        } finally {
+          setPageLoading("dashboard", false);
+        }
+      }
+
+      async function loadDashboardModelHealth() {
+        try {
+          const result = await api("/api/admin/dashboard/model-health");
+          state.dashboard.modelHealth = result.data || [];
+          state.dashboardLoadError = "";
+          state.dashboardRefreshNote = `模型健康已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+        } catch (error) {
+          state.dashboardLoadError = error.payload?.error?.message || "模型健康加载失败";
+          state.dashboard.modelHealth = [];
+          state.dashboardRefreshNote = "模型健康刷新失败";
+        }
+      }
+
+      async function loadDashboardRecentEvents() {
+        try {
+          const result = await api("/api/admin/dashboard/recent-events");
+          state.dashboard.recentEvents = result.data || [];
+          state.dashboardLoadError = "";
+          state.dashboardRefreshNote = `最近事件已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+        } catch (error) {
+          state.dashboardLoadError = error.payload?.error?.message || "最近事件加载失败";
+          state.dashboard.recentEvents = [];
+          state.dashboardRefreshNote = "最近事件刷新失败";
+        }
+      }
+
+      async function loadAdminSessions() {
+        setPageLoading("account", true);
+        try {
+          const result = await api("/api/admin/auth/sessions");
+          state.adminSessions = result.data || [];
+          state.adminSessionLoadError = "";
+          clearPageForbidden("account");
+        } catch (error) {
+          setPageForbidden("account", error);
+          state.adminSessionLoadError = error.payload?.error?.message || "会话列表加载失败";
+          state.adminSessions = [];
+        } finally {
+          setPageLoading("account", false);
+        }
+      }
+
+      function navButton(page, label) {
+        return `<button class="${state.page === page ? "active" : ""}" data-page="${page}"><span>${label}</span></button>`;
+      }
+
+      function navigate(page) {
+        state.page = page;
+        const pathMap = {
+          dashboard: "/admin/dashboard",
+          models: "/admin/models",
+          "model-workbench": "/admin/models/new",
+          users: "/admin/users",
+          risks: "/admin/risks",
+          settings: "/admin/settings",
+          account: "/admin/account",
+        };
+        history.pushState(null, "", pathMap[page]);
+        renderShell();
+      }
+
+      async function logout() {
+        await api("/api/admin/auth/logout", { method: "POST", body: "{}" }).catch(() => {});
+        state.session = null;
+        history.replaceState(null, "", "/admin/login");
+        renderLogin();
+      }
+
+      function renderPage() {
+        const pageState = renderPageState(state.page);
+        if (pageState) return pageState;
+        if (state.page === "dashboard") return dashboardPage();
+        if (state.page === "models") return modelsPage();
+        if (state.page === "model-workbench") return modelWorkbenchPage();
+        if (state.page === "users") return usersPage();
+        if (state.page === "risks") return risksPage();
+        if (state.page === "settings") return settingsPage();
+        return accountPage();
+      }
+
+      function dashboardPage() {
+        const metrics = state.dashboard.metrics;
+        return `
+          <div class="grid cards">
+            ${metric("今日生成", Number(metrics.generationCountToday || 0).toLocaleString(), `成功率 ${percent(metrics.generationSuccessRate)}`)}
+            ${metric("消耗积分", Number(metrics.creditsConsumedToday || 0).toLocaleString(), "今日账本消耗")}
+            ${metric("支付订单", Number(metrics.paidOrdersToday || 0).toLocaleString(), "今日已支付订单")}
+            ${metric("风险待处理", Number(metrics.riskPendingCount || 0).toLocaleString(), `失败任务 ${Number(metrics.failedTaskCount || 0).toLocaleString()}`)}
+          </div>
+          <div class="grid" style="grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); margin-top:14px;">
+            <section class="card">
+              <div class="toolbar">
+                <h3>总览趋势</h3>
+                <button class="btn ghost" onclick="loadDashboard().then(renderShell)">刷新总览</button>
+              </div>
+              ${dashboardTrendHtml(metrics)}
+              <div class="metric-note">${state.dashboardRefreshNote || "总览尚未单独刷新"}</div>
+            </section>
+            <section class="card"><h3>快捷处理</h3><div class="grid">
+              <button class="btn ghost" data-page="models">进入模型配置</button>
+              <button class="btn ghost" data-page="users">用户积分处理</button>
+              <button class="btn ghost" data-page="risks">查看风险审计</button>
+            </div></section>
+          </div>
+          <div class="grid" style="grid-template-columns: 1.3fr .7fr; margin-top:14px;">
+            <section class="card"><div class="toolbar"><h3>模型健康</h3><button class="btn ghost" onclick="loadDashboardModelHealth().then(renderShell)">刷新</button></div>${healthRows()}</section>
+            <section class="card"><h3>刷新状态</h3><div class="grid">
+              <button class="btn ghost" onclick="loadDashboardModelHealth().then(renderShell)">刷新模型健康</button>
+              <button class="btn ghost" onclick="loadDashboardRecentEvents().then(renderShell)">刷新最近事件</button>
+              <div class="metric-note">${state.dashboardRefreshNote || "暂无局部刷新记录"}</div>
+            </div></section>
+          </div>
+          <section class="card" style="margin-top:14px;"><div class="toolbar"><h3>最近后台事件</h3><button class="btn ghost" onclick="loadDashboardRecentEvents().then(renderShell)">刷新</button></div>${recentEventRows()}</section>
+        `;
+      }
+
+      function metric(label, value, note) {
+        return `<section class="card"><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></section>`;
+      }
+
+      function dashboardTrendHtml(metrics) {
+        const series = [
+          { label: "生成", value: Number(metrics.generationCountToday || 0), tone: "blue" },
+          { label: "积分", value: Number(metrics.creditsConsumedToday || 0), tone: "green" },
+          { label: "订单", value: Number(metrics.paidOrdersToday || 0), tone: "blue" },
+          { label: "风险", value: Number(metrics.riskPendingCount || 0), tone: "warn" },
+          { label: "失败", value: Number(metrics.failedTaskCount || 0), tone: "warn" },
+        ];
+        const max = Math.max(...series.map((item) => item.value), 1);
+        return `<div class="trend-bars">${series.map((item) => {
+          const height = Math.max(18, Math.round((item.value / max) * 100));
+          return `<div class="trend-bar"><span>${item.label}</span><em>${item.value.toLocaleString()}</em><i class="tag ${item.tone}">${height}%</i><b style="height:${height}%"></b></div>`;
+        }).join("")}</div>`;
+      }
+
+      function healthRows() {
+        const rows = state.dashboard.modelHealth.length
+          ? state.dashboard.modelHealth.map((item) => {
+              const needsAttention = item.status !== "active" || Number(item.failedCount || 0) > 0;
+              return `<tr><td>${item.displayName}<div class="metric-note">${item.modelCode}</div></td><td>${item.queueName}</td><td><span class="tag ${needsAttention ? "warn" : "green"}">${needsAttention ? "关注" : "正常"}</span></td><td>${Number(item.queueDepth || 0).toLocaleString()}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openDashboardModelHealthDrawer('${escapeAttribute(item.modelCode)}')">详</button></td></tr>`;
+            }).join("")
+          : `<tr><td colspan="5">${state.dashboardLoadError || "暂无模型健康数据"}</td></tr>`;
+        return `<div class="table-wrap compact"><table><thead><tr><th>模型</th><th>队列</th><th>状态</th><th>积压</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }
+
+      function openDashboardModelHealthDrawer(modelCode) {
+        const item = state.dashboard.modelHealth.find((entry) => String(entry.modelCode) === String(modelCode));
+        if (!item) return;
+        const queueDepth = Number(item.queueDepth || 0);
+        const failedCount = Number(item.failedCount || 0);
+        const needsAttention = item.status !== "active" || failedCount > 0;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(680px,100%);">
+          <div class="drawer-head"><h3>模型健康详情</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <section class="card">
+            <h4>运行状态</h4>
+            <div class="check-list">
+              <div><span>模型</span><span>${escapeHtml(item.displayName || "-")}</span></div>
+              <div><span>模型编码</span><span>${escapeHtml(item.modelCode || "-")}</span></div>
+              <div><span>状态</span><span class="tag ${needsAttention ? "warn" : "green"}">${needsAttention ? "需要关注" : "正常"}</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h4>队列指标</h4>
+            <div class="check-list">
+              <div><span>队列名称</span><span>${escapeHtml(item.queueName || "-")}</span></div>
+              <div><span>积压任务</span><span>${queueDepth.toLocaleString()}</span></div>
+              <div><span>失败任务</span><span>${failedCount.toLocaleString()}</span></div>
+            </div>
+          </section>
+          <div class="grid" style="grid-template-columns:1fr 1fr;">
+            <button class="btn primary full" onclick="navigate('models')">进入模型配置</button>
+            <button class="btn ghost full" onclick="navigate('risks')">进入风控审计</button>
+          </div>
+        </aside>`;
+      }
+
+      function recentEventRows() {
+        const rows = state.dashboard.recentEvents.length
+          ? state.dashboard.recentEvents.map((event) => `<tr><td>${event.type}</td><td>${event.targetType}</td><td>${event.reason || "-"}</td><td>${new Date(event.createdAt).toLocaleString("zh-CN")}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openDashboardEventDrawer('${escapeAttribute(event.id)}')">详</button></td></tr>`).join("")
+          : `<tr><td colspan="5">${state.dashboardLoadError || "暂无后台事件"}</td></tr>`;
+        return `<div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }
+
+      function dashboardEventDestination(event) {
+        const eventType = String(event.type || event.eventType || "");
+        const targetType = String(event.targetType || "");
+        if (targetType.includes("ai_model") || eventType.includes(".model.")) {
+          return { page: "models", label: "模型配置" };
+        }
+        if (targetType.includes("user") || eventType.includes(".user.") || eventType.includes(".credit.")) {
+          return { page: "users", label: "用户与积分" };
+        }
+        if (targetType.includes("risk") || targetType.includes("payment") || eventType.includes(".risk.") || eventType.includes(".payment.") || eventType.includes(".task.")) {
+          return { page: "risks", label: "风控与审计" };
+        }
+        if (targetType.includes("runtime_config") || targetType.includes("admin_account") || targetType.includes("secret") || eventType.includes(".settings.") || eventType.includes(".secret_") || eventType.includes(".account.")) {
+          return { page: "settings", label: "系统设置" };
+        }
+        return { page: "risks", label: "审计日志" };
+      }
+
+      function openDashboardEventDrawer(eventId) {
+        const event = state.dashboard.recentEvents.find((item) => String(item.id) === String(eventId));
+        if (!event) return;
+        const destination = dashboardEventDestination(event);
+        const metadata = event.metadata || {};
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(680px,100%);">
+          <div class="drawer-head"><h3>仪表盘事件详情</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <section class="card">
+            <h4>事件摘要</h4>
+            <div class="check-list">
+              <div><span>动作</span><span>${escapeHtml(event.type || event.eventType || "-")}</span></div>
+              <div><span>时间</span><span>${event.createdAt ? new Date(event.createdAt).toLocaleString("zh-CN") : "-"}</span></div>
+              <div><span>操作原因</span><span>${escapeHtml(event.reason || "-")}</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h4>目标对象</h4>
+            <div class="check-list">
+              <div><span>targetType</span><span>${escapeHtml(event.targetType || "-")}</span></div>
+              <div><span>targetId</span><span style="word-break:break-all;">${escapeHtml(event.targetId || "-")}</span></div>
+              <div><span>关联页面</span><span class="tag blue">${destination.label}</span></div>
+            </div>
+          </section>
+          <section class="card"><h4>Metadata</h4><div class="json-box">${escapeHtml(JSON.stringify(metadata, null, 2))}</div></section>
+          <button class="btn primary full" onclick="navigate('${destination.page}')">跳转处理</button>
+        </aside>`;
+      }
+
+      function percent(value) {
+        return `${(Number(value || 0) * 100).toFixed(1)}%`;
+      }
+
+      function modelsPage() {
+        const rows = state.models.length
+          ? state.models.map((model) => modelRow(model)).join("")
+          : `<tr><td colspan="9">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
+        return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码 / 供应商" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>供应商</th><th>媒体</th><th>任务模式</th><th>价格摘要</th><th>调度</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
+          ${rows}
+        </tbody></table></div>`;
+      }
+
+      function toolbar(placeholder, cta, page) {
+        return `<div class="toolbar"><div class="filters"><input placeholder="${placeholder}" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" data-page="${page}">${cta}</button></div>`;
+      }
+
+      function modelRow(model) {
+        const price = priceSummary(model.pricing);
+        const dispatch = model.dispatchPolicy
+          ? `RPM ${model.dispatchPolicy.providerRpmLimit} / 并发 ${model.dispatchPolicy.providerConcurrentLimit}`
+          : "待配置";
+        const statusLabel = model.status === "active" ? "启用" : model.status === "disabled" ? "禁用" : "归档";
+        const nextStatus = model.status === "active" ? "disabled" : "active";
+        const nextStatusTitle = model.status === "active" ? "禁用" : "启用";
+        return `<tr><td>${model.modelCode}</td><td>${model.displayName}</td><td>${model.providerName}</td><td>${model.mediaType}</td><td>${model.taskModes.join(" / ")}</td><td>${price}</td><td>${dispatch}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看" onclick="selectModel('${model.id}')">查</button><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
+      }
+
+      function priceSummary(pricing = {}) {
+        if (!pricing || Object.keys(pricing).length === 0) return "待配置";
+        const base = pricing.baseCredits ?? "-";
+        const unit = pricing.unit || "次";
+        return `${base} 起 / ${unit}`;
+      }
+
+      function modelLaunchCheckUi(model) {
+        const checks = [
+          {
+            key: "apiKeyEnv",
+            label: "密钥引用",
+            ok: Boolean(model?.providerConfig?.apiKeyEnv),
+            message: "供应商配置必须填写 apiKeyEnv。",
+          },
+          {
+            key: "endpoint",
+            label: "Endpoint",
+            ok: isValidProviderEndpoint(model?.providerConfig?.endpoint || model?.providerConfig?.createTaskEndpoint),
+            message: "供应商 endpoint 必须是 http/https URL，或以 / 开头的接口路径。",
+          },
+          {
+            key: "queryTaskEndpoint",
+            label: "轮询 Endpoint",
+            ok: model?.invocationMode === "async_polling"
+              ? isValidProviderEndpoint(model?.providerConfig?.queryTaskEndpoint)
+              : true,
+            message: "异步轮询模型必须配置合法 queryTaskEndpoint，用于查询任务结果。",
+          },
+          {
+            key: "parameterSchema",
+            label: "参数校验",
+            ok: Object.keys(model?.parameterSchema || {}).length > 0,
+            message: "模型参数 schema 不能为空。",
+          },
+          {
+            key: "pricing",
+            label: "计费规则",
+            ok: Number(model?.pricing?.baseCredits || 0) > 0,
+            message: "模型定价必须配置大于 0 的 baseCredits。",
+          },
+          {
+            key: "dispatchPolicy",
+            label: "调度策略",
+            ok: Boolean(model?.dispatchPolicy?.submitQueueName),
+            message: "调度策略必须配置提交队列。",
+          },
+        ];
+        return {
+          ok: checks.every((check) => check.ok),
+          checks,
+          failedItems: checks.filter((check) => !check.ok),
+        };
+      }
+
+      function isValidProviderEndpoint(endpoint) {
+        const value = String(endpoint || "").trim();
+        if (!value) return false;
+        if (value.startsWith("/")) return !value.startsWith("//") && !/\s/.test(value);
+        try {
+          const parsed = new URL(value);
+          return ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
+        } catch {
+          return false;
+        }
+      }
+
+      function launchCheckHtml(checks) {
+        return `<div class="check-list">${checks
+          .map((check) => `<div><span>${check.label}</span><span class="tag ${check.ok ? "green" : "warn"}">${check.ok ? "通过" : check.message}</span></div>`)
+          .join("")}</div>`;
+      }
+
+      function renderLaunchCheckFailure(failedItems) {
+        return `上线检查未通过：${failedItems.map((item) => `${item.label || item.key} - ${item.message || "未通过"}`).join("；")}`;
+      }
+
+      function selectModel(id) {
+        state.selectedModelId = id;
+        navigate("model-workbench");
+      }
+
+      function modelWorkbenchPage() {
+        const model = state.models.find((item) => item.id === state.selectedModelId) || state.models[0];
+        if (!model) {
+          return `<section class="card"><h3>模型参数详情</h3><p class="metric-note">${state.modelLoadError || "暂无模型配置，请先新增模型。"}</p></section>`;
+        }
+        const parameterTags = Object.entries(model.parameterSchema || {})
+          .slice(0, 8)
+          .map(([key, value]) => `<span class="tag blue">${key}: ${value.type || value.enum ? "enum" : "json"}</span>`)
+          .join("");
+        const parameterJson = escapeHtml(JSON.stringify(model.parameterSchema || {}, null, 2));
+        const providerJson = escapeHtml(JSON.stringify(model.providerConfig || {}, null, 2));
+        return `<div class="workbench">
+          <section class="card anchor-list"><a class="active">基础信息</a><a>任务模式</a><a>参数编辑器</a><a>参考素材</a><a>模型定价</a><a>请求映射</a><a>调度限流</a></section>
+          <section class="section">
+            <div class="card"><div class="toolbar"><h3>基础信息</h3><button class="btn primary" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>保存配置</button></div><div class="form-grid">${field("模型编码", model.modelCode)}${field("展示名称", model.displayName)}${field("供应商", model.providerName)}${field("真实模型名", model.providerModel)}${field("协议", model.providerProtocol)}${field("调用方式", model.invocationMode)}</div></div>
+            <div class="card"><h3>参数编辑器</h3><div class="toolbar"><div class="filters">${parameterTags || '<span class="tag warn">暂无参数</span>'}</div><button class="btn primary" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>新增参数</button></div><div class="json-box">${parameterJson}</div></div>
+            <div class="card"><h3>模型定价</h3><div class="form-grid">${field("基础积分", model.pricing?.baseCredits ?? "")}${field("计费单位", model.pricing?.unit ?? "")}${field("清晰度倍率", JSON.stringify(model.pricing?.qualityMultipliers || model.pricing?.resolutionMultipliers || {}))}${field("失败退款", JSON.stringify(model.pricing?.failureRefund || {}))}</div></div>
+            <div class="card"><h3>请求映射</h3><div class="json-box">${providerJson}</div></div>
+          </section>
+          <aside class="card workbench-aside"><h3>上线检查</h3><div class="check-list"><div><span>密钥引用</span><span class="tag ${model.providerConfig?.apiKeyEnv ? "green" : "warn"}">${model.providerConfig?.apiKeyEnv || "待配置"}</span></div><div><span>参数校验</span><span class="tag ${Object.keys(model.parameterSchema || {}).length ? "green" : "warn"}">${Object.keys(model.parameterSchema || {}).length ? "通过" : "缺失"}</span></div><div><span>计费规则</span><span class="tag ${model.pricing?.baseCredits ? "green" : "warn"}">${model.pricing?.baseCredits ? "完整" : "待配置"}</span></div><div><span>调度策略</span><span class="tag ${model.dispatchPolicy ? "green" : "warn"}">${model.dispatchPolicy?.submitQueueName || "待配置"}</span></div></div><button class="btn primary full" style="margin-top:16px" onclick="openModelStatusDrawer('${model.id}','active')" ${permissionAttrs("model.publish")}>发布模型</button><button class="btn ghost full" style="margin-top:10px" onclick="openModelRevisionsDrawer('${model.id}')">修订历史</button></aside>
+        </div>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      function field(label, value) {
+        return `<label class="field"><span>${label}</span><input value="${value}" /></label>`;
+      }
+
+      function usersPage() {
+        const rows = state.users.length
+          ? state.users.map((user) => userRow(user)).join("")
+          : `<tr><td colspan="7">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+        const teamAccountRows = state.teamPermissionAccounts.length
+          ? state.teamPermissionAccounts.map(teamPermissionAccountCard).join("")
+          : `<div class="metric-note">${state.teamPermissionLoadError || "暂无团队权限账户"}</div>`;
+        return `<div class="toolbar"><div class="filters"><input placeholder="搜索用户 / 手机号 / 邮箱 / 团队" /><select><option>全部状态</option><option>正常</option><option>禁用</option></select><select><option>全部账户</option><option>主账户</option><option>团队权限账户</option><option>子账户</option></select></div><button class="btn primary" onclick="openDrawer('批量积分','请选择列表中的具体用户进行积分操作，避免误操作。')" ${permissionAttrs("credit.adjust")}>手动加积分</button></div>
+          <section class="card" style="margin-bottom:14px;">
+            <div class="toolbar"><h3>团队权限账户摘要</h3><button class="btn ghost" onclick="loadTeamPermissionAccounts().then(renderShell)">刷新</button></div>
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">${teamAccountRows}</div>
+          </section>
+          <div class="table-wrap users dense"><table><thead><tr><th>用户</th><th>账户类型</th><th>团队权限</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
+          ${rows}
+        </tbody></table></div>`;
+      }
+
+      function teamPermissionAccountCard(user) {
+        return `<button class="card ghost" style="text-align:left;cursor:pointer;" onclick="openUserDetailDrawer('${user.userId}')">
+          <h4>${user.displayName}</h4>
+          <div class="metric-note">${user.teamGroupName || "-"} / ${user.teamRole || "-"}</div>
+          <div class="check-list" style="margin-top:10px;">
+            <div><span>子账户</span><span>${Number(user.subaccountCount || 0).toLocaleString()}</span></div>
+            <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
+          </div>
+        </button>`;
+      }
+
+      function userRow(user) {
+        const typeLabel = {
+          owner_account: "主账户",
+          team_permission_account: "团队权限账户",
+          subaccount: "子账户",
+          user: "普通用户",
+        }[user.accountType] || "普通用户";
+        const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
+        const groupText = user.teamGroupName
+          ? `${user.teamRole || "-"} / ${user.teamGroupName} / 子账户 ${user.subaccountCount}`
+          : user.membershipRole || "-";
+        const nextStatus = user.status === "active" ? "disabled" : "active";
+        return `<tr><td>${user.displayName}<div class="metric-note">${user.phone || user.email || user.userId}</div></td><td><span class="tag blue">${typeLabel}</span></td><td>${groupText}</td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看账户" onclick="openUserDetailDrawer('${user.userId}')">查</button><button class="icon-btn" title="手动添加积分" onclick="openCreditGrantDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>加</button><button class="icon-btn" title="手动扣减积分" onclick="openCreditDeductDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>扣</button><button class="icon-btn" title="调整到目标积分" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>调</button><button class="icon-btn" title="修改资料" onclick="openUserProfileDrawer('${user.userId}')" ${permissionAttrs("user.write")}>改</button><button class="icon-btn" title="${nextStatus === "disabled" ? "禁用账户" : "启用账户"}" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${permissionAttrs("user.write")}>${nextStatus === "disabled" ? "停" : "启"}</button><button class="icon-btn" title="归档账户" onclick="openUserStatusDrawer('${user.userId}','archived')" ${permissionAttrs("user.write")}>归</button></div></td></tr>`;
+      }
+
+      function risksPage() {
+        const riskRows = state.risks.risks.length
+          ? state.risks.risks.map(paymentRiskRow).join("")
+          : `<tr><td colspan="5">${state.riskLoadError || "暂无支付风险"}</td></tr>`;
+        const taskRows = state.risks.taskExceptions.length
+          ? state.risks.taskExceptions.map(taskExceptionRow).join("")
+          : `<tr><td colspan="5">暂无任务异常</td></tr>`;
+        const paymentIssueRows = state.risks.paymentIssues.length
+          ? state.risks.paymentIssues.map(paymentIssueRow).join("")
+          : `<tr><td colspan="6">暂无支付积分修复项</td></tr>`;
+        const auditRows = state.auditEvents.length
+          ? state.auditEvents.map(auditEventRow).join("")
+          : `<tr><td colspan="5">暂无审计日志</td></tr>`;
+        return `<div class="grid" style="grid-template-columns:minmax(0,1fr);">
+          <section class="card">
+            <div class="toolbar"><h3>支付风险</h3><div class="filters"><select id="riskStatusFilter" onchange="updateRiskStatusFilter(this.value)">${optionList(["all", "open", "reviewed", "ignored_with_reason"], state.riskStatusFilter)}</select></div><button class="btn ghost" onclick="downloadRiskExport('risks')" ${permissionAttrs("risk.export")}>导出CSV</button><button class="btn ghost" onclick="loadRiskAudit().then(renderShell)">刷新</button></div>
+            <div class="table-wrap compact"><table><thead><tr><th>风险类型</th><th>等级</th><th>决策</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${riskRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <h3>任务异常</h3>
+            <div class="table-wrap compact"><table><thead><tr><th>任务</th><th>队列</th><th>供应商</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${taskRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <h3>支付积分修复</h3>
+            <div class="table-wrap compact"><table><thead><tr><th>订单号</th><th>积分</th><th>金额</th><th>支付时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${paymentIssueRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>审计日志</h3><button class="btn ghost" onclick="downloadRiskExport('audit-events')" ${permissionAttrs("risk.export")}>导出CSV</button></div>
+            <div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${auditRows}</tbody></table></div>
+          </section>
+        </div>`;
+      }
+
+      function riskTable(name, severity, status) {
+        return `<div class="table-wrap"><table><thead><tr><th>事件</th><th>等级</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody><tr><td>${name}</td><td>${severity}</td><td><span class="tag warn">${status}</span></td><td class="actions"><button class="icon-btn" onclick="openDrawer('风险复核','填写处理结论并写入 audit_events。')">审</button></td></tr></tbody></table></div>`;
+      }
+
+      async function updateRiskStatusFilter(value) {
+        state.riskStatusFilter = value || "all";
+        await loadRiskAudit();
+        renderShell();
+      }
+
+      function paymentRiskRow(risk) {
+        const severityLabel = risk.severity === "critical" ? "高" : risk.severity === "warning" ? "中" : "低";
+        const statusLabel = risk.status === "open" ? "待处理" : risk.status === "reviewed" ? "已复核" : "已忽略";
+        return `<tr><td>${risk.riskType}<div class="metric-note">${compactJson(risk.metadata)}</div></td><td><span class="tag ${risk.severity === "critical" ? "warn" : "blue"}">${severityLabel}</span></td><td>${risk.decision}</td><td><span class="tag ${risk.status === "open" ? "warn" : "green"}">${statusLabel}</span></td><td class="actions"><button class="icon-btn" onclick="openRiskReviewDrawer('${risk.id}')" ${permissionAttrs("risk.review")}>审</button></td></tr>`;
+      }
+
+      function taskExceptionRow(task) {
+        return `<tr><td>${task.taskType}<div class="metric-note">${task.failureCode || task.id}</div></td><td>${task.queueName}</td><td>${task.providerName || "-"}</td><td><span class="tag warn">${task.status}</span></td><td class="actions"><button class="icon-btn" onclick="openTaskRetryDrawer('${task.id}')" ${permissionAttrs("ops.task.retry")}>重</button></td></tr>`;
+      }
+
+      function paymentIssueRow(issue) {
+        const amount = `${(Number(issue.amountMinor || 0) / 100).toFixed(2)} ${issue.currency || "CNY"}`;
+        const statusLabel = issue.status === "resolved" ? "已修复" : "待修复";
+        return `<tr><td>${issue.orderNo}<div class="metric-note">${issue.orderId}</div></td><td>${Number(issue.credits || 0).toLocaleString()}</td><td>${amount}</td><td>${issue.paidAt ? new Date(issue.paidAt).toLocaleString("zh-CN") : "-"}</td><td><span class="tag ${issue.status === "resolved" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="icon-btn" onclick="openPaymentRepairDrawer('${issue.orderId}')" ${permissionAttrs("risk.review")}>修</button></td></tr>`;
+      }
+
+      function auditEventRow(event) {
+        return `<tr><td>${event.eventType}</td><td>${event.targetType}<div class="metric-note">${event.targetId}</div></td><td>${event.reason || "-"}</td><td>${new Date(event.createdAt).toLocaleString("zh-CN")}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openAuditEventDrawer('${event.id}')">详</button></td></tr>`;
+      }
+
+      function downloadRiskExport(scope) {
+        const url = new URL(
+          scope === "audit-events" ? "/api/admin/exports/audit-events.csv" : "/api/admin/exports/risks.csv",
+          window.location.origin,
+        );
+        if (scope === "risks" && state.riskStatusFilter && state.riskStatusFilter !== "all") {
+          url.searchParams.set("riskStatus", state.riskStatusFilter);
+        }
+        window.location.assign(url.toString());
+      }
+
+      function openAuditEventDrawer(eventId) {
+        const event = state.auditEvents.find((item) => item.id === eventId);
+        if (!event) return;
+        const metadata = event.metadata || {};
+        const ipAddress = event.ipAddress || metadata.ipAddress || "-";
+        const userAgent = event.userAgent || metadata.userAgent || "-";
+        const adminDisplayName = event.adminDisplayName || metadata.adminDisplayName || metadata.loginName || "-";
+        const result = event.result || metadata.result || "success";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(720px,100%);">
+          <div class="drawer-head"><h3>审计详情</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <section class="card">
+            <h4>审计主体</h4>
+            <div class="check-list">
+              <div><span>管理员</span><span>${adminDisplayName}</span></div>
+              <div><span>动作</span><span>${event.eventType}</span></div>
+              <div><span>结果</span><span class="tag ${result === "success" ? "green" : "warn"}">${result}</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h4>目标对象</h4>
+            <div class="check-list">
+              <div><span>类型</span><span>${event.targetType}</span></div>
+              <div><span>ID</span><span>${event.targetId}</span></div>
+              <div><span>原因</span><span>${event.reason || "-"}</span></div>
+              <div><span>时间</span><span>${new Date(event.createdAt).toLocaleString("zh-CN")}</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <h4>请求上下文</h4>
+            <div class="check-list">
+              <div><span>ipAddress</span><span>${ipAddress}</span></div>
+              <div><span>userAgent</span><span style="word-break:break-all;">${userAgent}</span></div>
+            </div>
+          </section>
+          <section class="card"><h4>Metadata</h4><div class="json-box">${escapeHtml(JSON.stringify(metadata, null, 2))}</div></section>
+        </aside>`;
+      }
+
+      function settingsPage() {
+        const configRows = state.settings.configs.length
+          ? state.settings.configs.map(configRow).join("")
+          : `<tr><td colspan="5">${state.settingsLoadError || "暂无运行配置"}</td></tr>`;
+        const secretRows = state.settings.secretReferences.length
+          ? state.settings.secretReferences.map(secretReferenceRow).join("")
+          : `<tr><td colspan="5">暂无密钥引用</td></tr>`;
+        const accountRows = state.adminAccounts.length
+          ? state.adminAccounts.map(adminAccountRow).join("")
+          : `<tr><td colspan="5">暂无后台权限账户</td></tr>`;
+        return `<div class="grid" style="grid-template-columns:minmax(0,1fr);">
+          <section class="card">
+            <div class="toolbar"><h3>运行配置</h3><button class="btn primary" onclick="openRuntimeConfigDrawer()" ${permissionAttrs("settings.write")}>新增配置</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>配置键</th><th>作用域</th><th>类型</th><th>当前值</th><th class="actions">操作</th></tr></thead><tbody>${configRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>密钥引用</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>新增密钥引用</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>引用名</th><th>环境变量</th><th>供应商</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${secretRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>后台权限账户</h3><button class="btn primary" onclick="openAdminAccountDrawer()" ${permissionAttrs("admin_account.write")}>新增账户</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>
+          </section>
+        </div>`;
+      }
+
+      function configRow(config) {
+        const value = compactJson(config.value);
+        return `<tr><td>${config.key}<div class="metric-note">${config.description || "无说明"}</div></td><td>${config.scope}</td><td><span class="tag blue">${config.valueType}</span></td><td title="${escapeHtml(value)}">${escapeHtml(value)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openRuntimeConfigDrawer('${config.key}')" ${permissionAttrs("settings.write")}>改</button><button class="icon-btn" title="历史" onclick="openRuntimeConfigHistoryDrawer('${config.key}')">史</button></div></td></tr>`;
+      }
+
+      function secretReferenceRow(secret) {
+        const statusClass = secret.status === "configured" ? "green" : secret.status === "missing" ? "warn" : "blue";
+        const statusLabel = secret.status === "configured" ? "已配置" : secret.status === "missing" ? "缺失" : "未知";
+        const checkedText = secret.lastCheckedAt ? new Date(secret.lastCheckedAt).toLocaleString("zh-CN") : "未探测";
+        return `<tr><td>${secret.secretRef}<div class="metric-note">${secret.purpose}</div></td><td>${secret.envName}<div class="metric-note">${checkedText}</div></td><td>${secret.providerName || "-"}</td><td><span class="tag ${statusClass}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="探测密钥" onclick="probeSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>测</button></div></td></tr>`;
+      }
+
+      function adminAccountRow(account) {
+        const statusLabel = account.status === "active" ? "启用" : account.status === "disabled" ? "禁用" : "归档";
+        const nextStatus = account.status === "active" ? "disabled" : "active";
+        return `<tr><td>${account.loginName}</td><td>${account.displayName}</td><td>${account.roles.join(" / ")}</td><td><span class="tag ${account.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>改</button><button class="icon-btn" onclick="openAdminAccountPasswordResetDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>密</button><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}','${nextStatus}')" ${permissionAttrs("admin_account.write")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td></tr>`;
+      }
+
+      function compactJson(value) {
+        if (typeof value === "string") return value;
+        return JSON.stringify(value);
+      }
+
+      function accountPage() {
+        const sessions = state.adminSessions.length
+          ? state.adminSessions.map((session) => `
+            <tr>
+              <td>${session.current ? `<span class="tag blue">当前会话</span>` : `<span class="tag">其他会话</span>`}</td>
+              <td>${escapeHtml(session.ipAddress || "-")}</td>
+              <td style="max-width:260px;white-space:normal;">${escapeHtml(session.userAgent || "-")}</td>
+              <td>${session.revokedAt ? `<span class="tag warn">已失效</span>` : `<span class="tag green">有效</span>`}</td>
+              <td>${session.expiresAt ? new Date(session.expiresAt).toLocaleString("zh-CN") : "-"}</td>
+            </tr>
+          `).join("")
+          : `<tr><td colspan="5">${state.adminSessionLoadError || "暂无会话数据"}</td></tr>`;
+        return `
+          <div class="grid" style="max-width:980px;">
+            <section class="card">
+              <h3>管理员账户</h3>
+              <div class="form-grid">
+                ${field("登录名", state.session?.account?.loginName || "")}
+                ${field("显示名", state.session?.account?.displayName || "")}
+              </div>
+              <div class="toolbar" style="margin-top:16px;">
+                <button class="btn ghost" onclick="openAdminProfileDrawer()">修改资料</button>
+                <button class="btn primary" onclick="openPasswordChangeDrawer()">修改密码</button>
+                <button class="btn ghost" onclick="revokeOtherAdminSessions()">退出其他会话</button>
+                <button class="btn ghost" onclick="logout()">退出登录</button>
+              </div>
+            </section>
+            <section class="card">
+              <div class="toolbar">
+                <div>
+                  <h3 style="margin:0;">登录会话</h3>
+                  <div class="metric-note">查看当前管理员的登录设备，可一键失效其他有效会话。</div>
+                </div>
+                <button class="btn ghost" onclick="loadAdminSessions().then(renderShell)">刷新</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>会话</th><th>IP</th><th>User-Agent</th><th>状态</th><th>过期时间</th></tr></thead>
+                  <tbody>${sessions}</tbody>
+                </table>
+              </div>
+            </section>
+          </div>`;
+      }
+
+      async function revokeOtherAdminSessions() {
+        try {
+          const result = await api("/api/admin/auth/sessions/revoke-other", {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-revoke-sessions-${Date.now()}` },
+            body: "{}",
+          });
+          await loadAdminSessions();
+          renderShell();
+          openDrawer("其他会话已退出", `已失效 ${Number(result.data?.revokedCount || 0)} 个其他登录会话。`);
+        } catch (err) {
+          openDrawer("退出其他会话失败", err.payload?.error?.message || "请稍后重试");
+        }
+      }
+
+      function openAdminProfileDrawer() {
+        const drawer = document.getElementById("drawer");
+        const currentDisplayName = state.session?.account?.displayName || "";
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>当前管理员资料</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">这里修改的是当前登录管理员自己的展示名称，不会影响前台用户或其他后台账户。</p>
+          <form id="admin-profile-form">
+            <label class="field"><span>登录名</span><input value="${escapeAttribute(state.session?.account?.loginName || "")}" disabled /></label>
+            <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(currentDisplayName)}" required /></label>
+            <div class="error-text" id="admin-profile-error"></div>
+            <button class="btn primary full" type="submit">保存资料</button>
+          </form>
+        </aside>`;
+        document.getElementById("admin-profile-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("admin-profile-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/auth/profile", {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-profile-${Date.now()}` },
+              body: JSON.stringify({
+                displayName: String(form.get("displayName") || ""),
+              }),
+            });
+            await loadSession();
+            closeDrawer();
+            renderShell();
+          }, "管理员资料已更新").catch(() => undefined);
+        });
+      }
+
+      function openDrawer(title, body) {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel"><div class="drawer-head"><h3>${title}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><p style="color:var(--muted);line-height:1.7">${body}</p><label class="field"><span>操作原因</span><textarea rows="4" placeholder="危险或敏感操作必须填写原因"></textarea></label><button class="btn primary full">确认</button></aside>`;
+      }
+
+      function openRiskReviewDrawer(riskId) {
+        const risk = state.risks.risks.find((item) => item.id === riskId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>风险复核</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${risk?.riskType || riskId} 将标记为已复核，并写入后台审计记录。</p>
+          <div class="check-list">
+            <div><span>风险等级</span><span class="tag ${risk?.severity === "critical" ? "warn" : "blue"}">${risk?.severity || "-"}</span></div>
+            <div><span>处理决策</span><span>${risk?.decision || "-"}</span></div>
+            <div><span>支付单</span><span>${risk?.orderId || risk?.paymentIntentId || "-"}</span></div>
+          </div>
+          <form id="risk-review-form" style="margin-top:16px;">
+            <label class="field"><span>复核结论</span><textarea name="reason" rows="4" required placeholder="例如：核对支付回调与订单金额一致，允许放行"></textarea></label>
+            <div class="error-text" id="risk-review-error"></div>
+            <button class="btn primary full" type="submit">确认复核</button>
+          </form>
+        </aside>`;
+        document.getElementById("risk-review-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("risk-review-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/risks/${riskId}/review`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-risk-review-${riskId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            await loadRiskAudit();
+            closeDrawer();
+            renderShell();
+          }, "风险复核已完成").catch(() => undefined);
+        });
+      }
+
+      function openTaskRetryDrawer(taskId) {
+        const task = state.risks.taskExceptions.find((item) => item.id === taskId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>任务重试</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${task?.taskType || taskId} 将重新进入任务队列，并写入后台审计记录。</p>
+          <div class="check-list">
+            <div><span>队列</span><span>${task?.queueName || "-"}</span></div>
+            <div><span>当前状态</span><span class="tag warn">${task?.status || "-"}</span></div>
+            <div><span>失败原因</span><span>${task?.failureCode || "-"}</span></div>
+          </div>
+          <form id="task-retry-form" style="margin-top:16px;">
+            <label class="field"><span>重试原因</span><textarea name="reason" rows="4" required placeholder="例如：供应商超时已恢复，允许重新排队"></textarea></label>
+            <div class="error-text" id="task-retry-error"></div>
+            <button class="btn primary full" type="submit">确认重试</button>
+          </form>
+        </aside>`;
+        document.getElementById("task-retry-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("task-retry-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/ops/tasks/${taskId}/retry`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-task-retry-${taskId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            await loadRiskAudit();
+            closeDrawer();
+            renderShell();
+          }, "任务已重新排队").catch(() => undefined);
+        });
+      }
+
+      function openPaymentRepairDrawer(orderId) {
+        const issue = state.risks.paymentIssues.find((item) => item.orderId === orderId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>支付积分修复</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${issue?.orderNo || orderId} 已支付但未发放积分。确认后将通过积分账本补发，并写入后台审计。</p>
+          <div class="check-list">
+            <div><span>补发积分</span><span>${Number(issue?.credits || 0).toLocaleString()}</span></div>
+            <div><span>订单金额</span><span>${((Number(issue?.amountMinor || 0)) / 100).toFixed(2)} ${issue?.currency || "CNY"}</span></div>
+            <div><span>支付时间</span><span>${issue?.paidAt ? new Date(issue.paidAt).toLocaleString("zh-CN") : "-"}</span></div>
+          </div>
+          <form id="payment-repair-form" style="margin-top:16px;">
+            <label class="field"><span>修复原因</span><textarea name="reason" rows="4" required placeholder="例如：支付成功事件已核对，补发购买积分"></textarea></label>
+            <div class="error-text" id="payment-repair-error"></div>
+            <button class="btn primary full" type="submit">确认修复</button>
+          </form>
+        </aside>`;
+        document.getElementById("payment-repair-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("payment-repair-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/ops/payments/${orderId}/repair-credit`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-payment-repair-${orderId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            await Promise.all([loadRiskAudit(), loadDashboard()]);
+            closeDrawer();
+            renderShell();
+          }, "支付积分修复已完成").catch(() => undefined);
+        });
+      }
+
+      function openCreditGrantDrawer(userId) {
+        const targetUser = state.users.find((user) => user.userId === userId);
+        const displayName = targetUser?.displayName || userId;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>手动添加积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">给 ${displayName} 添加积分。提交后会写入 credit_ledger_entries、更新余额并记录后台审计。</p>
+          <form id="credit-grant-form">
+            <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
+            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="例如：客服补偿 / 活动赠送" required></textarea></label>
+            <div class="error-text" id="credit-grant-error"></div>
+            <button class="btn primary full" type="submit">确认添加</button>
+          </form>
+        </aside>`;
+        document.getElementById("credit-grant-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("credit-grant-error");
+          const workOrderNo = requireWorkOrder(form, error);
+          if (!workOrderNo) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/credits/grant`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-credit-${userId}-${Date.now()}` },
+              body: JSON.stringify({
+                amount: Number(form.get("amount")),
+                reason: String(form.get("reason") || "").trim(),
+                workOrderNo,
+              }),
+            });
+            await loadUsers();
+            closeDrawer();
+            renderShell();
+          }, "积分已添加").catch(() => undefined);
+        });
+      }
+
+      async function openUserDetailDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>账户详情</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
+          <div class="check-list">
+            <div><span>账户类型</span><span class="tag blue">${user?.accountType || "-"}</span></div>
+            <div><span>手机</span><span id="user-contact-phone">${user?.phone || "-"}</span></div>
+            <div><span>邮箱</span><span id="user-contact-email">${user?.email || "-"}</span></div>
+            <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
+            <div><span>团队权限</span><span>${user?.teamRole || user?.membershipRole || "-"}</span></div>
+            <div><span>子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
+            <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
+            <div><span>冻结积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
+          </div>
+          <form id="contact-reveal-form" style="margin-top:16px;">
+            <label class="field"><span>查看完整联系方式原因</span><textarea name="reason" rows="3" placeholder="例如：核对工单联系方式" required></textarea></label>
+            <div class="error-text" id="contact-reveal-error"></div>
+            <button class="btn ghost full" type="submit" ${permissionAttrs("user.write")}>查看完整联系方式</button>
+          </form>
+          <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
+        </aside>`;
+        document.getElementById("contact-reveal-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("contact-reveal-error");
+          error.textContent = "";
+          try {
+            const result = await api(`/api/admin/users/${userId}/contact/reveal`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-contact-reveal-${userId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            document.getElementById("user-contact-phone").textContent = result.data?.contact?.phone || "-";
+            document.getElementById("user-contact-email").textContent = result.data?.contact?.email || "-";
+          } catch (err) {
+            error.textContent = err.payload?.error?.message || "查看完整联系方式失败";
+          }
+        });
+        try {
+          const [ledgerResult, subaccountsResult] = await Promise.all([
+            api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
+            api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
+          ]);
+          const ledgerRows = (ledgerResult.data || [])
+            .map((entry) => `<tr><td>${entry.entryType}</td><td>${entry.sourceType}</td><td>${Number(entry.amount).toLocaleString()}</td><td>${entry.metadata?.workOrderNo || "-"}</td><td>${entry.reason}</td></tr>`)
+            .join("") || `<tr><td colspan="5">暂无流水</td></tr>`;
+          const subRows = (subaccountsResult.data || [])
+            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${item.teamRole || "子账户"}</span></div>`)
+            .join("");
+          document.getElementById("user-ledger-panel").innerHTML = `
+            <h4>积分流水</h4>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分</th><th>工单号</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+            <h4 style="margin-top:14px;">子账户</h4>
+            <div class="check-list">${subRows || "<div><span>暂无子账户</span><span>-</span></div>"}</div>
+          `;
+        } catch (err) {
+          document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
+        }
+      }
+
+      function openUserProfileDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>修改资料</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="user-profile-form">
+            <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(user?.displayName || "")}" required /></label>
+            <label class="field"><span>邮箱</span><input name="email" value="${escapeAttribute(user?.email || "")}" /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：客服协助修改资料"></textarea></label>
+            <div class="error-text" id="user-profile-error"></div>
+            <button class="btn primary full" type="submit">保存资料</button>
+          </form>
+        </aside>`;
+        document.getElementById("user-profile-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("user-profile-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/profile`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-user-profile-${userId}-${Date.now()}` },
+              body: JSON.stringify({
+                displayName: String(form.get("displayName") || ""),
+                email: String(form.get("email") || ""),
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadUsers();
+            closeDrawer();
+            renderShell();
+          }, "用户资料已保存").catch(() => undefined);
+        });
+      }
+
+      function openUserStatusDrawer(userId, status) {
+        const user = state.users.find((item) => item.userId === userId);
+        const action = status === "disabled" ? "禁用" : status === "archived" ? "归档" : "启用";
+        const isDangerStatus = status === "disabled" || status === "archived";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>${action}账户</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId} 将变更为 ${status}。</p>
+          <form id="user-status-form">
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="危险操作必须填写原因"></textarea></label>
+            ${status === "archived" ? dangerConfirmField("确认归档账户") : ""}
+            <div class="error-text" id="user-status-error"></div>
+            <button class="btn ${isDangerStatus ? "danger" : "primary"} full" type="submit">确认${action}</button>
+          </form>
+        </aside>`;
+        document.getElementById("user-status-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("user-status-error");
+          if (status === "archived" && !requireDangerConfirm(form, error, "确认归档账户")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/status`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-user-status-${userId}-${Date.now()}` },
+              body: JSON.stringify({ status, reason: String(form.get("reason") || "") }),
+            });
+            await loadUsers();
+            closeDrawer();
+            renderShell();
+          }, "账户状态已更新").catch(() => undefined);
+        });
+      }
+
+      function openCreditDeductDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>手动扣减积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">从 ${user?.displayName || userId} 扣减积分。提交后写入 credit_ledger_entries 并记录审计。</p>
+          <form id="credit-deduct-form">
+            <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
+            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：异常赠送扣回 / 账务修正"></textarea></label>
+            <div class="error-text" id="credit-deduct-error"></div>
+            <button class="btn danger full" type="submit">确认扣减</button>
+          </form>
+        </aside>`;
+        document.getElementById("credit-deduct-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("credit-deduct-error");
+          const workOrderNo = requireWorkOrder(form, error);
+          if (!workOrderNo) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/credits/deduct`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-credit-deduct-${userId}-${Date.now()}` },
+              body: JSON.stringify({
+                amount: Number(form.get("amount")),
+                reason: String(form.get("reason") || "").trim(),
+                workOrderNo,
+              }),
+            });
+            await loadUsers();
+            closeDrawer();
+            renderShell();
+          }, "积分已扣减").catch(() => undefined);
+        });
+      }
+
+      function openCreditSetBalanceDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const currentCredits = Number(user?.availableCredits || 0);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>调整到目标积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">为 ${user?.displayName || userId} 手动修改可用积分。系统会自动计算差额，并通过添加或扣减接口写入 credit_ledger_entries，不直接改余额缓存。</p>
+          <form id="credit-set-balance-form">
+            <div class="check-list" style="margin-bottom:14px;">
+              <div><span>当前可用积分</span><span id="credit-current-balance">${currentCredits.toLocaleString()}</span></div>
+              <div><span>调整差额</span><span id="credit-balance-delta">-</span></div>
+            </div>
+            <label class="field"><span>目标可用积分</span><input name="targetBalance" type="number" min="0" step="1" required /></label>
+            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：财务核账后修正用户可用积分"></textarea></label>
+            <div class="error-text" id="credit-set-balance-error"></div>
+            <button class="btn primary full" type="submit">确认调整积分</button>
+          </form>
+        </aside>`;
+        const formElement = document.getElementById("credit-set-balance-form");
+        const targetInput = formElement.elements.targetBalance;
+        const deltaNode = document.getElementById("credit-balance-delta");
+        const updateDelta = () => {
+          const target = Number(targetInput.value);
+          if (!Number.isFinite(target) || targetInput.value === "") {
+            deltaNode.textContent = "-";
+            return;
+          }
+          const delta = Math.trunc(target) - currentCredits;
+          deltaNode.textContent = `${delta > 0 ? "+" : ""}${delta.toLocaleString()}`;
+        };
+        targetInput.addEventListener("input", updateDelta);
+        formElement.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("credit-set-balance-error");
+          const workOrderNo = requireWorkOrder(form, error);
+          if (!workOrderNo) return;
+          const targetBalance = Number(form.get("targetBalance"));
+          if (!Number.isInteger(targetBalance) || targetBalance < 0) {
+            error.textContent = "目标可用积分必须是大于等于 0 的整数";
+            return;
+          }
+          const delta = targetBalance - currentCredits;
+          if (delta === 0) {
+            error.textContent = "目标积分与当前积分一致，无需调整";
+            return;
+          }
+          const direction = delta > 0 ? "grant" : "deduct";
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/credits/${direction}`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-credit-set-balance-${userId}-${Date.now()}` },
+              body: JSON.stringify({
+                amount: Math.abs(delta),
+                reason: String(form.get("reason") || "").trim(),
+                workOrderNo,
+              }),
+            });
+            await loadUsers();
+            closeDrawer();
+            renderShell();
+          }, "积分已调整到目标值").catch(() => undefined);
+        });
+      }
+
+      function openRuntimeConfigDrawer(configKey = "") {
+        const existing = configKey
+          ? state.settings.configs.find((config) => config.key === configKey)
+          : null;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>${existing ? "修改运行配置" : "新增运行配置"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">只保存非密钥业务配置。真实密钥继续使用环境变量或密钥管理系统，页面只维护引用状态。</p>
+          <form id="runtime-config-form">
+            <label class="field"><span>配置键</span><input name="key" value="${escapeAttribute(existing?.key || "")}" ${existing ? "readonly" : ""} placeholder="registration.enabled" required /></label>
+            <label class="field"><span>作用域</span><select name="scope">${optionList(["global", "admin", "creator", "model", "billing", "risk"], existing?.scope || "global")}</select></label>
+            <label class="field"><span>值类型</span><select name="valueType">${optionList(["string", "number", "boolean", "json", "string_array"], existing?.valueType || "string")}</select></label>
+            <label class="field"><span>配置值</span><textarea name="value" rows="5" required>${escapeHtml(valueForTextarea(existing?.value, existing?.valueType))}</textarea><small style="color:var(--muted);line-height:1.6">值必须匹配声明类型：boolean 仅 true/false，number 仅数字，string_array 可填 JSON 数组或逗号分隔文本。</small></label>
+            <label class="field"><span>说明</span><input name="description" value="${escapeAttribute(existing?.description || "")}" placeholder="配置用途说明" /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：调整注册策略 / 更新上传限制"></textarea></label>
+            ${dangerConfirmField("确认修改配置")}
+            <div class="error-text" id="runtime-config-error"></div>
+            <button class="btn primary full" type="submit">保存配置</button>
+          </form>
+        </aside>`;
+        document.getElementById("runtime-config-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("runtime-config-error");
+          error.textContent = "";
+          try {
+            const valueType = String(form.get("valueType") || "string");
+            const key = String(form.get("key") || "").trim();
+            if (!requireDangerConfirm(form, error, "确认修改配置")) return;
+            await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/settings/${encodeURIComponent(key)}`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-setting-${key}-${Date.now()}` },
+              body: JSON.stringify({
+                value: parseConfigValue(String(form.get("value") || ""), valueType),
+                valueType,
+                scope: String(form.get("scope") || "global"),
+                description: String(form.get("description") || ""),
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+            }, "运行配置已保存");
+          } catch (err) {
+            error.textContent = err.payload?.error?.code === "invalid_config_value"
+              ? "值必须匹配声明类型"
+              : err.message || "保存配置失败";
+          }
+        });
+      }
+
+      async function openRuntimeConfigHistoryDrawer(configKey) {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
+          <div class="drawer-head"><h3>配置历史</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${configKey}</p>
+          <div id="config-history-panel"><span class="metric-note">正在加载修订记录...</span></div>
+        </aside>`;
+        try {
+          const result = await api(`/api/admin/settings/revisions?key=${encodeURIComponent(configKey)}&pageSize=20`);
+          const rows = (result.data || []).map((revision) => {
+            const previous = escapeHtml(compactJson(revision.previousValue));
+            const next = escapeHtml(compactJson(revision.nextValue));
+            return `<tr><td>${new Date(revision.createdAt).toLocaleString("zh-CN")}<div class="metric-note">${revision.reason || "-"}</div></td><td title="${previous}">${previous}</td><td title="${next}">${next}</td><td class="actions"><button class="icon-btn" title="回滚" onclick="openRuntimeConfigRollbackDrawer('${configKey}','${revision.id}')">回</button></td></tr>`;
+          }).join("") || `<tr><td colspan="4">暂无修订记录</td></tr>`;
+          document.getElementById("config-history-panel").innerHTML = `<div class="table-wrap"><table><thead><tr><th>时间 / 原因</th><th>旧值</th><th>新值</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        } catch (err) {
+          document.getElementById("config-history-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "配置历史加载失败"}</span>`;
+        }
+      }
+
+      function openRuntimeConfigRollbackDrawer(configKey, revisionId) {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>回滚配置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${configKey} 将按所选修订记录回滚，提交后写入运行配置和审计记录。</p>
+          <form id="config-rollback-form">
+            <label class="field"><span>回滚原因</span><textarea name="reason" rows="4" required placeholder="例如：新策略影响注册，回滚到上一版本"></textarea></label>
+            ${dangerConfirmField("确认回滚配置")}
+            <div class="error-text" id="config-rollback-error"></div>
+            <button class="btn danger full" type="submit">确认回滚</button>
+          </form>
+        </aside>`;
+        document.getElementById("config-rollback-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("config-rollback-error");
+          if (!requireDangerConfirm(form, error, "确认回滚配置")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/settings/${encodeURIComponent(configKey)}/rollback`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-setting-rollback-${configKey}-${Date.now()}` },
+              body: JSON.stringify({
+                revisionId,
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "运行配置已回滚").catch(() => undefined);
+        });
+      }
+
+      function openSecretReferenceDrawer() {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>新增密钥引用</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">这里只记录引用名、环境变量名、用途和供应商，不填写、不展示、不保存明文密钥。</p>
+          <form id="secret-reference-form">
+            <label class="field"><span>引用名</span><input name="secretRef" placeholder="volcengine_ark_primary" required /></label>
+            <label class="field"><span>环境变量名</span><input name="envName" placeholder="VOLCENGINE_ARK_API_KEY" required /></label>
+            <label class="field"><span>供应商</span><input name="providerName" placeholder="volcengine / openai / kling" /></label>
+            <label class="field"><span>用途</span><textarea name="purpose" rows="4" required placeholder="例如：火山视频模型调用"></textarea></label>
+            ${dangerConfirmField("确认保存密钥")}
+            <div class="error-text" id="secret-reference-error"></div>
+            <button class="btn primary full" type="submit">保存密钥引用</button>
+          </form>
+        </aside>`;
+        document.getElementById("secret-reference-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("secret-reference-error");
+          if (!requireDangerConfirm(form, error, "确认保存密钥")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/secret-references", {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-secret-${Date.now()}` },
+              body: JSON.stringify({
+                secretRef: String(form.get("secretRef") || ""),
+                envName: String(form.get("envName") || ""),
+                providerName: String(form.get("providerName") || ""),
+                purpose: String(form.get("purpose") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "密钥引用已保存").catch(() => undefined);
+        });
+      }
+
+      function probeSecretReference(secretId) {
+        const secret = state.settings.secretReferences.find((item) => item.id === secretId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>探测密钥</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">将检查 ${secret?.envName || "该环境变量"} 是否存在，只更新引用状态和检查时间，不读取、不展示、不保存明文密钥。</p>
+          <form id="secret-probe-form">
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required>后台系统设置手动探测密钥引用</textarea></label>
+            ${dangerConfirmField("确认探测密钥")}
+            <div class="error-text" id="secret-probe-error"></div>
+            <button class="btn primary full" type="submit">开始探测</button>
+          </form>
+        </aside>`;
+        document.getElementById("secret-probe-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("secret-probe-error");
+          if (!requireDangerConfirm(form, error, "确认探测密钥")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const result = await api(`/api/admin/secret-references/${encodeURIComponent(secretId)}/probe`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-secret-probe-${secretId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+            const label = result.data?.status === "configured" ? "已配置" : result.data?.status === "missing" ? "缺失" : "未知";
+            openDrawer("密钥探测完成", `密钥引用状态：${label}。页面不会读取、展示或保存明文密钥。`);
+          }, "密钥探测已完成").catch(() => undefined);
+        });
+      }
+
+      function openAdminAccountDrawer() {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>新增权限账户</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">创建后台管理员、运营、模型、财务、客服或只读审计账号。新账号使用独立后台登录态，不影响前台用户。</p>
+          <form id="admin-account-form">
+            <label class="field"><span>登录账号</span><input name="loginName" autocomplete="off" required /></label>
+            <label class="field"><span>初始密码</span><input name="password" type="password" autocomplete="new-password" required /></label>
+            <label class="field"><span>显示名称</span><input name="displayName" required /></label>
+            <label class="field"><span>角色</span><select name="role">${optionList(["super_admin", "ops_admin", "model_admin", "finance_admin", "support_admin", "audit_viewer"], "ops_admin")}</select></label>
+            <label class="field"><span>备注 / 原因</span><textarea name="remark" rows="4" required placeholder="例如：新增客服后台账号"></textarea></label>
+            ${dangerConfirmField("确认创建账户")}
+            <div class="error-text" id="admin-account-error"></div>
+            <button class="btn primary full" type="submit">创建账户</button>
+          </form>
+        </aside>`;
+        document.getElementById("admin-account-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("admin-account-error");
+          if (!requireDangerConfirm(form, error, "确认创建账户")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/admin-accounts", {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-account-${Date.now()}` },
+              body: JSON.stringify({
+                loginName: String(form.get("loginName") || ""),
+                password: String(form.get("password") || ""),
+                displayName: String(form.get("displayName") || ""),
+                roles: [String(form.get("role") || "ops_admin")],
+                remark: String(form.get("remark") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "后台权限账户已创建").catch(() => undefined);
+        });
+      }
+
+      function openAdminAccountEditDrawer(accountId, forcedStatus = "") {
+        const account = state.adminAccounts.find((item) => item.id === accountId);
+        if (!account) return;
+        const status = forcedStatus || account.status;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>修改权限账户</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${account.loginName} 使用独立后台登录态；禁用后该账号不能继续登录。</p>
+          <form id="admin-account-edit-form">
+            <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(account.displayName)}" required /></label>
+            <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], status)}</select></label>
+            <label class="field"><span>角色</span><input name="roles" value="${escapeAttribute(account.roles.join(", "))}" required /></label>
+            <label class="field"><span>备注</span><textarea name="remark" rows="3">${escapeHtml(account.remark || "")}</textarea></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：轮岗调整权限 / 风险账号临时禁用"></textarea></label>
+            ${dangerConfirmField("确认修改账户")}
+            <div class="error-text" id="admin-account-edit-error"></div>
+            <button class="btn ${status === "disabled" || status === "archived" ? "danger" : "primary"} full" type="submit">保存账户</button>
+          </form>
+        </aside>`;
+        document.getElementById("admin-account-edit-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("admin-account-edit-error");
+          if (!requireDangerConfirm(form, error, "确认修改账户")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/admin-accounts/${accountId}`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-account-update-${accountId}-${Date.now()}` },
+              body: JSON.stringify({
+                displayName: String(form.get("displayName") || ""),
+                status: String(form.get("status") || "active"),
+                roles: String(form.get("roles") || "").split(",").map((role) => role.trim()).filter(Boolean),
+                remark: String(form.get("remark") || ""),
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "后台权限账户已保存").catch(() => undefined);
+        });
+      }
+
+      function openAdminAccountPasswordResetDrawer(accountId) {
+        const account = state.adminAccounts.find((item) => item.id === accountId);
+        if (!account) return;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>重置权限账户密码</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${account.loginName} 的密码将被后台管理员重置。提交后会撤销该账号已有后台会话，并写入审计记录。</p>
+          <form id="admin-account-password-reset-form">
+            <label class="field"><span>新密码</span><input name="newPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
+            <label class="field"><span>确认新密码</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
+            <label class="field"><span>重置原因</span><textarea name="reason" rows="4" required placeholder="例如：管理员忘记密码 / 账号交接后重置"></textarea></label>
+            ${dangerConfirmField("确认重置密码")}
+            <div class="error-text" id="admin-account-password-reset-error"></div>
+            <button class="btn danger full" type="submit">确认重置密码</button>
+          </form>
+        </aside>`;
+        document.getElementById("admin-account-password-reset-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("admin-account-password-reset-error");
+          const newPassword = String(form.get("newPassword") || "");
+          const confirmPassword = String(form.get("confirmPassword") || "");
+          error.textContent = "";
+          if (newPassword !== confirmPassword) {
+            error.textContent = "两次输入的新密码不一致";
+            return;
+          }
+          if (!requireDangerConfirm(form, error, "确认重置密码")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/admin-accounts/${accountId}/password`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-account-password-reset-${accountId}-${Date.now()}` },
+              body: JSON.stringify({
+                newPassword,
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "后台权限账户密码已重置").catch(() => undefined);
+        });
+      }
+
+      function openModelEditorDrawer(modelId = "") {
+        const model = modelId ? state.models.find((item) => item.id === modelId) : null;
+        const isEdit = Boolean(model);
+        const defaults = model || {
+          modelCode: "",
+          displayName: "",
+          providerName: "volcengine",
+          providerModel: "",
+          providerProtocol: "volcengine_ark_video",
+          invocationMode: "async_polling",
+          mediaType: "video",
+          taskModes: ["video.text_to_video", "video.image_to_video"],
+          status: "disabled",
+          sortOrder: 100,
+          remark: "",
+          capabilities: {},
+          parameterSchema: {
+            aspectRatio: {
+              label: "视频比率",
+              type: "enum",
+              required: true,
+              options: ["16:9", "9:16"],
+              adminEditableOptions: true,
+            },
+          },
+          defaultParams: { aspectRatio: "16:9" },
+          providerConfig: {
+            baseURL: "",
+            createTaskEndpoint: "",
+            queryTaskEndpoint: "",
+            apiKeyEnv: "",
+            requestFormat: "json",
+          },
+          pricing: { unit: "video", baseCredits: 120 },
+          limits: {},
+          uiConfig: {},
+          dispatchPolicy: {
+            submitQueueName: "generation-submit-video",
+            pollQueueName: "generation-poll-video",
+            providerRpmLimit: 60,
+            providerConcurrentLimit: 5,
+            submitConcurrencyLimit: 5,
+            pollingIntervalMs: 15000,
+            pollingConcurrencyLimit: 20,
+          },
+        };
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
+          <div class="drawer-head"><h3>${isEdit ? "编辑模型配置" : "新增模型配置"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="model-editor-form">
+            <div class="form-grid">
+              <label class="field"><span>模型编码</span><input name="modelCode" value="${escapeAttribute(defaults.modelCode)}" ${isEdit ? "readonly" : ""} required /></label>
+              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName)}" required /></label>
+              <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
+              <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
+              <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
+              <label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(defaults.sortOrder || 100)}" /></label>
+              <label class="field"><span>任务模式</span><input name="taskModes" value="${escapeAttribute((defaults.taskModes || []).join(", "))}" required /></label>
+            </div>
+            <section class="card" id="model-parameter-builder" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar"><h4>手动添加参数</h4><span class="metric-note">用于视频比率、分辨率、时长、数量、质量等管理员自定义项</span></div>
+              <div class="table-wrap" id="parameter-schema-list" style="margin-bottom:12px;">
+                <table>
+                  <thead><tr><th>现有参数</th><th>类型</th><th>选项</th><th class="actions">操作</th></tr></thead>
+                  <tbody>${parameterSchemaRows(defaults.parameterSchema || {})}</tbody>
+                </table>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>参数键</span><input name="manualParameterKey" placeholder="aspectRatio" /></label>
+                <label class="field"><span>显示名称</span><input name="manualParameterLabel" placeholder="视频比率" /></label>
+                <label class="field"><span>参数类型</span><select name="manualParameterType">${optionList(["string", "number", "integer", "boolean", "enum", "array", "file", "file[]", "json"], "enum")}</select></label>
+                <label class="field"><span>选项内容</span><input name="manualParameterOptions" placeholder="16:9, 9:16, 1:1" /></label>
+              </div>
+              <label class="inline-check"><input name="manualParameterRequired" type="checkbox" checked /> 必填参数</label>
+              <button class="btn ghost full" type="button" id="manual-parameter-add-btn">合并到参数 schema</button>
+            </section>
+            <label class="field"><span>参数 schema JSON</span><textarea name="parameterSchema" rows="8" required>${escapeHtml(JSON.stringify(defaults.parameterSchema || {}, null, 2))}</textarea></label>
+            <label class="field"><span>默认参数 JSON</span><textarea name="defaultParams" rows="4">${escapeHtml(JSON.stringify(defaults.defaultParams || {}, null, 2))}</textarea></label>
+            <label class="field"><span>模型定价 JSON</span><textarea name="pricing" rows="5" required>${escapeHtml(JSON.stringify(defaults.pricing || {}, null, 2))}</textarea></label>
+            <label class="field"><span>供应商配置 JSON</span><textarea name="providerConfig" rows="7" required>${escapeHtml(JSON.stringify(defaults.providerConfig || {}, null, 2))}</textarea></label>
+            <div class="form-grid">
+              <label class="field"><span>提交队列</span><input name="submitQueueName" value="${escapeAttribute(defaults.dispatchPolicy?.submitQueueName || "")}" required /></label>
+              <label class="field"><span>轮询队列</span><input name="pollQueueName" value="${escapeAttribute(defaults.dispatchPolicy?.pollQueueName || "")}" /></label>
+              <label class="field"><span>RPM 限制</span><input name="providerRpmLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.providerRpmLimit || 60)}" /></label>
+              <label class="field"><span>供应商并发</span><input name="providerConcurrentLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.providerConcurrentLimit || 5)}" /></label>
+              <label class="field"><span>提交并发</span><input name="submitConcurrencyLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.submitConcurrencyLimit || 5)}" /></label>
+              <label class="field"><span>轮询间隔 ms</span><input name="pollingIntervalMs" type="number" min="1000" value="${Number(defaults.dispatchPolicy?.pollingIntervalMs || 15000)}" /></label>
+            </div>
+            <label class="field"><span>限制 JSON</span><textarea name="limits" rows="4">${escapeHtml(JSON.stringify(defaults.limits || {}, null, 2))}</textarea></label>
+            <label class="field"><span>展示配置 JSON</span><textarea name="uiConfig" rows="4">${escapeHtml(JSON.stringify(defaults.uiConfig || {}, null, 2))}</textarea></label>
+            <label class="field"><span>备注</span><input name="remark" value="${escapeAttribute(defaults.remark || "")}" /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：接入新视频模型 / 调整计费和参数"></textarea></label>
+            <div class="error-text" id="model-editor-error"></div>
+            <button class="btn primary full" type="submit">${isEdit ? "保存模型配置" : "创建模型配置"}</button>
+          </form>
+        </aside>`;
+        const modelEditorForm = document.getElementById("model-editor-form");
+        document.getElementById("manual-parameter-add-btn").addEventListener("click", () => {
+          const error = document.getElementById("model-editor-error");
+          error.textContent = "";
+          try {
+            const schema = parameterSchemaFromForm(new FormData(modelEditorForm));
+            modelEditorForm.elements.parameterSchema.value = JSON.stringify(schema, null, 2);
+            refreshParameterSchemaList(schema);
+          } catch (err) {
+            error.textContent = err.message || "参数合并失败";
+          }
+        });
+        modelEditorForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("model-editor-error");
+          error.textContent = "";
+          try {
+            const payload = modelPayloadFromForm(form);
+            const path = isEdit ? `/api/admin/models/${model.id}` : "/api/admin/models";
+            await runAdminMutation(event.currentTarget, error, async () => {
+            await api(path, {
+              method: isEdit ? "PATCH" : "POST",
+              headers: { "idempotency-key": `admin-ui-model-${isEdit ? model.id : payload.modelCode}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
+            await loadModels();
+            const createdOrUpdated = state.models.find((item) => item.modelCode === payload.modelCode);
+            state.selectedModelId = createdOrUpdated?.id || model?.id || state.selectedModelId;
+            closeDrawer();
+            renderShell();
+            }, isEdit ? "模型配置已保存" : "模型配置已创建");
+          } catch (err) {
+            error.textContent = err.payload?.error?.message || err.message || "保存模型失败";
+          }
+        });
+      }
+
+      function openModelDuplicateDrawer(modelId) {
+        const model = state.models.find((item) => item.id === modelId);
+        if (!model) return;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>复制模型</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="model-duplicate-form">
+            <label class="field"><span>新模型编码</span><input name="modelCode" value="${escapeAttribute(`${model.modelCode}-copy`)}" required /></label>
+            <label class="field"><span>新展示名称</span><input name="displayName" value="${escapeAttribute(`${model.displayName} 副本`)}" required /></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：复制为新供应商测试版本"></textarea></label>
+            <div class="error-text" id="model-duplicate-error"></div>
+            <button class="btn primary full" type="submit">确认复制</button>
+          </form>
+        </aside>`;
+        document.getElementById("model-duplicate-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("model-duplicate-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/models/${modelId}/duplicate`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-model-duplicate-${modelId}-${Date.now()}` },
+              body: JSON.stringify({
+                modelCode: String(form.get("modelCode") || ""),
+                displayName: String(form.get("displayName") || ""),
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadModels();
+            closeDrawer();
+            renderShell();
+          }, "模型已复制").catch(() => undefined);
+        });
+      }
+
+      function openModelStatusDrawer(modelId, status) {
+        const model = state.models.find((item) => item.id === modelId);
+        if (!model) return;
+        const label = status === "active" ? "启用/发布" : status === "disabled" ? "禁用" : "归档";
+        const launchCheck = modelLaunchCheckUi(model);
+        const launchCheckBlock = status === "active"
+          ? `<h4>模型上线检查</h4>${launchCheckHtml(launchCheck.checks)}`
+          : "";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>${label}模型</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${model.displayName} 将变更为 ${status}。敏感操作必须填写原因并写入审计。</p>
+          ${launchCheckBlock}
+          <form id="model-status-form">
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：供应商维护暂停 / 上线检查通过发布"></textarea></label>
+            <div class="error-text" id="model-status-error"></div>
+            <button class="btn ${status === "disabled" || status === "archived" ? "danger" : "primary"} full" type="submit">确认${label}</button>
+          </form>
+        </aside>`;
+        document.getElementById("model-status-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("model-status-error");
+          error.textContent = "";
+          if (status === "active" && !launchCheck.ok) {
+            error.innerHTML = renderLaunchCheckFailure(launchCheck.failedItems);
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/models/${modelId}/status`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-model-status-${modelId}-${Date.now()}` },
+              body: JSON.stringify({
+                status,
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadModels();
+            closeDrawer();
+            renderShell();
+          }, "模型状态已更新").catch((err) => {
+            const failedItems = err.payload?.error?.details?.failedItems || [];
+            if (err.payload?.error?.code === "admin_model_launch_check_failed" && failedItems.length) {
+              error.innerHTML = renderLaunchCheckFailure(failedItems);
+            }
+          });
+        });
+      }
+
+      async function openModelRevisionsDrawer(modelId) {
+        const model = state.models.find((item) => item.id === modelId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>模型修订历史</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${model?.displayName || modelId}</p>
+          <div id="model-revisions-panel"><span class="metric-note">正在加载修订历史...</span></div>
+        </aside>`;
+        try {
+          const result = await api(`/api/admin/models/${modelId}/revisions?pageSize=20`);
+          const rows = (result.data || [])
+            .map((revision) => {
+              const snapshot = revision.snapshot || {};
+              const pricing = snapshot.pricing || {};
+              return `<tr><td>${new Date(revision.createdAt).toLocaleString("zh-CN")}<div class="metric-note">${revision.reason || "-"}</div></td><td>${snapshot.displayName || "-"}</td><td>${snapshot.providerModel || "-"}</td><td>${Number(pricing.baseCredits || 0).toLocaleString()}</td><td class="actions"><button class="icon-btn" title="回滚" onclick="openModelRollbackDrawer('${modelId}','${revision.id}')" ${permissionAttrs("model.publish")}>回</button></td></tr>`;
+            })
+            .join("") || `<tr><td colspan="5">暂无修订历史</td></tr>`;
+          document.getElementById("model-revisions-panel").innerHTML = `
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>展示名</th><th>真实模型</th><th>基础积分</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          `;
+        } catch (err) {
+          document.getElementById("model-revisions-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型修订历史加载失败"}</span>`;
+        }
+      }
+
+      function openModelRollbackDrawer(modelId, revisionId) {
+        const model = state.models.find((item) => item.id === modelId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>回滚模型配置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${model?.displayName || modelId} 将回滚到所选修订快照，提交后写入模型修订和审计记录。</p>
+          <form id="model-rollback-form">
+            <label class="field"><span>回滚原因</span><textarea name="reason" rows="4" required placeholder="例如：新版配置生成失败，回滚到稳定版本"></textarea></label>
+            <div class="error-text" id="model-rollback-error"></div>
+            <button class="btn danger full" type="submit" ${permissionAttrs("model.publish")}>确认回滚</button>
+          </form>
+        </aside>`;
+        document.getElementById("model-rollback-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("model-rollback-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/models/${modelId}/rollback`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-model-rollback-${modelId}-${Date.now()}` },
+              body: JSON.stringify({
+                revisionId,
+                reason: String(form.get("reason") || ""),
+              }),
+            });
+            await loadModels();
+            closeDrawer();
+            renderShell();
+          }, "模型配置已回滚").catch(() => undefined);
+        });
+      }
+
+      function openPasswordChangeDrawer() {
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>修改密码</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">修改当前后台管理员密码。提交成功后会写入后台审计，其他会话可按需失效。</p>
+          <form id="password-change-form">
+            <label class="field"><span>旧密码</span><input name="oldPassword" type="password" autocomplete="current-password" required /></label>
+            <label class="field"><span>新密码</span><input name="newPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
+            <label class="field"><span>确认新密码</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
+            <label class="field" style="display:flex;grid-template-columns:auto 1fr;align-items:center;">
+              <input name="revokeOtherSessions" type="checkbox" checked style="width:auto;" />
+              <span>失效其他已登录会话</span>
+            </label>
+            <div class="error-text" id="password-change-error"></div>
+            <button class="btn primary full" type="submit">确认修改</button>
+          </form>
+        </aside>`;
+        document.getElementById("password-change-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("password-change-error");
+          const newPassword = String(form.get("newPassword") || "");
+          const confirmPassword = String(form.get("confirmPassword") || "");
+          error.textContent = "";
+          if (newPassword !== confirmPassword) {
+            error.textContent = "两次输入的新密码不一致";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/auth/password", {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-password-change-${Date.now()}` },
+              body: JSON.stringify({
+                oldPassword: String(form.get("oldPassword") || ""),
+                newPassword,
+                revokeOtherSessions: form.get("revokeOtherSessions") === "on",
+              }),
+            });
+            closeDrawer();
+            openDrawer("密码已修改", "当前管理员密码已更新，并已写入后台审计记录。");
+          }, "密码已修改").catch(() => undefined);
+        });
+      }
+
+      function parseConfigValue(rawValue, valueType) {
+        if (valueType === "string") return rawValue;
+        if (valueType === "number") {
+          const value = Number(rawValue);
+          if (!Number.isFinite(value)) throw new Error("请输入有效数字");
+          return value;
+        }
+        if (valueType === "boolean") {
+          if (rawValue === "true" || rawValue === "开启" || rawValue === "1") return true;
+          if (rawValue === "false" || rawValue === "关闭" || rawValue === "0") return false;
+          throw new Error("布尔值请输入 true 或 false");
+        }
+        if (valueType === "string_array") {
+          const parsed = rawValue.trim().startsWith("[")
+            ? JSON.parse(rawValue)
+            : rawValue.split(",").map((item) => item.trim()).filter(Boolean);
+          if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+            throw new Error("字符串数组请输入 JSON 数组或逗号分隔文本");
+          }
+          return parsed;
+        }
+        return JSON.parse(rawValue);
+      }
+
+      function dangerConfirmField(expectedText) {
+        return `<label class="field"><span>二次确认</span><input name="dangerConfirm" autocomplete="off" placeholder="请输入：${expectedText}" required /><small style="color:var(--muted);line-height:1.6">危险操作必须逐字输入“${expectedText}”后才能提交。</small></label>`;
+      }
+
+      function requireDangerConfirm(form, errorElement, expectedText) {
+        const actual = String(form.get("dangerConfirm") || "").trim();
+        if (actual !== expectedText) {
+          errorElement.textContent = `请先输入二次确认文本：${expectedText}`;
+          return false;
+        }
+        return true;
+      }
+
+      function requireWorkOrder(form, errorElement) {
+        const workOrderNo = String(form.get("workOrderNo") || "").trim();
+        if (!/^[A-Za-z]{2,8}-\d{8}-\d{3,8}$/.test(workOrderNo)) {
+          errorElement.textContent = "请填写有效工单号，例如 CS-20260605-001";
+          return "";
+        }
+        return workOrderNo.toUpperCase();
+      }
+
+      function modelPayloadFromForm(form) {
+        const taskModes = String(form.get("taskModes") || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+        return {
+          modelCode: String(form.get("modelCode") || "").trim(),
+          displayName: String(form.get("displayName") || "").trim(),
+          providerName: String(form.get("providerName") || "").trim(),
+          providerModel: String(form.get("providerModel") || "").trim(),
+          providerProtocol: String(form.get("providerProtocol") || "custom_http"),
+          invocationMode: String(form.get("invocationMode") || "async_polling"),
+          mediaType: String(form.get("mediaType") || "video"),
+          taskModes,
+          status: String(form.get("status") || "disabled"),
+          sortOrder: Number(form.get("sortOrder") || 100),
+          parameterSchema: parameterSchemaFromForm(form),
+          defaultParams: parseJsonTextarea(form, "defaultParams"),
+          pricing: parseJsonTextarea(form, "pricing"),
+          providerConfig: parseJsonTextarea(form, "providerConfig"),
+          limits: parseJsonTextarea(form, "limits"),
+          uiConfig: parseJsonTextarea(form, "uiConfig"),
+          dispatchPolicy: {
+            submitQueueName: String(form.get("submitQueueName") || "").trim(),
+            pollQueueName: String(form.get("pollQueueName") || "").trim() || null,
+            providerRpmLimit: Number(form.get("providerRpmLimit") || 60),
+            providerConcurrentLimit: Number(form.get("providerConcurrentLimit") || 5),
+            submitConcurrencyLimit: Number(form.get("submitConcurrencyLimit") || 5),
+            pollingIntervalMs: Number(form.get("pollingIntervalMs") || 15000),
+            pollingConcurrencyLimit: 20,
+          },
+          remark: String(form.get("remark") || ""),
+          reason: String(form.get("reason") || ""),
+        };
+      }
+
+      function parseJsonTextarea(form, name) {
+        const raw = String(form.get(name) || "").trim();
+        if (!raw) return {};
+        const value = JSON.parse(raw);
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error(`${name} 必须是 JSON 对象`);
+        }
+        return value;
+      }
+
+      function parameterSchemaFromForm(form) {
+        const schema = parseJsonTextarea(form, "parameterSchema");
+        return addManualParameterToSchema(schema, {
+          key: String(form.get("manualParameterKey") || ""),
+          label: String(form.get("manualParameterLabel") || ""),
+          type: String(form.get("manualParameterType") || "string"),
+          options: String(form.get("manualParameterOptions") || ""),
+          required: Boolean(form.get("manualParameterRequired")),
+        });
+      }
+
+      function parameterSchemaRows(schema) {
+        const entries = Object.entries(schema || {});
+        if (entries.length === 0) {
+          return `<tr><td colspan="4">暂无现有参数</td></tr>`;
+        }
+        return entries.map(([key, value]) => {
+          const parameter = value && typeof value === "object" ? value : {};
+          const options = Array.isArray(parameter.options) ? parameter.options.join(", ") : "-";
+          return `<tr><td>${escapeHtml(parameter.label || key)}<div class="metric-note">${escapeHtml(key)}</div></td><td><span class="tag blue">${escapeHtml(parameter.type || "json")}</span></td><td>${escapeHtml(options)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑参数" type="button" onclick="fillManualParameterEditor('${escapeAttribute(key)}')">编</button><button class="icon-btn" title="删除参数" type="button" onclick="removeManualParameterFromSchema('${escapeAttribute(key)}')">删</button></div></td></tr>`;
+        }).join("");
+      }
+
+      function refreshParameterSchemaList(schema) {
+        const list = document.querySelector("#parameter-schema-list tbody");
+        if (list) list.innerHTML = parameterSchemaRows(schema);
+      }
+
+      function currentModelEditorSchema() {
+        const form = document.getElementById("model-editor-form");
+        return form ? parseJsonTextarea(new FormData(form), "parameterSchema") : {};
+      }
+
+      function fillManualParameterEditor(parameterKey) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const schema = currentModelEditorSchema();
+        const parameter = schema[parameterKey] || {};
+        form.elements.manualParameterKey.value = parameterKey;
+        form.elements.manualParameterLabel.value = parameter.label || parameterKey;
+        form.elements.manualParameterType.value = parameter.type || "string";
+        form.elements.manualParameterOptions.value = Array.isArray(parameter.options) ? parameter.options.join(", ") : "";
+        form.elements.manualParameterRequired.checked = Boolean(parameter.required);
+      }
+
+      function removeManualParameterFromSchema(parameterKey) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const schema = currentModelEditorSchema();
+        delete schema[parameterKey];
+        form.elements.parameterSchema.value = JSON.stringify(schema, null, 2);
+        refreshParameterSchemaList(schema);
+      }
+
+      function addManualParameterToSchema(schema, input) {
+        const key = String(input.key || "").trim();
+        if (!key) return schema;
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
+          throw new Error("参数键只能使用英文、数字和下划线，并且必须以字母开头");
+        }
+        const type = String(input.type || "string").trim();
+        const parameter = {
+          label: String(input.label || key).trim(),
+          type,
+          required: Boolean(input.required),
+        };
+        const options = String(input.options || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (options.length > 0) {
+          parameter.options = options;
+          parameter.adminEditableOptions = true;
+        }
+        return {
+          ...schema,
+          [key]: parameter,
+        };
+      }
+
+      function valueForTextarea(value, valueType) {
+        if (value === undefined || value === null) return "";
+        if (valueType === "string") return String(value);
+        return JSON.stringify(value, null, 2);
+      }
+
+      function optionList(options, selected) {
+        return options.map((option) => `<option value="${option}" ${option === selected ? "selected" : ""}>${option}</option>`).join("");
+      }
+
+      function escapeAttribute(value) {
+        return escapeHtml(value).replaceAll('"', "&quot;");
+      }
+
+      function closeDrawer() {
+        document.getElementById("drawer").classList.add("hidden");
+      }
+
+      window.addEventListener("popstate", () => {
+        state.page = routeFromPath();
+        state.session ? renderShell() : renderLogin();
+      });
+      window.openDrawer = openDrawer;
+      window.openCreditGrantDrawer = openCreditGrantDrawer;
+      window.openCreditDeductDrawer = openCreditDeductDrawer;
+      window.openCreditSetBalanceDrawer = openCreditSetBalanceDrawer;
+      window.openUserDetailDrawer = openUserDetailDrawer;
+      window.openUserProfileDrawer = openUserProfileDrawer;
+      window.openUserStatusDrawer = openUserStatusDrawer;
+      window.openRiskReviewDrawer = openRiskReviewDrawer;
+      window.openDashboardModelHealthDrawer = openDashboardModelHealthDrawer;
+      window.openDashboardEventDrawer = openDashboardEventDrawer;
+      window.openAuditEventDrawer = openAuditEventDrawer;
+      window.downloadRiskExport = downloadRiskExport;
+      window.updateRiskStatusFilter = updateRiskStatusFilter;
+      window.openTaskRetryDrawer = openTaskRetryDrawer;
+      window.openPaymentRepairDrawer = openPaymentRepairDrawer;
+      window.openRuntimeConfigDrawer = openRuntimeConfigDrawer;
+      window.openRuntimeConfigHistoryDrawer = openRuntimeConfigHistoryDrawer;
+      window.openRuntimeConfigRollbackDrawer = openRuntimeConfigRollbackDrawer;
+      window.openSecretReferenceDrawer = openSecretReferenceDrawer;
+      window.probeSecretReference = probeSecretReference;
+      window.openAdminAccountDrawer = openAdminAccountDrawer;
+      window.openAdminAccountEditDrawer = openAdminAccountEditDrawer;
+      window.openAdminAccountPasswordResetDrawer = openAdminAccountPasswordResetDrawer;
+      window.openModelEditorDrawer = openModelEditorDrawer;
+      window.openModelDuplicateDrawer = openModelDuplicateDrawer;
+      window.openModelStatusDrawer = openModelStatusDrawer;
+      window.fillManualParameterEditor = fillManualParameterEditor;
+      window.removeManualParameterFromSchema = removeManualParameterFromSchema;
+      window.openPasswordChangeDrawer = openPasswordChangeDrawer;
+      window.loadAdminSessions = loadAdminSessions;
+      window.revokeOtherAdminSessions = revokeOtherAdminSessions;
+      window.logout = logout;
+      window.closeDrawer = closeDrawer;
+
+      bootstrap();
+    </script>
+  </body>
+</html>

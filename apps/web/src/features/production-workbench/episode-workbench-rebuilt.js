@@ -1786,6 +1786,9 @@ export function renderPromptDock({
   const configuredModels = buildConfiguredPromptDockModels(episodeGenerationConfig, isVideoMode ? "video" : "image");
   const models = configuredModels.length ? configuredModels : (isVideoMode ? VIDEO_MODELS : IMAGE_MODELS);
   const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
+  const ratioOptions = optionPairsFromValues(selectedModel?.supportedRatios, isVideoMode ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"]);
+  const qualityOptions = optionPairsFromValues(selectedModel?.supportedQuality, isVideoMode ? ["1080p"] : ["2K"]);
+  const durationOptions = optionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
   const attachmentCards = [...generationAttachmentCards, ...(attachments ?? [])].map((item, index) =>
     renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
   );
@@ -1796,7 +1799,7 @@ export function renderPromptDock({
   const generateCost =
     scopeMode === "assets" && mediaMode === "image"
       ? 50
-      : resolveGenerateCost(mediaMode, generationControls);
+      : resolveGenerateCost(mediaMode, generationControls, selectedModel);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -1868,9 +1871,9 @@ export function renderPromptDock({
       <div class="episode-replica-prompt-footer">
         <div class="episode-replica-prompt-selects">
           ${renderControlMenu("model", selectedModel.label, openGenerationSelectMenu, models.map((item) => [item.id, item.label]), "select-video-model")}
-          ${renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"]])}
-          ${renderControlMenu("imageResolution", resolution, openGenerationSelectMenu, [["720p", "720p"], ["1K", "1K"], ["2K", "2K"]])}
-          ${isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, [["5", "5秒"], ["10", "10秒"], ["15", "15秒"]]) : ""}
+          ${renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions)}
+          ${renderControlMenu(isVideoMode ? "videoResolution" : "imageResolution", resolution, openGenerationSelectMenu, qualityOptions)}
+          ${isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, durationOptions) : ""}
         </div>
         <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy)}>
           <span>${escapeHtml(String(generateCost))}</span>
@@ -2382,7 +2385,10 @@ function renderEpisodeVoiceModal(modal) {
   `;
 }
 
-function resolveGenerateCost(mediaMode, generationControls = {}) {
+function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel = null) {
+  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
+    return Number(selectedModel.credits);
+  }
   if (mediaMode === "lip-sync") {
     return calculateLipSyncCreditCost(generationControls?.lipSyncPrompt ?? "");
   }
@@ -2415,9 +2421,24 @@ function buildConfiguredPromptDockModels(config, mediaType) {
         id,
         label: String(model?.modelLabel ?? model?.displayName ?? id).trim() || id,
         credits: Number(model?.displayBaseCost ?? model?.credits ?? 0),
+        supportedRatios: normalizeOptionValues(model?.supportedRatios),
+        supportedQuality: normalizeOptionValues(model?.supportedQuality),
+        supportedDurations: normalizeOptionValues(model?.supportedDurations),
       };
     })
     .filter(Boolean);
+}
+
+function normalizeOptionValues(values) {
+  return Array.isArray(values)
+    ? values.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function optionPairsFromValues(values, fallback, labeler = (value) => value) {
+  const normalized = normalizeOptionValues(values);
+  const source = normalized.length ? normalized : fallback;
+  return source.map((value) => [value, labeler(value)]);
 }
 
 function modelMatchesPromptDockMediaType(model, mediaType) {

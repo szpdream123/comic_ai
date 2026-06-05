@@ -56,7 +56,7 @@ function collectTests(directory) {
       continue;
     }
 
-    if (/\.(spec|test)\.ts$/.test(entry)) {
+    if (/\.(spec|test)\.(?:mjs|ts)$/.test(entry)) {
       files.push(fullPath);
     }
   }

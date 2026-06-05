@@ -99,6 +99,120 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0008_ai_generation_task_snapshots.sql" });
   }
+
+  if (!(await tableExists(db, "team_member_groups")) || !(await tableExists(db, "team_member_profiles"))) {
+    await ensureLegacyTenantUniqueConstraints(db);
+    await ensureTeamMemberProfileTables(db);
+  }
+
+  if (!(await tableExists(db, "admin_accounts"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
+  } else if (
+    !(await columnExists(db, "admin_accounts", "failed_login_count")) ||
+    !(await columnExists(db, "admin_accounts", "locked_until"))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
+  }
+}
+
+async function ensureLegacyTenantUniqueConstraints(db: SqlDatabase) {
+  if (
+    (await tableExists(db, "workspaces")) &&
+    !(await constraintExists(db, "workspaces", "workspaces_organization_id_id_key"))
+  ) {
+    await db.query(`
+      ALTER TABLE workspaces
+      ADD CONSTRAINT workspaces_organization_id_id_key
+      UNIQUE (organization_id, id)
+    `);
+  }
+
+  if (
+    (await tableExists(db, "memberships")) &&
+    !(await constraintExists(db, "memberships", "memberships_organization_id_id_key"))
+  ) {
+    await db.query(`
+      ALTER TABLE memberships
+      ADD CONSTRAINT memberships_organization_id_id_key
+      UNIQUE (organization_id, id)
+    `);
+  }
+}
+
+async function ensureTeamMemberProfileTables(db: SqlDatabase) {
+  await executeSchemaPatch(db, `
+    CREATE TABLE IF NOT EXISTS team_member_groups (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id),
+      name text NOT NULL,
+      status text NOT NULL CHECK (status IN ('active', 'archived')),
+      created_by_user_id uuid NOT NULL REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, workspace_id, name),
+      UNIQUE (organization_id, id),
+      UNIQUE (organization_id, workspace_id, id),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS team_member_groups_scope_idx
+      ON team_member_groups (organization_id, workspace_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS team_member_profiles (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id),
+      membership_id uuid NOT NULL REFERENCES memberships(id),
+      team_account text NOT NULL,
+      display_name text NOT NULL,
+      business_role text NOT NULL CHECK (
+        business_role IN (
+          'admin',
+          'group_admin',
+          'director_plus',
+          'animator_plus',
+          'director',
+          'animator',
+          'screenwriter',
+          'editor'
+        )
+      ),
+      member_group_id uuid NULL REFERENCES team_member_groups(id),
+      credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
+      credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
+      last_credit_consumed_at timestamptz NULL,
+      remark text NULL,
+      created_by_user_id uuid NOT NULL REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, workspace_id, membership_id),
+      UNIQUE (organization_id, workspace_id, team_account),
+      UNIQUE (organization_id, id),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id),
+      FOREIGN KEY (organization_id, workspace_id, member_group_id)
+        REFERENCES team_member_groups (organization_id, workspace_id, id),
+      FOREIGN KEY (organization_id, membership_id)
+        REFERENCES memberships (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS team_member_profiles_scope_idx
+      ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+  `);
+}
+
+async function executeSchemaPatch(db: SqlDatabase, sql: string) {
+  const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
+  if (typeof exec === "function") {
+    await exec.call(db, sql);
+    return;
+  }
+
+  for (const statement of sql.split(/;\s*(?:\r?\n|$)/).map((part) => part.trim()).filter(Boolean)) {
+    await db.query(`${statement};`);
+  }
 }
 
 async function tableExists(db: SqlDatabase, tableName: string) {
@@ -115,4 +229,38 @@ async function tableExists(db: SqlDatabase, tableName: string) {
   );
 
   return tableCheck.rows[0]?.exists === true;
+}
+
+async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {
+  const constraintCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE table_schema = 'public'
+          AND table_name = $1
+          AND constraint_name = $2
+      ) AS exists
+    `,
+    [tableName, constraintName],
+  );
+
+  return constraintCheck.rows[0]?.exists === true;
+}
+
+async function columnExists(db: SqlDatabase, tableName: string, columnName: string) {
+  const columnCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = $1
+          AND column_name = $2
+      ) AS exists
+    `,
+    [tableName, columnName],
+  );
+
+  return columnCheck.rows[0]?.exists === true;
 }

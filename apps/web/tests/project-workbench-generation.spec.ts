@@ -3309,6 +3309,43 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(payload.musicEnabled, false);
   });
 
+  it("uses the selected configured video model when building video generation payload", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-selected-model",
+      description: "selected video model shot",
+      generationState: {},
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { aspectRatio: "16:9", resolution: "1080p" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: "",
+        selectedModelId: "seedance-i2v-fast",
+        videoGenerationMode: "first-frame",
+        videoCount: 1,
+        videoResolution: "720p",
+        videoDurationSec: "5",
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "seedance-i2v-pro",
+          models: [
+            {
+              modelCode: "seedance-i2v-pro",
+              supportedModes: ["image_to_video"],
+            },
+            {
+              modelCode: "seedance-i2v-fast",
+              supportedModes: ["image_to_video"],
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(payload.model, "seedance-i2v-fast");
+  });
+
   it("builds lip-sync video payload with selected voice and text-based credit estimate", () => {
     const storyboard = {
       ...addStoryboard([])[0],
@@ -4431,6 +4468,81 @@ describe("production workbench project tab", () => {
       },
     });
     assert.equal(workbench.ui.selectedModelId, "seedance-i2v-pro");
+  });
+
+  it("applies configured model defaults when selecting generation models", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        episodeMediaMode: "image",
+        imageGenerationMode: "single-image",
+        videoGenerationMode: "first-frame",
+        selectedModelId: "legacy-image",
+        imageResolution: "4K",
+        imageAspectRatio: "1:1",
+        imageCount: 4,
+        videoResolution: "2K",
+        videoDurationSec: "15",
+        videoCount: 3,
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          defaultVideoModelCode: "seedance-i2v-pro",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              supportedRatios: ["16:9"],
+              supportedQuality: ["2K"],
+              defaultParams: { aspectRatio: "16:9", quality: "2K", count: 1 },
+            },
+            {
+              modelCode: "seedance-i2v-pro",
+              mediaType: "video",
+              supportedModes: ["image_to_video", "video"],
+              supportedRatios: ["9:16"],
+              supportedQuality: ["720p"],
+              supportedDurations: ["5"],
+              defaultParams: { aspectRatio: "9:16", resolution: "720p", durationSec: 5, count: 1 },
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-video-model",
+        modelId: "gpt-image-2-cn",
+        modelName: "GPT Image 2",
+      },
+    });
+
+    assert.equal(workbench.ui.selectedModelId, "gpt-image-2-cn");
+    assert.equal(workbench.ui.imageResolution, "2K");
+    assert.equal(workbench.ui.imageAspectRatio, "16:9");
+    assert.equal(workbench.ui.imageCount, 1);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-video-generation-mode",
+        mode: "first-frame",
+      },
+    });
+
+    assert.equal(workbench.ui.selectedModelId, "seedance-i2v-pro");
+    assert.equal(workbench.ui.videoResolution, "720p");
+    assert.equal(workbench.ui.videoDurationSec, "5");
+    assert.equal(workbench.ui.imageAspectRatio, "9:16");
+    assert.equal(workbench.ui.videoCount, 1);
   });
 
   it("filters prompt dock models by supported modes when mediaType is absent", () => {

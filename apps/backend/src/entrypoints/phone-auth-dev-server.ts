@@ -9,7 +9,21 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
-import { createAdminOpsService } from "../modules/admin-ops/admin-ops.service.ts";
+import { appendAuditEvent } from "../modules/audit/audit.service.ts";
+import {
+  createAdminAuthService,
+  type AdminPermission,
+  permissionsForRoles,
+} from "../modules/admin-auth/admin-auth.service.ts";
+import { createAdminDashboardService } from "../modules/admin-dashboard/admin-dashboard.service.ts";
+import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
+import {
+  createAdminOpsService,
+  listAdminOpsItemsForScope,
+} from "../modules/admin-ops/admin-ops.service.ts";
+import { createAdminRiskAuditService } from "../modules/admin-risk-audit/admin-risk-audit.service.ts";
+import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
+import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
@@ -37,7 +51,11 @@ import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
 } from "../modules/project/project-upload-record.service.ts";
-import { AuthorizationError, resolveActorContext } from "../modules/organization/actor-context.service.ts";
+import {
+  AuthorizationError,
+  type ActorContext,
+  resolveActorContext,
+} from "../modules/organization/actor-context.service.ts";
 import { queryOne } from "../modules/shared/db/sql.ts";
 import { createDevDb } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
@@ -77,7 +95,7 @@ import {
 import type { AssetType } from "../modules/project/asset.service.ts";
 import { createExportRecord } from "../modules/project/export-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
-import { InsufficientCreditsError, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
+import { InsufficientCreditsError, grantCreditsInTransaction, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
@@ -93,9 +111,18 @@ import {
 } from "../modules/model-gateway/provider-request.service.ts";
 import {
   findActiveAiModelConfigByCode,
+  findActiveAiModelDispatchPolicyByModelCode,
   listActiveAiModelConfigs,
   type AiModelConfigRecord,
 } from "../modules/model-catalog/ai-model-config.store.ts";
+import {
+  GenerationModelExecutionResolutionError,
+  resolveGenerationModelExecution,
+} from "../modules/model-catalog/generation-model-execution.resolver.ts";
+import {
+  GenerationModelRequestValidationError,
+  validateGenerationModelRequest,
+} from "../modules/model-catalog/generation-model-request.validator.ts";
 import { appendGenerationTaskCreatedOutboxEvent } from "../modules/model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
 import { createBullMQGenerationQueueHealthService } from "../modules/model-gateway/generation-queue-health.service.ts";
@@ -119,6 +146,7 @@ import { capabilities } from "../../../../packages/contracts/domain/capabilities
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
+const adminRoot = join(process.cwd(), "apps", "admin");
 const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
@@ -142,21 +170,21 @@ const mockEpisodeImageUrls = [
 ] as const;
 const episodeUploadLimits = {
   image: {
-    label: "图片",
+    label: "鍥剧墖",
     maxBytes: 20 * 1024 * 1024,
     maxReferencesPerTask: 30,
     mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
   },
   video: {
-    label: "视频",
+    label: "瑙嗛",
     maxBytes: 500 * 1024 * 1024,
     recommendedMaxDurationSeconds: 15 * 60,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
   audio: {
-    label: "音频",
+    label: "闊抽",
     maxBytes: 100 * 1024 * 1024,
     mimeTypes: ["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a"],
     extensions: [".mp3", ".wav", ".m4a"],
@@ -351,6 +379,130 @@ function singleValueHeaders(
   );
 }
 
+async function requireAdminRouteSession(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  cookieHeader?: string;
+  requiredRoles?: string[];
+  requiredPermissions?: AdminPermission[];
+}): Promise<
+  | {
+      ok: true;
+      session: {
+        id: string;
+        admin_account_id: string;
+        login_name: string;
+        display_name: string;
+        status: string;
+        expires_at: Date | string;
+      };
+      roles: string[];
+      permissions: AdminPermission[];
+    }
+  | { ok: false; response: AuthHttpResponse<unknown> }
+> {
+  const adminAuth = createAdminAuthService({
+    db: input.db,
+    organizationId: devOrganizationId,
+    workspaceId: devWorkspaceId,
+  });
+  const session = await adminAuth.resolveSession(
+    parseCookies(input.cookieHeader).admin_session,
+    new Date(),
+  );
+  if (!session) {
+    return {
+      ok: false,
+      response: {
+        status: 401,
+        body: { error: { code: "admin_unauthenticated", message: "admin session expired" } },
+      },
+    };
+  }
+
+  const requiredRoles = input.requiredRoles ?? [];
+  const roles = await listAdminRoles(input.db, session.admin_account_id);
+  const permissions = permissionsForRoles(roles);
+  if (requiredRoles.length > 0 && !requiredRoles.some((role) => roles.includes(role))) {
+    return {
+      ok: false,
+      response: {
+        status: 403,
+        body: { error: { code: "admin_forbidden", message: "admin permission denied" } },
+      },
+    };
+  }
+  const requiredPermissions = input.requiredPermissions ?? [];
+  if (
+    requiredPermissions.length > 0 &&
+    !requiredPermissions.every((permission) => permissions.includes(permission))
+  ) {
+    return {
+      ok: false,
+      response: {
+        status: 403,
+        body: { error: { code: "admin_forbidden", message: "admin permission denied" } },
+      },
+    };
+  }
+
+  return { ok: true, session, roles, permissions };
+}
+
+async function listAdminRoles(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  adminAccountId: string,
+) {
+  const result = await db.query<{ role_code: string }>(
+    `
+      SELECT role_code
+      FROM admin_account_roles
+      WHERE admin_account_id = $1
+      ORDER BY role_code ASC
+    `,
+    [adminAccountId],
+  );
+  return result.rows.map((row) => row.role_code);
+}
+
+async function resolveAdminOpsBridgeActor(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+): Promise<ActorContext> {
+  const row = await queryOne<{ user_id: string }>(
+    db,
+    `
+      SELECT user_id
+      FROM memberships
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND role = 'owner_admin'
+        AND status = 'active'
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [devOrganizationId, devWorkspaceId],
+  );
+  if (!row) {
+    throw new AuthorizationError("membership_missing");
+  }
+  return {
+    actorId: row.user_id,
+    organizationId: devOrganizationId,
+    workspaceId: devWorkspaceId,
+    role: "owner_admin",
+    capabilities: [capabilities.opsSettle],
+  };
+}
+
+const adminRouteRoles = {
+  modelWrite: ["super_admin", "model_admin"],
+  modelPublish: ["super_admin", "model_admin"],
+  userWrite: ["super_admin", "support_admin"],
+  creditAdjust: ["super_admin", "finance_admin", "support_admin"],
+  riskReview: ["super_admin", "finance_admin"],
+  riskExport: ["super_admin"],
+  opsTaskRetry: ["super_admin", "ops_admin"],
+} as const;
+
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
   if (error instanceof SyntaxError) {
     writeJson(response, {
@@ -379,15 +531,25 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
           : "permission_denied";
     const message =
       status === 401
-        ? "登录已过期，请重新登录"
+        ? "session expired"
         : status === 404
-          ? "资源不存在或无权限访问"
-          : "没有权限执行该操作，请确认项目成员角色";
+          ? "resource not found"
+          : "permission denied";
     writeJson(response, envelopedError(status, errorCode, message, { reason: error.code }));
     return true;
   }
 
   if (error instanceof GenerationRequestValidationError) {
+    writeJson(response, envelopedError(400, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof GenerationModelRequestValidationError) {
+    writeJson(response, envelopedError(400, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof GenerationModelExecutionResolutionError) {
     writeJson(response, envelopedError(400, error.code, error.message));
     return true;
   }
@@ -452,6 +614,368 @@ function envelopedError(
       details,
     },
   };
+}
+
+async function retryTaskForBackendAdmin(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  taskId: string;
+  reason: string;
+  idempotencyKey: string;
+  actorAdminAccountId: string;
+  now: Date;
+}): Promise<AuthHttpResponse<unknown>> {
+  const reason = input.reason.trim();
+  if (!reason) {
+    return {
+      status: 400,
+      body: { error: { code: "reason_required", message: "reason is required" } },
+    };
+  }
+
+  const requestBody = { taskId: input.taskId, reason };
+  await input.db.query("BEGIN");
+  try {
+    const store = new SqlIdempotencyRecordStore(input.db);
+    const started = await beginOrReplayCommand(store, {
+      organizationId: devOrganizationId,
+      operationName: operationNames.opsRetryTask,
+      idempotencyKey: input.idempotencyKey,
+      requestHash: hashJson(requestBody),
+    });
+
+    if (started.kind === "replayed") {
+      await input.db.query("COMMIT");
+      return {
+        status: 200,
+        body: started.record.responseSnapshot ?? { data: { task: { id: input.taskId } } },
+      };
+    }
+    if (started.kind === "processing") {
+      throw new IdempotencyProcessingError(started.record);
+    }
+
+    const task = await queryOne<{
+      id: string;
+      organization_id: string;
+      workspace_id: string;
+      workflow_id: string;
+      task_type: string;
+      status: string;
+      queue_name: string;
+      input_snapshot_json: unknown;
+      target_entity_type: string;
+      target_entity_id: string;
+      attempt_count: number;
+      max_attempts: number;
+    }>(
+      input.db,
+      `
+        SELECT
+          id,
+          organization_id,
+          workspace_id,
+          workflow_id,
+          task_type,
+          status,
+          queue_name,
+          input_snapshot_json,
+          target_entity_type,
+          target_entity_id,
+          attempt_count,
+          max_attempts
+        FROM tasks
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND id = $3
+        FOR UPDATE
+      `,
+      [devOrganizationId, devWorkspaceId, input.taskId],
+    );
+    if (!task) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 404,
+        body: { error: { code: "task_not_found", message: "task not found" } },
+      };
+    }
+    if (!["failed", "canceled"].includes(task.status) || task.attempt_count >= task.max_attempts) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 400,
+        body: { error: { code: "task_not_retryable", message: "task is not retryable" } },
+      };
+    }
+
+    const updated = await queryOne<{
+      id: string;
+      task_type: string;
+      status: string;
+      queue_name: string;
+      failure_code: string | null;
+      updated_at: Date | string;
+    }>(
+      input.db,
+      `
+        UPDATE tasks
+        SET status = 'queued',
+            failure_code = NULL,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            scheduled_at = $4,
+            updated_at = $4
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND id = $3
+        RETURNING id, task_type, status, queue_name, failure_code, updated_at
+      `,
+      [devOrganizationId, devWorkspaceId, task.id, input.now],
+    );
+
+    await input.db.query(
+      `
+        UPDATE workflows
+        SET status = 'queued',
+            failure_code = NULL,
+            failure_message = NULL,
+            updated_at = $4
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND id = $3
+      `,
+      [devOrganizationId, devWorkspaceId, task.workflow_id, input.now],
+    );
+
+    const snapshot = normalizeRecordJson(task.input_snapshot_json);
+    const mediaKind = task.task_type.includes("video") ? "video" : "image";
+    await appendGenerationTaskCreatedOutboxEvent(input.db, {
+      organizationId: devOrganizationId,
+      workflowId: task.workflow_id,
+      taskId: task.id,
+      kind: mediaKind,
+      modelCode: readString(snapshot.modelCode) || readString(snapshot.model) || null,
+      queueName: task.queue_name,
+      targetType: task.target_entity_type,
+      targetId: task.target_entity_id,
+      providerExecutor: readString(snapshot.providerExecutor) || "manual_retry",
+      availableAt: input.now,
+    }).catch(() => undefined);
+
+    const body = {
+      data: {
+        task: {
+          id: updated!.id,
+          taskType: updated!.task_type,
+          status: updated!.status,
+          queueName: updated!.queue_name,
+          failureCode: updated!.failure_code,
+          updatedAt: new Date(updated!.updated_at).toISOString(),
+        },
+      },
+    };
+    await store.update({
+      ...started.record,
+      responseResourceType: "task",
+      responseResourceId: task.id,
+      responseSnapshot: body,
+      status: "succeeded",
+      updatedAt: input.now,
+    });
+    await appendAuditEvent(input.db, {
+      organizationId: devOrganizationId,
+      workspaceId: devWorkspaceId,
+      actorUserId: null,
+      eventType: "admin.ops.task_retried",
+      targetType: "task",
+      targetId: task.id,
+      reason,
+      sensitive: true,
+      metadata: {
+        actorAdminAccountId: input.actorAdminAccountId,
+        previousStatus: task.status,
+        taskType: task.task_type,
+        queueName: task.queue_name,
+      },
+      occurredAt: input.now,
+    });
+    await input.db.query("COMMIT");
+    return { status: 200, body };
+  } catch (error) {
+    await input.db.query("ROLLBACK").catch(() => undefined);
+    if (error instanceof IdempotencyConflictError) {
+      return { status: 409, body: { error: "idempotency_conflict" } };
+    }
+    if (error instanceof IdempotencyProcessingError) {
+      return { status: 202, body: { error: "idempotency_processing" } };
+    }
+    throw error;
+  }
+}
+
+async function repairPaymentCreditForBackendAdmin(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  orderId: string;
+  reason: string;
+  idempotencyKey: string;
+  actorAdminAccountId: string;
+  now: Date;
+}): Promise<AuthHttpResponse<unknown>> {
+  const reason = input.reason.trim();
+  if (!reason) {
+    return {
+      status: 400,
+      body: { error: { code: "reason_required", message: "reason is required" } },
+    };
+  }
+
+  const requestBody = { orderId: input.orderId, reason };
+  await input.db.query("BEGIN");
+  try {
+    const store = new SqlIdempotencyRecordStore(input.db);
+    const started = await beginOrReplayCommand(store, {
+      organizationId: devOrganizationId,
+      operationName: operationNames.opsRepairPaidWithoutCredit,
+      idempotencyKey: input.idempotencyKey,
+      requestHash: hashJson(requestBody),
+    });
+    if (started.kind === "replayed") {
+      await input.db.query("COMMIT");
+      return {
+        status: 200,
+        body: started.record.responseSnapshot ?? { data: { orderId: input.orderId } },
+      };
+    }
+    if (started.kind === "processing") {
+      throw new IdempotencyProcessingError(started.record);
+    }
+
+    const order = await queryOne<{
+      id: string;
+      organization_id: string;
+      created_by_user_id: string;
+      order_no: string;
+      credits: number;
+      status: string;
+      credit_grant_ledger_entry_id: string | null;
+      successful_payment_intent_id: string | null;
+    }>(
+      input.db,
+      `
+        SELECT
+          id,
+          organization_id,
+          created_by_user_id,
+          order_no,
+          credits,
+          status,
+          credit_grant_ledger_entry_id,
+          successful_payment_intent_id
+        FROM billing_orders
+        WHERE organization_id = $1
+          AND id = $2
+        FOR UPDATE
+      `,
+      [devOrganizationId, input.orderId],
+    );
+    if (!order) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 404,
+        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
+      };
+    }
+    if (order.status !== "paid" || order.credit_grant_ledger_entry_id) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 400,
+        body: { error: { code: "payment_issue_not_repairable", message: "payment issue is not repairable" } },
+      };
+    }
+
+    const creditGrant = await grantCreditsInTransaction(input.db, {
+      organizationId: order.organization_id,
+      amount: order.credits,
+      sourceType: "payment_order",
+      sourceId: order.id,
+      reason,
+      createdByUserId: null,
+      metadata: {
+        orderNo: order.order_no,
+        paymentIntentId: order.successful_payment_intent_id,
+        actorAdminAccountId: input.actorAdminAccountId,
+      },
+      now: input.now,
+    });
+
+    await input.db.query(
+      `
+        UPDATE billing_orders
+        SET credit_grant_ledger_entry_id = $3,
+            updated_at = $4
+        WHERE organization_id = $1
+          AND id = $2
+          AND credit_grant_ledger_entry_id IS NULL
+      `,
+      [order.organization_id, order.id, creditGrant.id, input.now],
+    );
+
+    const body = {
+      data: {
+        issue: {
+          orderId: order.id,
+          orderNo: order.order_no,
+          issueType: "paid_without_credit",
+          status: "resolved",
+        },
+        creditGrant: {
+          id: creditGrant.id,
+          amount: creditGrant.amount,
+        },
+      },
+    };
+    await store.update({
+      ...started.record,
+      responseResourceType: "billing_order",
+      responseResourceId: order.id,
+      responseSnapshot: body,
+      status: "succeeded",
+      updatedAt: input.now,
+    });
+    await appendAuditEvent(input.db, {
+      organizationId: devOrganizationId,
+      workspaceId: devWorkspaceId,
+      actorUserId: null,
+      eventType: "admin.ops.payment_credit_repaired",
+      targetType: "billing_order",
+      targetId: order.id,
+      reason,
+      sensitive: true,
+      metadata: {
+        actorAdminAccountId: input.actorAdminAccountId,
+        orderNo: order.order_no,
+        creditGrantLedgerEntryId: creditGrant.id,
+        amount: creditGrant.amount,
+      },
+      occurredAt: input.now,
+    });
+    await input.db.query("COMMIT");
+    return { status: 200, body };
+  } catch (error) {
+    await input.db.query("ROLLBACK").catch(() => undefined);
+    if (error instanceof IdempotencyConflictError) {
+      return { status: 409, body: { error: "idempotency_conflict" } };
+    }
+    if (error instanceof IdempotencyProcessingError) {
+      return { status: 202, body: { error: "idempotency_processing" } };
+    }
+    throw error;
+  }
+}
+
+function normalizeRecordJson(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
+  return value as Record<string, unknown>;
 }
 
 function parsePositiveInt(value: string | null, fallback: number, max: number) {
@@ -657,7 +1181,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "不支持上传该文件类型",
+      message: "涓嶆敮鎸佷笂浼犺鏂囦欢绫诲瀷",
     };
   }
   const kind = getUploadLimitKind(normalizedContentType, input.fileName);
@@ -665,7 +1189,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "仅支持图片、视频或音频文件",
+      message: "浠呮敮鎸佸浘鐗囥€佽棰戞垨闊抽鏂囦欢",
     };
   }
   const rule = episodeUploadLimits[kind];
@@ -673,7 +1197,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_mime_not_allowed",
-      message: `${rule.label} MIME 类型不在允许列表中`, 
+      message: `${rule.label} MIME type is not allowed`,
     };
   }
   const sizeBytes = Number(input.sizeBytes ?? 0);
@@ -681,7 +1205,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_file_too_large",
-      message: `${rule.label}文件超过上传大小限制`,
+      message: `${rule.label}鏂囦欢瓒呰繃涓婁紶澶у皬闄愬埗`,
       details: {
         kind,
         maxBytes: rule.maxBytes,
@@ -741,14 +1265,18 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
       ? readEnumValues(modelConfig.parameterSchema.quality)
       : readEnumValues(modelConfig.parameterSchema.resolution);
   const supportedRatios = schemaRatios.length ? schemaRatios : defaultRatios;
+  const supportedDurations = readEnumValues(modelConfig.parameterSchema.durationSec);
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
+    mediaType: modelConfig.mediaType,
     providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
     pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
     supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
     supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
+    supportedDurations,
+    defaultParams: modelConfig.defaultParams,
     displayBaseCost: generationCostFromModelConfig(0, modelConfig),
     disabled: modelConfig.status !== "active",
   };
@@ -1348,7 +1876,7 @@ async function mapGenerationTaskResponse(
           id: `${row.task_id}-audio-1`,
           type: "audio",
           kind: "audio",
-          name: "闊抽 1",
+          name: "闂婃娊顣?1",
           summary: String(lipSyncConfig.text ?? snapshot.prompt ?? "").trim().slice(0, 48),
           voiceId: lipSyncConfig.voiceId ?? null,
           voiceName: String(lipSyncConfig.voiceName ?? "").trim(),
@@ -1599,12 +2127,12 @@ function generationFailureDisplayMessage(input: {
   const providerMessage = String(input.providerMessage ?? "").trim();
   if (failureCode === "provider_failed" && providerMessage) {
     return generationProviderFailureDisplayMessage(providerMessage) ||
-      `模型供应商返回失败：${providerMessage}`;
+      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerMessage}`;
   }
   const providerErrorCode = String(input.providerErrorCode ?? "").trim();
   if (failureCode === "provider_failed" && providerErrorCode) {
     return generationProviderFailureDisplayMessage(providerErrorCode) ||
-      `模型供应商返回失败：${providerErrorCode}`;
+      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerErrorCode}`;
   }
   return generationFailureDisplayMessageByCode(failureCode);
 }
@@ -1612,57 +2140,56 @@ function generationFailureDisplayMessage(input: {
 function generationProviderFailureDisplayMessage(value: string): string {
   const code = value.trim();
   if (code === "provider_submission_ambiguous") {
-    return "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。";
+    return "Provider submission is ambiguous. Credits were refunded and the task requires retry or admin review.";
   }
   const openAiImagesStatus = /^openai_images_(\d{3})$/i.exec(code)?.[1];
   if (openAiImagesStatus === "504") {
-    return "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。";
+    return "GPT Image 2 provider timed out. Credits were refunded; retry later or check provider health.";
   }
   if (openAiImagesStatus === "429") {
-    return "GPT Image 2 中转站或供应商触发限流（HTTP 429），积分已返还。请稍后重试。";
+    return "GPT Image 2 provider is rate limited. Credits were refunded; retry later.";
   }
   if (openAiImagesStatus === "401" || openAiImagesStatus === "403") {
-    return "GPT Image 2 中转站或供应商鉴权失败，请联系管理员检查 API Key 和中转站权限。";
+    return "GPT Image 2 provider authentication failed. Check API key and provider permissions.";
   }
   if (openAiImagesStatus === "400") {
-    return "GPT Image 2 中转站或供应商拒绝了本次请求，请检查提示词、参考图或模型参数。";
+    return "GPT Image 2 provider rejected the request. Check prompt, references, or model parameters.";
   }
   if (openAiImagesStatus && Number(openAiImagesStatus) >= 500) {
-    return `GPT Image 2 中转站或供应商服务异常（HTTP ${openAiImagesStatus}），积分已返还。请稍后重试。`;
+    return `GPT Image 2 provider error HTTP ${openAiImagesStatus}. Credits were refunded; retry later.`;
   }
   return "";
 }
 
 function generationFailureDisplayMessageByCode(failureCode: string): string {
-  return (
-    {
-      task_timeout: "生成任务超过 15 分钟未完成，已自动标记失败并返还积分。",
-      provider_failed: "模型供应商返回失败，积分已返还。请调整提示词或稍后重试。",
-      provider_submission_ambiguous: "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。",
-      openai_images_504: "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
-      provider_poll_timeout: "模型生成结果查询超时，任务已失败并返还积分。",
-      provider_result_unknown: "模型生成状态暂不确定，请稍后刷新或联系后台复核。",
-      provider_output_download_failed: "模型已生成结果，但从供应商下载产物失败，积分已返还。",
-      provider_output_upload_failed: "模型已生成结果，但上传到平台存储失败，积分已返还。",
-      provider_output_persist_failed: "产物已上传到平台存储，但写入资产记录或绑定分镜失败，正在等待后台补写。",
-      provider_api_key_env_required: "模型供应商密钥环境变量未配置，请联系管理员。",
-      provider_api_key_missing: "模型供应商密钥为空，请联系管理员检查环境配置。",
-      provider_adapter_missing: "当前模型供应商适配器不可用，请联系管理员检查模型配置。",
-      provider_circuit_open: "模型供应商熔断保护中，请稍后重试或联系管理员。",
-      worker_crashed_after_external_start: "任务已提交到模型供应商，但本地 worker 中断，结果需要后台复核。",
-      storage_put_object_required: "平台存储上传能力未启用，请联系管理员检查 COS 配置。",
-      model_not_configured: "当前模型未配置，请切换模型或联系管理员。",
-      model_disabled: "当前模型维护中，请切换模型后重试。",
-      model_task_mode_unsupported: "当前模型不支持这类生成方式，请切换模型或生成模式。",
-      model_media_type_mismatch: "当前模型类型与生成内容不匹配，请切换模型。",
-      model_reference_limit_exceeded: "参考素材数量超出模型限制，请减少参考图后重试。",
-      model_reference_not_found: "参考素材不存在或无权访问，请重新选择参考图。",
-      model_reference_unavailable: "参考素材尚未准备好，请重新选择或稍后重试。",
-      model_reference_mime_not_allowed: "当前模型不支持该参考素材格式，请更换参考图。",
-      model_prompt_too_long: "提示词过长，请缩短后重试。",
-      insufficient_credits: "积分不足，任务未提交到模型供应商。",
-    }[failureCode] ?? `生成任务失败：${failureCode || "unknown_failure"}`
-  );
+  const messages: Record<string, string> = {
+    task_timeout: "Generation task timed out. Credits were refunded.",
+    provider_failed: "Provider returned a failure. Credits were refunded.",
+    provider_submission_ambiguous: "Provider submission is ambiguous. Credits were refunded and admin review may be needed.",
+    openai_images_504: "GPT Image 2 provider timed out. Credits were refunded.",
+    provider_poll_timeout: "Provider result polling timed out. Credits were refunded.",
+    provider_result_unknown: "Provider result is unknown. Refresh later or contact admin review.",
+    provider_output_download_failed: "Provider output download failed. Credits were refunded.",
+    provider_output_upload_failed: "Provider output upload failed. Credits were refunded.",
+    provider_output_persist_failed: "Provider output was uploaded but asset persistence failed. Admin repair is required.",
+    provider_api_key_env_required: "Provider API key environment variable is not configured.",
+    provider_api_key_missing: "Provider API key is missing.",
+    provider_adapter_missing: "Provider adapter is unavailable.",
+    provider_circuit_open: "Provider circuit breaker is open. Retry later.",
+    worker_crashed_after_external_start: "Task was submitted externally but local worker stopped. Admin review is required.",
+    storage_put_object_required: "Platform storage upload capability is not enabled.",
+    model_not_configured: "Current model is not configured.",
+    model_disabled: "Current model is under maintenance.",
+    model_task_mode_unsupported: "Current model does not support this generation mode.",
+    model_media_type_mismatch: "Current model media type does not match the requested generation.",
+    model_reference_limit_exceeded: "Reference asset count exceeds model limits.",
+    model_reference_not_found: "Reference asset was not found or is inaccessible.",
+    model_reference_unavailable: "Reference asset is not ready.",
+    model_reference_mime_not_allowed: "Reference asset format is not supported by the model.",
+    model_prompt_too_long: "Prompt is too long.",
+    insufficient_credits: "Insufficient credits; task was not submitted to provider.",
+  };
+  return messages[failureCode] ?? `Generation task failed: ${failureCode || "unknown_failure"}`;
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -2431,25 +2958,37 @@ async function createEpisodeGenerationTask(
   const modelConfig = requestedModelCode
     ? await findActiveAiModelConfigByCode(db, requestedModelCode)
     : undefined;
+  const dispatchPolicy = requestedModelCode
+    ? await findActiveAiModelDispatchPolicyByModelCode(db, requestedModelCode)
+    : undefined;
   const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig);
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
   const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
-  const bullMqSubmitQueueName = input.kind === "video"
+  const fallbackSubmitQueueName = input.kind === "video"
     ? generationQueueConfig.queues.submitVideo
     : generationQueueConfig.queues.submitImage;
-  const shouldUseSeedanceProvider =
-    input.kind === "video" &&
-    requestedModelCode === "seedance-i2v-pro" &&
-    isEnabled(input.env.SEEDANCE_PROVIDER_ENABLED);
-  const shouldUseGptImageProvider =
-    input.kind === "image" &&
-    requestedModelCode === "gpt-image-2-cn" &&
-    isEnabled(input.env.GPT_IMAGE2_PROVIDER_ENABLED);
   const rawParameters = input.body.parameters && typeof input.body.parameters === "object"
     ? input.body.parameters as Record<string, unknown>
     : {};
+  const modelExecution = resolveGenerationModelExecution({
+    kind: input.kind,
+    modelCode: requestedModelCode,
+    modelConfig,
+    dispatchPolicy,
+    parameters: rawParameters,
+    fallbackQueueName: fallbackSubmitQueueName,
+  });
+  if (modelConfig) {
+    validateGenerationModelRequest({
+      kind: input.kind,
+      modelCode: requestedModelCode,
+      modelConfig,
+      parameters: modelExecution.parameters,
+      prompt: String(input.body.prompt ?? input.body.promptOverride ?? input.body.motionPrompt ?? ""),
+    });
+  }
   const referenceAssetVersionIds = input.kind === "image"
-    ? readGenerationReferenceAssetVersionIds(input.body, rawParameters)
+    ? readGenerationReferenceAssetVersionIds(input.body, modelExecution.parameters)
     : [];
   validateGenerationReferenceLimit(referenceAssetVersionIds, modelConfig);
   const resolvedReferenceImages = input.kind === "image"
@@ -2463,13 +3002,13 @@ async function createEpisodeGenerationTask(
     : [];
   const parameters = resolvedReferenceImages.length
     ? {
-        ...rawParameters,
+        ...modelExecution.parameters,
         referenceImages: [
-          ...readArray(rawParameters.referenceImages),
+          ...readArray(modelExecution.parameters.referenceImages),
           ...resolvedReferenceImages,
         ],
       }
-    : rawParameters;
+    : modelExecution.parameters;
   const requestSnapshot = {
     kind: input.kind,
     episodeId: input.episodeId,
@@ -2524,14 +3063,14 @@ async function createEpisodeGenerationTask(
       ...requestSnapshot,
       requestedAt: input.now.toISOString(),
       timeoutAt: timeoutAt.toISOString(),
-      mockExecutor: !(shouldUseSeedanceProvider || shouldUseGptImageProvider),
-      providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
+      mockExecutor: modelExecution.providerExecutor === "mock",
+      providerExecutor: modelExecution.providerExecutor,
     },
     createdByUserId: context.userId,
     tasks: [
       {
         taskType: config.taskType,
-        queueName: shouldUseBullMQDispatch ? bullMqSubmitQueueName : config.queueName,
+        queueName: shouldUseBullMQDispatch ? modelExecution.queueName : config.queueName,
         targetEntityType,
         targetEntityId,
         inputSnapshot: {
@@ -2539,8 +3078,8 @@ async function createEpisodeGenerationTask(
           cost: estimatedCost,
           requestedAt: input.now.toISOString(),
           timeoutAt: timeoutAt.toISOString(),
-          mockExecutor: !(shouldUseSeedanceProvider || shouldUseGptImageProvider),
-          providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
+          mockExecutor: modelExecution.providerExecutor === "mock",
+          providerExecutor: modelExecution.providerExecutor,
         },
       },
     ],
@@ -2595,9 +3134,9 @@ async function createEpisodeGenerationTask(
     taskId: task.id,
     modelConfigId: modelConfig?.id ?? null,
     creditReservationId: reservation.reservation.id,
-    modelCode: requestedModelCode || (input.kind === "video" ? "mock-video" : "mock-image"),
+    modelCode: requestedModelCode,
     mediaType: input.kind,
-    taskMode: input.kind === "video" ? "video.image_to_video" : "image.generate",
+    taskMode: modelExecution.taskMode,
     estimatedCredits: estimatedCost,
     requestSummary: {
       prompt: requestSnapshot.prompt,
@@ -2619,11 +3158,11 @@ async function createEpisodeGenerationTask(
       workflowId: workflow.workflow.id,
       taskId: task.id,
       kind: input.kind,
-      modelCode: requestedModelCode || null,
-      queueName: bullMqSubmitQueueName,
+      modelCode: requestedModelCode,
+      queueName: modelExecution.queueName,
       targetType: requestSnapshot.targetType,
       targetId: requestSnapshot.targetId,
-      providerExecutor: shouldUseSeedanceProvider ? "seedance" : shouldUseGptImageProvider ? "gpt-image-2" : "mock",
+      providerExecutor: modelExecution.providerExecutor,
       availableAt: input.now,
     });
 
@@ -2646,7 +3185,7 @@ async function createEpisodeGenerationTask(
     return { status: 200 as const, body: responseBody };
   }
 
-  if (shouldUseGptImageProvider) {
+  if (modelExecution.providerExecutor === "gpt-image-2") {
     const claim = await claimQueuedTask(db, {
       taskId: task.id,
       workerId: "episode-gpt-image-submit-worker",
@@ -2883,7 +3422,7 @@ async function createEpisodeGenerationTask(
     }
   }
 
-  if (shouldUseSeedanceProvider && !shouldUseBullMQDispatch) {
+  if (modelExecution.providerExecutor === "seedance" && !shouldUseBullMQDispatch) {
     const claim = await claimQueuedTask(db, {
       taskId: task.id,
       workerId: "episode-seedance-submit-worker",
@@ -3127,7 +3666,7 @@ function validateGenerationReferenceLimit(
   ) {
     throw new GenerationRequestValidationError(
       "model_reference_limit_exceeded",
-      "参考素材数量超出模型限制",
+      "Reference asset count exceeds model limits",
     );
   }
 }
@@ -3188,13 +3727,13 @@ async function resolveGenerationReferenceImages(
     if (!row) {
       throw new GenerationRequestValidationError(
         "model_reference_not_found",
-        "参考素材不存在或无权访问",
+        "Reference asset was not found or is inaccessible",
       );
     }
     if (row.storage_status && row.storage_status !== "available") {
       throw new GenerationRequestValidationError(
         "model_reference_unavailable",
-        "参考素材尚未可用或已失效",
+        "Reference asset is unavailable",
       );
     }
     const metadata = parseMetadataJson(row.metadata_json);
@@ -3209,7 +3748,7 @@ async function resolveGenerationReferenceImages(
     ) {
       throw new GenerationRequestValidationError(
         "model_reference_mime_not_allowed",
-        "参考素材格式不符合当前模型配置",
+        "鍙傝€冪礌鏉愭牸寮忎笉绗﹀悎褰撳墠妯″瀷閰嶇疆",
       );
     }
     const objectKey = readString(row.storage_object_key_from_object) || row.storage_object_key;
@@ -3431,12 +3970,12 @@ function normalizeEpisodeAssetType(value: string) {
 
 function defaultEpisodeAssetDescription(kind: "role" | "scene" | "prop") {
   if (kind === "role") {
-    return "自己的角色描述，随意更改";
+    return "鑷繁鐨勮鑹叉弿杩帮紝闅忔剰鏇存敼";
   }
   if (kind === "scene") {
-    return "这是刚添加的场景选项";
+    return "杩欐槸鍒氭坊鍔犵殑鍦烘櫙閫夐」";
   }
-  return "这是刚添加的道具选项";
+  return "杩欐槸鍒氭坊鍔犵殑閬撳叿閫夐」";
 }
 
 function matchesEpisodeScopedAsset(
@@ -3595,7 +4134,7 @@ async function listEpisodeAssetsFromDb(
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
-          name: String(metadata.label ?? row.asset_key ?? "未命名资产"),
+          name: String(metadata.label ?? row.asset_key ?? "Untitled asset"),
           description: String(metadata.description ?? ""),
           fixedImageFileId: fixedImageVersion?.assetVersion.versionId ?? fixedImageFileId ?? row.version_id,
           fixedImageStorageObjectId:
@@ -5450,6 +5989,23 @@ async function serveStatic(pathname: string, response: ServerResponse) {
   response.end(file);
 }
 
+async function serveAdminStatic(pathname: string, response: ServerResponse) {
+  const normalizedPath = pathname === "/admin" ? "/admin/" : pathname;
+  const relativePath = normalizedPath.replace(/^\/admin\/?/, "");
+  const filePath = relativePath && extname(relativePath)
+    ? join(adminRoot, relativePath)
+    : join(adminRoot, "index.html");
+  const file = await readFile(filePath);
+
+  response.statusCode = 200;
+  response.setHeader(
+    "content-type",
+    contentTypes[extname(filePath)] ?? "text/html; charset=utf-8",
+  );
+  response.setHeader("cache-control", "no-store");
+  response.end(file);
+}
+
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
   const filePath =
@@ -5924,6 +6480,13 @@ export function createPhoneAuthDevServer(
         return;
       }
 
+      if (
+        request.method === "GET" &&
+        (pathname === "/admin" || pathname.startsWith("/admin/"))
+      ) {
+        return await serveAdminStatic(pathname, response);
+      }
+
       const db = await dbPromise;
       const creatorApplication = createCreatorApplication({
         db,
@@ -5939,6 +6502,1102 @@ export function createPhoneAuthDevServer(
 
       if (pathname.startsWith("/vendor/")) {
         return await serveVendorFile(pathname, response);
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/auth/login") {
+        const body = (await readJsonBody(request)) as {
+          loginName?: string;
+          password?: string;
+        };
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.login({
+            loginName: String(body.loginName ?? ""),
+            password: String(body.password ?? ""),
+            ipAddress: requestIpAddress(request),
+            userAgent: String(request.headers["user-agent"] ?? ""),
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/auth/me") {
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.me({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/auth/logout") {
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.logout({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/auth/profile") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const body = (await readJsonBody(request)) as {
+          displayName?: string;
+        };
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.updateProfile({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            displayName: String(body.displayName ?? ""),
+            idempotencyKey,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/auth/password") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const body = (await readJsonBody(request)) as {
+          oldPassword?: string;
+          newPassword?: string;
+          revokeOtherSessions?: boolean;
+        };
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.changePassword({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            oldPassword: String(body.oldPassword ?? ""),
+            newPassword: String(body.newPassword ?? ""),
+            revokeOtherSessions: Boolean(body.revokeOtherSessions),
+            idempotencyKey,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/auth/sessions") {
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.listSessions({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/auth/sessions/revoke-other") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminAuth = createAdminAuthService({
+          db,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+        });
+        return writeJson(
+          response,
+          await adminAuth.revokeOtherSessions({
+            sessionToken: parseCookies(request.headers.cookie).admin_session,
+            idempotencyKey,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/dashboard/overview") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["dashboard.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminDashboard = createAdminDashboardService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminDashboard.overview({
+            organizationId: devOrganizationId,
+            workspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (
+        request.method === "GET" &&
+        (pathname === "/api/admin/dashboard/model-health" || pathname === "/api/admin/dashboard/recent-events")
+      ) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["dashboard.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminDashboard = createAdminDashboardService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: pathname.endsWith("/model-health")
+            ? await adminDashboard.modelHealth({
+                organizationId: devOrganizationId,
+                workspaceId: devWorkspaceId,
+              })
+            : await adminDashboard.recentEvents({
+                organizationId: devOrganizationId,
+                workspaceId: devWorkspaceId,
+              }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/models") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["model.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminModels = createAdminModelConfigService({ db });
+        const result = await adminModels.listModels({
+          keyword: url.searchParams.get("keyword"),
+          status: url.searchParams.get("status"),
+          mediaType: url.searchParams.get("mediaType"),
+          page: Number(url.searchParams.get("page") ?? 1),
+          pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+        });
+        return writeJson(response, {
+          status: 200,
+          body: result,
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/models") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.createModel({
+            ...body,
+            taskModes: Array.isArray(body.taskModes) ? body.taskModes.map(String) : [],
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminModelDuplicateMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)\/duplicate$/);
+      if (request.method === "POST" && adminModelDuplicateMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          modelCode?: string;
+          displayName?: string;
+          reason?: string;
+        };
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.duplicateModel({
+            id: decodeURIComponent(adminModelDuplicateMatch[1]),
+            modelCode: String(body.modelCode ?? ""),
+            displayName: String(body.displayName ?? ""),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminModelStatusMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && adminModelStatusMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelPublish],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          status?: string;
+          reason?: string;
+        };
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.changeStatus({
+            id: decodeURIComponent(adminModelStatusMatch[1]),
+            status: String(body.status ?? ""),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminModelRevisionsMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)\/revisions$/);
+      if (request.method === "GET" && adminModelRevisionsMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["model.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.listRevisions({
+            id: decodeURIComponent(adminModelRevisionsMatch[1]),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        );
+      }
+
+      const adminModelRollbackMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)\/rollback$/);
+      if (request.method === "POST" && adminModelRollbackMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelPublish],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          revisionId?: string;
+          reason?: string;
+        };
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.rollbackModel({
+            id: decodeURIComponent(adminModelRollbackMatch[1]),
+            revisionId: String(body.revisionId ?? ""),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminModelDetailMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)$/);
+      if (request.method === "PATCH" && adminModelDetailMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.updateModel({
+            id: decodeURIComponent(adminModelDetailMatch[1]),
+            patch: {
+              ...body,
+              taskModes: Array.isArray(body.taskModes) ? body.taskModes.map(String) : undefined,
+            },
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && adminModelDetailMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["model.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminModels = createAdminModelConfigService({ db });
+        const model = await adminModels.getModel(decodeURIComponent(adminModelDetailMatch[1]));
+        if (!model) {
+          return writeJson(response, {
+            status: 404,
+            body: { error: { code: "admin_model_not_found", message: "admin session expired" } },
+          });
+        }
+        return writeJson(response, {
+          status: 200,
+          body: { data: { model } },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/users") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminUsers.listUsers({
+            keyword: url.searchParams.get("keyword"),
+            page: Number(url.searchParams.get("page") ?? 1),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/team-permission-accounts") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminUsers.listTeamPermissionAccounts({
+            keyword: url.searchParams.get("keyword"),
+            page: Number(url.searchParams.get("page") ?? 1),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        });
+      }
+
+      const adminUserSubaccountsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/subaccounts$/);
+      if (request.method === "GET" && adminUserSubaccountsMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminUsers.listSubaccounts({
+            userId: decodeURIComponent(adminUserSubaccountsMatch[1]),
+          }),
+        });
+      }
+
+      const adminUserGrantCreditsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/grant$/);
+      if (request.method === "POST" && adminUserGrantCreditsMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          amount?: number;
+          reason?: string;
+          workOrderNo?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.grantUserCredits({
+            userId: decodeURIComponent(adminUserGrantCreditsMatch[1]),
+            amount: Number(body.amount ?? 0),
+            reason: String(body.reason ?? ""),
+            workOrderNo: String(body.workOrderNo ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminUserContactRevealMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/contact\/reveal$/);
+      if (request.method === "POST" && adminUserContactRevealMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.userWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.revealUserContact({
+            userId: decodeURIComponent(adminUserContactRevealMatch[1]),
+            reason: String(body.reason ?? ""),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+          }),
+        );
+      }
+
+      const adminUserProfileMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/profile$/);
+      if (request.method === "PATCH" && adminUserProfileMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.userWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          displayName?: string;
+          email?: string | null;
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.updateUserProfile({
+            userId: decodeURIComponent(adminUserProfileMatch[1]),
+            displayName: body.displayName,
+            email: body.email,
+            reason: String(body.reason ?? ""),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminUserStatusMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && adminUserStatusMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.userWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          status?: string;
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.updateUserStatus({
+            userId: decodeURIComponent(adminUserStatusMatch[1]),
+            status: String(body.status ?? ""),
+            reason: String(body.reason ?? ""),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminUserDeductCreditsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/deduct$/);
+      if (request.method === "POST" && adminUserDeductCreditsMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          amount?: number;
+          reason?: string;
+          workOrderNo?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.deductUserCredits({
+            userId: decodeURIComponent(adminUserDeductCreditsMatch[1]),
+            amount: Number(body.amount ?? 0),
+            reason: String(body.reason ?? ""),
+            workOrderNo: String(body.workOrderNo ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminUserCreditLedgerMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/ledger$/);
+      if (request.method === "GET" && adminUserCreditLedgerMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminUsers.listUserCreditLedger({
+            userId: decodeURIComponent(adminUserCreditLedgerMatch[1]),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/risks") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["risk.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminRiskAudit = createAdminRiskAuditService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminRiskAudit.listRisks({
+            organizationId: devOrganizationId,
+            workspaceId: devWorkspaceId,
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+            riskStatus: url.searchParams.get("riskStatus"),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/exports/risks.csv") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.riskExport],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminRiskAudit = createAdminRiskAuditService({ db });
+        const exported = await adminRiskAudit.exportRisksCsv({
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+          riskStatus: url.searchParams.get("riskStatus"),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          now: new Date(),
+        });
+        return writeText(response, {
+          status: 200,
+          contentType: "text/csv; charset=utf-8",
+          body: exported.body,
+          fileName: exported.fileName,
+        });
+      }
+
+      const adminRiskReviewMatch = pathname.match(/^\/api\/admin\/risks\/([^/]+)\/review$/);
+      if (request.method === "POST" && adminRiskReviewMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.riskReview],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminRiskAudit = createAdminRiskAuditService({ db });
+        return writeJson(
+          response,
+          await adminRiskAudit.reviewPaymentRisk({
+            riskId: decodeURIComponent(adminRiskReviewMatch[1]),
+            organizationId: devOrganizationId,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/audit-events") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminRiskAudit = createAdminRiskAuditService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminRiskAudit.listAuditEvents({
+            organizationId: devOrganizationId,
+            workspaceId: devWorkspaceId,
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/exports/audit-events.csv") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.riskExport],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminRiskAudit = createAdminRiskAuditService({ db });
+        const exported = await adminRiskAudit.exportAuditEventsCsv({
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          now: new Date(),
+        });
+        return writeText(response, {
+          status: 200,
+          contentType: "text/csv; charset=utf-8",
+          body: exported.body,
+          fileName: exported.fileName,
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/settings") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.listSettings(),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/settings/revisions") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.listRuntimeConfigRevisions({
+            key: url.searchParams.get("key"),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+          }),
+        });
+      }
+
+      const adminSettingRollbackMatch = pathname.match(/^\/api\/admin\/settings\/([^/]+)\/rollback$/);
+      if (request.method === "POST" && adminSettingRollbackMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          revisionId?: string;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.rollbackRuntimeConfig({
+            key: decodeURIComponent(adminSettingRollbackMatch[1]),
+            revisionId: String(body.revisionId ?? ""),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminSettingPatchMatch = pathname.match(/^\/api\/admin\/settings\/([^/]+)$/);
+      if (request.method === "PATCH" && adminSettingPatchMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          value?: unknown;
+          valueType?: string;
+          scope?: string;
+          description?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateRuntimeConfig({
+            key: decodeURIComponent(adminSettingPatchMatch[1]),
+            value: body.value,
+            valueType: String(body.valueType ?? "json"),
+            scope: String(body.scope ?? "global"),
+            description: body.description ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminSecretProbeMatch = pathname.match(/^\/api\/admin\/secret-references\/([^/]+)\/probe$/);
+      if (request.method === "POST" && adminSecretProbeMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as { reason?: string };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.probeSecretReference({
+            id: decodeURIComponent(adminSecretProbeMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/secret-references") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          secretRef?: string;
+          envName?: string;
+          purpose?: string;
+          providerName?: string | null;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.createSecretReference({
+            secretRef: String(body.secretRef ?? ""),
+            envName: String(body.envName ?? ""),
+            purpose: String(body.purpose ?? ""),
+            providerName: body.providerName ?? null,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/admin-accounts") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["admin_account.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.listAdminAccounts(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/admin-accounts") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          loginName?: string;
+          password?: string;
+          displayName?: string;
+          roles?: string[];
+          remark?: string | null;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.createAdminAccount({
+            loginName: String(body.loginName ?? ""),
+            password: String(body.password ?? ""),
+            displayName: String(body.displayName ?? ""),
+            roles: Array.isArray(body.roles) ? body.roles : [],
+            remark: body.remark ?? null,
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminAccountPasswordResetMatch = pathname.match(/^\/api\/admin\/admin-accounts\/([^/]+)\/password$/);
+      if (request.method === "POST" && adminAccountPasswordResetMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          newPassword?: string;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.resetAdminAccountPassword({
+            accountId: decodeURIComponent(adminAccountPasswordResetMatch[1]),
+            newPassword: String(body.newPassword ?? ""),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminAccountPatchMatch = pathname.match(/^\/api\/admin\/admin-accounts\/([^/]+)$/);
+      if (request.method === "PATCH" && adminAccountPatchMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          displayName?: string;
+          roles?: string[];
+          status?: string;
+          remark?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateAdminAccount({
+            accountId: decodeURIComponent(adminAccountPatchMatch[1]),
+            displayName: String(body.displayName ?? ""),
+            roles: Array.isArray(body.roles) ? body.roles : [],
+            status: String(body.status ?? "active"),
+            remark: body.remark ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
       }
 
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
@@ -6329,13 +7988,13 @@ export function createPhoneAuthDevServer(
           if (!process.env.DATABASE_URL?.trim()) {
             return writeJson(
               response,
-              envelopedError(500, "database_url_required", "未配置真实数据库，禁止上传。"),
+              envelopedError(500, "database_url_required", "DATABASE_URL is required for uploads"),
             );
           }
           if (storageRuntime.mode === "creator-dev") {
             return writeJson(
               response,
-              envelopedError(500, "cloud_storage_required", "未配置云存储，项目上传必须走云存储。"),
+              envelopedError(500, "cloud_storage_required", "Cloud storage is required for uploads"),
             );
           }
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
@@ -6588,7 +8247,7 @@ export function createPhoneAuthDevServer(
         if (!authenticated) {
           return writeJson(
             response,
-            envelopedError(401, "unauthenticated", "登录已过期，请重新登录"),
+            envelopedError(401, "unauthenticated", "session expired"),
           );
         }
 
@@ -6613,7 +8272,7 @@ export function createPhoneAuthDevServer(
               envelopedError(
                 result.status,
                 String(body.error ?? "project_detail_failed"),
-                "项目详情加载失败",
+                "椤圭洰璇︽儏鍔犺浇澶辫触",
               ),
             );
           }
@@ -6638,7 +8297,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "project_not_found", "项目不存在或无权限访问"));
+            return writeJson(response, envelopedError(result.status, "project_not_found", "project not found"));
           }
           const detail = result.body as Record<string, unknown>;
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
@@ -6671,7 +8330,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_create_failed"), "剧集创建失败"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_create_failed"), "鍓ч泦鍒涘缓澶辫触"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -6706,7 +8365,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_update_failed"), "剧集更新失败"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_update_failed"), "鍓ч泦鏇存柊澶辫触"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -6735,7 +8394,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_delete_failed"), "剧集删除失败"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_delete_failed"), "鍓ч泦鍒犻櫎澶辫触"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -6760,7 +8419,7 @@ export function createPhoneAuthDevServer(
             [episodeId],
           );
           if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "鍓ч泦涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const result = await creatorApplication.getProjectDetail({
             user: {
@@ -6771,7 +8430,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(result.status, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const detail = normalizeProjectDetailForEpisodeContract(result.body as Record<string, unknown>);
           const project = detail.project as Record<string, unknown>;
@@ -6863,7 +8522,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!items) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
@@ -6884,7 +8543,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
             return writeJson(response, envelopedError(400, result.error, "Asset name is required"));
@@ -6908,7 +8567,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
             const message =
@@ -6943,7 +8602,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result?.asset) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -6964,7 +8623,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -6987,7 +8646,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
             const status = result.error === "asset_library_duplicate" ? 409 : 400;
@@ -7014,7 +8673,7 @@ export function createPhoneAuthDevServer(
             [episodeId],
           );
           if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const result = await creatorApplication.getProjectDetail({
             user: {
@@ -7025,7 +8684,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(result.status, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const detail = result.body as Record<string, unknown>;
           const shots = Array.isArray(detail.shots) ? detail.shots : [];
@@ -7101,7 +8760,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!context) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "鍓ч泦涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const seedanceEnabled = isEnabled(runtimeEnv.SEEDANCE_PROVIDER_ENABLED);
           const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
@@ -7113,7 +8772,7 @@ export function createPhoneAuthDevServer(
             : [
                 {
                   modelCode: "nano_banana_2",
-                  modelLabel: "nano banana 2（链路G）",
+                  modelLabel: "nano banana 2",
                   providerGroup: "Nano banana",
                   pipeline: "G",
                   supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
@@ -7127,7 +8786,7 @@ export function createPhoneAuthDevServer(
             ? modelConfigToGenerationConfigModel(seedanceModelConfig)
             : {
                 modelCode: "video_mock_1",
-                modelLabel: "固定视频 Mock",
+                modelLabel: "鍥哄畾瑙嗛 Mock",
                 providerGroup: "Mock",
                 pipeline: "mock",
                 supportedModes: ["video"],
@@ -7159,7 +8818,7 @@ export function createPhoneAuthDevServer(
         ) {
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
-            return writeJson(response, envelopedError(400, "idempotency_key_required", "缺少 Idempotency-Key"));
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "缂哄皯 Idempotency-Key"));
           }
           const episodeId = decodeURIComponent(pathname.split("/").at(3) ?? "");
           const kind = pathname.endsWith("/generation/video-tasks") ? "video" : "image";
@@ -7178,18 +8837,18 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             });
             if (!result.body) {
-              return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+              return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
             }
             return writeJson(response, enveloped(result.status, result.body));
           } catch (error) {
             if (error instanceof IdempotencyConflictError) {
-              return writeJson(response, envelopedError(409, error.code, "幂等键已用于不同请求"));
+              return writeJson(response, envelopedError(409, error.code, "骞傜瓑閿凡鐢ㄤ簬涓嶅悓璇锋眰"));
             }
             if (error instanceof IdempotencyProcessingError) {
-              return writeJson(response, envelopedError(202, error.code, "任务正在处理中"));
+              return writeJson(response, envelopedError(202, error.code, "request is still processing"));
             }
             if (error instanceof InsufficientCreditsError) {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "积分不足"));
+              return writeJson(response, envelopedError(402, "insufficient_credits", "绉垎涓嶈冻"));
             }
             throw error;
           }
@@ -7211,10 +8870,10 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
-            return writeJson(response, envelopedError(400, result.error, "上传文件不能绑定到当前目标"));
+            return writeJson(response, envelopedError(400, result.error, "uploaded file cannot be bound to this target"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7239,10 +8898,10 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
-            return writeJson(response, envelopedError(400, result.error, "媒体文件不符合当前操作要求"));
+            return writeJson(response, envelopedError(400, result.error, "media file is not valid for this operation"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7259,7 +8918,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(assetId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_asset_conversation_target", "资产对话目标无效"),
+              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -7274,7 +8933,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7291,7 +8950,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(storyboardId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -7306,7 +8965,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7323,7 +8982,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(assetId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_asset_conversation_target", "资产对话目标无效"),
+              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
             );
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -7335,7 +8994,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7352,7 +9011,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(storyboardId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
             );
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -7364,7 +9023,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7382,7 +9041,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(assetId) || !taskId.trim()) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_asset_conversation_target", "invalid asset conversation target"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -7398,7 +9057,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "conversation message not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7416,7 +9075,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(storyboardId) || !taskId.trim()) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "分镜对话目标无效"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -7432,7 +9091,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7455,13 +9114,13 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
             const status = result.error === "file_in_use" ? 409 : 400;
             return writeJson(
               response,
-              envelopedError(status, result.error, "文件仍在使用或删除失败", "details" in result ? result.details : undefined),
+              envelopedError(status, result.error, "file is still in use or deletion failed", "details" in result ? result.details : undefined),
             );
           }
           return writeJson(response, enveloped(200, result));
@@ -7488,10 +9147,10 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           if ("error" in result) {
-            return writeJson(response, envelopedError(400, result.error, "媒体文件不符合当前操作要求"));
+            return writeJson(response, envelopedError(400, result.error, "media file is not valid for this operation"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7512,7 +9171,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "可导出的原视频不存在"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "鍙鍑虹殑鍘熻棰戜笉瀛樺湪"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -7530,7 +9189,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!context) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const taskRows = await db.query<{ id: string }>(
             `
@@ -7581,7 +9240,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!taskContext) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           const now = new Date();
           await settleTimedOutEpisodeGenerationTask(db, {
@@ -7607,7 +9266,7 @@ export function createPhoneAuthDevServer(
             now,
           });
           if (!task) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
           }
           return writeJson(response, enveloped(200, task));
         }
@@ -7634,7 +9293,7 @@ export function createPhoneAuthDevServer(
             if (!isUuid(episodeId) || (targetType !== "asset" && targetType !== "storyboard") || !targetId) {
               return writeJson(
                 response,
-                envelopedError(400, "invalid_generation_draft_target", "草稿目标无效"),
+                envelopedError(400, "invalid_generation_draft_target", "鑽夌鐩爣鏃犳晥"),
               );
             }
             const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -7649,7 +9308,7 @@ export function createPhoneAuthDevServer(
             if (!result) {
               return writeJson(
                 response,
-                envelopedError(404, "resource_not_found", "资源不存在或无权限访问"),
+                envelopedError(404, "resource_not_found", "resource not found"),
               );
             }
             return writeJson(response, enveloped(200, result));
@@ -7659,7 +9318,7 @@ export function createPhoneAuthDevServer(
             request.method === "GET" &&
             pathname.startsWith("/api/generation-tasks/")
           ) {
-          return writeJson(response, envelopedError(404, "resource_not_found", "资源不存在或已被删除"));
+          return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
         }
       }
 
@@ -8195,7 +9854,7 @@ export function createPhoneAuthDevServer(
           const roleFilter = queryUrl.searchParams.get("role") ?? "all";
           const statusFilter = queryUrl.searchParams.get("status") ?? "all";
           const dashboardTab = queryUrl.searchParams.get("tab") ?? "member-consumption";
-          const dateShortcut = queryUrl.searchParams.get("dateShortcut") ?? "今天";
+          const dateShortcut = queryUrl.searchParams.get("dateShortcut") ?? "浠婂ぉ";
           const members = Array.isArray((memberResponse.body as Record<string, unknown>).members)
             ? ((memberResponse.body as Record<string, unknown>).members as Array<Record<string, unknown>>)
             : [];
@@ -8769,46 +10428,87 @@ export function createPhoneAuthDevServer(
         }
       }
 
-      if (pathname.startsWith("/api/admin/ops/")) {
-        const authenticated = await findAuthenticatedUser(
+      const adminDocumentedTaskRetryMatch = pathname.match(/^\/api\/admin\/ops\/tasks\/([^/]+)\/retry$/);
+      if (request.method === "POST" && adminDocumentedTaskRetryMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
           db,
-          request.headers.cookie,
-          new Date(),
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.opsTaskRetry],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as { reason?: string };
+        return writeJson(
+          response,
+          await retryTaskForBackendAdmin({
+            db,
+            taskId: decodeURIComponent(adminDocumentedTaskRetryMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            now: new Date(),
+          }),
         );
-        if (!authenticated) {
-          return writeJson(response, {
-            status: 401,
-            body: { error: "unauthenticated" },
-          });
+      }
+
+      const adminDocumentedPaymentRepairMatch = pathname.match(/^\/api\/admin\/ops\/payments\/([^/]+)\/repair-credit$/);
+      if (request.method === "POST" && adminDocumentedPaymentRepairMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.riskReview],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as { reason?: string };
+        return writeJson(
+          response,
+          await repairPaymentCreditForBackendAdmin({
+            db,
+            orderId: decodeURIComponent(adminDocumentedPaymentRepairMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (pathname.startsWith("/api/admin/ops/")) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
         }
 
-        const adminOps = createAdminOpsService({
-          db,
-          workspaceId: devWorkspaceId,
-        });
-
         if (request.method === "GET" && pathname === "/api/admin/ops/items") {
-          return writeJson(
-            response,
-            await adminOps.listItems({
-              user: { sessionToken: authenticated.sessionToken },
-              now: new Date(),
+          return writeJson(response, {
+            status: 200,
+            body: await listAdminOpsItemsForScope({
+              db,
+              organizationId: devOrganizationId,
+              workspaceId: devWorkspaceId,
             }),
-          );
+          });
         }
 
         if (
           request.method === "GET" &&
           pathname === "/api/admin/ops/generation-queues"
         ) {
-          const authorized = await adminOps.listItems({
-            user: { sessionToken: authenticated.sessionToken },
-            now: new Date(),
-          });
-          if (authorized.status !== 200) {
-            return writeJson(response, authorized);
-          }
-
           const queueHealth = createBullMQGenerationQueueHealthService(
             loadGenerationQueueConfig(runtimeEnv),
           );
@@ -8847,70 +10547,77 @@ export function createPhoneAuthDevServer(
           }
 
           try {
-            const operated = await runIdempotentCommand({
-              db,
-              operationName: operationNames.opsGenerationQueueJobOperate,
-              capability: capabilities.opsSettle,
-              idempotencyKey,
-              requestHash: hashJson({
-                queueName: body.queueName,
-                jobId: body.jobId,
-                action: body.action,
-                reason,
-              }),
-              now: new Date(),
-              resolveActor: (commandDb) =>
-                resolveActorContext(commandDb, {
-                  sessionToken: authenticated.sessionToken,
-                  workspaceId: devWorkspaceId,
-                  capability: capabilities.opsSettle,
-                  now: new Date(),
-                }),
-              replay: async ({ idempotencyRecord }) => {
-                if (!idempotencyRecord.responseSnapshot) {
-                  throw new IdempotencyProcessingError(idempotencyRecord);
-                }
-                return idempotencyRecord.responseSnapshot;
-              },
-              execute: async () => {
-                const queueJobOps =
-                  options.generationQueueJobOpsService ??
-                  createBullMQGenerationQueueJobOpsService(
-                    loadGenerationQueueConfig(runtimeEnv),
-                  );
-                const queueResult = await queueJobOps.operate({
-                  queueName: body.queueName ?? "",
-                  jobId: body.jobId ?? "",
-                  action: body.action ?? "retry",
-                });
-                if (queueResult.status !== 200) {
-                  throw new GenerationQueueJobOpsRouteError(queueResult);
-                }
-
-                const operationId = randomUUID();
-                return {
-                  result: queueResult.body,
-                  responseResourceType: "generation_queue_job",
-                  responseResourceId: operationId,
-                  responseSnapshot: queueResult.body,
-                  audit: {
-                    eventType: "ops.generation_queue_job_operated",
-                    targetType: "generation_queue_job",
-                    targetId: operationId,
-                    workspaceId: devWorkspaceId,
-                    reason,
-                    sensitive: true,
-                    metadata: queueResult.body,
-                  },
-                };
-              },
+            await db.query("BEGIN");
+            const requestHash = hashJson({
+              queueName: body.queueName,
+              jobId: body.jobId,
+              action: body.action,
+              reason,
             });
+            const store = new SqlIdempotencyRecordStore(db);
+            const started = await beginOrReplayCommand(store, {
+              organizationId: devOrganizationId,
+              operationName: operationNames.opsGenerationQueueJobOperate,
+              idempotencyKey,
+              requestHash,
+            });
+            if (started.kind === "replayed") {
+              if (!started.record.responseSnapshot) {
+                throw new IdempotencyProcessingError(started.record);
+              }
+              await db.query("COMMIT");
+              return writeJson(response, {
+                status: 200,
+                body: started.record.responseSnapshot,
+              });
+            }
+            if (started.kind === "processing") {
+              throw new IdempotencyProcessingError(started.record);
+            }
 
+            const queueJobOps =
+              options.generationQueueJobOpsService ??
+              createBullMQGenerationQueueJobOpsService(
+                loadGenerationQueueConfig(runtimeEnv),
+              );
+            const queueResult = await queueJobOps.operate({
+              queueName: body.queueName ?? "",
+              jobId: body.jobId ?? "",
+              action: body.action ?? "retry",
+            });
+            if (queueResult.status !== 200) {
+              throw new GenerationQueueJobOpsRouteError(queueResult);
+            }
+            await appendAuditEvent(db, {
+              organizationId: devOrganizationId,
+              workspaceId: devWorkspaceId,
+              actorUserId: null,
+              eventType: "admin.ops.generation_queue_job_operated",
+              targetType: "generation_queue_job",
+              targetId: randomUUID(),
+              reason,
+              sensitive: true,
+              metadata: {
+                ...queueResult.body,
+                actorAdminAccountId: adminRoute.session.admin_account_id,
+              },
+              occurredAt: new Date(),
+            });
+            await store.update({
+              ...started.record,
+              responseResourceType: "generation_queue_job",
+              responseResourceId: randomUUID(),
+              responseSnapshot: queueResult.body,
+              status: "succeeded",
+              updatedAt: new Date(),
+            });
+            await db.query("COMMIT");
             return writeJson(response, {
               status: 200,
-              body: operated.result,
+              body: queueResult.body,
             });
           } catch (error) {
+            await db.query("ROLLBACK").catch(() => undefined);
             if (error instanceof GenerationQueueJobOpsRouteError) {
               return writeJson(response, error.response);
             }
@@ -8936,6 +10643,12 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const adminOps = createAdminOpsService({
+          db,
+          workspaceId: devWorkspaceId,
+        });
+        const adminOpsActor = await resolveAdminOpsBridgeActor(db);
+
         if (
           request.method === "POST" &&
           pathname === "/api/admin/ops/tasks/manual-settle"
@@ -8952,7 +10665,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.manualSettleTask({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -8972,7 +10685,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryTask({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -8992,7 +10705,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryFinalize({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -9012,7 +10725,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryPersistAsset({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -9035,7 +10748,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.markPaymentRiskReviewed({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -9058,7 +10771,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.repairPaidWithoutCredit({
-              user: { sessionToken: authenticated.sessionToken },
+              user: { actor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -9068,6 +10781,9 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET") {
+        if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+          return await serveAdminStatic(pathname, response);
+        }
         return await serveStatic(pathname, response);
       }
 

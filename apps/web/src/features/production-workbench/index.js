@@ -837,6 +837,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.("[data-model-choice]")) {
       workbench.ui.selectedModelId = target.value;
+      applySelectedModelGenerationDefaults(workbench, workbench.ui.episodeMediaMode === "video" ? "video" : "image");
       workbench.ui.toast = `Selected ${target.options[target.selectedIndex]?.text ?? target.value}.`;
       render(workbench);
       return;
@@ -844,6 +845,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('input[name="video-model"]')) {
       workbench.ui.selectedModelId = target.value;
+      applySelectedModelGenerationDefaults(workbench, workbench.ui.episodeMediaMode === "video" ? "video" : "image");
       workbench.ui.toast = `Selected ${target.value}.`;
       render(workbench);
       return;
@@ -4369,12 +4371,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.videoResolution = "1080p";
     } else if (workbench.ui.videoGenerationMode === "reference-video") {
       workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "reference-video", "seedance-2-0-vip");
-      workbench.ui.videoDurationSec = "15";
-      workbench.ui.videoResolution = "2K";
+      applySelectedModelGenerationDefaults(workbench, "video");
     } else if (workbench.ui.videoGenerationMode === "first-frame") {
       workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "first-frame", "seedance-i2v-pro");
-      workbench.ui.videoDurationSec = "15";
-      workbench.ui.videoResolution = "1080p";
+      applySelectedModelGenerationDefaults(workbench, "video");
     } else if (workbench.ui.videoGenerationMode === "edit-video") {
       workbench.ui.selectedModelId = "happy-horse";
       workbench.ui.videoResolution = "1080p";
@@ -4398,6 +4398,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.selectedModelId = resolveConfiguredImageModelCode(workbench, "single-image", "gpt-image-2-cn");
       workbench.ui.imageCount = 1;
     }
+    applySelectedModelGenerationDefaults(workbench, "image");
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
@@ -5317,6 +5318,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "select-video-model") {
     workbench.ui.selectedModelId = target.dataset.modelId ?? workbench.ui.selectedModelId;
+    applySelectedModelGenerationDefaults(workbench, workbench.ui.episodeMediaMode === "video" ? "video" : "image");
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.musePromptMenu = null;
     workbench.ui.toast = `Selected ${target.dataset.modelName ?? workbench.ui.selectedModelId}.`;
@@ -6828,11 +6830,19 @@ async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
 function resolveConfiguredVideoModelCode(workbench, mode, fallback) {
   const config = workbench.ui.episodeGenerationConfig ?? {};
   const normalizedMode = mode === "first-frame" ? "image-to-video" : mode;
+  const selectedModelCode = String(workbench.ui.selectedModelId ?? "").trim();
   const configuredDefault =
     typeof config.defaultVideoModelCode === "string" && config.defaultVideoModelCode.trim()
       ? config.defaultVideoModelCode.trim()
       : "";
   const models = Array.isArray(config.models) ? config.models : [];
+  const selectedModel = models.find((model) => model?.modelCode === selectedModelCode);
+  if (
+    selectedModelCode &&
+    ((!models.length && !selectedModel) || (selectedModel && modelSupportsGenerationMode(selectedModel, normalizedMode)))
+  ) {
+    return selectedModelCode;
+  }
   const defaultModel = models.find((model) => model?.modelCode === configuredDefault);
   if (configuredDefault && (!defaultModel || modelSupportsGenerationMode(defaultModel, normalizedMode))) {
     return configuredDefault;
@@ -6843,17 +6853,92 @@ function resolveConfiguredVideoModelCode(workbench, mode, fallback) {
 
 function resolveConfiguredImageModelCode(workbench, mode, fallback) {
   const config = workbench.ui.episodeGenerationConfig ?? {};
+  const selectedModelCode = String(workbench.ui.selectedModelId ?? "").trim();
   const configuredDefault =
     typeof config.defaultImageModelCode === "string" && config.defaultImageModelCode.trim()
       ? config.defaultImageModelCode.trim()
       : "";
   const models = Array.isArray(config.models) ? config.models : [];
+  const selectedModel = models.find((model) => model?.modelCode === selectedModelCode);
+  if (
+    selectedModelCode &&
+    ((!models.length && !selectedModel) || (selectedModel && modelSupportsGenerationMode(selectedModel, mode)))
+  ) {
+    return selectedModelCode;
+  }
   const defaultModel = models.find((model) => model?.modelCode === configuredDefault);
   if (configuredDefault && (!defaultModel || modelSupportsGenerationMode(defaultModel, mode))) {
     return configuredDefault;
   }
   const configuredModel = models.find((model) => modelSupportsGenerationMode(model, mode));
   return configuredModel?.modelCode ?? fallback;
+}
+
+function findConfiguredGenerationModel(workbench, modelCode) {
+  const normalizedModelCode = String(modelCode ?? "").trim();
+  if (!normalizedModelCode) {
+    return null;
+  }
+  const models = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  return models.find((model) => String(model?.modelCode ?? model?.id ?? "").trim() === normalizedModelCode) ?? null;
+}
+
+function normalizeGenerationOptionValues(values) {
+  return Array.isArray(values)
+    ? values.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function firstGenerationValue(...candidates) {
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function applySelectedModelGenerationDefaults(workbench, mediaKind = "") {
+  const model = findConfiguredGenerationModel(workbench, workbench.ui.selectedModelId);
+  if (!model) {
+    return;
+  }
+  const defaults = model.defaultParams && typeof model.defaultParams === "object"
+    ? model.defaultParams
+    : {};
+  const ratios = normalizeGenerationOptionValues(model.supportedRatios);
+  const qualities = normalizeGenerationOptionValues(model.supportedQuality);
+  const durations = normalizeGenerationOptionValues(model.supportedDurations);
+  const resolvedMediaKind = mediaKind || (String(model.mediaType ?? "") === "video" ? "video" : "image");
+  const aspectRatio = firstGenerationValue(defaults.aspectRatio, ratios[0]);
+  const quality = firstGenerationValue(defaults.quality, defaults.resolution, qualities[0]);
+  const count = Number(defaults.count);
+
+  if (aspectRatio) {
+    workbench.ui.imageAspectRatio = aspectRatio;
+  }
+  if (resolvedMediaKind === "video") {
+    const duration = firstGenerationValue(defaults.durationSec, durations[0]);
+    if (quality) {
+      workbench.ui.videoResolution = quality;
+    }
+    if (duration) {
+      workbench.ui.videoDurationSec = duration;
+    }
+    if (Number.isFinite(count) && count > 0) {
+      workbench.ui.videoCount = Math.floor(count);
+    }
+    return;
+  }
+  if (quality) {
+    workbench.ui.imageResolution = quality;
+  }
+  if (Number.isFinite(count) && count > 0) {
+    workbench.ui.imageCount = Math.floor(count);
+  }
 }
 
 function modelSupportsGenerationMode(model, mode) {
@@ -6872,10 +6957,17 @@ function generationModeAliases(mode) {
   const aliases = new Set([normalized, normalized.replaceAll("-", "_")]);
   if (normalized === "first-frame") {
     aliases.add("first_frame");
+    aliases.add("image-to-video");
+    aliases.add("image_to_video");
+    aliases.add("video");
+  } else if (normalized === "image-to-video") {
+    aliases.add("first-frame");
+    aliases.add("first_frame");
     aliases.add("image_to_video");
     aliases.add("video");
   } else if (normalized === "reference-video") {
     aliases.add("reference_video");
+    aliases.add("image-to-video");
     aliases.add("image_to_video");
     aliases.add("video");
   } else if (normalized === "first-last-frame") {
@@ -7676,10 +7768,7 @@ export function buildVideoGenerationPayload(workbench) {
   );
   const generationState = selectedStoryboard?.generationState ?? createEmptyGenerationState();
   const videoMode = workbench.ui.episodeMediaMode === "lip-sync" ? "lip-sync" : workbench.ui.videoGenerationMode;
-  const model =
-    videoMode === "first-frame"
-      ? resolveConfiguredVideoModelCode(workbench, "first-frame", "seedance-i2v-pro")
-      : (workbench.ui.selectedModelId ?? resolveConfiguredVideoModelCode(workbench, videoMode, "seedance-i2v-pro"));
+  const model = resolveConfiguredVideoModelCode(workbench, videoMode, workbench.ui.selectedModelId ?? "seedance-i2v-pro");
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     motionPrompt: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
@@ -7689,7 +7778,7 @@ export function buildVideoGenerationPayload(workbench) {
       count: clampCount(workbench.ui.videoCount ?? 1, 1, 4),
       resolution: workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p",
       durationSec: Number(workbench.ui.videoDurationSec ?? 5),
-      aspectRatio: workbench.state?.project?.aspectRatio ?? "9:16",
+      aspectRatio: workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
       references: selectedStoryboard?.references ?? [],
       quickReferences: generationState.quickReferenceItems ?? [],
       mentionReferences: generationState.mentionReferences ?? [],
