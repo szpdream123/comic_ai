@@ -10,6 +10,7 @@
     "test:admin:ui": "node --test apps/admin/index.test.mjs",
     "test:admin:http": "node --import tsx --test apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts",
     "test:admin:http:auth": "node --import tsx --test apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts --test-name-pattern \"admin shell|admin login|sessions|profile|password\"",
+    "smoke:text-gateway": "node --import tsx scripts/run-text-model-gateway-smoke.mjs",
     "worker:generation-outbox": "node --import tsx scripts/run-generation-outbox-dispatcher.mjs",
     "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs"
   },
