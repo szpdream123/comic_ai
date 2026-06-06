@@ -40,6 +40,407 @@ export interface AdminModelDispatchPolicyView {
   status: string;
 }
 
+export interface AdminModelTemplateView {
+  id: string;
+  name: string;
+  providerName: string;
+  providerProtocol: string;
+  invocationMode: string;
+  mediaType: string;
+  family: string;
+  adapterMode: "native" | "standard_http_proxy";
+  modelCodeHint: string;
+  providerModelHint: string;
+  allowedTaskModes: string[];
+  defaultTaskModes: string[];
+  promptLimit: AdminModelPromptLimitView;
+  providerConfig: Record<string, unknown>;
+  pricing: Record<string, unknown>;
+  parameterSchema: Record<string, unknown>;
+  defaultParams: Record<string, unknown>;
+  limits: Record<string, unknown>;
+  uiConfig: Record<string, unknown>;
+  dispatchPolicy: Omit<AdminModelDispatchPolicyView, "id" | "status">;
+}
+
+export interface AdminModelPromptLimitView {
+  maxLength: number;
+  unit: "characters" | "tokens";
+  label: string;
+  source: "official" | "provider_proxy" | "platform_default";
+  sourceName: string;
+  sourceUrl: string;
+  note: string;
+}
+
+const IMAGE_MARKET_TASK_MODES = ["image.generate", "image.image_to_image", "image.edit", "image.reference_generate"];
+const VIDEO_MARKET_TASK_MODES = [
+  "video.text_to_video",
+  "video.image_to_video",
+  "video.first_last_frame_to_video",
+  "video.reference_image_to_video",
+  "video.video_to_video",
+  "video.image_video_to_video",
+];
+const VIDEO_TEXT_ONLY = ["video.text_to_video"];
+const VIDEO_TEXT_IMAGE = ["video.text_to_video", "video.image_to_video"];
+const VIDEO_TEXT_IMAGE_LAST = ["video.text_to_video", "video.image_to_video", "video.first_last_frame_to_video"];
+const VIDEO_IMAGE_ONLY = ["video.image_to_video"];
+const VIDEO_IMAGE_LAST = ["video.image_to_video", "video.first_last_frame_to_video"];
+const VIDEO_FULL_IMAGE_REFERENCE = ["video.text_to_video", "video.image_to_video", "video.first_last_frame_to_video", "video.reference_image_to_video"];
+const VIDEO_WITH_SOURCE_VIDEO = ["video.text_to_video", "video.image_to_video", "video.video_to_video"];
+const VIDEO_WITH_IMAGE_AND_VIDEO = ["video.image_to_video", "video.video_to_video", "video.image_video_to_video"];
+const PROMPT_LIMITS = {
+  openAiImage: promptLimit(32000, "characters", "OpenAI Images API", "official", "https://platform.openai.com/docs/api-reference/images"),
+  imagen4: promptLimit(480, "tokens", "Google Vertex AI Imagen 4", "official", "https://cloud.google.com/vertex-ai/generative-ai/docs/models/imagen/4-0-generate-preview-06-06"),
+  fluxKontext: promptLimit(2083, "characters", "Black Forest Labs FLUX Kontext API", "official", "https://docs.bfl.ml/api-reference/tasks/edit-or-create-an-image-with-flux-kontext-max"),
+  runwayVideo: promptLimit(1000, "characters", "Runway API", "official", "https://docs.dev.runwayml.com/api"),
+  seedanceCloudflare: promptLimit(2000, "characters", "Cloudflare Workers AI Seedance 2.0", "provider_proxy", "https://developers.cloudflare.com/ai/models/bytedance/seedance-2.0/"),
+  pixverseCloudflare: promptLimit(2048, "characters", "Cloudflare Workers AI PixVerse V6", "provider_proxy", "https://developers.cloudflare.com/ai/models/pixverse/v6/"),
+  hailuoCloudflare: promptLimit(2000, "characters", "Cloudflare Workers AI MiniMax Hailuo", "provider_proxy", "https://developers.cloudflare.com/ai/models/minimax/hailuo-2.3/"),
+  lumaAgents: promptLimit(6000, "characters", "Luma Agents API", "provider_proxy", "https://docs.agents.lumalabs.ai/api/resources/generations/methods/create"),
+  klingProxy: promptLimit(2500, "characters", "Kling 3.0 API 代理文档", "provider_proxy", "https://aivideoapi.ai/docs/video-generation/kling-3"),
+  soraProxy: promptLimit(6000, "characters", "Sora 2 API 代理文档", "provider_proxy", "https://runware.ai/docs/models/openai-sora-2"),
+  wanProxy: promptLimit(800, "characters", "Wan 2.2 API 代理文档", "provider_proxy", "https://mule.mintlify.app/api-reference/endpoint/alibaba/wan2.2-t2v-plus/generation"),
+  imageDefault: promptLimit(4000, "characters", "平台默认图片提示词限制", "platform_default", "", "官方未公开精确上限，按平台保守默认值限制。"),
+  videoDefault: promptLimit(2000, "characters", "平台默认视频提示词限制", "platform_default", "", "官方未公开精确上限，按平台保守默认值限制。"),
+};
+
+function promptLimit(
+  maxLength: number,
+  unit: "characters" | "tokens",
+  sourceName: string,
+  source: AdminModelPromptLimitView["source"],
+  sourceUrl: string,
+  note = "",
+): AdminModelPromptLimitView {
+  return {
+    maxLength,
+    unit,
+    label: `${maxLength.toLocaleString("zh-CN")} ${unit === "tokens" ? "tokens" : "字符"}`,
+    source,
+    sourceName,
+    sourceUrl,
+    note,
+  };
+}
+
+export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
+  imageTemplate({
+    id: "google-nano-banana-image",
+    name: "Google · Nano Banana",
+    providerName: "google",
+    modelCodeHint: "nano-banana-image",
+    providerModelHint: "nano-banana",
+    baseCredits: 80,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "Nano Banana",
+  }),
+  imageTemplate({
+    id: "google-nano-banana-2-image",
+    name: "Google · Nano Banana 2",
+    providerName: "google",
+    modelCodeHint: "nano-banana-2-image",
+    providerModelHint: "nano-banana-2",
+    baseCredits: 100,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "Nano Banana",
+  }),
+  imageTemplate({
+    id: "google-nano-banana-fast-image",
+    name: "Google · Nano Banana Fast",
+    providerName: "google",
+    modelCodeHint: "nano-banana-fast-image",
+    providerModelHint: "nano-banana-fast",
+    baseCredits: 60,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "Nano Banana",
+  }),
+  imageTemplate({
+    id: "jimeng-5-image",
+    name: "火山引擎 · 即梦 5.0 图片",
+    providerName: "volcengine",
+    modelCodeHint: "jimeng-5-image",
+    providerModelHint: "jimeng-5.0",
+    baseCredits: 110,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "即梦",
+  }),
+  imageTemplate({
+    id: "jimeng-45-image",
+    name: "火山引擎 · 即梦 4.5 图片",
+    providerName: "volcengine",
+    modelCodeHint: "jimeng-4-5-image",
+    providerModelHint: "jimeng-4.5",
+    baseCredits: 95,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "即梦",
+  }),
+  imageTemplate({
+    id: "jimeng-40-image",
+    name: "火山引擎 · 即梦 4.0 图片",
+    providerName: "volcengine",
+    modelCodeHint: "jimeng-4-0-image",
+    providerModelHint: "jimeng-4.0",
+    baseCredits: 80,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "即梦",
+  }),
+  {
+    ...imageTemplate({
+      id: "openai-image2",
+      name: "OpenAI · Image 2",
+      providerName: "openai",
+      modelCodeHint: "image2",
+      providerModelHint: "gpt-image-2",
+      baseCredits: 90,
+      defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+      promptLimit: PROMPT_LIMITS.openAiImage,
+      group: "OpenAI",
+    }),
+    providerProtocol: "openai_images",
+    adapterMode: "native",
+    providerConfig: {
+      baseURL: "https://api.openai.com",
+      endpoint: "/v1/images/generations",
+      editEndpoint: "/v1/images/edits",
+      apiKeyEnv: "",
+      requestFormat: "openai_images",
+      resultFormat: "b64_json",
+    },
+  },
+  imageTemplate({
+    id: "google-imagen-4-image",
+    name: "Google · Imagen 4",
+    providerName: "google",
+    modelCodeHint: "imagen-4-image",
+    providerModelHint: "imagen-4",
+    baseCredits: 95,
+    defaultTaskModes: ["image.generate", "image.image_to_image", "image.reference_generate"],
+    promptLimit: PROMPT_LIMITS.imagen4,
+    group: "Google",
+  }),
+  imageTemplate({
+    id: "qwen-image-image",
+    name: "通义千问 · Qwen Image",
+    providerName: "alibaba",
+    modelCodeHint: "qwen-image",
+    providerModelHint: "qwen-image",
+    baseCredits: 70,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "Qwen",
+  }),
+  imageTemplate({
+    id: "flux-kontext-image",
+    name: "Black Forest Labs · Flux Kontext",
+    providerName: "bfl",
+    modelCodeHint: "flux-kontext-image",
+    providerModelHint: "flux-kontext",
+    baseCredits: 90,
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.fluxKontext,
+    group: "Flux",
+  }),
+  videoTemplate({
+    id: "kling-30-video",
+    name: "可灵 · 3.0 视频",
+    providerName: "kling",
+    modelCodeHint: "kling-3-0-video",
+    providerModelHint: "kling-3.0",
+    baseCredits: 220,
+    taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+    promptLimit: PROMPT_LIMITS.klingProxy,
+    group: "可灵",
+  }),
+  videoTemplate({
+    id: "kling-26-video",
+    name: "可灵 · 2.6 视频",
+    providerName: "kling",
+    modelCodeHint: "kling-2-6-video",
+    providerModelHint: "kling-2.6",
+    baseCredits: 190,
+    taskModes: VIDEO_IMAGE_LAST,
+    promptLimit: PROMPT_LIMITS.klingProxy,
+    group: "可灵",
+  }),
+  videoTemplate({
+    id: "kling-25-video",
+    name: "可灵 · 2.5 视频",
+    providerName: "kling",
+    modelCodeHint: "kling-2-5-video",
+    providerModelHint: "kling-2.5",
+    baseCredits: 170,
+    taskModes: VIDEO_IMAGE_LAST,
+    promptLimit: PROMPT_LIMITS.klingProxy,
+    group: "可灵",
+  }),
+  videoTemplate({
+    id: "grok-video",
+    name: "Grok · 视频",
+    providerName: "xai",
+    modelCodeHint: "grok-video",
+    providerModelHint: "grok-video",
+    baseCredits: 220,
+    taskModes: VIDEO_TEXT_IMAGE,
+    promptLimit: PROMPT_LIMITS.videoDefault,
+    group: "Grok",
+  }),
+  {
+    ...videoTemplate({
+      id: "seedance-20-video",
+      name: "火山引擎 · Seedance 2.0",
+      providerName: "volcengine",
+      modelCodeHint: "seedance-2-0-video",
+      providerModelHint: "seedance-2-0",
+      baseCredits: 140,
+      taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+    }),
+    providerProtocol: "volcengine_ark_video",
+    adapterMode: "native",
+    providerConfig: volcengineVideoProviderConfig(),
+  },
+  {
+    ...videoTemplate({
+      id: "seedance-20-pro-video",
+      name: "火山引擎 · Seedance 2.0 Pro",
+      providerName: "volcengine",
+      modelCodeHint: "seedance-2-0-pro-video",
+      providerModelHint: "seedance-2-0-pro",
+      baseCredits: 180,
+      taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+    }),
+    providerProtocol: "volcengine_ark_video",
+    adapterMode: "native",
+    providerConfig: volcengineVideoProviderConfig(),
+  },
+  {
+    ...videoTemplate({
+      id: "seedance-fast-video",
+      name: "火山引擎 · Seedance Fast",
+      providerName: "volcengine",
+      modelCodeHint: "seedance-fast-video",
+      providerModelHint: "seedance-fast",
+      baseCredits: 110,
+      taskModes: VIDEO_TEXT_IMAGE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+    }),
+    providerProtocol: "volcengine_ark_video",
+    adapterMode: "native",
+    providerConfig: volcengineVideoProviderConfig(),
+  },
+  videoTemplate({
+    id: "happy-horse-video",
+    name: "Happy Horse · 视频",
+    providerName: "happy-horse",
+    modelCodeHint: "happy-horse-video",
+    providerModelHint: "happy-horse-video",
+    baseCredits: 160,
+    taskModes: VIDEO_WITH_IMAGE_AND_VIDEO,
+    promptLimit: PROMPT_LIMITS.videoDefault,
+    group: "Happy Horse",
+  }),
+  videoTemplate({
+    id: "google-veo-31-video",
+    name: "Google · Veo 3.1",
+    providerName: "google",
+    modelCodeHint: "veo-3-1-video",
+    providerModelHint: "veo-3.1",
+    baseCredits: 260,
+    taskModes: VIDEO_TEXT_IMAGE_LAST,
+    promptLimit: PROMPT_LIMITS.runwayVideo,
+    group: "Veo",
+  }),
+  videoTemplate({
+    id: "openai-sora-2-video",
+    name: "OpenAI · Sora 2",
+    providerName: "openai",
+    modelCodeHint: "sora-2-video",
+    providerModelHint: "sora-2",
+    baseCredits: 280,
+    taskModes: VIDEO_WITH_SOURCE_VIDEO,
+    promptLimit: PROMPT_LIMITS.soraProxy,
+    group: "Sora",
+  }),
+  videoTemplate({
+    id: "runway-gen4-video",
+    name: "Runway · Gen-4",
+    providerName: "runway",
+    modelCodeHint: "runway-gen-4-video",
+    providerModelHint: "gen-4",
+    baseCredits: 240,
+    taskModes: VIDEO_IMAGE_ONLY,
+    promptLimit: PROMPT_LIMITS.runwayVideo,
+    group: "Runway",
+  }),
+  videoTemplate({
+    id: "luma-ray3-video",
+    name: "Luma · Ray 3",
+    providerName: "luma",
+    modelCodeHint: "luma-ray-3-video",
+    providerModelHint: "ray-3",
+    baseCredits: 230,
+    taskModes: VIDEO_TEXT_IMAGE_LAST,
+    promptLimit: PROMPT_LIMITS.lumaAgents,
+    group: "Luma",
+  }),
+  videoTemplate({
+    id: "pixverse-5-video",
+    name: "PixVerse · 5.0",
+    providerName: "pixverse",
+    modelCodeHint: "pixverse-5-video",
+    providerModelHint: "pixverse-5",
+    baseCredits: 180,
+    taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+    promptLimit: PROMPT_LIMITS.pixverseCloudflare,
+    group: "PixVerse",
+  }),
+  videoTemplate({
+    id: "pika-25-video",
+    name: "Pika · 2.5",
+    providerName: "pika",
+    modelCodeHint: "pika-2-5-video",
+    providerModelHint: "pika-2.5",
+    baseCredits: 170,
+    taskModes: VIDEO_WITH_SOURCE_VIDEO,
+    promptLimit: PROMPT_LIMITS.videoDefault,
+    group: "Pika",
+  }),
+  videoTemplate({
+    id: "hailuo-02-video",
+    name: "MiniMax · Hailuo 02",
+    providerName: "minimax",
+    modelCodeHint: "hailuo-02-video",
+    providerModelHint: "hailuo-02",
+    baseCredits: 170,
+    taskModes: VIDEO_TEXT_IMAGE,
+    promptLimit: PROMPT_LIMITS.hailuoCloudflare,
+    group: "Hailuo",
+  }),
+  videoTemplate({
+    id: "wan-22-video",
+    name: "通义万相 · Wan 2.2",
+    providerName: "alibaba",
+    modelCodeHint: "wan-2-2-video",
+    providerModelHint: "wan-2.2",
+    baseCredits: 150,
+    taskModes: VIDEO_TEXT_IMAGE,
+    promptLimit: PROMPT_LIMITS.wanProxy,
+    group: "Wan",
+  }),
+];
+
 interface AdminModelConfigRow {
   id: string;
   model_code: string;
@@ -64,6 +465,98 @@ interface AdminModelConfigRow {
 }
 
 export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
+  function listModelTemplates() {
+    return {
+      data: ADMIN_MODEL_TEMPLATES.map((template) => cloneJson(template) as AdminModelTemplateView),
+      meta: {
+        total: ADMIN_MODEL_TEMPLATES.length,
+        nativeAdapterCount: ADMIN_MODEL_TEMPLATES.filter((template) => template.adapterMode === "native").length,
+      },
+    };
+  }
+
+  async function validateModelDraft(input: AdminModelWriteInput & { id?: string }) {
+    const failedItems = validateModelDraftFailedItems(input);
+    const modelCode = readString(input.modelCode);
+    if (modelCode) {
+      const existing = await queryOne<{ id: string }>(
+        deps.db,
+        "SELECT id FROM ai_model_configs WHERE model_code = $1 LIMIT 1",
+        [modelCode],
+      );
+      if (existing && existing.id !== input.id) {
+        failedItems.push({
+          step: "business",
+          field: "modelCode",
+          message: "模型编码已存在，请换一个唯一编码。",
+        });
+      }
+    }
+    return {
+      status: 200,
+      body: {
+        data: {
+          ok: failedItems.length === 0,
+          failedItems,
+        },
+      },
+    };
+  }
+
+  async function probeModelConfig(input: {
+    id: string;
+    reason: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const reason = input.reason.trim();
+    if (!reason) return error(400, "reason_required", "请填写操作原因");
+    const model = await getModel(input.id);
+    if (!model) return error(404, "admin_model_not_found", "模型不存在");
+    const launchCheck = modelLaunchCheck(model);
+    const checks = launchCheck.ok
+      ? [
+          { key: "static", label: "静态配置", status: "passed" },
+          { key: "adapter", label: "后端适配器", status: hasSupportedAdapter(model.providerProtocol) ? "passed" : "warning" },
+        ]
+      : launchCheck.failedItems.map((item) => ({
+          key: item.key,
+          label: item.label,
+          status: "failed",
+          message: item.message,
+        }));
+    await appendAuditEvent(deps.db, {
+      organizationId: input.auditOrganizationId,
+      workspaceId: input.auditWorkspaceId,
+      actorUserId: null,
+      eventType: "admin.model.probed",
+      targetType: "ai_model_config",
+      targetId: model.id,
+      reason,
+      sensitive: true,
+      metadata: {
+        modelCode: model.modelCode,
+        providerName: model.providerName,
+        providerProtocol: model.providerProtocol,
+        ok: launchCheck.ok,
+        failedKeys: launchCheck.failedItems.map((item) => item.key),
+        actorAdminAccountId: input.actorAdminAccountId,
+      },
+    });
+    return {
+      status: 200,
+      body: {
+        data: {
+          ok: launchCheck.ok,
+          checks,
+          checkedAt: input.now.toISOString(),
+        },
+      },
+    };
+  }
+
   async function listModels(input: {
     keyword?: string | null;
     status?: string | null;
@@ -547,6 +1040,9 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
   }
 
   return {
+    listModelTemplates,
+    validateModelDraft,
+    probeModelConfig,
     listModels,
     getModel,
     createModel,
@@ -755,6 +1251,281 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function cloneJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function imageTemplate(input: {
+  id: string;
+  name: string;
+  providerName: string;
+  modelCodeHint: string;
+  providerModelHint: string;
+  baseCredits: number;
+  defaultTaskModes: string[];
+  promptLimit: AdminModelPromptLimitView;
+  group: string;
+}): AdminModelTemplateView {
+  return {
+    id: input.id,
+    name: input.name,
+    providerName: input.providerName,
+    providerProtocol: "custom_http",
+    invocationMode: "sync",
+    mediaType: "image",
+    family: input.group,
+    adapterMode: "standard_http_proxy",
+    modelCodeHint: input.modelCodeHint,
+    providerModelHint: input.providerModelHint,
+    allowedTaskModes: IMAGE_MARKET_TASK_MODES,
+    defaultTaskModes: input.defaultTaskModes,
+    promptLimit: input.promptLimit,
+    providerConfig: {
+      endpoint: `/api/provider-proxy/${input.providerName}/image`,
+      apiKeyEnv: "",
+      requestFormat: "standard_image_generation",
+      resultFormat: "url_or_b64_json",
+    },
+    pricing: {
+      unit: "image",
+      baseCredits: input.baseCredits,
+      qualityMultipliers: { standard: 1, hd: 1.2, "2K": 1.5 },
+    },
+    parameterSchema: {
+      prompt: { label: "提示词", type: "string", required: true, maxLength: input.promptLimit.maxLength, limitUnit: input.promptLimit.unit },
+      negativePrompt: { label: "反向提示词", type: "string", required: false, maxLength: 2000 },
+      referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 8 },
+      editInstruction: { label: "编辑说明", type: "string", required: false, maxLength: 2000 },
+      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
+      quality: { label: "质量", type: "enum", required: false, options: ["standard", "hd", "2K"] },
+      count: { label: "数量", type: "integer", required: false, minimum: 1, maximum: 4 },
+      seed: { label: "随机种子", type: "integer", required: false, minimum: 0 },
+    },
+    defaultParams: { aspectRatio: "1:1", quality: "standard", count: 1 },
+    limits: {
+      maxPromptLength: input.promptLimit.maxLength,
+      promptLengthUnit: input.promptLimit.unit,
+      promptLimitLabel: input.promptLimit.label,
+      promptLimitSource: input.promptLimit.source,
+      promptLimitSourceName: input.promptLimit.sourceName,
+      promptLimitSourceUrl: input.promptLimit.sourceUrl,
+      promptLimitNote: input.promptLimit.note,
+      maxReferences: 8,
+      maxCount: 4,
+      allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
+    },
+    uiConfig: {
+      label: input.name,
+      group: input.group,
+      visible: true,
+      pipeline: "image",
+      supportedModes: input.defaultTaskModes,
+      marketPreset: "文生图 / 图生图 / 图片编辑 / 参考生图",
+    },
+    dispatchPolicy: {
+      submitQueueName: "generation-submit-image",
+      pollQueueName: null,
+      finalizeQueueName: null,
+      providerRpmLimit: 60,
+      providerConcurrentLimit: 5,
+      submitConcurrencyLimit: 5,
+      pollingIntervalMs: 15000,
+      pollingConcurrencyLimit: 20,
+    },
+  };
+}
+
+function videoTemplate(input: {
+  id: string;
+  name: string;
+  providerName: string;
+  modelCodeHint: string;
+  providerModelHint: string;
+  baseCredits: number;
+  taskModes?: string[];
+  promptLimit: AdminModelPromptLimitView;
+  group: string;
+}): AdminModelTemplateView {
+  const taskModes = input.taskModes ?? VIDEO_TEXT_IMAGE;
+  const parameterSchema = videoParameterSchema(taskModes, input.promptLimit);
+  const assetCapabilities = videoAssetCapabilities(taskModes);
+  return {
+    id: input.id,
+    name: input.name,
+    providerName: input.providerName,
+    providerProtocol: "custom_http",
+    invocationMode: "async_polling",
+    mediaType: "video",
+    family: input.group,
+    adapterMode: "standard_http_proxy",
+    modelCodeHint: input.modelCodeHint,
+    providerModelHint: input.providerModelHint,
+    allowedTaskModes: taskModes,
+    defaultTaskModes: taskModes,
+    promptLimit: input.promptLimit,
+    providerConfig: {
+      endpoint: `/api/provider-proxy/${input.providerName}/video`,
+      createTaskEndpoint: `/api/provider-proxy/${input.providerName}/video/tasks`,
+      queryTaskEndpoint: `/api/provider-proxy/${input.providerName}/video/tasks/{taskId}`,
+      apiKeyEnv: "",
+      requestFormat: "standard_video_generation",
+    },
+    pricing: {
+      unit: "video",
+      baseCredits: input.baseCredits,
+      durationMultipliers: { "5": 1, "10": 1.8 },
+      resolutionMultipliers: { "720p": 1, "1080p": 1.2, "2K": 1.8 },
+    },
+    parameterSchema,
+    defaultParams: { aspectRatio: "9:16", durationSec: 5, resolution: "1080p" },
+    limits: {
+      maxPromptLength: input.promptLimit.maxLength,
+      promptLengthUnit: input.promptLimit.unit,
+      promptLimitLabel: input.promptLimit.label,
+      promptLimitSource: input.promptLimit.source,
+      promptLimitSourceName: input.promptLimit.sourceName,
+      promptLimitSourceUrl: input.promptLimit.sourceUrl,
+      promptLimitNote: input.promptLimit.note,
+      maxReferences: 4,
+      ...assetCapabilities,
+      maxDurationSec: 10,
+      allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "video/mp4"],
+    },
+    uiConfig: {
+      label: input.name,
+      group: input.group,
+      visible: true,
+      pipeline: "video",
+      supportedModes: taskModes.map((taskMode) => taskMode.replace("video.", "")),
+      marketPreset: videoMarketPreset(taskModes),
+    },
+    dispatchPolicy: {
+      submitQueueName: "generation-submit-video",
+      pollQueueName: "generation-poll-video",
+      finalizeQueueName: "generation-finalize-artifact",
+      providerRpmLimit: 60,
+      providerConcurrentLimit: 5,
+      submitConcurrencyLimit: 5,
+      pollingIntervalMs: 15000,
+      pollingConcurrencyLimit: 20,
+    },
+  };
+}
+
+function volcengineVideoProviderConfig() {
+  return {
+    baseURL: "https://ark.cn-beijing.volces.com",
+    createTaskEndpoint: "/api/v3/contents/generations/tasks",
+    queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+    apiKeyEnv: "",
+    requestFormat: "volcengine_ark_contents_generation",
+  };
+}
+
+function videoParameterSchema(taskModes: string[], promptLimit: AdminModelPromptLimitView) {
+  const schema: Record<string, unknown> = {
+    prompt: { label: "提示词", type: "string", required: true, maxLength: promptLimit.maxLength, limitUnit: promptLimit.unit },
+    negativePrompt: { label: "反向提示词", type: "string", required: false, maxLength: 1200 },
+    aspectRatio: { label: "视频比例", type: "enum", required: true, options: ["16:9", "9:16", "1:1"] },
+    durationSec: { label: "时长", type: "enum", required: true, options: [5, 10] },
+    resolution: { label: "分辨率", type: "enum", required: false, options: ["720p", "1080p", "2K"] },
+    cameraControl: { label: "镜头运动", type: "enum", required: false, options: ["auto", "push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down"] },
+    motionStrength: { label: "运动强度", type: "enum", required: false, options: ["low", "medium", "high"] },
+    seed: { label: "随机种子", type: "integer", required: false, minimum: 0 },
+  };
+  if (taskModes.includes("video.image_to_video") || taskModes.includes("video.first_last_frame_to_video") || taskModes.includes("video.image_video_to_video")) {
+    schema.firstFrame = { label: "首帧图", type: "file", required: taskModes.length === 1 || taskModes.includes("video.image_video_to_video") };
+  }
+  if (taskModes.includes("video.first_last_frame_to_video")) {
+    schema.lastFrame = { label: "尾帧图", type: "file", required: true };
+  }
+  if (taskModes.includes("video.reference_image_to_video")) {
+    schema.referenceImages = { label: "参考图", type: "file[]", required: true, minimum: 1, maximum: 4 };
+  }
+  if (taskModes.includes("video.video_to_video") || taskModes.includes("video.image_video_to_video")) {
+    schema.sourceVideo = { label: "参考/源视频", type: "file", required: true };
+  }
+  if (taskModes.includes("video.image_video_to_video")) {
+    schema.sourceVideoRole = { label: "视频用途", type: "enum", required: false, options: ["reference_motion", "extend", "edit"] };
+  }
+  return schema;
+}
+
+function videoAssetCapabilities(taskModes: string[]) {
+  return {
+    requiresFirstFrame: taskModes.length === 1 && taskModes.includes("video.image_to_video"),
+    supportsFirstFrame: taskModes.includes("video.image_to_video") || taskModes.includes("video.first_last_frame_to_video") || taskModes.includes("video.image_video_to_video"),
+    supportsLastFrame: taskModes.includes("video.first_last_frame_to_video"),
+    supportsReferenceImages: taskModes.includes("video.reference_image_to_video"),
+    supportsSourceVideo: taskModes.includes("video.video_to_video") || taskModes.includes("video.image_video_to_video"),
+    supportsImageAndVideoInput: taskModes.includes("video.image_video_to_video"),
+    assetRequirementSummary: videoMarketPreset(taskModes),
+  };
+}
+
+function videoMarketPreset(taskModes: string[]) {
+  const labels: string[] = [];
+  if (taskModes.includes("video.text_to_video")) labels.push("文生视频");
+  if (taskModes.includes("video.image_to_video")) labels.push("首帧图生视频");
+  if (taskModes.includes("video.first_last_frame_to_video")) labels.push("首尾帧生视频");
+  if (taskModes.includes("video.reference_image_to_video")) labels.push("参考图生视频");
+  if (taskModes.includes("video.video_to_video")) labels.push("参考/源视频");
+  if (taskModes.includes("video.image_video_to_video")) labels.push("图+视频输入");
+  return labels.join(" / ");
+}
+
+function validateModelDraftFailedItems(input: AdminModelWriteInput) {
+  const failedItems: Array<{ step: string; field: string; message: string }> = [];
+  const requiredFields: Array<[keyof AdminModelWriteInput, string, string]> = [
+    ["modelCode", "business", "请填写模型编码。"],
+    ["displayName", "business", "请填写中文名称。"],
+    ["providerName", "template", "请选择供应商模板。"],
+    ["providerModel", "business", "请填写供应商真实模型名。"],
+    ["providerProtocol", "template", "请选择供应商协议。"],
+    ["invocationMode", "template", "请选择调用方式。"],
+    ["mediaType", "capability", "请选择模型媒体类型。"],
+  ];
+  for (const [field, step, message] of requiredFields) {
+    if (!readString(input[field])) failedItems.push({ step, field, message });
+  }
+  const staticValidation = validateModelWriteInput(input, false);
+  if (staticValidation) {
+    failedItems.push({
+      step: "review",
+      field: "model",
+      message: staticValidation.body.error.message,
+    });
+  }
+  const providerConfig = input.providerConfig ?? {};
+  const apiKeyEnv = readString(providerConfig.apiKeyEnv);
+  if (!apiKeyEnv) {
+    failedItems.push({ step: "business", field: "apiKeyEnv", message: "请选择密钥引用。" });
+  } else if (looksLikeSecretValue(apiKeyEnv)) {
+    failedItems.push({ step: "business", field: "apiKeyEnv", message: "密钥引用只能保存环境变量名，不能填写明文密钥。" });
+  }
+  if (input.invocationMode === "async_polling" && !isValidOptionalProviderEndpoint(providerConfig.queryTaskEndpoint)) {
+    failedItems.push({ step: "template", field: "queryTaskEndpoint", message: "异步视频模型必须配置合法的轮询接口。" });
+  }
+  if (input.providerProtocol === "custom_http" && !hasValidProviderEndpoint(providerConfig)) {
+    failedItems.push({ step: "template", field: "endpoint", message: "标准 HTTP 代理模型必须配置 endpoint 或 createTaskEndpoint。" });
+  }
+  if (!input.pricing || !Number.isFinite(Number(input.pricing.baseCredits)) || Number(input.pricing.baseCredits) <= 0) {
+    failedItems.push({ step: "pricing", field: "baseCredits", message: "基础积分必须大于 0。" });
+  }
+  if (!input.parameterSchema || Object.keys(input.parameterSchema).length === 0) {
+    failedItems.push({ step: "pricing", field: "parameterSchema", message: "请至少配置一个参数。" });
+  }
+  return failedItems;
+}
+
+function hasSupportedAdapter(providerProtocol: string) {
+  return ["creator_dev", "openai_images", "volcengine_ark_video", "custom_http"].includes(providerProtocol);
+}
+
+function looksLikeSecretValue(value: string) {
+  return /^(sk-|ak-|AIza|xai-|eyJ|Bearer\s+)/i.test(value) || value.length > 80;
+}
+
 function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolean) {
   const requiredFields: Array<keyof AdminModelWriteInput> = [
     "modelCode",
@@ -785,6 +1556,16 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
   }
   if (!Array.isArray(input.taskModes) || input.taskModes.length === 0) {
     return error(400, "task_modes_required", "至少需要一个任务模式");
+  }
+  if (input.mediaType === "image" && input.taskModes.some((taskMode) => !taskMode.startsWith("image."))) {
+    return error(400, "task_modes_media_mismatch", "图片模型只能选择图片能力");
+  }
+  if (input.mediaType === "video" && input.taskModes.some((taskMode) => !taskMode.startsWith("video."))) {
+    return error(400, "task_modes_media_mismatch", "视频模型只能选择视频能力");
+  }
+  const apiKeyEnv = readString(input.providerConfig?.apiKeyEnv);
+  if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
+    return error(400, "api_key_env_must_be_reference", "密钥引用不能保存明文密钥");
   }
   if (input.dispatchPolicy && !readString(input.dispatchPolicy.submitQueueName)) {
     return error(400, "dispatch_submit_queue_required", "请配置提交队列");

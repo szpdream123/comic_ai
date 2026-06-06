@@ -113,6 +113,22 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   ) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
   }
+
+  if (!(await tableExists(db, "storyboard_prompt_packages"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
+  }
+
+  if (!(await tableExists(db, "image_prompt_styles"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0012_image_prompt_styles.sql" });
+  }
+
+  if (!(await tableExists(db, "character_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0014_character_prompt_templates.sql" });
+  }
+
+  if (!(await tableExists(db, "scene_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0015_scene_prompt_templates.sql" });
+  }
 }
 
 async function ensureLegacyTenantUniqueConstraints(db: SqlDatabase) {

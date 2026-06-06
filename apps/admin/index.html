@@ -339,6 +339,102 @@
       }
       .anchor-list a.active, .anchor-list a:hover { background: var(--primary-soft); color: var(--primary); }
       .section { display: grid; gap: 14px; }
+      .prompt-workbench {
+        display: grid;
+        grid-template-columns: 168px minmax(0, 1fr) minmax(360px, .66fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .prompt-kind-list { display: grid; gap: 8px; }
+      .prompt-kind-card {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        padding: 12px;
+        text-align: left;
+      }
+      .prompt-kind-card strong { display: block; margin-bottom: 8px; color: var(--text); }
+      .prompt-kind-card.active {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+        box-shadow: inset 0 0 0 1px rgba(36,107,254,.12);
+      }
+      .prompt-kind-card.active strong { color: var(--primary); }
+      .prompt-preview {
+        position: sticky;
+        top: 76px;
+        display: grid;
+        gap: 14px;
+      }
+      .prompt-preview-box {
+        border: 1px solid #1b2c4a;
+        border-radius: 6px;
+        background: #0f172a;
+        color: #dbeafe;
+        padding: 14px;
+        min-height: 420px;
+        max-height: calc(100vh - 260px);
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+      .prompt-preview-box strong { color: #ffffff; }
+      .prompt-result-box {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        min-height: 180px;
+        padding: 14px;
+        color: var(--text);
+        resize: vertical;
+        width: 100%;
+      }
+      .prompt-toolbar-title h3 { margin: 0; }
+      .prompt-toolbar-title .metric-note { margin-top: 6px; }
+      .prompt-code-cell { font-family: Consolas, monospace; color: #1b3559; }
+      .prompt-title-cell { min-width: 160px; }
+      .prompt-cover-col { width: 72px; text-align: center; }
+      .prompt-cover-thumb {
+        width: 46px;
+        height: 46px;
+        border-radius: 10px;
+        object-fit: cover;
+        flex: 0 0 auto;
+        background: linear-gradient(135deg, #1f7a6d, #e6a94b);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.45), 0 6px 18px rgba(20,31,51,.14);
+      }
+      .prompt-cover-empty {
+        display: inline-grid;
+        place-items: center;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .prompt-cover-upload { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: center; }
+      .prompt-cover-upload .prompt-cover-thumb { width: 64px; height: 64px; border-radius: 14px; }
+      .prompt-cover-upload input[type="file"] { margin-top: 8px; }
+      .character-flow {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .character-flow-step {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f8fbff;
+        padding: 10px;
+        min-height: 82px;
+      }
+      .character-flow-step strong { display: block; color: #17365f; margin-bottom: 6px; }
+      .character-flow-step span { color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .character-template-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+      }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
       .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
@@ -481,6 +577,7 @@
         models: "模型配置",
         "model-workbench": "模型参数详情",
         users: "用户与积分",
+        prompts: "提示词管理",
         risks: "风控与审计",
         settings: "系统设置",
         account: "管理员账户",
@@ -496,6 +593,25 @@
         teamPermissionAccounts: [],
         userLoadError: "",
         teamPermissionLoadError: "",
+        promptManagementMode: "script",
+        scriptPromptPackageType: "genre",
+        scriptPromptKeyword: "",
+        imagePromptCategory: "all",
+        imagePromptKeyword: "",
+        scriptPromptPackages: [],
+        scriptPromptLoadError: "",
+        imagePromptStyles: [],
+        imagePromptLoadError: "",
+        characterPromptStage: "extract",
+        characterPromptKeyword: "",
+        characterPromptTemplates: [],
+        characterPromptLoadError: "",
+        characterPromptComposeResult: "",
+        characterPromptComposeError: "",
+        scenePromptStage: "split",
+        scenePromptKeyword: "",
+        scenePromptTemplates: [],
+        scenePromptLoadError: "",
         settings: { configs: [], secretReferences: [] },
         adminAccounts: [],
         settingsLoadError: "",
@@ -530,6 +646,7 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
+        if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
@@ -638,7 +755,7 @@
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
           state.page = routeFromPath();
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           renderShell();
         } catch {
           history.replaceState(null, "", "/admin/login");
@@ -651,7 +768,7 @@
         try {
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           history.replaceState(null, "", "/admin/dashboard");
           state.page = "dashboard";
           renderShell();
@@ -696,7 +813,7 @@
               }),
             });
             state.session = result.data;
-            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
             history.replaceState(null, "", "/admin/dashboard");
             state.page = "dashboard";
             renderShell();
@@ -720,6 +837,7 @@
                 ${navButton("models", "模型配置")}
                 ${navButton("model-workbench", "参数详情")}
                 ${navButton("users", "用户积分")}
+                ${navButton("prompts", "提示词管理")}
                 ${navButton("risks", "风控审计")}
                 ${navButton("settings", "系统设置")}
               </nav>
@@ -795,6 +913,729 @@
           state.teamPermissionAccounts = [];
         } finally {
           setPageLoading("users", false);
+        }
+      }
+
+      async function loadPromptManagement() {
+        setPageLoading("prompts", true);
+        try {
+          await Promise.allSettled([loadScriptPrompts(), loadImagePromptStyles(), loadCharacterPromptTemplates(), loadScenePromptTemplates()]);
+          clearPageForbidden("prompts");
+        } catch (error) {
+          setPageForbidden("prompts", error);
+        } finally {
+          setPageLoading("prompts", false);
+        }
+      }
+
+      async function loadScriptPrompts() {
+        try {
+          const result = await api("/api/admin/storyboard-prompt/packages?page_size=100");
+          state.scriptPromptPackages = Array.isArray(result.data) ? result.data : [];
+          state.scriptPromptLoadError = "";
+        } catch (error) {
+          state.scriptPromptLoadError = error.payload?.error?.message || "剧本提示词加载失败";
+          state.scriptPromptPackages = [];
+        }
+      }
+
+      const characterPromptTemplateFallback = [
+        {
+          id: "character-prompt-extract-default",
+          name: "长篇小说人物线索抽取",
+          code: "novel_character_extract",
+          stage: "extract",
+          model_family: "general",
+          tags: ["分块抽取", "证据", "JSON"],
+          variables: ["{{chunk_id}}", "{{novel_chunk}}"],
+          chunk_min_chars: 3000,
+          chunk_max_chars: 8000,
+          overlap_chars: 500,
+          json_schema: "characters[].name, aliases, gender, age_text, identity, faction, importance, evidence arrays, confidence",
+          prompt_content: `你是小说人物抽取专家。请只分析当前小说片段，抽取片段中出现的主要人物、重要配角、反派、推动剧情的人物，以及对人物外貌、身份、服装、武器、性格、关系、场景有用的信息。
+
+重要规则：
+1. 只根据当前片段抽取，不要臆造后文剧情。
+2. 可以合理推断性别、年龄段、身份，但必须标注 confidence。
+3. 路人、无名士兵、普通百姓、只出现一次且不推动剧情的人物不要输出。
+4. 同一人物的别称、称号、代称要记录到 aliases。
+5. 如果信息不确定，填 null 或 unknown。
+6. 输出必须是合法 JSON，不要 Markdown，不要解释。
+
+小说片段：
+{{novel_chunk}}`,
+          is_default: true,
+          sort_order: 300,
+          status: "enabled",
+          remark: "每块 3000-8000 字，overlap 300-800 字。第一步只负责证据抽取。",
+        },
+        {
+          id: "character-prompt-merge-default",
+          name: "人物档案合并去重",
+          code: "novel_character_merge",
+          stage: "merge",
+          model_family: "general",
+          tags: ["合并去重", "冲突处理", "人物档案"],
+          variables: ["{{all_chunk_character_json}}"],
+          chunk_min_chars: 0,
+          chunk_max_chars: 0,
+          overlap_chars: 0,
+          json_schema: "final_characters[].id, name, aliases, appearance, costume, weapons, conflicts",
+          prompt_content: `你是小说人物档案合并专家。请根据多个分块抽取结果，合并同一人物，去重别名，修正冲突，并生成最终人物档案。
+
+重要规则：
+1. 判断同一人物时，综合 name、aliases、身份、阵营、关系、场景。
+2. 同名不同人必须拆开，并在 name 后加区分称谓。
+3. 不确定冲突不要强行合并，写入 conflicts。
+4. 最终只保留主角、重要配角、反派、关键阵营人物。
+5. 不要编造小说没有支撑的重大设定。
+6. 可以补全视觉设定，但必须符合原文身份、年龄、气质和时代背景。
+7. 输出必须是合法 JSON，不要 Markdown，不要解释。
+
+分块抽取结果：
+{{all_chunk_character_json}}`,
+          is_default: true,
+          sort_order: 200,
+          status: "enabled",
+          remark: "第二步负责把证据合并成人物档案，保留 conflicts 供人工复核。",
+        },
+        {
+          id: "character-prompt-grid-default",
+          name: "九宫格角色设定图生成",
+          code: "character_grid_sheet",
+          stage: "grid",
+          model_family: "doubao",
+          tags: ["九宫格", "角色设定", "一致性"],
+          variables: ["{{character_profile_json}}"],
+          chunk_min_chars: 0,
+          chunk_max_chars: 0,
+          overlap_chars: 0,
+          json_schema: "中文提示词 sections: 人物, 九宫格角色设定图提示词, 负面提示词",
+          prompt_content: `你是 AI 生图提示词专家。请根据输入的最终人物档案，生成一条“小说人物九宫格角色设定图提示词”。
+
+要求：
+1. 生成的是 3x3 九宫格角色设定图，不是单人海报。
+2. 九个格子必须内容明确、互不重复。
+3. 同一人物在九宫格中必须保持同一张脸、同一发型、同一服装、同一武器、同一色彩方案。
+4. 默认中国人/东亚人面孔，除非人物档案明确不是。
+5. 年龄感、身份、阵营、气质必须准确。
+6. 输出中文提示词，适合直接给生图模型使用。
+
+请按以下格式输出：
+
+【人物】
+姓名：
+身份：
+核心气质：
+视觉锚点：
+
+【九宫格角色设定图提示词】
+生成一张3x3九宫格角色设定图，专业影视美术角色参考板，游戏角色原画设定九宫格，电影级写实质感，超高清，九个格子边框清晰，人物身份统一，画面整洁，细节丰富。
+
+角色：
+{姓名，年龄，性别，身份，阵营，核心气质}
+
+第1格：高清面部特写，展示脸型、五官、眼神、妆容或胡须，面部清晰，有辨识度。
+第2格：半身定妆照，展示发型、发饰、肩颈、衣领、上身服装、配饰。
+第3格：全身正面图，单人正面站姿，服装完整可见，身体比例准确。
+第4格：全身侧面图，展示侧面轮廓、发型长度、服装层次、武器挂载方式。
+第5格：全身背面图，展示背面发型、披风、衣摆、背部纹样、武器背负方式。
+第6格：服装细节拆解，展示衣领、袖口、腰封、护腕、鞋履、披风、纹样、材质细节。
+第7格：武器与配饰细节，展示主武器、副武器、发饰、玉佩、腰牌、戒指、护腕、挂坠或法器。
+第8格：表情参考，展示冷漠、审视、微怒、沉思四种表情，保持同一张脸。
+第9格：动作与场景参考，展示代表动作和适配背景，背景与小说场景一致。
+
+完整人物外观：
+{完整外观描述}
+
+完整服装设计：
+{完整服装描述}
+
+完整武器配饰：
+{完整武器与配饰描述}
+
+整体风格：
+cinematic realistic character design sheet, professional game character concept art, 3x3 grid layout, ultra detailed, sharp focus, consistent character identity, realistic fabric texture, realistic metal texture, realistic skin texture, high detail, clean panel borders.
+
+负面提示词：
+不要一次性塞进九宫格提示词，不要单人海报，不要普通写真，不要九宫格缺失，不要格子混乱，不要人物换脸，不要服装变化，不要发型变化，不要武器变化，不要三视图不一致，不要多人，不要西方面孔，不要欧美五官，不要网红脸，不要肢体畸形，不要多手，不要多脚，不要多手指，不要手指畸形，不要身体扭曲，不要比例失衡，不要头身比异常，不要低清晰度，不要模糊，不要水印，不要logo，不要乱码文字，不要廉价网游风，不要卡通Q版。
+
+人物档案：
+{{character_profile_json}}`,
+          is_default: true,
+          sort_order: 100,
+          status: "enabled",
+          remark: "第三步才生成 3x3九宫格角色设定图，锁定一致性。",
+        },
+      ];
+
+      async function loadCharacterPromptTemplates() {
+        try {
+          const result = await api("/api/admin/character-prompt/templates?page_size=100");
+          state.characterPromptTemplates = Array.isArray(result.data) && result.data.length ? result.data : characterPromptTemplateFallback;
+          state.characterPromptLoadError = "";
+        } catch (error) {
+          const saved = localStorage.getItem("admin-character-prompt-templates");
+          state.characterPromptTemplates = saved ? JSON.parse(saved) : characterPromptTemplateFallback;
+          state.characterPromptLoadError = error.payload?.error?.message || "人物提示词接口暂不可用，当前使用本地模板";
+        }
+      }
+
+      const scenePromptTemplateFallback = [
+        {
+          id: "scene-prompt-split-default",
+          name: "长篇小说分场景拆分",
+          code: "scene_split_long_novel",
+          stage: "split",
+          model_family: "general",
+          tags: ["长篇分场景", "章节拆分", "JSON"],
+          variables: ["{{volume}}", "{{chapter}}", "{{novel_chapter}}", "{{previous_scene_summary}}"],
+          json_schema: "scenes[].scene_id, scene_name, volume, chapter, sequence, location_id, location_name, environment_type, time, scene_role, characters, plot_function, previous_scene_link, next_scene_hook, continuity_notes, visual_motifs, summary",
+          prompt_content: `你是长篇小说分场景策划。请根据输入的小说章节，将文本拆分为多个可独立拍摄、绘制、改编的场景。
+
+拆分原则：
+1. 地点变化必须拆分。
+2. 时间明显变化必须拆分。
+3. 人物目标、冲突状态或情绪重心变化明显时，可以拆分。
+4. 回忆、梦境、幻觉、插叙必须单独标记。
+5. 同一地点连续发生的小动作不要过度拆分，除非剧情功能发生变化。
+6. 必须为长篇连续性保留 location_id、visual_motifs、continuity_notes。
+
+请输出 JSON 数组。每个场景必须包含 scene_id、scene_name、volume、chapter、sequence、location_id、location_name、environment_type、time、scene_role、characters、plot_function、previous_scene_link、next_scene_hook、continuity_notes、visual_motifs、summary。
+
+章节信息：{{volume}} / {{chapter}}
+前一场景摘要：{{previous_scene_summary}}
+小说章节：{{novel_chapter}}`,
+          is_default: true,
+          sort_order: 500,
+          status: "enabled",
+          remark: "第一步：把长篇章节稳定拆成可追踪 scene_id 和 location_id。",
+        },
+        {
+          id: "scene-prompt-extract-default",
+          name: "场景要素抽取",
+          code: "scene_extract_elements",
+          stage: "extract",
+          model_family: "general",
+          tags: ["场景要素抽取", "空间结构", "伏笔"],
+          variables: ["{{scene_json}}", "{{novel_scene_text}}"],
+          json_schema: "environment, spatial_layers, visual_details, sounds, smells, tactile_details, props, foreshadowing, continuity_notes",
+          prompt_content: `你是小说场景资料整理师。请只分析当前 scene_json 和对应原文，抽取可用于写作、分镜和生图的场景要素。
+
+要求：
+1. 不要改写剧情，不要新增原文没有依据的重大设定。
+2. 把空间分为前景、中景、远景或入口、主体、深处。
+3. 记录具体物件、声音、气味、触感、光线、材质。
+4. 标出 location_id、visual_motifs、continuity_notes 中必须延续的内容。
+5. 输出合法 JSON，不要 Markdown。
+
+scene_json：{{scene_json}}
+原文场景片段：{{novel_scene_text}}`,
+          is_default: true,
+          sort_order: 400,
+          status: "enabled",
+          remark: "第二步：从单场景原文抽取空间、五感、道具和伏笔证据。",
+        },
+        {
+          id: "scene-prompt-merge-default",
+          name: "长篇场景库合并",
+          code: "scene_merge_library",
+          stage: "merge",
+          model_family: "general",
+          tags: ["场景库合并", "地点去重", "连续性"],
+          variables: ["{{all_scene_extract_json}}", "{{existing_scene_library_json}}"],
+          json_schema: "scene_library[].location_id, location_name, fixed_features, variable_states, appearances, visual_motifs, continuity_rules, unresolved_hooks",
+          prompt_content: `你是长篇小说场景库管理员。请根据多个场景抽取结果和已有场景库，合并重复地点，形成可长期复用的场景圣经。
+
+规则：
+1. 同一地点必须复用同一个 location_id。
+2. 固定空间结构写入 fixed_features。
+3. 随章节变化的损毁、天气、血迹、灯光、封锁状态写入 variable_states。
+4. 人物留下的痕迹、未回收道具、伏笔写入 continuity_rules 或 unresolved_hooks。
+5. 冲突信息不要强行覆盖，写入 conflict_notes。
+6. 输出合法 JSON，不要 Markdown。
+
+已有场景库：{{existing_scene_library_json}}
+本轮抽取结果：{{all_scene_extract_json}}`,
+          is_default: true,
+          sort_order: 300,
+          status: "enabled",
+          remark: "第三步：维护长篇场景圣经，避免同一地点前后不一致。",
+        },
+        {
+          id: "scene-prompt-detail-default",
+          name: "小说场景设定拆解表",
+          code: "scene_detail_breakdown",
+          stage: "detail",
+          model_family: "general",
+          tags: ["场景设定拆解", "影视概念设定", "短视频场景稿"],
+          variables: ["{{scene_json}}", "{{scene_extract_json}}", "{{scene_library_json}}"],
+          json_schema: "sections: 场景名称, 所属篇章, 场景定位, 环境类型, 时间设定, 整体氛围, 场景主体, 场景描述, 细节元素拆解, 人物与场景关系, 剧情功能, 长篇连续性记录, 视觉母题, 光影版本, 声音氛围, 气味与触感, AI绘图提示词, 写作建议, 下一场景衔接建议",
+          prompt_content: `你是影视概念设定师和小说场景美术指导。请根据输入的 scene 对象、场景要素抽取结果和场景库资料，生成完整的小说场景设定拆解表。
+
+必须包含：
+【场景名称】【所属篇章 / 长篇位置】【场景定位】【环境类型】【时间设定】【整体氛围】【场景主体】【场景描述】【细节元素拆解】【人物与场景关系】【剧情功能】【长篇连续性记录】【视觉母题】【光影版本】【声音氛围】【气味与触感】【可用于 AI 绘图的场景提示词】【小说写作使用建议】【下一场景衔接建议】。
+
+要求：
+1. 保持 location_id 对应地点的一致性。
+2. 不要改变已存在的伏笔、道具、空间结构。
+3. 如果本场景是旧地点再次出现，需要写出“本次变化”。
+4. 场景描述 150-300 字，有空间层次、视觉细节、声音、气味或触感。
+5. AI 绘图提示词必须包含主体、环境、时间、光影、氛围、细节元素、镜头视角、画面风格。
+
+scene：{{scene_json}}
+场景抽取：{{scene_extract_json}}
+场景库：{{scene_library_json}}`,
+          is_default: true,
+          sort_order: 200,
+          status: "enabled",
+          remark: "第四步：生成完整场景拆解表。",
+        },
+        {
+          id: "scene-prompt-image-default",
+          name: "场景概念图提示词",
+          code: "scene_image_concept_art",
+          stage: "image",
+          model_family: "doubao",
+          tags: ["场景生图提示词", "影视概念设定图", "前景中景远景"],
+          variables: ["{{scene_detail_json}}", "{{style_prompt}}"],
+          json_schema: "positive_prompt, negative_prompt, aspect_ratio, camera, style_notes",
+          prompt_content: `你是 AI 场景概念图提示词设计师。请根据场景设定拆解结果，生成适合生图模型的中文场景提示词。
+
+格式：
+主体空间 + 环境类型 + 时间 + 光影 + 氛围 + 前景细节 + 中景主体 + 远景背景 + 镜头视角 + 画面风格 + 长篇视觉母题。
+
+要求：
+1. 优先生成场景概念图，不做人物海报。
+2. 人物只能作为小比例叙事点出现。
+3. 必须体现前景、中景、远景。
+4. 必须保留 visual_motifs 和 continuity_notes 中的重要元素。
+5. 画面风格参考影视概念设定图、剧集美术设定稿、短视频场景设定稿。
+6. 输出正向提示词和负向提示词。
+
+场景拆解：{{scene_detail_json}}
+风格补充：{{style_prompt}}`,
+          negative_prompt: "避免文字、水印、logo、人物大特写、单人海报、画面主体缺失、空间混乱、透视错误、低清晰度、过曝",
+          is_default: true,
+          sort_order: 100,
+          status: "enabled",
+          remark: "第五步：把场景拆解转成可直接生图的概念图提示词。",
+        },
+      ];
+
+      async function loadScenePromptTemplates() {
+        try {
+          const result = await api("/api/admin/scene-prompt/templates?page_size=100");
+          state.scenePromptTemplates = Array.isArray(result.data) && result.data.length ? result.data : scenePromptTemplateFallback;
+          state.scenePromptLoadError = "";
+        } catch (error) {
+          const saved = localStorage.getItem("admin-scene-prompt-templates");
+          state.scenePromptTemplates = saved ? JSON.parse(saved) : scenePromptTemplateFallback;
+          state.scenePromptLoadError = error.payload?.error?.message || "场景提示词接口暂不可用，当前使用本地模板";
+        }
+      }
+
+      const imagePromptNegativeFallback = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
+      const imagePromptStyleFallback = [
+        {
+          id: "image-style-portrait-photography",
+          name: "人像摄影",
+          code: "portrait_photography",
+          category: "official",
+          model_family: "doubao",
+          tags: ["摄影", "人像"],
+          prompt_content: "真实人像摄影风格，皮肤质感自然，表情细腻，浅景深背景虚化，柔和棚拍光，画面清晰高级",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 320,
+          status: "enabled",
+        },
+        {
+          id: "image-style-cinematic-portrait",
+          name: "电影写真",
+          code: "cinematic_portrait",
+          category: "official",
+          model_family: "doubao",
+          tags: ["电影", "写真"],
+          prompt_content: "电影剧照写真风格，强叙事氛围，胶片色调，侧逆光，光影层次丰富，镜头感明显",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 310,
+          status: "enabled",
+        },
+        {
+          id: "image-style-chinese-style",
+          name: "中国风",
+          code: "chinese_style",
+          category: "official",
+          model_family: "doubao",
+          tags: ["国风", "东方"],
+          prompt_content: "中国传统美学风格，东方构图，古典纹样，雅致配色，含蓄留白，画面有国风意境",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 300,
+          status: "enabled",
+        },
+        {
+          id: "image-style-animation",
+          name: "动画",
+          code: "animation",
+          category: "official",
+          model_family: "doubao",
+          tags: ["动画"],
+          prompt_content: "高质量动画电影风格，角色造型生动，色彩明快，线条干净，表情动作夸张但自然",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 290,
+          status: "enabled",
+        },
+        {
+          id: "image-style-three-d-render",
+          name: "3D渲染",
+          code: "three_d_render",
+          category: "official",
+          model_family: "doubao",
+          tags: ["3D", "渲染"],
+          prompt_content: "精致 3D 渲染风格，真实材质，立体光影，细节丰富，电影级质感，画面干净清晰",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 280,
+          status: "enabled",
+        },
+        {
+          id: "image-style-cyberpunk",
+          name: "赛博朋克",
+          code: "cyberpunk",
+          category: "official",
+          model_family: "doubao",
+          tags: ["科幻", "霓虹"],
+          prompt_content: "赛博朋克风格，未来城市，霓虹灯光，机械科技元素，高对比冷暖色，夜景氛围强",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 270,
+          status: "enabled",
+        },
+        {
+          id: "image-style-cg-animation",
+          name: "CG 动画",
+          code: "cg_animation",
+          category: "official",
+          model_family: "doubao",
+          tags: ["CG", "动画"],
+          prompt_content: "CG 动画电影质感，角色建模精致，材质柔和，光照自然，画面有梦幻商业动画感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 260,
+          status: "enabled",
+        },
+        {
+          id: "image-style-ink-wash",
+          name: "水墨画",
+          code: "ink_wash",
+          category: "official",
+          model_family: "doubao",
+          tags: ["水墨", "国风"],
+          prompt_content: "中国水墨画风格，墨色晕染，宣纸质感，写意笔触，留白构图，整体淡雅有诗意",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 250,
+          status: "enabled",
+        },
+        {
+          id: "image-style-oil-painting",
+          name: "油画",
+          code: "oil_painting",
+          category: "official",
+          model_family: "doubao",
+          tags: ["油画"],
+          prompt_content: "古典油画风格，厚重笔触，布面纹理，色彩层次丰富，明暗柔和，画面具有艺术馆质感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 240,
+          status: "enabled",
+        },
+        {
+          id: "image-style-classic-art",
+          name: "古典",
+          code: "classic_art",
+          category: "official",
+          model_family: "doubao",
+          tags: ["古典"],
+          prompt_content: "古典艺术风格，庄重优雅，复古色调，精致服饰与装饰，柔和光影，构图稳定",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 230,
+          status: "enabled",
+        },
+        {
+          id: "image-style-watercolor",
+          name: "水彩画",
+          code: "watercolor",
+          category: "official",
+          model_family: "doubao",
+          tags: ["水彩"],
+          prompt_content: "水彩插画风格，透明颜料晕染，纸张纹理明显，边缘柔和，色彩清新明亮",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 220,
+          status: "enabled",
+        },
+        {
+          id: "image-style-cartoon",
+          name: "卡通",
+          code: "cartoon",
+          category: "official",
+          model_family: "doubao",
+          tags: ["卡通"],
+          prompt_content: "卡通插画风格，造型圆润可爱，色彩鲜明，线条简洁，表情活泼，画面轻松有趣",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 210,
+          status: "enabled",
+        },
+        {
+          id: "image-style-flat-illustration",
+          name: "平面插画",
+          code: "flat_illustration",
+          category: "official",
+          model_family: "doubao",
+          tags: ["插画", "扁平"],
+          prompt_content: "扁平插画风格，简洁几何造型，干净色块，现代配色，少阴影，整体设计感强",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 200,
+          status: "enabled",
+        },
+        {
+          id: "image-style-landscape",
+          name: "风景",
+          code: "landscape",
+          category: "official",
+          model_family: "doubao",
+          tags: ["风景"],
+          prompt_content: "高质量风景画面，自然光线，空间纵深明显，环境细节丰富，构图开阔，氛围真实",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 190,
+          status: "enabled",
+        },
+        {
+          id: "image-style-hong-kong-anime",
+          name: "港风动漫",
+          code: "hong_kong_anime",
+          category: "official",
+          model_family: "doubao",
+          tags: ["港风", "动漫"],
+          prompt_content: "港风复古动漫风格，怀旧胶片色调，霓虹街景，90 年代城市氛围，线条有漫画感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 180,
+          status: "enabled",
+        },
+        {
+          id: "image-style-pixel-art",
+          name: "像素风格",
+          code: "pixel_art",
+          category: "official",
+          model_family: "doubao",
+          tags: ["像素"],
+          prompt_content: "像素艺术风格，复古游戏画面，低分辨率像素块，轮廓清楚，有限色板，画面规整",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 170,
+          status: "enabled",
+        },
+        {
+          id: "image-style-fluorescent-painting",
+          name: "荧光绘画",
+          code: "fluorescent_painting",
+          category: "official",
+          model_family: "doubao",
+          tags: ["荧光"],
+          prompt_content: "荧光绘画风格，深色背景，高饱和霓虹色，发光边缘，电光效果，视觉冲击强",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 160,
+          status: "enabled",
+        },
+        {
+          id: "image-style-colored-pencil",
+          name: "彩铅画",
+          code: "colored_pencil",
+          category: "official",
+          model_family: "doubao",
+          tags: ["彩铅", "手绘"],
+          prompt_content: "彩色铅笔手绘风格，细腻排线，纸张纹理，柔和渐变，色彩温暖自然",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 150,
+          status: "enabled",
+        },
+        {
+          id: "image-style-figurine",
+          name: "手办",
+          code: "figurine",
+          category: "official",
+          model_family: "doubao",
+          tags: ["手办"],
+          prompt_content: "精品手办摄影风格，PVC 材质，精致雕刻，上色细腻，棚拍灯光，收藏级质感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 140,
+          status: "enabled",
+        },
+        {
+          id: "image-style-children-drawing",
+          name: "儿童绘画",
+          code: "children_drawing",
+          category: "official",
+          model_family: "doubao",
+          tags: ["儿童", "手绘"],
+          prompt_content: "儿童绘画风格，天真线条，明亮色彩，简单形状，童趣构图，画面温暖可爱",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 130,
+          status: "enabled",
+        },
+        {
+          id: "image-style-abstract-art",
+          name: "抽象",
+          code: "abstract_art",
+          category: "official",
+          model_family: "doubao",
+          tags: ["抽象"],
+          prompt_content: "抽象艺术风格，用形状、色块和线条表达情绪，非写实构图，视觉节奏强",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 120,
+          status: "enabled",
+        },
+        {
+          id: "image-style-sharp-pen-illustration",
+          name: "锐笔插画",
+          code: "sharp_pen_illustration",
+          category: "official",
+          model_family: "doubao",
+          tags: ["插画", "线稿"],
+          prompt_content: "针管笔锐利插画风格，线条清晰有力，细节密集，黑白对比强，边缘利落",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 110,
+          status: "enabled",
+        },
+        {
+          id: "image-style-anime-2d",
+          name: "二次元",
+          code: "anime_2d",
+          category: "official",
+          model_family: "doubao",
+          tags: ["二次元", "动漫"],
+          prompt_content: "二次元动漫风格，精致线稿，大眼角色，干净上色，柔和高光，日系动画质感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 100,
+          status: "enabled",
+        },
+        {
+          id: "image-style-ink-print",
+          name: "油墨印刷",
+          code: "ink_print",
+          category: "official",
+          model_family: "doubao",
+          tags: ["印刷", "复古"],
+          prompt_content: "复古油墨印刷风格，网点纹理，套色偏移，纸张颗粒感，海报印刷质感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 90,
+          status: "enabled",
+        },
+        {
+          id: "image-style-printmaking",
+          name: "版画",
+          code: "printmaking",
+          category: "official",
+          model_family: "doubao",
+          tags: ["版画"],
+          prompt_content: "木刻版画风格，粗犷刻线，强烈黑白关系，有限色彩，图形感突出",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 80,
+          status: "enabled",
+        },
+        {
+          id: "image-style-monet-impressionism",
+          name: "莫奈",
+          code: "monet_impressionism",
+          category: "official",
+          model_family: "doubao",
+          tags: ["印象派"],
+          prompt_content: "印象派莫奈风格，柔和光色，松散笔触，自然景致，空气感强，色彩朦胧",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 70,
+          status: "enabled",
+        },
+        {
+          id: "image-style-picasso-cubism",
+          name: "毕加索",
+          code: "picasso_cubism",
+          category: "official",
+          model_family: "doubao",
+          tags: ["立体主义"],
+          prompt_content: "立体主义风格，几何分解，多视角构图，夸张形体，艺术实验感强",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 60,
+          status: "enabled",
+        },
+        {
+          id: "image-style-rembrandt-lighting",
+          name: "伦勃朗",
+          code: "rembrandt_lighting",
+          category: "official",
+          model_family: "doubao",
+          tags: ["古典", "光影"],
+          prompt_content: "伦勃朗式古典光影，深色背景，强明暗对比，戏剧性侧光，肖像质感厚重",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 50,
+          status: "enabled",
+        },
+        {
+          id: "image-style-matisse-fauvism",
+          name: "马蒂斯",
+          code: "matisse_fauvism",
+          category: "official",
+          model_family: "doubao",
+          tags: ["野兽派"],
+          prompt_content: "马蒂斯风格，鲜艳纯色，装饰性平面构图，流畅线条，色彩大胆明快",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 40,
+          status: "enabled",
+        },
+        {
+          id: "image-style-baroque",
+          name: "巴洛克",
+          code: "baroque",
+          category: "official",
+          model_family: "doubao",
+          tags: ["巴洛克"],
+          prompt_content: "巴洛克艺术风格，华丽装饰，戏剧光影，动态构图，金色细节，宏大气势",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 30,
+          status: "enabled",
+        },
+        {
+          id: "image-style-retro-anime",
+          name: "复古动漫",
+          code: "retro_anime",
+          category: "official",
+          model_family: "doubao",
+          tags: ["复古", "动漫"],
+          prompt_content: "复古赛璐璐动漫风格，怀旧配色，胶片颗粒，手绘线条，旧动画质感",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 20,
+          status: "enabled",
+        },
+        {
+          id: "image-style-picture-book",
+          name: "绘本",
+          code: "picture_book",
+          category: "official",
+          model_family: "doubao",
+          tags: ["绘本", "插画"],
+          prompt_content: "绘本插画风格，温暖色调，柔和手绘线条，童话叙事感，纸张纹理清晰",
+          negative_prompt: imagePromptNegativeFallback,
+          sort_order: 10,
+          status: "enabled",
+        },
+      ];
+      imagePromptStyleFallback.forEach((item) => {
+        item.cover_image_url = item.cover_image_url || promptCoverDataUrl(item.code, item.name);
+        item.coverImageUrl = item.cover_image_url;
+      });
+
+      async function loadImagePromptStyles() {
+        try {
+          const result = await api("/api/admin/image-prompt/styles?page_size=200");
+          const loadedStyles = Array.isArray(result.data) ? result.data : [];
+          state.imagePromptStyles = loadedStyles.length ? loadedStyles : imagePromptStyleFallback;
+          state.imagePromptLoadError = "";
+        } catch (error) {
+          state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用，当前展示内置豆包样例";
+          state.imagePromptStyles = imagePromptStyleFallback;
         }
       }
 
@@ -913,6 +1754,7 @@
           models: "/admin/models",
           "model-workbench": "/admin/models/new",
           users: "/admin/users",
+          prompts: "/admin/prompts",
           risks: "/admin/risks",
           settings: "/admin/settings",
           account: "/admin/account",
@@ -935,6 +1777,7 @@
         if (state.page === "models") return modelsPage();
         if (state.page === "model-workbench") return modelWorkbenchPage();
         if (state.page === "users") return usersPage();
+        if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
@@ -1264,6 +2107,520 @@
             <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
           </div>
         </button>`;
+      }
+
+      const scriptPromptTypes = [
+        { key: "genre", title: "题材包", note: "控制故事类型、世界观表达和题材爽点" },
+        { key: "emotion", title: "情绪包", note: "控制情绪基调、叙事张力和爽点类型" },
+        { key: "camera", title: "镜头包", note: "控制分镜方式、画面语言和 AI 视频友好度" },
+        { key: "output", title: "输出格式包", note: "规定最终返回结构，如表格、JSON 或文本" },
+        { key: "taboo", title: "通用禁忌包", note: "维护质量底线、负向要求和一致性约束" },
+      ];
+
+      const imagePromptKinds = [
+        { key: "all", title: "全部样式", note: "查看所有生图题词和画风预设" },
+        { key: "official", title: "官方样式", note: "默认内置的豆包生图画风提示词" },
+        { key: "custom", title: "自定义样式", note: "运营手动新增和调优的项目样式" },
+      ];
+
+      const promptManagementTabs = [
+        { key: "script", label: "剧本提示词", note: "管理小说改编、短剧分镜和组合生成使用的剧本提示词" },
+        { key: "image", label: "生图题词", note: "管理分镜生成后用于生图模型的画风、质量和负向约束" },
+        { key: "character", label: "人物提示词", note: "管理角色设定、人物外观和一致性描述使用的提示词" },
+        { key: "scene", label: "场景提示词", note: "管理空间环境、时代氛围和镜头场景使用的提示词" },
+      ];
+
+      function promptTabs() {
+        const activeTab = promptManagementTabs.find((item) => item.key === state.promptManagementMode) || promptManagementTabs[0];
+        return `<div class="toolbar" style="margin-bottom:14px;">
+          <div class="filters">
+            ${promptManagementTabs.map((item) => `<button class="btn ${state.promptManagementMode === item.key ? "primary" : "ghost"}" onclick="updatePromptManagementMode('${item.key}')">${item.label}</button>`).join("")}
+          </div>
+          <div class="metric-note">${activeTab.note}</div>
+        </div>`;
+      }
+
+      function updatePromptManagementMode(mode) {
+        state.promptManagementMode = promptManagementTabs.some((item) => item.key === mode) ? mode : "script";
+        renderShell();
+      }
+
+      function promptsPage() {
+        if (state.promptManagementMode === "image") return imagePromptStylesPage();
+        if (state.promptManagementMode === "character") return characterPromptTemplatesPage();
+        if (state.promptManagementMode === "scene") return scenePromptTemplatesPage();
+        return scriptPromptsPage();
+      }
+
+      function promptComingSoonPage(title, note) {
+        return `${promptTabs()}<section class="card" data-required-permission="storyboard_prompt:view">
+          <h3 style="margin:0 0 8px;">${title}</h3>
+          <p class="metric-note" style="margin:0;">${note}</p>
+        </section>`;
+      }
+
+      const characterPromptStages = [
+        { key: "extract", title: "分块抽取", note: "每次传 3000-8000 字小说片段，只抽取当前片段的人物证据。" },
+        { key: "merge", title: "合并去重", note: "合并所有 chunk JSON，修正同人别名、冲突和最终人物档案。" },
+        { key: "grid", title: "九宫格生成", note: "为每个最终人物生成 3x3九宫格角色设定图提示词。" },
+      ];
+
+      function characterPromptTemplatesPage() {
+        const activeStage = characterPromptStages.find((item) => item.key === state.characterPromptStage) || characterPromptStages[0];
+        const keyword = (state.characterPromptKeyword || "").trim().toLowerCase();
+        const filtered = (state.characterPromptTemplates || [])
+          .filter((item) => (item.stage || item.prompt_stage || item.promptStage) === activeStage.key)
+          .filter((item) => !keyword || [
+            item.name,
+            item.code,
+            item.stage,
+            item.model_family || item.modelFamily,
+            (item.tags || []).join(" "),
+            item.prompt_content || item.promptContent,
+          ].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length
+          ? filtered.map(characterPromptTemplateRow).join("")
+          : `<tr><td colspan="9">${state.characterPromptLoadError || "暂无该阶段的人物提示词模板"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+          <aside class="card">
+            <div class="prompt-kind-list">${characterPromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updateCharacterPromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${characterPromptStageCount(item.key)} 个模板</span></button>`).join("")}</div>
+          </aside>
+          <section class="section">
+            <section class="card" style="box-shadow:none;border:1px solid var(--line);">
+              <div class="toolbar">
+                <div class="prompt-toolbar-title"><h3>三段式人物提示词流水线</h3><div class="metric-note">不要一次性塞进九宫格提示词。先证据抽取，再合并档案，最后逐个角色生成设定图提示词。</div></div>
+              </div>
+              ${characterPromptWorkflowGuide()}
+            </section>
+            <div class="toolbar">
+                <div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note} 当前仅显示所选阶段，切换左侧阶段可查看合并和九宫格模板。</div></div>
+              <div class="filters">
+                <input value="${escapeAttribute(state.characterPromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateCharacterPromptKeyword(this.value)" />
+                <select onchange="updateCharacterPromptStage(this.value)">${optionList(characterPromptStages.map((item) => item.key), activeStage.key)}</select>
+                <button class="btn primary" onclick="openCharacterPromptTemplateDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增人物提示词</button>
+                <button class="btn ghost" onclick="loadCharacterPromptTemplates().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap dense"><table><thead><tr><th>名称</th><th>编码</th><th>阶段</th><th>模型族</th><th>状态</th><th>默认</th><th>切块</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          </section>
+          <aside class="card prompt-preview">
+            <div class="toolbar"><h3 style="margin:0;">模板预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
+            <div class="prompt-preview-box" id="prompt-preview">${characterPromptPreview(filtered)}</div>
+            <div class="toolbar"><h3 style="margin:0;">后端组装测试</h3><button class="btn ghost" onclick="composeCharacterPromptFromPreview()">组装</button></div>
+            <textarea class="prompt-result-box" id="character-compose-variables" placeholder="填写变量 JSON，后端会识别并替换 {{character_profile_json}} 等变量。">${escapeHtml(characterPromptVariableSample(activeStage.key))}</textarea>
+            <div class="error-text">${escapeHtml(state.characterPromptComposeError || "")}</div>
+            <textarea class="prompt-result-box" id="character-compose-result" readonly placeholder="后端组装后的完整人物提示词会显示在这里。">${escapeHtml(state.characterPromptComposeResult || "每块 3000-8000 中文字\n相邻块 overlap 300-800 字\n先抽取所有 chunk\n再合并 final_characters\n最后逐个 character 生成九宫格提示词")}</textarea>
+          </aside>
+        </section>`;
+      }
+
+      function characterPromptWorkflowGuide() {
+        return `<div class="character-flow">
+          <div class="character-flow-step"><strong>1. 分块抽取</strong><span>输入 {{chunk_id}} 和 {{novel_chunk}}，输出合法 JSON 人物线索。</span></div>
+          <div class="character-flow-step"><strong>2. 合并去重</strong><span>输入 {{all_chunk_character_json}}，输出 final_characters 人物档案。</span></div>
+          <div class="character-flow-step"><strong>3. 九宫格生成</strong><span>输入 {{character_profile_json}}，输出单个人物九宫格提示词。</span></div>
+        </div>`;
+      }
+
+      function characterPromptStageCount(stage) {
+        return (state.characterPromptTemplates || []).filter((item) => (item.stage || item.prompt_stage || item.promptStage) === stage).length;
+      }
+
+      function characterPromptTemplateRow(item) {
+        const stageKey = item.stage || item.prompt_stage || item.promptStage || "extract";
+        const stage = characterPromptStages.find((stageItem) => stageItem.key === stageKey);
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        const chunkText = stageKey === "extract"
+          ? `${Number(item.chunk_min_chars || item.chunkMinChars || 3000)}-${Number(item.chunk_max_chars || item.chunkMaxChars || 8000)} / overlap ${Number(item.overlap_chars || item.overlapChars || 500)}`
+          : "-";
+        return `<tr>
+          <td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="character-template-meta">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag blue">${escapeHtml(tag)}</span>`).join("")}</div></div></td>
+          <td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td>
+          <td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td>
+          <td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td>
+          <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
+          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${escapeHtml(chunkText)}</td>
+          <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openCharacterPromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyCharacterPromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleCharacterPromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
+        </tr>`;
+      }
+
+      function characterPromptPreview(items) {
+        const selected = items[0] || (state.characterPromptTemplates || []).find((item) => (item.stage || item.promptStage) === state.characterPromptStage);
+        if (!selected) return "暂无可预览的人物提示词模板。";
+        const variables = (selected.variables || []).join(" / ") || "-";
+        return escapeHtml(`【${selected.name}】\n阶段：${selected.stage || selected.promptStage}\n变量：${variables}\n\n${selected.prompt_content || selected.promptContent || ""}\n\nJSON Schema：\n${selected.json_schema || selected.jsonSchema || "-"}`);
+      }
+
+      function selectedCharacterPromptTemplate() {
+        return (state.characterPromptTemplates || [])
+          .filter((item) => (item.stage || item.promptStage) === state.characterPromptStage && item.status !== "disabled")
+          .sort((a, b) => Number(b.is_default || b.isDefault) - Number(a.is_default || a.isDefault) || Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0))[0]
+          || (state.characterPromptTemplates || []).find((item) => (item.stage || item.promptStage) === state.characterPromptStage);
+      }
+
+      function characterPromptVariableSample(stage) {
+        if (stage === "extract") {
+          return JSON.stringify({ chunk_id: "chunk_001", novel_chunk: "这里粘贴 3000-8000 字小说片段。" }, null, 2);
+        }
+        if (stage === "merge") {
+          return JSON.stringify({ all_chunk_character_json: [{ chunk_id: "chunk_001", characters: [] }] }, null, 2);
+        }
+        return JSON.stringify({
+          character_profile_json: {
+            name: "沈青舟",
+            gender: "男",
+            age: "二十七岁",
+            identity: "落魄剑修",
+            temperament: "冷静克制",
+            visual_anchors: ["青色旧袍", "断剑", "眉尾伤痕"],
+          },
+        }, null, 2);
+      }
+
+      async function composeCharacterPromptFromPreview() {
+        const template = selectedCharacterPromptTemplate();
+        if (!template) {
+          state.characterPromptComposeError = "请先选择一个人物提示词模板";
+          renderShell();
+          return;
+        }
+        try {
+          const raw = document.getElementById("character-compose-variables")?.value || "{}";
+          const variables = JSON.parse(raw);
+          const result = await api("/api/admin/character-prompt/compose", {
+            method: "POST",
+            body: JSON.stringify({
+              template_id: template.id,
+              variables,
+            }),
+          });
+          state.characterPromptComposeResult = result.data?.composed_prompt || "";
+          state.characterPromptComposeError = "";
+        } catch (error) {
+          state.characterPromptComposeError = error.payload?.error?.message || error.message || "人物提示词组装失败";
+          state.characterPromptComposeResult = "";
+        }
+        renderShell();
+      }
+
+      function characterPromptTemplateById(id) {
+        return (state.characterPromptTemplates || []).find((item) => String(item.id) === String(id));
+      }
+
+      function updateCharacterPromptStage(stage) {
+        state.characterPromptStage = characterPromptStages.some((item) => item.key === stage) ? stage : "extract";
+        renderShell();
+      }
+
+      function updateCharacterPromptKeyword(value) {
+        state.characterPromptKeyword = value || "";
+        renderShell();
+      }
+
+      const scenePromptStages = [
+        { key: "split", title: "长篇分场景", note: "按地点、时间和冲突变化拆出 scene_id，并保留 location_id。" },
+        { key: "extract", title: "场景要素抽取", note: "从单场景原文抽取空间层次、五感、道具、伏笔和视觉元素。" },
+        { key: "merge", title: "场景库合并", note: "合并重复地点，维护长篇 scene_library 和连续性规则。" },
+        { key: "detail", title: "场景设定拆解", note: "生成小说场景设定拆解表，服务写作、分镜和短视频场景稿。" },
+        { key: "image", title: "场景生图提示词", note: "输出前景、中景、远景清楚的影视概念设定图提示词。" },
+      ];
+
+      function scenePromptTemplatesPage() {
+        const activeStage = scenePromptStages.find((item) => item.key === state.scenePromptStage) || scenePromptStages[0];
+        const keyword = (state.scenePromptKeyword || "").trim().toLowerCase();
+        const filtered = (state.scenePromptTemplates || [])
+          .filter((item) => (item.stage || item.promptStage) === activeStage.key)
+          .filter((item) => !keyword || [
+            item.name,
+            item.code,
+            item.stage,
+            item.model_family || item.modelFamily,
+            (item.tags || []).join(" "),
+            item.prompt_content || item.promptContent,
+          ].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length
+          ? filtered.map(scenePromptTemplateRow).join("")
+          : `<tr><td colspan="8">${state.scenePromptLoadError || "暂无该阶段的场景提示词模板"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+          <aside class="card">
+            <div class="prompt-kind-list">${scenePromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updateScenePromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${scenePromptStageCount(item.key)} 个模板</span></button>`).join("")}</div>
+          </aside>
+          <section class="section">
+            <section class="card" style="box-shadow:none;border:1px solid var(--line);">
+              <div class="toolbar">
+                <div class="prompt-toolbar-title"><h3>长篇小说场景提示词流水线</h3><div class="metric-note">先拆分章节，再抽取要素，合并场景库，最后生成场景拆解表和影视概念设定图提示词。</div></div>
+              </div>
+              ${scenePromptWorkflowGuide()}
+            </section>
+            <div class="toolbar">
+              <div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note}</div></div>
+              <div class="filters">
+                <input value="${escapeAttribute(state.scenePromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateScenePromptKeyword(this.value)" />
+                <select onchange="updateScenePromptStage(this.value)">${optionList(scenePromptStages.map((item) => item.key), activeStage.key)}</select>
+                <button class="btn primary" onclick="openScenePromptTemplateDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增场景提示词</button>
+                <button class="btn ghost" onclick="loadScenePromptTemplates().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap dense"><table><thead><tr><th>名称</th><th>编码</th><th>阶段</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          </section>
+          <aside class="card prompt-preview">
+            <div class="toolbar"><h3 style="margin:0;">模板预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
+            <div class="prompt-preview-box" id="prompt-preview">${scenePromptPreview(filtered)}</div>
+            <h3 style="margin:0;">接入建议</h3>
+            <textarea class="prompt-result-box" readonly>章节文本
+→ split 长篇分场景
+→ extract 场景要素抽取
+→ merge 更新 scene_library
+→ detail 生成拆解表
+→ image 生成场景概念图提示词</textarea>
+          </aside>
+        </section>`;
+      }
+
+      function scenePromptWorkflowGuide() {
+        return `<div class="character-flow">
+          <div class="character-flow-step"><strong>1. 长篇分场景</strong><span>输入 {{novel_chapter}}，输出带 location_id、visual_motifs、continuity_notes 的场景列表。</span></div>
+          <div class="character-flow-step"><strong>2. 要素抽取</strong><span>输入 {{scene_json}} 和原文，抽取空间层次、五感、道具与伏笔。</span></div>
+          <div class="character-flow-step"><strong>3. 场景库合并</strong><span>输入 {{scene_library_json}}，维护长篇地点连续性和本次变化。</span></div>
+          <div class="character-flow-step"><strong>4. 设定拆解</strong><span>生成完整场景设定拆解表，支持写作和短视频场景稿。</span></div>
+          <div class="character-flow-step"><strong>5. 生图提示词</strong><span>输出前景、中景、远景明确的影视概念设定图提示词。</span></div>
+        </div>`;
+      }
+
+      function scenePromptStageCount(stage) {
+        return (state.scenePromptTemplates || []).filter((item) => (item.stage || item.promptStage) === stage).length;
+      }
+
+      function scenePromptTemplateRow(item) {
+        const stageKey = item.stage || item.promptStage || "detail";
+        const stage = scenePromptStages.find((stageItem) => stageItem.key === stageKey);
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        return `<tr>
+          <td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="character-template-meta">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag blue">${escapeHtml(tag)}</span>`).join("")}</div></div></td>
+          <td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td>
+          <td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td>
+          <td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td>
+          <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
+          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openScenePromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyScenePromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleScenePromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
+        </tr>`;
+      }
+
+      function scenePromptPreview(items) {
+        const selected = items[0] || (state.scenePromptTemplates || []).find((item) => (item.stage || item.promptStage) === state.scenePromptStage);
+        if (!selected) return "暂无可预览的场景提示词模板。";
+        const variables = (selected.variables || []).join(" / ") || "-";
+        return escapeHtml(`【${selected.name}】\n阶段：${selected.stage || selected.promptStage}\n变量：${variables}\n\n${selected.prompt_content || selected.promptContent || ""}\n\nJSON Schema：\n${selected.json_schema || selected.jsonSchema || "-"}`);
+      }
+
+      function scenePromptTemplateById(id) {
+        return (state.scenePromptTemplates || []).find((item) => String(item.id) === String(id));
+      }
+
+      function updateScenePromptStage(stage) {
+        state.scenePromptStage = scenePromptStages.some((item) => item.key === stage) ? stage : "split";
+        renderShell();
+      }
+
+      function updateScenePromptKeyword(value) {
+        state.scenePromptKeyword = value || "";
+        renderShell();
+      }
+
+      function scriptPromptsPage() {
+        const activeType = scriptPromptTypes.find((item) => item.key === state.scriptPromptPackageType) || scriptPromptTypes[0];
+        const keyword = (state.scriptPromptKeyword || "").trim().toLowerCase();
+        const filtered = state.scriptPromptPackages
+          .filter((item) => (item.package_type || item.packageType) === activeType.key)
+          .filter((item) => !keyword || [item.name, item.code, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length
+          ? filtered.map(scriptPromptPackageRow).join("")
+          : `<tr><td colspan="8">${state.scriptPromptLoadError || "暂无该分类的剧本提示词"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+          <aside class="card">
+            <div class="prompt-kind-list">${scriptPromptTypes.map((item) => `<button class="prompt-kind-card ${item.key === activeType.key ? "active" : ""}" onclick="updateScriptPromptPackageType('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
+          </aside>
+          <section class="section">
+            <div class="toolbar">
+              <div class="prompt-toolbar-title"><h3>${activeType.title}管理</h3><div class="metric-note">${activeType.note}</div></div>
+              <div class="filters">
+                <input value="${escapeAttribute(state.scriptPromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateScriptPromptKeyword(this.value)" />
+                <select onchange="updateScriptPromptPackageType(this.value)">${optionList(scriptPromptTypes.map((item) => item.key), activeType.key)}</select>
+                <button class="btn primary" onclick="openScriptPromptPackageDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增提示词包</button>
+                <button class="btn ghost" onclick="loadScriptPrompts().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>类型</th><th>状态</th><th>默认</th><th>排序</th><th>更新</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          </section>
+          <aside class="card prompt-preview">
+            <div class="toolbar"><h3 style="margin:0;">组合预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
+            <div class="prompt-preview-box" id="prompt-preview">${scriptPromptPreview()}</div>
+            <h3 style="margin:0;">测试结果</h3>
+            <textarea class="prompt-result-box" placeholder="测试结果会显示在这里。"></textarea>
+          </aside>
+        </section>`;
+      }
+
+      function scriptPromptPackageRow(item) {
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        const type = scriptPromptTypes.find((typeItem) => typeItem.key === (item.package_type || item.packageType));
+        return `<tr>
+          <td class="prompt-cover-col">${promptCoverMarkup(item, "剧")}</td>
+          <td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="metric-note">${escapeHtml((item.tags || []).join(" / ") || item.audience || "-")}</div></div></td>
+          <td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td>
+          <td><span class="tag blue">${escapeHtml(type?.title || item.package_type || item.packageType || "-")}</span></td>
+          <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
+          <td>${item.is_default || item.isDefault || item.is_global_default || item.isGlobalDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
+          <td>${formatShortDate(item.updated_at || item.updatedAt)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openScriptPromptPackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyScriptPromptPackage('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleScriptPromptPackageStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
+        </tr>`;
+      }
+
+      function scriptPromptPreview() {
+        const preferred = ["genre", "emotion", "camera", "output", "taboo"];
+        const sections = preferred.flatMap((typeKey) => {
+          const type = scriptPromptTypes.find((item) => item.key === typeKey);
+          const item = state.scriptPromptPackages
+            .filter((row) => (row.package_type || row.packageType) === typeKey && row.status !== "disabled")
+            .sort((a, b) => Number(b.is_default || b.isDefault || b.is_global_default || b.isGlobalDefault) - Number(a.is_default || a.isDefault || a.is_global_default || a.isGlobalDefault) || Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0))[0];
+          return item ? [`【${type?.title || typeKey}：${item.name}】\n${item.prompt_content || item.promptContent || ""}`] : [];
+        });
+        return escapeHtml(sections.join("\n\n") || "暂无可预览的提示词组合。");
+      }
+
+      function scriptPromptPackageById(id) {
+        return (state.scriptPromptPackages || []).find((item) => String(item.id) === String(id));
+      }
+
+      function updateScriptPromptPackageType(type) {
+        state.scriptPromptPackageType = scriptPromptTypes.some((item) => item.key === type) ? type : "genre";
+        renderShell();
+      }
+
+      function updateScriptPromptKeyword(value) {
+        state.scriptPromptKeyword = value || "";
+        renderShell();
+      }
+
+      function promptCoverMarkup(item, fallbackText) {
+        const cover = item?.cover_image_url || item?.coverImageUrl || "";
+        const label = escapeAttribute(item?.name || fallbackText || "封");
+        if (cover) {
+          return `<img class="prompt-cover-thumb" src="${escapeAttribute(cover)}" alt="${label}封面" loading="lazy" referrerpolicy="no-referrer" />`;
+        }
+        return `<span class="prompt-cover-thumb prompt-cover-empty" aria-label="${label}封面">${escapeHtml((item?.name || fallbackText || "封").slice(0, 1))}</span>`;
+      }
+
+      function promptCoverDataUrl(code, name) {
+        void name;
+        return `/admin/assets/prompt-covers/${code}.webp`;
+      }
+
+      function readPromptCoverFile(input, formId) {
+        const file = input.files?.[0];
+        if (!file) return;
+        if (!file.type.startsWith("image/")) {
+          showToast("请选择图片文件");
+          input.value = "";
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const form = document.getElementById(formId);
+          const valueInput = form?.querySelector('input[name="cover_image_url"]');
+          if (valueInput) valueInput.value = String(reader.result || "");
+          const preview = form?.querySelector(".prompt-cover-upload .prompt-cover-thumb");
+          if (preview?.tagName === "IMG") preview.src = String(reader.result || "");
+          showToast("封面已读取，保存后生效");
+        };
+        reader.readAsDataURL(file);
+      }
+
+      function imagePromptStylesPage() {
+        const activeKind = imagePromptKinds.find((item) => item.key === state.imagePromptCategory) || imagePromptKinds[0];
+        const keyword = (state.imagePromptKeyword || "").trim().toLowerCase();
+        const filtered = state.imagePromptStyles
+          .filter((item) => activeKind.key === "all" || item.category === activeKind.key)
+          .filter((item) => !keyword || [item.name, item.code, item.category, item.model_family || item.modelFamily, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length
+          ? filtered.map(imagePromptStyleRow).join("")
+          : `<tr><td colspan="8">${state.imagePromptLoadError || "暂无该分类的生图题词"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+          <aside class="card">
+            <div class="prompt-kind-list">${imagePromptKinds.map((item) => `<button class="prompt-kind-card ${item.key === activeKind.key ? "active" : ""}" onclick="updateImagePromptCategory('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
+          </aside>
+          <section class="section">
+            <div class="toolbar">
+              <div class="prompt-toolbar-title"><h3>${activeKind.title}管理</h3><div class="metric-note">${activeKind.note}</div></div>
+              <div class="filters">
+                <input value="${escapeAttribute(state.imagePromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateImagePromptKeyword(this.value)" />
+                <select onchange="updateImagePromptCategory(this.value)">${optionList(imagePromptKinds.map((item) => item.key), activeKind.key)}</select>
+                <button class="btn primary" onclick="openImagePromptStyleDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增生图题词</button>
+                <button class="btn ghost" onclick="loadImagePromptStyles().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>分类</th><th>模型族</th><th>状态</th><th>排序</th><th>提示词</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          </section>
+          <aside class="card prompt-preview">
+            <div class="toolbar"><h3 style="margin:0;">样式预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
+            <div class="prompt-preview-box" id="prompt-preview">${imagePromptPreview(filtered)}</div>
+            <h3 style="margin:0;">负向约束</h3>
+            <textarea class="prompt-result-box" readonly>${escapeHtml((filtered[0]?.negative_prompt || filtered[0]?.negativePrompt || "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整"))}</textarea>
+          </aside>
+        </section>`;
+      }
+
+      function imagePromptStyleRow(item) {
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        return `<tr>
+          <td class="prompt-cover-col">${promptCoverMarkup(item, "图")}</td>
+          <td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="metric-note">${escapeHtml((item.tags || []).join(" / ") || "-")}</div></div></td>
+          <td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td>
+          <td><span class="tag blue">${escapeHtml(item.category || "-")}</span></td>
+          <td>${escapeHtml(item.model_family || item.modelFamily || "doubao")}</td>
+          <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
+          <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
+          <td style="max-width:360px;">${escapeHtml(item.prompt_content || item.promptContent || "")}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openImagePromptStyleDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyImagePromptStyle('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleImagePromptStyleStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
+        </tr>`;
+      }
+
+      function imagePromptPreview(items) {
+        const selected = items.slice(0, 6);
+        const sections = selected.map((item) => `【${item.name}】\n${item.prompt_content || item.promptContent || ""}`);
+        return escapeHtml(sections.join("\n\n") || "暂无可预览的生图题词。");
+      }
+
+      function imagePromptStyleById(id) {
+        return (state.imagePromptStyles || []).find((item) => String(item.id) === String(id));
+      }
+
+      function updateImagePromptCategory(category) {
+        state.imagePromptCategory = imagePromptKinds.some((item) => item.key === category) ? category : "all";
+        renderShell();
+      }
+
+      function updateImagePromptKeyword(value) {
+        state.imagePromptKeyword = value || "";
+        renderShell();
+      }
+
+      function formatShortDate(value) {
+        if (!value) return "-";
+        return new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      }
+
+      function copyPromptPreview() {
+        const text = document.getElementById("prompt-preview")?.textContent || "";
+        navigator.clipboard?.writeText(text).then(() => showToast("预览已复制")).catch(() => showToast("当前浏览器不支持自动复制"));
       }
 
       function userRow(user) {
@@ -2742,6 +4099,438 @@
         return JSON.stringify(value, null, 2);
       }
 
+      function openScriptPromptPackageDrawer(packageId = "") {
+        const existing = scriptPromptPackageById(packageId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑剧本提示词" : "新增剧本提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="script-prompt-package-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
+              <label class="field"><span>类型</span><select name="package_type">${optionList(["genre", "emotion", "camera", "output", "taboo"], existing?.package_type || existing?.packageType || "genre")}</select></label>
+              <label class="field"><span>受众</span><select name="audience">${optionList(["", "male", "female", "general"], existing?.audience || "")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
+            </div>
+            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "剧")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="https://... 或 data:image/..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'script-prompt-package-form')" /></div></div></label>
+            <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="爽点, 分镜, 情绪" /></label>
+            <label class="field"><span>关键点</span><input name="key_points" value="${escapeAttribute((existing?.key_points || existing?.keyPoints || []).join(", "))}" placeholder="冲突升级, 反转, 高光" /></label>
+            <label class="field"><span>适用场景</span><input name="applicable_scene" value="${escapeAttribute((existing?.applicable_scene || existing?.applicableScene || []).join(", "))}" placeholder="短剧, 漫剧, AI视频" /></label>
+            <label class="field"><span>剧本提示词正文</span><textarea name="prompt_content" rows="9" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
+            <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="3">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || "")}</textarea></label>
+            <label class="field"><span>内部备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || "")}</textarea></label>
+            <div class="error-text" id="script-prompt-package-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存剧本提示词</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("script-prompt-package-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("script-prompt-package-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+            const payload = {
+              name: String(form.get("name") || "").trim(),
+              code: String(form.get("code") || "").trim(),
+              package_type: String(form.get("package_type") || "genre"),
+              audience: String(form.get("audience") || ""),
+              tags: splitList("tags"),
+              cover_image_url: String(form.get("cover_image_url") || "").trim(),
+              key_points: splitList("key_points"),
+              applicable_scene: splitList("applicable_scene"),
+              prompt_content: String(form.get("prompt_content") || "").trim(),
+              negative_prompt: String(form.get("negative_prompt") || "").trim(),
+              status: String(form.get("status") || "enabled"),
+              sort_order: Number(form.get("sort_order") || 0),
+              remark: String(form.get("remark") || ""),
+            };
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("剧本提示词正文不得为空，建议不少于 20 字");
+            await api(existing ? `/api/admin/storyboard-prompt/packages/${encodeURIComponent(existing.id)}` : "/api/admin/storyboard-prompt/packages", {
+              method: existing ? "PUT" : "POST",
+              headers: { "idempotency-key": `admin-ui-script-prompt-package-${existing?.id || payload.code}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
+            await loadScriptPrompts();
+            closeDrawer();
+            renderShell();
+          }, "剧本提示词已保存").catch(() => undefined);
+        });
+      }
+
+      async function copyScriptPromptPackage(packageId) {
+        try {
+          await api(`/api/admin/storyboard-prompt/packages/${encodeURIComponent(packageId)}/copy`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-script-prompt-copy-${packageId}-${Date.now()}` },
+            body: "{}",
+          });
+          await loadScriptPrompts();
+          renderShell();
+          showToast("剧本提示词已复制");
+        } catch (error) {
+          openScriptPromptPackageDrawer(packageId);
+          showToast(error.payload?.error?.message || "接口暂不可用，请在抽屉中手动另存");
+        }
+      }
+
+      async function toggleScriptPromptPackageStatus(packageId, status) {
+        try {
+          await api(`/api/admin/storyboard-prompt/packages/${encodeURIComponent(packageId)}/status`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-script-prompt-status-${packageId}-${Date.now()}` },
+            body: JSON.stringify({ status }),
+          });
+          await loadScriptPrompts();
+          renderShell();
+          showToast(status === "enabled" ? "剧本提示词已启用" : "剧本提示词已停用");
+        } catch (error) {
+          showToast(error.payload?.error?.message || "状态更新失败");
+        }
+      }
+
+      function persistCharacterPromptTemplates() {
+        localStorage.setItem("admin-character-prompt-templates", JSON.stringify(state.characterPromptTemplates || []));
+      }
+
+      function characterPromptPayloadFromForm(form, existing) {
+        const stage = String(form.get("stage") || "extract");
+        const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+        return {
+          id: existing?.id || `character-prompt-${String(form.get("code") || Date.now()).trim()}`,
+          name: String(form.get("name") || "").trim(),
+          code: String(form.get("code") || "").trim(),
+          stage,
+          model_family: String(form.get("model_family") || "general"),
+          tags: splitList("tags"),
+          variables: splitList("variables"),
+          chunk_min_chars: Number(form.get("chunk_min_chars") || 0),
+          chunk_max_chars: Number(form.get("chunk_max_chars") || 0),
+          overlap_chars: Number(form.get("overlap_chars") || 0),
+          json_schema: String(form.get("json_schema") || "").trim(),
+          prompt_content: String(form.get("prompt_content") || "").trim(),
+          is_default: form.get("is_default") === "on",
+          status: String(form.get("status") || "enabled"),
+          sort_order: Number(form.get("sort_order") || 0),
+          remark: String(form.get("remark") || "").trim(),
+        };
+      }
+
+      function openCharacterPromptTemplateDrawer(templateId = "") {
+        const existing = characterPromptTemplateById(templateId);
+        const stage = existing?.stage || existing?.promptStage || state.characterPromptStage || "extract";
+        const defaults = existing || characterPromptTemplateFallback.find((item) => item.stage === stage) || characterPromptTemplateFallback[0];
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(860px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑人物提示词" : "新增人物提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="character-prompt-template-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
+              <label class="field"><span>阶段</span><select name="stage">${optionList(["extract", "merge", "grid"], stage)}</select></label>
+              <label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label>
+            </div>
+            <div class="form-grid">
+              <label class="field"><span>最小切块字数</span><input name="chunk_min_chars" type="number" value="${Number(existing?.chunk_min_chars || existing?.chunkMinChars || defaults?.chunk_min_chars || 0)}" /></label>
+              <label class="field"><span>最大切块字数</span><input name="chunk_max_chars" type="number" value="${Number(existing?.chunk_max_chars || existing?.chunkMaxChars || defaults?.chunk_max_chars || 0)}" /></label>
+              <label class="field"><span>重叠字数</span><input name="overlap_chars" type="number" value="${Number(existing?.overlap_chars || existing?.overlapChars || defaults?.overlap_chars || 0)}" /></label>
+              <label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{chunk_id}}, {{novel_chunk}}" /></label>
+            </div>
+            <label class="inline-check"><input name="is_default" type="checkbox" ${existing?.is_default || existing?.isDefault ? "checked" : ""} /> 设为该阶段默认模板</label>
+            <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="分块抽取, JSON, 九宫格" /></label>
+            <label class="field"><span>JSON Schema / 输出结构</span><textarea name="json_schema" rows="4">${escapeHtml(existing?.json_schema || existing?.jsonSchema || defaults?.json_schema || "")}</textarea></label>
+            <label class="field"><span>人物提示词正文</span><textarea name="prompt_content" rows="12" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || defaults?.prompt_content || "")}</textarea></label>
+            <label class="field"><span>内部备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || defaults?.remark || "")}</textarea></label>
+            <div class="error-text" id="character-prompt-template-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存人物提示词</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("character-prompt-template-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("character-prompt-template-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = characterPromptPayloadFromForm(form, existing);
+            if (!payload.name || !payload.code) throw new Error("名称和编码必填");
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("人物提示词正文不得为空，建议不少于 20 字");
+            try {
+              await api(existing ? `/api/admin/character-prompt/templates/${encodeURIComponent(existing.id)}` : "/api/admin/character-prompt/templates", {
+                method: existing ? "PUT" : "POST",
+                headers: { "idempotency-key": `admin-ui-character-prompt-template-${existing?.id || payload.code}-${Date.now()}` },
+                body: JSON.stringify(payload),
+              });
+              await loadCharacterPromptTemplates();
+            } catch {
+              const others = (state.characterPromptTemplates || []).filter((item) => String(item.id) !== String(payload.id));
+              state.characterPromptTemplates = [...others, payload];
+              persistCharacterPromptTemplates();
+            }
+            state.characterPromptStage = payload.stage;
+            closeDrawer();
+            renderShell();
+          }, "人物提示词已保存").catch(() => undefined);
+        });
+      }
+
+      async function copyCharacterPromptTemplate(templateId) {
+        const existing = characterPromptTemplateById(templateId);
+        if (!existing) return;
+        try {
+          await api(`/api/admin/character-prompt/templates/${encodeURIComponent(templateId)}/copy`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-character-prompt-copy-${templateId}-${Date.now()}` },
+            body: "{}",
+          });
+          await loadCharacterPromptTemplates();
+        } catch {
+          state.characterPromptTemplates = [
+            ...(state.characterPromptTemplates || []),
+            {
+              ...existing,
+              id: `${existing.id}-copy-${Date.now()}`,
+              name: `${existing.name} 副本`,
+              code: `${existing.code}_copy_${Date.now()}`,
+              is_default: false,
+            },
+          ];
+          persistCharacterPromptTemplates();
+        }
+        renderShell();
+        showToast("人物提示词已复制");
+      }
+
+      async function toggleCharacterPromptTemplateStatus(templateId, status) {
+        try {
+          await api(`/api/admin/character-prompt/templates/${encodeURIComponent(templateId)}/status`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-character-prompt-status-${templateId}-${Date.now()}` },
+            body: JSON.stringify({ status }),
+          });
+          await loadCharacterPromptTemplates();
+        } catch {
+          state.characterPromptTemplates = (state.characterPromptTemplates || []).map((item) => String(item.id) === String(templateId) ? { ...item, status } : item);
+          persistCharacterPromptTemplates();
+        }
+        renderShell();
+        showToast(status === "enabled" ? "人物提示词已启用" : "人物提示词已停用");
+      }
+
+      function openImagePromptStyleDrawer(styleId = "") {
+        const existing = imagePromptStyleById(styleId);
+        const drawer = document.getElementById("drawer");
+        const defaultNegative = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑生图题词" : "新增生图题词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="image-prompt-style-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
+              <label class="field"><span>分类</span><select name="category">${optionList(["official", "custom"], existing?.category || "official")}</select></label>
+              <label class="field"><span>模型族</span><select name="model_family">${optionList(["doubao", "seedream", "general"], existing?.model_family || existing?.modelFamily || "doubao")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
+            </div>
+            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "图")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="参考豆包风格小图，可粘贴图片 URL 或 data:image/..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'image-prompt-style-form')" /></div></div></label>
+            <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="摄影, 国风, 二次元" /></label>
+            <label class="field"><span>豆包生图提示词</span><textarea name="prompt_content" rows="8" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
+            <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="4">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaultNegative)}</textarea></label>
+            <label class="field"><span>内部备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || "")}</textarea></label>
+            <div class="error-text" id="image-prompt-style-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存生图题词</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("image-prompt-style-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("image-prompt-style-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = {
+              name: String(form.get("name") || "").trim(),
+              code: String(form.get("code") || "").trim(),
+              category: String(form.get("category") || "official"),
+              model_family: String(form.get("model_family") || "doubao"),
+              cover_image_url: String(form.get("cover_image_url") || "").trim(),
+              tags: String(form.get("tags") || "").split(",").map((item) => item.trim()).filter(Boolean),
+              prompt_content: String(form.get("prompt_content") || "").trim(),
+              negative_prompt: String(form.get("negative_prompt") || "").trim(),
+              status: String(form.get("status") || "enabled"),
+              sort_order: Number(form.get("sort_order") || 0),
+              remark: String(form.get("remark") || ""),
+            };
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("生图题词正文不得为空，建议不少于 20 字");
+            await api(existing ? `/api/admin/image-prompt/styles/${encodeURIComponent(existing.id)}` : "/api/admin/image-prompt/styles", {
+              method: existing ? "PUT" : "POST",
+              headers: { "idempotency-key": `admin-ui-image-prompt-style-${existing?.id || payload.code}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
+            await loadImagePromptStyles();
+            closeDrawer();
+            renderShell();
+          }, "生图题词已保存").catch(() => undefined);
+        });
+      }
+
+      async function copyImagePromptStyle(styleId) {
+        try {
+          await api(`/api/admin/image-prompt/styles/${encodeURIComponent(styleId)}/copy`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-image-prompt-copy-${styleId}-${Date.now()}` },
+            body: "{}",
+          });
+          await loadImagePromptStyles();
+          renderShell();
+          showToast("生图题词已复制");
+        } catch (error) {
+          openImagePromptStyleDrawer(styleId);
+          showToast(error.payload?.error?.message || "接口暂不可用，请在抽屉中手动另存");
+        }
+      }
+
+      async function toggleImagePromptStyleStatus(styleId, status) {
+        try {
+          await api(`/api/admin/image-prompt/styles/${encodeURIComponent(styleId)}/status`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-image-prompt-status-${styleId}-${Date.now()}` },
+            body: JSON.stringify({ status }),
+          });
+          await loadImagePromptStyles();
+          renderShell();
+          showToast(status === "enabled" ? "生图题词已启用" : "生图题词已停用");
+        } catch (error) {
+          showToast(error.payload?.error?.message || "状态更新失败");
+        }
+      }
+
+      function persistScenePromptTemplates() {
+        localStorage.setItem("admin-scene-prompt-templates", JSON.stringify(state.scenePromptTemplates || []));
+      }
+
+      function scenePromptPayloadFromForm(form, existing) {
+        const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+        return {
+          id: existing?.id || `scene-prompt-${String(form.get("code") || Date.now()).trim()}`,
+          name: String(form.get("name") || "").trim(),
+          code: String(form.get("code") || "").trim(),
+          stage: String(form.get("stage") || "detail"),
+          model_family: String(form.get("model_family") || "general"),
+          tags: splitList("tags"),
+          variables: splitList("variables"),
+          json_schema: String(form.get("json_schema") || "").trim(),
+          prompt_content: String(form.get("prompt_content") || "").trim(),
+          negative_prompt: String(form.get("negative_prompt") || "").trim(),
+          is_default: form.get("is_default") === "on",
+          status: String(form.get("status") || "enabled"),
+          sort_order: Number(form.get("sort_order") || 0),
+          remark: String(form.get("remark") || "").trim(),
+        };
+      }
+
+      function openScenePromptTemplateDrawer(templateId = "") {
+        const existing = scenePromptTemplateById(templateId);
+        const stage = existing?.stage || existing?.promptStage || state.scenePromptStage || "split";
+        const defaults = existing || scenePromptTemplateFallback.find((item) => item.stage === stage) || scenePromptTemplateFallback[0];
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(900px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑场景提示词" : "新增场景提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="scene-prompt-template-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
+              <label class="field"><span>阶段</span><select name="stage">${optionList(["split", "extract", "merge", "detail", "image"], stage)}</select></label>
+              <label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label>
+            </div>
+            <label class="inline-check"><input name="is_default" type="checkbox" ${existing?.is_default || existing?.isDefault || defaults?.is_default ? "checked" : ""} /> 设为该阶段默认模板</label>
+            <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || defaults?.tags || []).join(", "))}" placeholder="长篇分场景, 场景库, 影视概念设定" /></label>
+            <label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{scene_json}}, {{scene_library_json}}" /></label>
+            <label class="field"><span>JSON Schema / 输出结构</span><textarea name="json_schema" rows="4">${escapeHtml(existing?.json_schema || existing?.jsonSchema || defaults?.json_schema || "")}</textarea></label>
+            <label class="field"><span>场景提示词正文</span><textarea name="prompt_content" rows="14" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || defaults?.prompt_content || "")}</textarea></label>
+            <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="3">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaults?.negative_prompt || "")}</textarea></label>
+            <label class="field"><span>内部备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || defaults?.remark || "")}</textarea></label>
+            <div class="error-text" id="scene-prompt-template-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存场景提示词</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("scene-prompt-template-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("scene-prompt-template-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = scenePromptPayloadFromForm(form, existing);
+            if (!payload.name || !payload.code) throw new Error("名称和编码必填");
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("场景提示词正文不得为空，建议不少于 20 字");
+            try {
+              await api(existing ? `/api/admin/scene-prompt/templates/${encodeURIComponent(existing.id)}` : "/api/admin/scene-prompt/templates", {
+                method: existing ? "PUT" : "POST",
+                headers: { "idempotency-key": `admin-ui-scene-prompt-template-${existing?.id || payload.code}-${Date.now()}` },
+                body: JSON.stringify(payload),
+              });
+              await loadScenePromptTemplates();
+            } catch {
+              const others = (state.scenePromptTemplates || []).filter((item) => String(item.id) !== String(payload.id));
+              state.scenePromptTemplates = [...others, payload];
+              persistScenePromptTemplates();
+            }
+            state.scenePromptStage = payload.stage;
+            closeDrawer();
+            renderShell();
+          }, "场景提示词已保存").catch(() => undefined);
+        });
+      }
+
+      async function copyScenePromptTemplate(templateId) {
+        const existing = scenePromptTemplateById(templateId);
+        if (!existing) return;
+        try {
+          await api(`/api/admin/scene-prompt/templates/${encodeURIComponent(templateId)}/copy`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-scene-prompt-copy-${templateId}-${Date.now()}` },
+            body: "{}",
+          });
+          await loadScenePromptTemplates();
+        } catch {
+          state.scenePromptTemplates = [...(state.scenePromptTemplates || []), { ...existing, id: `${existing.id}-copy-${Date.now()}`, name: `${existing.name} 副本`, code: `${existing.code}_copy_${Date.now()}`, is_default: false }];
+          persistScenePromptTemplates();
+        }
+        renderShell();
+        showToast("场景提示词已复制");
+      }
+
+      async function toggleScenePromptTemplateStatus(templateId, status) {
+        try {
+          await api(`/api/admin/scene-prompt/templates/${encodeURIComponent(templateId)}/status`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-scene-prompt-status-${templateId}-${Date.now()}` },
+            body: JSON.stringify({ status }),
+          });
+          await loadScenePromptTemplates();
+        } catch {
+          state.scenePromptTemplates = (state.scenePromptTemplates || []).map((item) => String(item.id) === String(templateId) ? { ...item, status } : item);
+          persistScenePromptTemplates();
+        }
+        renderShell();
+        showToast(status === "enabled" ? "场景提示词已启用" : "场景提示词已停用");
+      }
+
       function optionList(options, selected) {
         return options.map((option) => `<option value="${option}" ${option === selected ? "selected" : ""}>${option}</option>`).join("");
       }
@@ -2765,6 +4554,34 @@
       window.openUserDetailDrawer = openUserDetailDrawer;
       window.openUserProfileDrawer = openUserProfileDrawer;
       window.openUserStatusDrawer = openUserStatusDrawer;
+      window.updatePromptManagementMode = updatePromptManagementMode;
+      window.loadScriptPrompts = loadScriptPrompts;
+      window.loadImagePromptStyles = loadImagePromptStyles;
+      window.updateScriptPromptPackageType = updateScriptPromptPackageType;
+      window.updateScriptPromptKeyword = updateScriptPromptKeyword;
+      window.updateImagePromptCategory = updateImagePromptCategory;
+      window.updateImagePromptKeyword = updateImagePromptKeyword;
+      window.updateCharacterPromptStage = updateCharacterPromptStage;
+      window.updateCharacterPromptKeyword = updateCharacterPromptKeyword;
+      window.loadCharacterPromptTemplates = loadCharacterPromptTemplates;
+      window.composeCharacterPromptFromPreview = composeCharacterPromptFromPreview;
+      window.updateScenePromptStage = updateScenePromptStage;
+      window.updateScenePromptKeyword = updateScenePromptKeyword;
+      window.loadScenePromptTemplates = loadScenePromptTemplates;
+      window.readPromptCoverFile = readPromptCoverFile;
+      window.copyPromptPreview = copyPromptPreview;
+      window.openScriptPromptPackageDrawer = openScriptPromptPackageDrawer;
+      window.copyScriptPromptPackage = copyScriptPromptPackage;
+      window.toggleScriptPromptPackageStatus = toggleScriptPromptPackageStatus;
+      window.openImagePromptStyleDrawer = openImagePromptStyleDrawer;
+      window.copyImagePromptStyle = copyImagePromptStyle;
+      window.toggleImagePromptStyleStatus = toggleImagePromptStyleStatus;
+      window.openCharacterPromptTemplateDrawer = openCharacterPromptTemplateDrawer;
+      window.copyCharacterPromptTemplate = copyCharacterPromptTemplate;
+      window.toggleCharacterPromptTemplateStatus = toggleCharacterPromptTemplateStatus;
+      window.openScenePromptTemplateDrawer = openScenePromptTemplateDrawer;
+      window.copyScenePromptTemplate = copyScenePromptTemplate;
+      window.toggleScenePromptTemplateStatus = toggleScenePromptTemplateStatus;
       window.openRiskReviewDrawer = openRiskReviewDrawer;
       window.openDashboardModelHealthDrawer = openDashboardModelHealthDrawer;
       window.openDashboardEventDrawer = openDashboardEventDrawer;

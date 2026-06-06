@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620" role="img" aria-labelledby="title desc">
+  <title id="title">后台模型配置运营向导流程图</title>
+  <desc id="desc">展示运营人员从选择模型能力到测试发布的五步配置流程。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f8fb; }
+      .panel { fill: #ffffff; stroke: #d8e0ec; stroke-width: 2; rx: 14; }
+      .step { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 12; }
+      .step-dark { fill: #13233f; stroke: #13233f; stroke-width: 2; rx: 12; }
+      .check { fill: #ecfdf5; stroke: #16a34a; stroke-width: 2; rx: 12; }
+      .warn { fill: #fff7ed; stroke: #f97316; stroke-width: 2; rx: 12; }
+      .title { font: 700 24px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .h { font: 700 18px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .h-light { font: 700 18px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #ffffff; }
+      .p { font: 14px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #475569; }
+      .p-light { font: 14px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #dbeafe; }
+      .small { font: 12px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #64748b; }
+      .line { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="620"/>
+  <text class="title" x="54" y="56">后台模型配置：运营可填写向导</text>
+  <text class="p" x="54" y="86">目标：运营不手写内部任务模式、不直接编辑 JSON，通过模板和校验完成模型草稿配置。</text>
+
+  <rect class="step" x="54" y="135" width="190" height="128"/>
+  <text class="h" x="78" y="172">1. 选择能力</text>
+  <text class="p" x="78" y="202">文生图 / 图生图</text>
+  <text class="p" x="78" y="226">文生视频 / 图生视频</text>
+  <text class="small" x="78" y="248">自动限制媒体类型和任务模式</text>
+
+  <path class="line" d="M244 199 H292"/>
+
+  <rect class="step" x="292" y="135" width="190" height="128"/>
+  <text class="h" x="316" y="172">2. 选择模板</text>
+  <text class="p" x="316" y="202">火山即梦图片</text>
+  <text class="p" x="316" y="226">Seedance 视频</text>
+  <text class="small" x="316" y="248">自动带出协议、队列、端点</text>
+
+  <path class="line" d="M482 199 H530"/>
+
+  <rect class="step" x="530" y="135" width="190" height="128"/>
+  <text class="h" x="554" y="172">3. 填业务信息</text>
+  <text class="p" x="554" y="202">模型编码、中文名称</text>
+  <text class="p" x="554" y="226">真实模型名、密钥引用</text>
+  <text class="small" x="554" y="248">密钥从系统引用下拉选择</text>
+
+  <path class="line" d="M720 199 H768"/>
+
+  <rect class="step" x="768" y="135" width="190" height="128"/>
+  <text class="h" x="792" y="172">4. 配价格参数</text>
+  <text class="p" x="792" y="202">基础积分、倍率</text>
+  <text class="p" x="792" y="226">参数中文名和选项</text>
+  <text class="small" x="792" y="248">自动生成 schema / pricing</text>
+
+  <path class="line" d="M958 199 H1006"/>
+
+  <rect class="check" x="1006" y="135" width="220" height="128"/>
+  <text class="h" x="1030" y="172">5. 测试并保存</text>
+  <text class="p" x="1030" y="202">静态检查 + 密钥检查</text>
+  <text class="p" x="1030" y="226">供应商探测 + 发布确认</text>
+  <text class="small" x="1030" y="248">通过后才能启用模型</text>
+
+  <rect class="panel" x="54" y="330" width="360" height="200"/>
+  <text class="h" x="82" y="370">运营默认只看到</text>
+  <text class="p" x="82" y="406">中文名称、真实模型名、密钥引用</text>
+  <text class="p" x="82" y="432">模型能力复选框、价格表单</text>
+  <text class="p" x="82" y="458">参数表单、测试结果、发布按钮</text>
+  <text class="small" x="82" y="492">所有内部 key 由模板自动生成</text>
+
+  <rect class="warn" x="460" y="330" width="360" height="200"/>
+  <text class="h" x="488" y="370">高级配置默认折叠</text>
+  <text class="p" x="488" y="406">providerConfig JSON</text>
+  <text class="p" x="488" y="432">parameterSchema / pricing / limits</text>
+  <text class="p" x="488" y="458">dispatchPolicy 队列和并发</text>
+  <text class="small" x="488" y="492">仅 model_admin / super_admin 展开</text>
+
+  <rect class="step-dark" x="866" y="330" width="360" height="200"/>
+  <text class="h-light" x="894" y="370">后端仍按现有表落库</text>
+  <text class="p-light" x="894" y="406">ai_model_configs</text>
+  <text class="p-light" x="894" y="432">ai_model_dispatch_policies</text>
+  <text class="p-light" x="894" y="458">ai_model_config_revisions</text>
+  <text class="p-light" x="894" y="484">audit_events</text>
+</svg>

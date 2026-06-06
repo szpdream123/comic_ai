@@ -314,15 +314,32 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     envName: string;
     purpose: string;
     providerName?: string | null;
+    providerChannel?: string | null;
+    mediaTypes?: string[];
+    modelCodes?: string[];
+    baseUrl?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    extraHeaders?: Record<string, string> | null;
     actorAdminAccountId: string;
     now: Date;
   }) {
     const secretRef = input.secretRef.trim();
     const envName = input.envName.trim();
-    const purpose = input.purpose.trim();
-    if (!secretRef || !envName || !purpose) {
+    const purposeText = input.purpose.trim();
+    if (!secretRef || !envName || !purposeText) {
       return error(400, "secret_reference_required", "请填写密钥引用、环境变量名和用途");
     }
+    const purpose = formatSecretReferencePurpose({
+      purpose: input.purpose,
+      providerChannel: input.providerChannel,
+      mediaTypes: input.mediaTypes,
+      modelCodes: input.modelCodes,
+      baseUrl: input.baseUrl,
+      authHeaderName: input.authHeaderName,
+      authScheme: input.authScheme,
+      extraHeaders: input.extraHeaders,
+    });
 
     const row = await queryOne<SecretReferenceRow>(
       deps.db,
@@ -826,15 +843,112 @@ function configFromRow(row: RuntimeConfigRow) {
 }
 
 function secretReferenceFromRow(row: SecretReferenceRow) {
+  const parsedPurpose = parseSecretReferencePurpose(row.purpose);
   return {
     id: row.id,
     secretRef: row.secret_ref,
     envName: row.env_name,
-    purpose: row.purpose,
+    purpose: parsedPurpose.purpose,
     providerName: row.provider_name,
+    providerChannel: parsedPurpose.providerChannel,
+    mediaTypes: parsedPurpose.mediaTypes,
+    modelCodes: parsedPurpose.modelCodes,
+    baseUrl: parsedPurpose.baseUrl,
+    authHeaderName: parsedPurpose.authHeaderName,
+    authScheme: parsedPurpose.authScheme,
+    extraHeaders: parsedPurpose.extraHeaders,
     status: row.status,
     lastCheckedAt: row.last_checked_at ? new Date(row.last_checked_at).toISOString() : null,
   };
+}
+
+const secretPurposeMarker = "\n---admin-secret-meta---\n";
+
+function formatSecretReferencePurpose(input: {
+  purpose: string;
+  providerChannel?: string | null;
+  mediaTypes?: string[];
+  modelCodes?: string[];
+  baseUrl?: string | null;
+  authHeaderName?: string | null;
+  authScheme?: string | null;
+  extraHeaders?: Record<string, string> | null;
+}) {
+  const purpose = String(input.purpose ?? "").trim();
+  const providerChannel = ["official", "proxy"].includes(String(input.providerChannel ?? ""))
+    ? String(input.providerChannel)
+    : "official";
+  const mediaTypes = normalizeStringList(input.mediaTypes).filter((item) => item === "image" || item === "video");
+  const modelCodes = normalizeStringList(input.modelCodes);
+  const baseUrl = String(input.baseUrl ?? "").trim();
+  const authHeaderName = String(input.authHeaderName ?? "").trim() || "Authorization";
+  const authScheme = ["bearer", "raw", "none"].includes(String(input.authScheme ?? ""))
+    ? String(input.authScheme)
+    : "bearer";
+  const extraHeaders = normalizeHeaderMap(input.extraHeaders);
+  if (!mediaTypes.length && !modelCodes.length && providerChannel === "official" && !baseUrl && authHeaderName === "Authorization" && authScheme === "bearer" && !Object.keys(extraHeaders).length) {
+    return purpose;
+  }
+  return `${purpose}${secretPurposeMarker}${JSON.stringify({
+    providerChannel,
+    mediaTypes,
+    modelCodes,
+    baseUrl,
+    authHeaderName,
+    authScheme,
+    extraHeaders,
+  })}`;
+}
+
+function parseSecretReferencePurpose(rawPurpose: string) {
+  const raw = String(rawPurpose ?? "");
+  const [purposeText, metadataText] = raw.split(secretPurposeMarker);
+  const fallback = {
+    purpose: purposeText.trim() || raw.trim(),
+    providerChannel: "official",
+    mediaTypes: [] as string[],
+    modelCodes: [] as string[],
+  };
+  if (!metadataText) return fallback;
+  try {
+    const metadata = JSON.parse(metadataText) as {
+      providerChannel?: string;
+      mediaTypes?: string[];
+      modelCodes?: string[];
+      baseUrl?: string;
+      authHeaderName?: string;
+      authScheme?: string;
+      extraHeaders?: Record<string, string>;
+    };
+    return {
+      purpose: fallback.purpose,
+      providerChannel: metadata.providerChannel === "proxy" ? "proxy" : "official",
+      mediaTypes: normalizeStringList(metadata.mediaTypes).filter((item) => item === "image" || item === "video"),
+      modelCodes: normalizeStringList(metadata.modelCodes),
+      baseUrl: String(metadata.baseUrl ?? "").trim(),
+      authHeaderName: String(metadata.authHeaderName ?? "").trim() || "Authorization",
+      authScheme: ["bearer", "raw", "none"].includes(String(metadata.authScheme ?? ""))
+        ? String(metadata.authScheme)
+        : "bearer",
+      extraHeaders: normalizeHeaderMap(metadata.extraHeaders),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeStringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function normalizeHeaderMap(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, headerValue]) => [key.trim(), String(headerValue ?? "").trim()])
+      .filter(([key, headerValue]) => key && headerValue),
+  );
 }
 
 function runtimeConfigRevisionFromRow(row: RuntimeConfigRevisionRow) {

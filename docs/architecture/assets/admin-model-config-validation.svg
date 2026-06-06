@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="680" viewBox="0 0 1280 680" role="img" aria-labelledby="title desc">
+  <title id="title">后台模型配置上线校验流程图</title>
+  <desc id="desc">展示模型草稿从保存到测试配置再到发布的校验流程。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfbfe; }
+      .box { fill: #ffffff; stroke: #d8d6e8; stroke-width: 2; rx: 12; }
+      .check { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2; rx: 12; }
+      .ok { fill: #ecfdf5; stroke: #16a34a; stroke-width: 2; rx: 12; }
+      .bad { fill: #fef2f2; stroke: #ef4444; stroke-width: 2; rx: 12; }
+      .title { font: 700 24px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .h { font: 700 17px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .p { font: 14px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #475569; }
+      .small { font: 12px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #64748b; }
+      .line { stroke: #7c3aed; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .line-bad { stroke: #ef4444; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .line-ok { stroke: #16a34a; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="680"/>
+  <text class="title" x="54" y="54">模型配置保存、测试、发布校验</text>
+  <text class="p" x="54" y="84">发布不是单一按钮，必须经过草稿校验、密钥检查、供应商探测和二次确认。</text>
+
+  <rect class="box" x="70" y="150" width="210" height="100"/>
+  <text class="h" x="96" y="188">保存草稿</text>
+  <text class="p" x="96" y="218">状态默认 disabled</text>
+
+  <path class="line" d="M280 200 H340"/>
+
+  <rect class="check" x="340" y="125" width="250" height="150"/>
+  <text class="h" x="368" y="164">静态校验</text>
+  <text class="p" x="368" y="194">模型编码唯一</text>
+  <text class="p" x="368" y="220">任务模式匹配媒体类型</text>
+  <text class="p" x="368" y="246">价格、参数、endpoint 完整</text>
+
+  <path class="line-bad" d="M465 275 V340 H260"/>
+  <rect class="bad" x="70" y="330" width="190" height="100"/>
+  <text class="h" x="96" y="368">返回错误清单</text>
+  <text class="p" x="96" y="398">定位到对应步骤</text>
+
+  <path class="line-ok" d="M590 200 H660"/>
+
+  <rect class="check" x="660" y="125" width="230" height="150"/>
+  <text class="h" x="688" y="164">密钥引用检查</text>
+  <text class="p" x="688" y="194">apiKeyEnv 来自下拉</text>
+  <text class="p" x="688" y="220">环境变量已配置</text>
+  <text class="p" x="688" y="246">不展示明文 key</text>
+
+  <path class="line-ok" d="M890 200 H960"/>
+
+  <rect class="check" x="960" y="125" width="240" height="150"/>
+  <text class="h" x="988" y="164">测试配置</text>
+  <text class="p" x="988" y="194">构造最小请求</text>
+  <text class="p" x="988" y="220">探测 create/poll endpoint</text>
+  <text class="p" x="988" y="246">校验结果解析规则</text>
+
+  <path class="line-bad" d="M1080 275 V365 H900"/>
+  <rect class="bad" x="690" y="345" width="210" height="110"/>
+  <text class="h" x="718" y="384">测试失败</text>
+  <text class="p" x="718" y="414">只允许保存草稿</text>
+  <text class="small" x="718" y="438">不能发布 active</text>
+
+  <path class="line-ok" d="M1080 275 V510 H900"/>
+  <rect class="ok" x="690" y="500" width="210" height="110"/>
+  <text class="h" x="718" y="538">测试通过</text>
+  <text class="p" x="718" y="568">允许发布确认</text>
+  <text class="small" x="718" y="592">写 probe 结果和审计</text>
+
+  <path class="line-ok" d="M900 555 H990"/>
+  <rect class="ok" x="990" y="500" width="210" height="110"/>
+  <text class="h" x="1018" y="538">发布 active</text>
+  <text class="p" x="1018" y="568">写 revision</text>
+  <text class="p" x="1018" y="592">写 audit_events</text>
+</svg>

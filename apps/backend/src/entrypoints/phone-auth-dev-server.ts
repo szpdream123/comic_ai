@@ -22,6 +22,13 @@ import {
   listAdminOpsItemsForScope,
 } from "../modules/admin-ops/admin-ops.service.ts";
 import { createAdminRiskAuditService } from "../modules/admin-risk-audit/admin-risk-audit.service.ts";
+import {
+  createAdminStoryboardPromptService,
+  ensureDefaultStoryboardPromptData,
+} from "../modules/admin-storyboard-prompts/admin-storyboard-prompt.service.ts";
+import { createAdminCharacterPromptService } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
+import { createAdminImagePromptService } from "../modules/admin-image-prompts/admin-image-prompt.service.ts";
+import { createAdminScenePromptService } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import {
@@ -379,6 +386,105 @@ function singleValueHeaders(
   );
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function storyboardPromptPackageBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    package_type: String(body.package_type ?? ""),
+    audience: body.audience === undefined || body.audience === null ? null : String(body.audience),
+    tags: stringArray(body.tags),
+    cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
+    prompt_content: String(body.prompt_content ?? ""),
+    key_points: stringArray(body.key_points),
+    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    applicable_genres: stringArray(body.applicable_genres),
+    applicable_scene: stringArray(body.applicable_scene),
+    output_type: body.output_type === undefined || body.output_type === null ? null : String(body.output_type),
+    scope: body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {},
+    can_stack: body.can_stack === undefined ? true : Boolean(body.can_stack),
+    max_select_count: body.max_select_count === undefined || body.max_select_count === null ? null : Number(body.max_select_count),
+    is_default: Boolean(body.is_default),
+    is_global_default: Boolean(body.is_global_default),
+    is_recommended: Boolean(body.is_recommended),
+    sort_order: Number(body.sort_order ?? 0),
+    status: String(body.status ?? "enabled"),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function imagePromptStyleBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    category: String(body.category ?? "official"),
+    model_family: String(body.model_family ?? body.modelFamily ?? "doubao"),
+    tags: stringArray(body.tags),
+    cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
+    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
+    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
+    status: String(body.status ?? "enabled"),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function scenePromptTemplateBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    stage: String(body.stage ?? "detail"),
+    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
+    tags: stringArray(body.tags),
+    variables: stringArray(body.variables),
+    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
+    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
+    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
+    status: String(body.status ?? "enabled"),
+    is_default: Boolean(body.is_default ?? body.isDefault),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function characterPromptTemplateBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    stage: String(body.stage ?? "extract"),
+    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
+    tags: stringArray(body.tags),
+    variables: stringArray(body.variables),
+    chunk_min_chars: Number(body.chunk_min_chars ?? body.chunkMinChars ?? 0),
+    chunk_max_chars: Number(body.chunk_max_chars ?? body.chunkMaxChars ?? 0),
+    overlap_chars: Number(body.overlap_chars ?? body.overlapChars ?? 0),
+    json_schema: body.json_schema === undefined || body.json_schema === null ? null : String(body.json_schema),
+    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
+    is_default: Boolean(body.is_default ?? body.isDefault),
+    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
+    status: String(body.status ?? "enabled"),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function storyboardPromptComposeBody(body: Record<string, unknown>) {
+  return {
+    base_prompt: String(body.base_prompt ?? ""),
+    genre_package_id: String(body.genre_package_id ?? ""),
+    emotion_package_ids: stringArray(body.emotion_package_ids),
+    camera_package_ids: stringArray(body.camera_package_ids),
+    output_package_id: String(body.output_package_id ?? ""),
+    taboo_package_ids: stringArray(body.taboo_package_ids),
+    variables: body.variables && typeof body.variables === "object" && !Array.isArray(body.variables)
+      ? body.variables as Record<string, unknown>
+      : {},
+    extra_request: String(body.extra_request ?? ""),
+  };
+}
+
 async function requireAdminRouteSession(input: {
   db: Awaited<ReturnType<typeof createDevDb>>;
   cookieHeader?: string;
@@ -501,6 +607,8 @@ const adminRouteRoles = {
   riskReview: ["super_admin", "finance_admin"],
   riskExport: ["super_admin"],
   opsTaskRetry: ["super_admin", "ops_admin"],
+  storyboardPromptWrite: ["super_admin", "ops_admin"],
+  storyboardPromptExport: ["super_admin"],
 } as const;
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -6713,6 +6821,42 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/model-templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["model.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: adminModels.listModelTemplates(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/models/validate-draft") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.validateModelDraft({
+            ...body,
+            taskModes: Array.isArray(body.taskModes) ? body.taskModes.map(String) : [],
+          }),
+        );
+      }
+
       if (request.method === "POST" && pathname === "/api/admin/models") {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
         if (!idempotencyKey) {
@@ -6735,6 +6879,33 @@ export function createPhoneAuthDevServer(
             taskModes: Array.isArray(body.taskModes) ? body.taskModes.map(String) : [],
             reason: String(body.reason ?? ""),
             idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminModelProbeMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)\/probe$/);
+      if (request.method === "POST" && adminModelProbeMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.probeModelConfig({
+            id: decodeURIComponent(adminModelProbeMatch[1]),
+            reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
             auditOrganizationId: devOrganizationId,
             auditWorkspaceId: devWorkspaceId,
@@ -6961,6 +7132,565 @@ export function createPhoneAuthDevServer(
             page: Number(url.searchParams.get("page") ?? 1),
             pageSize: Number(url.searchParams.get("pageSize") ?? 50),
           }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/storyboard-prompt/packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listPackages({
+            packageType: url.searchParams.get("package_type"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/image-prompt/styles") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminImagePromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listStyles({
+            category: url.searchParams.get("category"),
+            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/scene-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminScenePromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listTemplates({
+            stage: url.searchParams.get("stage"),
+            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/scene-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminScenePromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...scenePromptTemplateBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create scene prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const scenePromptTemplateCopyMatch = pathname.match(/^\/api\/admin\/scene-prompt\/templates\/([^/]+)\/copy$/);
+      if (request.method === "POST" && scenePromptTemplateCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminScenePromptService({ db });
+        return writeJson(response, await service.copyTemplate({
+          id: decodeURIComponent(scenePromptTemplateCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy scene prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const scenePromptTemplateStatusMatch = pathname.match(/^\/api\/admin\/scene-prompt\/templates\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && scenePromptTemplateStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminScenePromptService({ db });
+        return writeJson(response, await service.changeTemplateStatus({
+          id: decodeURIComponent(scenePromptTemplateStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change scene prompt template status"),
+          now: new Date(),
+        }));
+      }
+
+      const scenePromptTemplateMatch = pathname.match(/^\/api\/admin\/scene-prompt\/templates\/([^/]+)$/);
+      if (request.method === "PUT" && scenePromptTemplateMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminScenePromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...scenePromptTemplateBody(body),
+          id: decodeURIComponent(scenePromptTemplateMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update scene prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/image-prompt/styles") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminImagePromptService({ db });
+        return writeJson(response, await service.saveStyle({
+          ...imagePromptStyleBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create image prompt style"),
+          now: new Date(),
+        }));
+      }
+
+      const imagePromptStyleCopyMatch = pathname.match(/^\/api\/admin\/image-prompt\/styles\/([^/]+)\/copy$/);
+      if (request.method === "POST" && imagePromptStyleCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminImagePromptService({ db });
+        return writeJson(response, await service.copyStyle({
+          id: decodeURIComponent(imagePromptStyleCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy image prompt style"),
+          now: new Date(),
+        }));
+      }
+
+      const imagePromptStyleStatusMatch = pathname.match(/^\/api\/admin\/image-prompt\/styles\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && imagePromptStyleStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminImagePromptService({ db });
+        return writeJson(response, await service.changeStyleStatus({
+          id: decodeURIComponent(imagePromptStyleStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change image prompt style status"),
+          now: new Date(),
+        }));
+      }
+
+      const imagePromptStyleMatch = pathname.match(/^\/api\/admin\/image-prompt\/styles\/([^/]+)$/);
+      if (request.method === "PUT" && imagePromptStyleMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminImagePromptService({ db });
+        return writeJson(response, await service.saveStyle({
+          ...imagePromptStyleBody(body),
+          id: decodeURIComponent(imagePromptStyleMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update image prompt style"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/character-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listTemplates({
+            stage: url.searchParams.get("stage"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/character-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...characterPromptTemplateBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create character prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const characterPromptTemplateCopyMatch = pathname.match(/^\/api\/admin\/character-prompt\/templates\/([^/]+)\/copy$/);
+      if (request.method === "POST" && characterPromptTemplateCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, await service.copyTemplate({
+          id: decodeURIComponent(characterPromptTemplateCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy character prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const characterPromptTemplateStatusMatch = pathname.match(/^\/api\/admin\/character-prompt\/templates\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && characterPromptTemplateStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, await service.changeTemplateStatus({
+          id: decodeURIComponent(characterPromptTemplateStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change character prompt template status"),
+          now: new Date(),
+        }));
+      }
+
+      const characterPromptTemplateMatch = pathname.match(/^\/api\/admin\/character-prompt\/templates\/([^/]+)$/);
+      if (request.method === "PUT" && characterPromptTemplateMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...characterPromptTemplateBody(body),
+          id: decodeURIComponent(characterPromptTemplateMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update character prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/character-prompt/compose") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:test"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminCharacterPromptService({ db });
+        return writeJson(response, await service.compose({
+          template_id: body.template_id === undefined || body.template_id === null ? null : String(body.template_id),
+          template_code: body.template_code === undefined || body.template_code === null ? null : String(body.template_code),
+          variables: body.variables && typeof body.variables === "object" && !Array.isArray(body.variables)
+            ? body.variables as Record<string, unknown>
+            : {},
+        }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/storyboard-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listTemplates({
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/storyboard-prompt/packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.savePackage({
+          ...storyboardPromptPackageBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create storyboard prompt package"),
+          now: new Date(),
+        }));
+      }
+
+      const storyboardPromptPackageCopyMatch = pathname.match(/^\/api\/admin\/storyboard-prompt\/packages\/([^/]+)\/copy$/);
+      if (request.method === "POST" && storyboardPromptPackageCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.copyPackage({
+          id: decodeURIComponent(storyboardPromptPackageCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy storyboard prompt package"),
+          now: new Date(),
+        }));
+      }
+
+      const storyboardPromptPackageStatusMatch = pathname.match(/^\/api\/admin\/storyboard-prompt\/packages\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && storyboardPromptPackageStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.changePackageStatus({
+          id: decodeURIComponent(storyboardPromptPackageStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change storyboard prompt package status"),
+          now: new Date(),
+        }));
+      }
+
+      const storyboardPromptPackageMatch = pathname.match(/^\/api\/admin\/storyboard-prompt\/packages\/([^/]+)$/);
+      if (request.method === "PUT" && storyboardPromptPackageMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.savePackage({
+          ...storyboardPromptPackageBody(body),
+          id: decodeURIComponent(storyboardPromptPackageMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update storyboard prompt package"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/storyboard-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          name: String(body.name ?? ""),
+          code: String(body.code ?? ""),
+          base_prompt: String(body.base_prompt ?? ""),
+          genre_package_id: String(body.genre_package_id ?? ""),
+          emotion_package_ids: stringArray(body.emotion_package_ids),
+          camera_package_ids: stringArray(body.camera_package_ids),
+          output_package_id: String(body.output_package_id ?? ""),
+          taboo_package_ids: stringArray(body.taboo_package_ids),
+          is_default: Boolean(body.is_default),
+          sort_order: Number(body.sort_order ?? 0),
+          status: String(body.status ?? "enabled"),
+          remark: String(body.remark ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "save storyboard prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/storyboard-prompt/compose") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:test"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.compose(storyboardPromptComposeBody(body)));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/storyboard-prompt/test-generate") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:test"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, await service.testGenerate({
+          ...storyboardPromptComposeBody(body),
+          novel_content: String(body.novel_content ?? ""),
+        }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/storyboard-prompt/export") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptExport],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminStoryboardPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: { data: await service.exportConfig() },
         });
       }
 
@@ -7457,6 +8187,13 @@ export function createPhoneAuthDevServer(
           envName?: string;
           purpose?: string;
           providerName?: string | null;
+          providerChannel?: string | null;
+          mediaTypes?: string[];
+          modelCodes?: string[];
+          baseUrl?: string | null;
+          authHeaderName?: string | null;
+          authScheme?: string | null;
+          extraHeaders?: Record<string, string> | null;
         };
         const adminSettings = createAdminSystemSettingsService({ db });
         return writeJson(
@@ -7466,6 +8203,13 @@ export function createPhoneAuthDevServer(
             envName: String(body.envName ?? ""),
             purpose: String(body.purpose ?? ""),
             providerName: body.providerName ?? null,
+            providerChannel: body.providerChannel ?? null,
+            mediaTypes: body.mediaTypes,
+            modelCodes: body.modelCodes,
+            baseUrl: body.baseUrl ?? null,
+            authHeaderName: body.authHeaderName ?? null,
+            authScheme: body.authScheme ?? null,
+            extraHeaders: body.extraHeaders ?? null,
             actorAdminAccountId: adminRoute.session.admin_account_id,
             now: new Date(),
           }),

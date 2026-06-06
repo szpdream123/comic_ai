@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">后台模型配置字段落库图</title>
+  <desc id="desc">展示运营表单字段如何转换为数据库中的模型配置 JSON 字段和调度策略。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#0f766e"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 12; }
+      .form { fill: #eef6ff; stroke: #2563eb; stroke-width: 2; rx: 12; }
+      .json { fill: #ecfdf5; stroke: #0f766e; stroke-width: 2; rx: 12; }
+      .db { fill: #13233f; stroke: #13233f; stroke-width: 2; rx: 12; }
+      .title { font: 700 24px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .h { font: 700 17px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #13233f; }
+      .h-light { font: 700 17px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #ffffff; }
+      .p { font: 14px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #475569; }
+      .p-light { font: 14px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #dbeafe; }
+      .small { font: 12px "Microsoft YaHei UI", "Noto Sans SC", sans-serif; fill: #64748b; }
+      .line { stroke: #0f766e; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="720"/>
+  <text class="title" x="56" y="54">运营表单到模型配置落库关系</text>
+  <text class="p" x="56" y="84">运营填中文表单，系统生成内部配置；高级 JSON 只是结果预览和技术兜底。</text>
+
+  <rect class="form" x="60" y="130" width="270" height="130"/>
+  <text class="h" x="86" y="166">基础信息</text>
+  <text class="p" x="86" y="196">模型编码、中文名称</text>
+  <text class="p" x="86" y="220">供应商、真实模型名、排序</text>
+  <text class="small" x="86" y="244">普通表单输入</text>
+
+  <rect class="form" x="60" y="300" width="270" height="130"/>
+  <text class="h" x="86" y="336">模型能力</text>
+  <text class="p" x="86" y="366">文生图 / 图生图</text>
+  <text class="p" x="86" y="390">文生视频 / 图生视频</text>
+  <text class="small" x="86" y="414">中文复选框</text>
+
+  <rect class="form" x="60" y="470" width="270" height="130"/>
+  <text class="h" x="86" y="506">价格和参数</text>
+  <text class="p" x="86" y="536">基础积分、倍率</text>
+  <text class="p" x="86" y="560">参数中文名、选项、默认值</text>
+  <text class="small" x="86" y="584">表格编辑</text>
+
+  <path class="line" d="M330 195 H410"/>
+  <path class="line" d="M330 365 H410"/>
+  <path class="line" d="M330 535 H410"/>
+
+  <rect class="json" x="410" y="120" width="330" height="150"/>
+  <text class="h" x="438" y="158">ai_model_configs 基础列</text>
+  <text class="p" x="438" y="190">model_code / display_name</text>
+  <text class="p" x="438" y="216">provider_name / provider_model</text>
+  <text class="p" x="438" y="242">provider_protocol / media_type</text>
+
+  <rect class="json" x="410" y="290" width="330" height="150"/>
+  <text class="h" x="438" y="328">task_modes_json</text>
+  <text class="p" x="438" y="360">image.generate</text>
+  <text class="p" x="438" y="386">video.text_to_video</text>
+  <text class="p" x="438" y="412">video.image_to_video</text>
+
+  <rect class="json" x="410" y="460" width="330" height="180"/>
+  <text class="h" x="438" y="498">自动生成 JSON</text>
+  <text class="p" x="438" y="530">parameter_schema_json</text>
+  <text class="p" x="438" y="556">default_params_json</text>
+  <text class="p" x="438" y="582">pricing_json / limits_json</text>
+  <text class="p" x="438" y="608">provider_config_json</text>
+
+  <path class="line" d="M740 195 H830"/>
+  <path class="line" d="M740 365 H830"/>
+  <path class="line" d="M740 550 H830"/>
+
+  <rect class="db" x="830" y="120" width="360" height="150"/>
+  <text class="h-light" x="860" y="158">ai_model_configs</text>
+  <text class="p-light" x="860" y="190">模型列表、详情、前台模型目录</text>
+  <text class="p-light" x="860" y="216">发布检查读取这里的配置</text>
+  <text class="p-light" x="860" y="242">不保存明文密钥</text>
+
+  <rect class="db" x="830" y="320" width="360" height="140"/>
+  <text class="h-light" x="860" y="358">ai_model_dispatch_policies</text>
+  <text class="p-light" x="860" y="390">submitQueue / pollQueue</text>
+  <text class="p-light" x="860" y="416">RPM、并发、轮询间隔</text>
+
+  <rect class="db" x="830" y="510" width="360" height="140"/>
+  <text class="h-light" x="860" y="548">revision + audit</text>
+  <text class="p-light" x="860" y="580">每次保存写修订快照</text>
+  <text class="p-light" x="860" y="606">敏感操作写 audit_events</text>
+</svg>
