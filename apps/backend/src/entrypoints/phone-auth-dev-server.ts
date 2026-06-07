@@ -6211,6 +6211,27 @@ function resolveLocalStorageObjectPath(bucket: string, objectKey: string) {
   return absolutePath;
 }
 
+async function revokeDevSeedTeamEntitlements(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  await db.query(
+    `
+      UPDATE organization_entitlements
+      SET status = 'revoked',
+          updated_at = now()
+      WHERE organization_id = $1
+        AND source = 'dev_seed'
+        AND status = 'active'
+        AND entitlement_key IN (
+          'team_member_management',
+          'team_asset_library',
+          'team_dashboard'
+        )
+    `,
+    [devOrganizationId],
+  );
+}
+
 async function readBinaryBody(request: AsyncIterable<Buffer | string>) {
   const chunks = [];
   for await (const chunk of request) {
@@ -6369,6 +6390,10 @@ async function ensureDevWorkspaceAccess(
     `,
     [randomUUID(), devOrganizationId, devWorkspaceId, userId, role],
   );
+
+  if (options.seedTeamEntitlements === false) {
+    await revokeDevSeedTeamEntitlements(db);
+  }
 
   if (role === "owner_admin" && options.seedTeamEntitlements) {
     await db.query(

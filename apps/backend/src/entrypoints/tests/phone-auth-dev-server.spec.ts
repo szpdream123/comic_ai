@@ -5864,6 +5864,8 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /createPhoneAuthDevServer/);
     assert.match(launcherScript, /seedTeamEntitlements/);
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
+    assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
+    assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
     assert.match(launcherScript, /LOCAL_DATABASE_DIR/);
     assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
     assert.match(launcherScript, /server\.listen\(port\)/);
@@ -6009,6 +6011,84 @@ describe("phone auth dev server", () => {
       assert.equal(response.status, 403);
       assert.equal(body.errorCode, "team_asset_library_entitlement_required");
       assert.equal(sessions.rows[0]?.count, "0");
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+      await server.close();
+    }
+  });
+
+  it("does not let development seed entitlements leak into production-like upload checks", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      seedTeamEntitlements: false,
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+      },
+    });
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = originalDatabaseUrl || "postgres://prod-like-upload-gate.test/local";
+
+    try {
+      await server.listen(0);
+      await login(server.origin, "13800138001");
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (
+            id,
+            organization_id,
+            entitlement_key,
+            status,
+            source
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000001',
+            '10000000-0000-4000-8000-000000000001',
+            'team_asset_library',
+            'active',
+            'dev_seed'
+          )
+          ON CONFLICT (organization_id, entitlement_key)
+          DO UPDATE SET status = 'active', source = 'dev_seed'
+        `,
+      );
+      const cookie = await login(server.origin, "13800138000");
+
+      const response = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "blocked-seeded-team-asset-upload",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: null,
+          purpose: "team-assets/character",
+          fileName: "blocked-seeded-hero.png",
+          contentType: "image/png",
+          sizeBytes: 1024,
+        }),
+      });
+      const body = await response.json();
+      const entitlement = await db.query<{ status: string }>(
+        `
+          SELECT status
+          FROM organization_entitlements
+          WHERE entitlement_key = 'team_asset_library'
+            AND source = 'dev_seed'
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(response.status, 403);
+      assert.equal(body.errorCode, "team_asset_library_entitlement_required");
+      assert.equal(entitlement.rows[0]?.status, "revoked");
     } finally {
       if (originalDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;

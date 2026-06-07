@@ -32,7 +32,7 @@ const result = spawnSync(
     "--eval",
     `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
       const server = createPhoneAuthDevServer({
-        seedTeamEntitlements: process.env.SEED_TEAM_ENTITLEMENTS !== "false",
+        seedTeamEntitlements: process.env.SEED_TEAM_ENTITLEMENTS === "true",
       });
       const port = Number(process.env.PORT ?? "4310");
       await server.listen(port);
