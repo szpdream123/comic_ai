@@ -6487,6 +6487,35 @@ function parseRepairSchedulerOptions(
   return { enabled, intervalMs, limit };
 }
 
+function isTeamAssetUploadPurpose(value: unknown): boolean {
+  return String(value ?? "").trim().startsWith("team-assets/");
+}
+
+async function hasActiveOrganizationEntitlement(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    entitlementKey: string;
+    now: Date;
+  },
+): Promise<boolean> {
+  const entitlement = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM organization_entitlements
+      WHERE organization_id = $1
+        AND entitlement_key = $2
+        AND status = 'active'
+        AND (expires_at IS NULL OR expires_at > $3)
+      LIMIT 1
+    `,
+    [input.organizationId, input.entitlementKey, input.now],
+  );
+
+  return Boolean(entitlement);
+}
+
 export function createPhoneAuthDevServer(
   options: PhoneAuthDevServerOptions = {},
 ): PhoneAuthDevServer {
@@ -8775,6 +8804,23 @@ export function createPhoneAuthDevServer(
             ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : { workspaceId: devWorkspaceId }),
             now: new Date(),
           });
+          if (isTeamAssetUploadPurpose(body.purpose)) {
+            const hasTeamAssetLibrary = await hasActiveOrganizationEntitlement(db, {
+              organizationId: actor.organizationId,
+              entitlementKey: "team_asset_library",
+              now: new Date(),
+            });
+            if (!hasTeamAssetLibrary) {
+              return writeJson(
+                response,
+                envelopedError(
+                  403,
+                  "team_asset_library_entitlement_required",
+                  "Team asset library membership is required for uploads",
+                ),
+              );
+            }
+          }
           const prepared = await createUploadSession(db, {
             actor,
             sessionToken: authenticated.sessionToken,

@@ -5964,6 +5964,60 @@ describe("phone auth dev server", () => {
       await server.close();
     }
   });
+
+  it("rejects direct team asset uploads before the paid team asset entitlement is active", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+      },
+    });
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = originalDatabaseUrl || "postgres://upload-gate.test/local";
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const response = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "blocked-team-asset-upload",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: null,
+          purpose: "team-assets/character",
+          fileName: "blocked-hero.png",
+          contentType: "image/png",
+          sizeBytes: 1024,
+        }),
+      });
+      const body = await response.json();
+      const sessions = await db.query<{ count: string }>(
+        `
+          SELECT count(*)::text AS count
+          FROM storage_upload_sessions
+          WHERE purpose = 'team-assets/character'
+        `,
+      );
+
+      assert.equal(response.status, 403);
+      assert.equal(body.errorCode, "team_asset_library_entitlement_required");
+      assert.equal(sessions.rows[0]?.count, "0");
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+      await server.close();
+    }
+  });
 });
 
 async function login(origin: string, phone: string) {
