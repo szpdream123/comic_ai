@@ -20,6 +20,8 @@ import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
 
+const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
+
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
@@ -2358,7 +2360,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
     const uploadId = target.dataset.localUploadId ?? "";
     const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
-    workbench.ui.toast = removed ? "已删除本地上传预览。" : "未找到要删除的本地上传。";
+    workbench.ui.toast = removed ? "已从当前列表移除。" : "未找到要删除的团队素材。";
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
@@ -7059,6 +7061,211 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
     previewUrl: result.upload.previewUrl ?? null,
   });
   return result.upload;
+}
+
+export async function handleTeamAssetLocalUploadFiles(workbench, category, files = []) {
+  const normalizedCategory = String(category ?? workbench.ui?.libraryCategory ?? "character");
+  if (!canSyncTeamAssetLocalUploadsToCloud(workbench)) {
+    workbench.ui.libraryTeamAssetScope = "team";
+    workbench.ui.libraryCategory = normalizedCategory;
+    workbench.ui.isLibraryPricingModalOpen = true;
+    workbench.ui.toast = "团队资产库为会员权益，开通后才能上传素材。";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  const nextFiles = [...files].filter(Boolean);
+  const existingUploadsByCategory = workbench.ui.teamAssetLocalUploads ?? {};
+  const existingUploads = Array.isArray(existingUploadsByCategory[normalizedCategory])
+    ? existingUploadsByCategory[normalizedCategory]
+    : [];
+  const availableSlots = Math.max(0, TEAM_ASSET_LOCAL_UPLOAD_LIMIT - existingUploads.length);
+  const acceptedRecords = [];
+  const acceptedItems = [];
+  let skippedCount = 0;
+  let validationMessage = "";
+
+  for (const [index, file] of nextFiles.entries()) {
+    if (acceptedRecords.length >= availableSlots) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const validation = validateTeamAssetLocalUploadFile(normalizedCategory, file);
+    if (!validation.ok) {
+      skippedCount += 1;
+      validationMessage = validation.message ?? validationMessage;
+      continue;
+    }
+
+    const previewUrl = await createTeamAssetLocalPreviewUrl(file, validation.mediaType);
+    const record = {
+      id: createTeamAssetLocalUploadId(normalizedCategory, file, index),
+      category: normalizedCategory,
+      name: normalizeTeamAssetLocalUploadName(file.name),
+      fileName: file.name ?? "upload",
+      previewUrl,
+      sourceUrl: "",
+      sizeLabel: formatTeamAssetLocalUploadSize(file.size),
+      mimeType: file.type || validation.mimeType || "",
+      extension: validation.extension ?? "",
+      status: "uploading",
+      statusLabel: "上传中",
+      uploadSessionId: null,
+      storageObjectId: null,
+      storageObjectKey: "",
+    };
+    acceptedRecords.push(record);
+    acceptedItems.push({ record, file });
+  }
+
+  if (!acceptedRecords.length) {
+    workbench.ui.toast =
+      validationMessage ||
+      (skippedCount > 0 ? "本分类最多保留 20 个本地上传预览。" : "请选择可上传的图片或音频文件。");
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  workbench.ui.libraryTeamAssetScope = "team";
+  workbench.ui.libraryCategory = normalizedCategory;
+  workbench.ui.teamAssetLocalUploads = {
+    ...existingUploadsByCategory,
+    [normalizedCategory]: [...acceptedRecords, ...existingUploads].slice(0, TEAM_ASSET_LOCAL_UPLOAD_LIMIT),
+  };
+  workbench.ui.toast = buildTeamAssetLocalUploadToast(acceptedRecords.length, skippedCount, "正在保存到团队资产库...");
+  render(workbench, { preserveLibraryScroll: true });
+
+  const uploadFailures = [];
+  for (const { record, file } of acceptedItems) {
+    try {
+      const upload = await uploadTeamAssetLocalFile(workbench, normalizedCategory, file);
+      record.status = "ready";
+      record.statusLabel = "";
+      record.uploadSessionId = upload.uploadSessionId ?? null;
+      record.storageObjectId = upload.storageObjectId ?? null;
+      record.storageObjectKey = upload.storageObjectKey ?? "";
+      record.sourceUrl = upload.sourceUrl ?? upload.publicUrl ?? "";
+      record.publicUrl = upload.publicUrl ?? upload.sourceUrl ?? "";
+      record.mimeType = upload.mimeType ?? record.mimeType;
+      record.sizeLabel = formatTeamAssetLocalUploadSize(upload.byteSize ?? file.size);
+    } catch (error) {
+      record.status = "failed";
+      record.statusLabel = "上传失败";
+      uploadFailures.push(friendlyError(error));
+    }
+  }
+
+  workbench.ui.toast = uploadFailures.length
+    ? `已添加 ${acceptedRecords.length} 个团队素材，${uploadFailures.length} 个上传失败。`
+    : buildTeamAssetLocalUploadToast(acceptedRecords.length, skippedCount, "已保存到团队资产库。");
+  render(workbench, { preserveLibraryScroll: true });
+}
+
+function canSyncTeamAssetLocalUploadsToCloud(workbench) {
+  return workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary === true;
+}
+
+async function uploadTeamAssetLocalFile(workbench, category, file) {
+  if (typeof workbench.api?.uploadFile !== "function") {
+    throw new Error("云存储接口暂不可用，请稍后重试。");
+  }
+  return uploadLocalFile(workbench, file, `${TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX}/${category}`, {
+    uploadLimits: getTeamAssetLocalUploadLimits(category),
+  });
+}
+
+function getTeamAssetLocalUploadLimits(category) {
+  if (category === "voice") {
+    return {
+      ...defaultUploadLimits,
+      image: undefined,
+      video: undefined,
+      audio: {
+        ...defaultUploadLimits.audio,
+        mimeTypes: [
+          "application/octet-stream",
+          "audio/mpeg",
+          "audio/mp3",
+          "audio/wav",
+          "audio/x-wav",
+          "audio/mp4",
+          "audio/aac",
+          "audio/x-m4a",
+        ],
+        extensions: [".mp3", ".wav", ".m4a", ".aac"],
+      },
+    };
+  }
+
+  return {
+    ...defaultUploadLimits,
+    image: {
+      ...defaultUploadLimits.image,
+      mimeTypes: ["application/octet-stream", "image/png", "image/jpeg", "image/webp"],
+      extensions: [".png", ".jpg", ".jpeg", ".webp"],
+    },
+    video: undefined,
+    audio: undefined,
+  };
+}
+
+async function createTeamAssetLocalPreviewUrl(file, mediaType) {
+  if (mediaType === "audio") {
+    return createObjectUrlPreview(file);
+  }
+  try {
+    return await readFileAsDataUrl(file);
+  } catch {
+    return createObjectUrlPreview(file);
+  }
+}
+
+function createObjectUrlPreview(file) {
+  if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    try {
+      return URL.createObjectURL(file);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function createTeamAssetLocalUploadId(category, file, index) {
+  const randomToken =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `team-local-${category}-${index}-${randomToken}`;
+}
+
+function normalizeTeamAssetLocalUploadName(fileName) {
+  const baseName = String(fileName ?? "")
+    .replace(/\.[^.\\/]+$/, "")
+    .trim();
+  return baseName || "未命名素材";
+}
+
+function formatTeamAssetLocalUploadSize(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = numeric;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 10 || unitIndex === 0 ? Math.round(size) : Math.round(size * 10) / 10;
+  return `${rounded} ${units[unitIndex]}`;
+}
+
+function buildTeamAssetLocalUploadToast(acceptedCount, skippedCount, suffix) {
+  const skippedCopy = skippedCount > 0 ? `，${skippedCount} 个文件已跳过` : "";
+  return `已添加 ${acceptedCount} 个团队素材预览${skippedCopy}，${suffix}`;
 }
 
 export async function uploadProjectCoverFile(workbench, file, projectId) {

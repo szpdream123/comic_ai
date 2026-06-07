@@ -131,6 +131,106 @@ describe("createDevDb", () => {
     }
   });
 
+  it("repairs existing local databases missing model configuration tables", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      await db.query("DROP TABLE IF EXISTS ai_generation_task_snapshots CASCADE");
+      await db.query("DROP TABLE IF EXISTS ai_model_dispatch_policies CASCADE");
+      await db.query("DROP TABLE IF EXISTS ai_model_configs CASCADE");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const models = await repairedDb.query<{ model_code: string }>(
+        `
+          SELECT model_code
+          FROM ai_model_configs
+          WHERE model_code IN ('gpt-image-2-cn', 'seedance-i2v-pro')
+          ORDER BY model_code
+        `,
+      );
+      const snapshots = await repairedDb.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'ai_generation_task_snapshots'
+          ) AS exists
+        `,
+      );
+      await repairedDb.close();
+
+      assert.deepEqual(models.rows.map((row) => row.model_code), ["gpt-image-2-cn", "seedance-i2v-pro"]);
+      assert.equal(snapshots.rows[0]?.exists, true);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs existing local databases missing team collaboration tables", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      await db.query("DROP TABLE IF EXISTS team_plan_limits CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_credit_adjustments CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_project_ownerships CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_project_assignments CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_member_profiles CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_member_groups CASCADE");
+      await db.query("DROP TABLE IF EXISTS organization_entitlements CASCADE");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const tables = await repairedDb.query<{ table_name: string }>(
+        `
+          SELECT table_name
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name IN (
+              'organization_entitlements',
+              'team_member_groups',
+              'team_member_profiles',
+              'team_project_assignments',
+              'team_project_ownerships',
+              'team_credit_adjustments',
+              'team_plan_limits'
+            )
+          ORDER BY table_name
+        `,
+      );
+      await repairedDb.close();
+
+      assert.deepEqual(tables.rows.map((row) => row.table_name), [
+        "organization_entitlements",
+        "team_credit_adjustments",
+        "team_member_groups",
+        "team_member_profiles",
+        "team_plan_limits",
+        "team_project_assignments",
+        "team_project_ownerships",
+      ]);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 function restoreEnv(key: string, value: string | undefined) {

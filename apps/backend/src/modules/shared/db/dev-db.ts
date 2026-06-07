@@ -6,7 +6,6 @@ import { Pool } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
 import { applySqlMigrations } from "./migrations.ts";
-import { createMigratedTestDb } from "./test-db.ts";
 
 export interface DevDatabase extends SqlDatabase {
   close(): Promise<void>;
@@ -15,10 +14,7 @@ export interface DevDatabase extends SqlDatabase {
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    if (process.env.NODE_ENV === "test" && !process.env.LOCAL_DATABASE_DIR?.trim()) {
-      return createMigratedTestDb();
-    }
-    throw new Error("DATABASE_URL is required for dev server; PGlite fallback is disabled.");
+    return createLocalDevDb();
   }
 
   const pool = new Pool({
@@ -29,9 +25,10 @@ export async function createDevDb(): Promise<DevDatabase> {
     await ensureFoundationSchema(pool);
   } catch (error) {
     await pool.end().catch(() => undefined);
-    throw new Error(
-      `[dev-db] DATABASE_URL is configured but unavailable. ${error instanceof Error ? error.message : String(error)}`,
+    console.warn(
+      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
     );
+    return createLocalDevDb();
   }
 
   return {
@@ -76,6 +73,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     return;
   }
 
+  await ensurePaymentProviderConstraints(db);
+
   if (!(await tableExists(db, "sms_send_records"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0009_sms_send_records_backfill.sql" });
   }
@@ -96,13 +95,29 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0006_project_upload_records.sql" });
   }
 
+  if (
+    !(await tableExists(db, "ai_model_configs")) ||
+    !(await tableExists(db, "ai_model_dispatch_policies")) ||
+    !(await tableExists(db, "ai_model_config_revisions"))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0007_ai_model_configs.sql" });
+  }
+
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0008_ai_generation_task_snapshots.sql" });
   }
 
-  if (!(await tableExists(db, "team_member_groups")) || !(await tableExists(db, "team_member_profiles"))) {
+  if (
+    !(await tableExists(db, "organization_entitlements")) ||
+    !(await tableExists(db, "team_member_groups")) ||
+    !(await tableExists(db, "team_member_profiles")) ||
+    !(await tableExists(db, "team_project_assignments")) ||
+    !(await tableExists(db, "team_project_ownerships")) ||
+    !(await tableExists(db, "team_credit_adjustments")) ||
+    !(await tableExists(db, "team_plan_limits"))
+  ) {
     await ensureLegacyTenantUniqueConstraints(db);
-    await ensureTeamMemberProfileTables(db);
+    await ensureTeamCollaborationTables(db);
   }
 
   if (!(await tableExists(db, "admin_accounts"))) {
@@ -131,6 +146,58 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 }
 
+async function ensurePaymentProviderConstraints(db: SqlDatabase) {
+  await ensureProviderConstraint(db, {
+    tableName: "payment_intents",
+    constraintName: "payment_intents_provider_check",
+    allowedProviders: ["paylab", "wechat_pay", "alipay"],
+  });
+  await ensureProviderConstraint(db, {
+    tableName: "payment_provider_events",
+    constraintName: "payment_provider_events_provider_check",
+    allowedProviders: ["paylab", "wechat_pay", "alipay"],
+  });
+  await ensureProviderConstraint(db, {
+    tableName: "payment_reconciliation_runs",
+    constraintName: "payment_reconciliation_runs_provider_check",
+    allowedProviders: ["paylab", "wechat_pay", "alipay", "all"],
+  });
+}
+
+async function ensureProviderConstraint(
+  db: SqlDatabase,
+  input: {
+    tableName: string;
+    constraintName: string;
+    allowedProviders: string[];
+  },
+) {
+  if (!(await tableExists(db, input.tableName))) {
+    return;
+  }
+
+  const current = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = $1
+      LIMIT 1
+    `,
+    [input.constraintName],
+  );
+  const definition = current.rows[0]?.definition ?? "";
+  const hasExpectedProviders = input.allowedProviders.every((provider) => definition.includes(provider));
+  if (hasExpectedProviders) {
+    return;
+  }
+
+  const allowedSql = input.allowedProviders.map((provider) => `'${provider}'`).join(", ");
+  await db.query(`ALTER TABLE ${input.tableName} DROP CONSTRAINT IF EXISTS ${input.constraintName}`);
+  await db.query(
+    `ALTER TABLE ${input.tableName} ADD CONSTRAINT ${input.constraintName} CHECK (provider IN (${allowedSql}))`,
+  );
+}
+
 async function ensureLegacyTenantUniqueConstraints(db: SqlDatabase) {
   if (
     (await tableExists(db, "workspaces")) &&
@@ -155,8 +222,30 @@ async function ensureLegacyTenantUniqueConstraints(db: SqlDatabase) {
   }
 }
 
-async function ensureTeamMemberProfileTables(db: SqlDatabase) {
+async function ensureTeamCollaborationTables(db: SqlDatabase) {
   await executeSchemaPatch(db, `
+    CREATE TABLE IF NOT EXISTS organization_entitlements (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      entitlement_key text NOT NULL CHECK (
+        entitlement_key IN (
+          'team_asset_library',
+          'team_member_management',
+          'team_dashboard',
+          'priority_generation'
+        )
+      ),
+      status text NOT NULL CHECK (status IN ('active', 'expired', 'revoked')),
+      source text NOT NULL CHECK (source IN ('manual', 'payment', 'trial', 'dev_seed')),
+      expires_at timestamptz NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, entitlement_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS organization_entitlements_active_idx
+      ON organization_entitlements (organization_id, entitlement_key, status, expires_at);
+
     CREATE TABLE IF NOT EXISTS team_member_groups (
       id uuid PRIMARY KEY,
       organization_id uuid NOT NULL REFERENCES organizations(id),
@@ -216,6 +305,78 @@ async function ensureTeamMemberProfileTables(db: SqlDatabase) {
 
     CREATE INDEX IF NOT EXISTS team_member_profiles_scope_idx
       ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+
+    CREATE TABLE IF NOT EXISTS team_project_assignments (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id),
+      membership_id uuid NOT NULL REFERENCES memberships(id),
+      project_id uuid NOT NULL REFERENCES projects(id),
+      assigned_by_user_id uuid NOT NULL REFERENCES users(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, workspace_id, membership_id, project_id),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id),
+      FOREIGN KEY (organization_id, membership_id)
+        REFERENCES memberships (organization_id, id),
+      FOREIGN KEY (organization_id, project_id)
+        REFERENCES projects (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS team_project_assignments_member_idx
+      ON team_project_assignments (organization_id, workspace_id, membership_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS team_project_ownerships (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id),
+      project_id uuid NOT NULL REFERENCES projects(id),
+      member_group_id uuid NULL REFERENCES team_member_groups(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, workspace_id, project_id),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id),
+      FOREIGN KEY (organization_id, workspace_id, member_group_id)
+        REFERENCES team_member_groups (organization_id, workspace_id, id),
+      FOREIGN KEY (organization_id, project_id)
+        REFERENCES projects (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS team_project_ownerships_group_idx
+      ON team_project_ownerships (organization_id, workspace_id, member_group_id);
+
+    CREATE TABLE IF NOT EXISTS team_credit_adjustments (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id),
+      operator_user_id uuid NOT NULL REFERENCES users(id),
+      target_membership_id uuid NOT NULL REFERENCES memberships(id),
+      adjustment_type text NOT NULL CHECK (
+        adjustment_type IN ('allocate', 'recover', 'reset', 'expire')
+      ),
+      amount integer NOT NULL CHECK (amount > 0),
+      reason text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id, id),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id),
+      FOREIGN KEY (organization_id, target_membership_id)
+        REFERENCES memberships (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS team_credit_adjustments_scope_idx
+      ON team_credit_adjustments (organization_id, workspace_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS team_plan_limits (
+      id uuid PRIMARY KEY,
+      organization_id uuid NOT NULL REFERENCES organizations(id),
+      seat_limit integer NOT NULL DEFAULT 5 CHECK (seat_limit >= 0),
+      single_account_concurrency_limit integer NOT NULL DEFAULT 1 CHECK (single_account_concurrency_limit >= 1),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (organization_id)
+    );
   `);
 }
 

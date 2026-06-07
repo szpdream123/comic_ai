@@ -336,7 +336,7 @@ export function validateTeamAssetLocalUploadFile(category, file) {
   const extensionOk = Boolean(extension && config.extensions.includes(extension));
   const mimeOk = Boolean(mimeType && config.mimeTypes.includes(mimeType));
 
-  if (!extensionOk && !mimeOk) {
+  if ((extension && !extensionOk) || (mimeType && !mimeOk) || (!extensionOk && !mimeOk)) {
     return {
       ok: false,
       message: config.rejectMessage,
@@ -372,14 +372,16 @@ function renderOfficialTeamLibrary(context) {
   const teamLocked =
     assetScope === "team" && context.libraryEntitlement?.hasTeamAssetLibrary !== true;
   const isTeamApi = assetScope === "team" && selectedCategory === "api";
+  const canUseTeamLocalUploads = assetScope === "team" && !teamLocked;
   const localUploads =
-    assetScope === "team" ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
+    canUseTeamLocalUploads ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
   const localUploadToolbar =
-    assetScope === "team" ? renderTeamAssetLocalUploadToolbar(selectedCategory) : "";
-  const localUploadSection =
-    assetScope === "team" ? renderTeamAssetLocalUploadSection(selectedCategory, localUploads) : "";
+    canUseTeamLocalUploads ? renderTeamAssetLocalUploadToolbar(selectedCategory) : "";
   const title = assetScope === "team" ? "团队资产库" : "官方资产库";
-  const detailAsset = resolveDetailAsset(assets, context.libraryDetailAssetId);
+  const detailAsset = assetScope === "team" ? null : resolveDetailAsset(assets, context.libraryDetailAssetId);
+  const teamAssetContent = canUseTeamLocalUploads
+    ? renderTeamAssetWorkspace(selectedCategory, localUploads)
+    : "";
 
   return `
     <section class="library-team-page official-library-page" aria-labelledby="official-library-title">
@@ -397,8 +399,10 @@ function renderOfficialTeamLibrary(context) {
           isTeamApi
             ? renderTeamApiPanel()
             : teamLocked
-              ? `${localUploadSection}${renderLockedTeamPanel()}`
-              : `${localUploadSection}${renderAssetBoard({
+              ? renderLockedTeamPanel()
+              : assetScope === "team"
+                ? teamAssetContent
+                : renderAssetBoard({
                   assets,
                   context,
                   folders,
@@ -406,13 +410,29 @@ function renderOfficialTeamLibrary(context) {
                   selectedFolder,
                   query,
                   title,
-                })}`
+                })
           }
       </div>
       ${detailAsset ? renderAssetDetailOverlay(detailAsset, context) : ""}
       ${renderPricingModal({ open: context.pricingOpen === true })}
     </section>
   `;
+}
+
+function renderTeamAssetWorkspace(selectedCategory, uploads) {
+  const localUploadSection = renderTeamAssetLocalUploadSection(selectedCategory, uploads);
+  if (localUploadSection) {
+    return localUploadSection;
+  }
+
+  const config = teamLocalUploadConfigs[selectedCategory];
+  const label = categoryLabel(selectedCategory);
+  if (!config) {
+    return renderStatusState(`${label}暂未接入`, "当前分类暂不展示官方素材内容，后续接入团队素材后会在这里管理。");
+  }
+
+  const action = config.mediaType === "audio" ? "上传音频" : "上传图片";
+  return renderStatusState(`暂无${label}素材`, `${action}后会保存到团队资产库，并显示在当前分类。`);
 }
 
 function renderTeamAssetLocalUploadToolbar(selectedCategory) {
@@ -423,10 +443,10 @@ function renderTeamAssetLocalUploadToolbar(selectedCategory) {
   const label = categoryLabel(selectedCategory);
 
   return `
-    <section class="library-team-local-upload-toolbar" aria-label="${escapeAttr(label)}本地上传">
+    <section class="library-team-local-upload-toolbar" aria-label="${escapeAttr(label)}上传">
       <div class="library-team-local-upload-copy">
-        <strong>${escapeHtml(label)}本地上传</strong>
-        <span>${escapeHtml(config.helperText)}，上传后先显示为本地预览，后续可同步到团队云端。</span>
+        <strong>${escapeHtml(label)}上传</strong>
+        <span>${escapeHtml(config.helperText)}，上传后会保存到团队资产库，并显示在当前分类。</span>
       </div>
       <div class="library-team-local-upload-actions">
         <button
@@ -457,11 +477,11 @@ function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
   const unit = config.mediaType === "audio" ? "段音频" : "张图片";
 
   return `
-    <section class="library-team-local-upload-section" aria-label="${escapeAttr(label)}本地上传预览">
+    <section class="library-team-local-upload-section" aria-label="${escapeAttr(label)}团队素材">
       <div class="library-team-local-upload-section-head">
         <div>
-          <p>本地上传，待同步</p>
-          <h2>${escapeHtml(label)}本地预览</h2>
+          <p>团队素材</p>
+          <h2>${escapeHtml(label)}素材</h2>
         </div>
         <span>${uploads.length} ${escapeHtml(unit)}</span>
       </div>
@@ -475,6 +495,10 @@ function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
 function renderTeamAssetLocalUploadCard(asset, config) {
   const name = asset.name ?? asset.fileName ?? "未命名上传";
   const previewUrl = asset.previewUrl ?? asset.sourceUrl ?? asset.url ?? "";
+  const status = shouldShowTeamAssetUploadStatus(asset) ? asset.statusLabel : "";
+  const statusBadge = status
+    ? `<span class="library-team-local-upload-status">${escapeHtml(status)}</span>`
+    : "";
   const meta = [asset.sizeLabel, asset.mimeType || asset.extension].filter(Boolean).join(" · ");
   const deleteButton = renderTeamAssetLocalUploadDeleteButton(asset, name);
 
@@ -484,7 +508,10 @@ function renderTeamAssetLocalUploadCard(asset, config) {
         <div class="library-team-local-upload-audio-icon" aria-hidden="true"></div>
         <div class="library-team-local-upload-card-body">
           <div class="library-team-local-upload-card-title">
-            <h3>${escapeHtml(name)}</h3>
+            <div class="library-team-local-upload-card-name">
+              <h3>${escapeHtml(name)}</h3>
+              ${statusBadge}
+            </div>
             ${deleteButton}
           </div>
           ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
@@ -498,7 +525,10 @@ function renderTeamAssetLocalUploadCard(asset, config) {
     <article class="library-team-local-upload-card is-image" data-local-upload-id="${escapeAttr(asset.id ?? "")}">
       <div class="library-team-local-upload-card-body">
         <div class="library-team-local-upload-card-title">
-          <h3>${escapeHtml(name)}</h3>
+          <div class="library-team-local-upload-card-name">
+            <h3>${escapeHtml(name)}</h3>
+            ${statusBadge}
+          </div>
           ${deleteButton}
         </div>
         ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
@@ -512,6 +542,10 @@ function renderTeamAssetLocalUploadCard(asset, config) {
       </figure>
     </article>
   `;
+}
+
+function shouldShowTeamAssetUploadStatus(asset) {
+  return asset.status === "uploading" || asset.status === "failed";
 }
 
 function renderTeamAssetLocalUploadDeleteButton(asset, name) {

@@ -19,6 +19,10 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath);
+if (!process.env.LOCAL_DATABASE_DIR?.trim()) {
+  const port = process.env.PORT?.trim() || "4310";
+  process.env.LOCAL_DATABASE_DIR = `.local/dev-db/phone-auth-${port}`;
+}
 
 const result = spawnSync(
   runtime,
@@ -27,7 +31,9 @@ const result = spawnSync(
     "--input-type=module",
     "--eval",
     `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
-      const server = createPhoneAuthDevServer();
+      const server = createPhoneAuthDevServer({
+        seedTeamEntitlements: process.env.SEED_TEAM_ENTITLEMENTS !== "false",
+      });
       const port = Number(process.env.PORT ?? "4310");
       await server.listen(port);
       console.log("Phone auth dev server listening on " + server.origin);

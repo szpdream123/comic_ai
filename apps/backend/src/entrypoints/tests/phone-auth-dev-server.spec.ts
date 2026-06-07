@@ -5862,6 +5862,10 @@ describe("phone auth dev server", () => {
     );
 
     assert.match(launcherScript, /createPhoneAuthDevServer/);
+    assert.match(launcherScript, /seedTeamEntitlements/);
+    assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
+    assert.match(launcherScript, /LOCAL_DATABASE_DIR/);
+    assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
     assert.match(launcherScript, /server\.listen\(port\)/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);
