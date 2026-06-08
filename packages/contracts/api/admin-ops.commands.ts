@@ -129,6 +129,41 @@ export const repairPaidWithoutCreditCommand: ApiCommandContract = {
   verificationIds: ["PAY-paid-without-credit-repair", "C10-payment-ops"],
 };
 
+export const operateGenerationQueueJobCommand: ApiCommandContract = {
+  name: "OperateGenerationQueueJob",
+  operationName: operationNames.opsGenerationQueueJobOperate,
+  capability: capabilities.opsSettle,
+  idempotencyRequired: true,
+  requestSchema: {
+    queueName: "required text",
+    jobId: "required text",
+    action: "retry|promote|remove",
+    reason: "required text",
+  },
+  responseSchema: {
+    queueName: "string",
+    jobId: "string",
+    jobName: "string",
+    action: "retry|promote|remove",
+    previousState: "string",
+  },
+  resourceScope: "generation_queue_job:{queue_name}:{job_id}",
+  statePreconditions: [
+    "actor has ops settlement capability",
+    "queue is configured for generation jobs",
+  ],
+  businessErrors: [
+    "generation_queue_not_allowed",
+    "generation_queue_job_action_invalid",
+    "generation_queue_job_not_found",
+    "generation_queue_job_state_mismatch",
+    "generation_queue_job_action_unsupported",
+    "reason_required",
+  ],
+  auditEvent: "admin.ops.generation_queue_job_operated",
+  verificationIds: ["OPS-generation-queue-job-operate"],
+};
+
 export const adminOpsCommandContracts = [
   manualSettleUnknownTaskCommand,
   adminRetryTaskCommand,
@@ -136,4 +171,5 @@ export const adminOpsCommandContracts = [
   adminRetryPersistAssetCommand,
   markPaymentRiskReviewedCommand,
   repairPaidWithoutCreditCommand,
+  operateGenerationQueueJobCommand,
 ];

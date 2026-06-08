@@ -231,6 +231,124 @@ describe("createDevDb", () => {
     }
   });
 
+  it("repairs existing local databases missing a membership subscription migration table", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      const sentinels = await db.query<{ table_name: string }>(
+        `
+          SELECT table_name
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name IN ('membership_plans', 'credit_lots')
+          ORDER BY table_name
+        `,
+      );
+      const orderColumn = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'billing_orders'
+              AND column_name = 'product_type'
+          ) AS exists
+        `,
+      );
+      assert.deepEqual(sentinels.rows.map((row) => row.table_name), [
+        "credit_lots",
+        "membership_plans",
+      ]);
+      assert.equal(orderColumn.rows[0]?.exists, true);
+
+      await db.query("DROP TABLE membership_reminders");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const repaired = await repairedDb.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'membership_reminders'
+          ) AS exists
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(repaired.rows[0]?.exists, true);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs existing local databases missing membership subscription constraints", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      await db.query(`
+        ALTER TABLE billing_orders
+          DROP CONSTRAINT billing_orders_credits_product_shape_check
+      `);
+      await db.query(`
+        ALTER TABLE organization_membership_subscriptions
+          DROP CONSTRAINT organization_membership_subscriptions_latest_order_fk
+      `);
+      await db.query(`
+        ALTER TABLE membership_periods
+          DROP CONSTRAINT membership_periods_order_fk
+      `);
+      await db.query(`
+        ALTER TABLE credit_lots
+          DROP CONSTRAINT credit_lots_grant_ledger_entry_fk
+      `);
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const constraints = await repairedDb.query<{ constraint_name: string }>(
+        `
+          SELECT constraint_name
+          FROM information_schema.table_constraints
+          WHERE table_schema = 'public'
+            AND constraint_name IN (
+              'billing_orders_credits_product_shape_check',
+              'organization_membership_subscriptions_latest_order_fk',
+              'membership_periods_order_fk',
+              'credit_lots_grant_ledger_entry_fk'
+            )
+          ORDER BY constraint_name
+        `,
+      );
+      await repairedDb.close();
+
+      assert.deepEqual(constraints.rows.map((row) => row.constraint_name), [
+        "billing_orders_credits_product_shape_check",
+        "credit_lots_grant_ledger_entry_fk",
+        "membership_periods_order_fk",
+        "organization_membership_subscriptions_latest_order_fk",
+      ]);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 function restoreEnv(key: string, value: string | undefined) {

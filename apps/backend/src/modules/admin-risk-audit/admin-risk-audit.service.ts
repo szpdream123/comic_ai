@@ -86,6 +86,7 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
          AND cle.source_id = bo.id
          AND cle.entry_type = 'grant'
         WHERE bo.organization_id = $1
+          AND bo.product_type = 'credit_package'
           AND bo.status = 'paid'
           AND bo.credit_grant_ledger_entry_id IS NULL
           AND cle.id IS NULL

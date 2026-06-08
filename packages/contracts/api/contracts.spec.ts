@@ -59,6 +59,33 @@ describe("API command contracts", () => {
     });
   });
 
+  it("declares membership subscription commands", () => {
+    const commandsByName = new Map(
+      allApiCommandContracts.map((command) => [command.name, command]),
+    );
+
+    const listPlans = commandsByName.get("ListMembershipPlans");
+    assert.ok(listPlans);
+    assert.equal(listPlans.operationName, "membership.plans.list");
+    assert.equal(listPlans.capability, "billing:purchase");
+    assert.equal(listPlans.auditEvent, "membership.plans.listed");
+    assert.equal(listPlans.idempotencyRequired, false);
+
+    const createOrder = commandsByName.get("CreateMembershipOrder");
+    assert.ok(createOrder);
+    assert.equal(createOrder.operationName, "membership.order.create");
+    assert.equal(createOrder.capability, "billing:purchase");
+    assert.equal(createOrder.auditEvent, "membership.order.created");
+    assert.equal(createOrder.idempotencyRequired, true);
+
+    const getStatus = commandsByName.get("GetMembershipStatus");
+    assert.ok(getStatus);
+    assert.equal(getStatus.operationName, "membership.status.get");
+    assert.equal(getStatus.capability, "workspace:read");
+    assert.equal(getStatus.auditEvent, "membership.status.read");
+    assert.equal(getStatus.idempotencyRequired, false);
+  });
+
   it("has a command contract for every exported operation name", () => {
     const contractedOperationNames = new Set(
       allApiCommandContracts.map((command) => command.operationName),

@@ -22,6 +22,7 @@ interface PaidOrderRow {
   organization_id: string;
   created_by_user_id: string;
   order_no: string;
+  product_type: string;
   credits: number;
   amount_minor: number;
   currency: string;
@@ -46,6 +47,7 @@ export async function consumePaymentSucceededCreditGrant(
 ): Promise<
   | { kind: "applied"; creditGrant: CreditLedgerEntryRecord }
   | { kind: "duplicate" }
+  | { kind: "ignored" }
 > {
   if (input.event.eventType !== eventTypes.paymentSucceeded) {
     throw new Error(`unsupported_event_type:${input.event.eventType}`);
@@ -94,6 +96,11 @@ export async function consumePaymentSucceededCreditGrant(
         }
         assertPaymentSucceededPayloadMatchesOrder(payload, order);
 
+        if (order.product_type !== "credit_package") {
+          await db.query("COMMIT");
+          return { kind: "ignored" as const };
+        }
+
         const grant = await grantCreditsInTransaction(db, {
           organizationId: order.organization_id,
           amount: order.credits,
@@ -131,6 +138,10 @@ export async function consumePaymentSucceededCreditGrant(
 
   if (consumed.kind === "duplicate") {
     return { kind: "duplicate" };
+  }
+
+  if ("kind" in consumed.result && consumed.result.kind === "ignored") {
+    return { kind: "ignored" };
   }
 
   return { kind: "applied", creditGrant: consumed.result };

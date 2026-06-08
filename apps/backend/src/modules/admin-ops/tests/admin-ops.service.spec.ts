@@ -20,6 +20,9 @@ const paidOrderId = "91000000-0000-4000-8000-000000000001";
 const paymentIntentId = "92000000-0000-4000-8000-000000000001";
 const paymentRiskEventId = "93000000-0000-4000-8000-000000000001";
 const retryEpisodeId = "94000000-0000-4000-8000-000000000001";
+const membershipPlanId = "95000000-0000-4000-8000-000000000001";
+const membershipPaidOrderId = "96000000-0000-4000-8000-000000000001";
+const membershipPaymentIntentId = "97000000-0000-4000-8000-000000000001";
 
 describe("admin ops service", { concurrency: false }, () => {
   it("lists stuck tasks for ops users and rejects ordinary creators", async () => {
@@ -685,6 +688,47 @@ describe("admin ops service", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("does not list or repair membership orders through paid-without-credit ops", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const { adminSession } = await seedOpsFixture(db);
+      await seedMembershipPaymentOpsFixture(db);
+      const service = createAdminOpsService({ db, workspaceId });
+
+      const listed = await service.listItems({
+        user: { sessionToken: adminSession.token },
+        now: new Date("2026-05-19T11:10:00.000Z"),
+      });
+      const repaired = await service.repairPaidWithoutCredit({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-repair-membership-paid-without-credit",
+        body: {
+          orderId: membershipPaidOrderId,
+          reason: "Membership orders are not repaired by legacy credit grants.",
+        },
+        now: new Date("2026-05-19T11:11:00.000Z"),
+      });
+      const ledgerCount = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order' AND source_id = $1",
+        [membershipPaidOrderId],
+      );
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [membershipPaidOrderId],
+      );
+
+      assert.equal(listed.status, 200);
+      assert.deepEqual(listed.body.paymentIssues, []);
+      assert.equal(repaired.status, 404);
+      assert.deepEqual(repaired.body, { error: "payment_issue_not_found" });
+      assert.equal(ledgerCount.rows[0]?.count, 0);
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedOpsFixture(
@@ -1051,5 +1095,73 @@ async function seedPaymentOpsFixture(
       )
     `,
     [paymentRiskEventId, organizationId, adminUserId, paidOrderId, paymentIntentId],
+  );
+}
+
+async function seedMembershipPaymentOpsFixture(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        gift_credits,
+        seat_limit,
+        status
+      )
+      VALUES ($1, 'ops_membership', 'Ops Membership', 'professional', 'month', 1, 19900, 10, 5, 'active')
+    `,
+    [membershipPlanId],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        product_type,
+        membership_plan_id,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'ORD-OPS-MEMBERSHIP-1',
+        'membership_plan',
+        $4,
+        '{}'::jsonb,
+        '{"code":"ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb,
+        10,
+        19900,
+        'CNY',
+        'paid',
+        '2026-05-20T00:00:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        $5
+      )
+    `,
+    [
+      membershipPaidOrderId,
+      organizationId,
+      adminUserId,
+      membershipPlanId,
+      membershipPaymentIntentId,
+    ],
   );
 }

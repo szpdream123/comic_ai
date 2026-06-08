@@ -981,6 +981,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
         FROM billing_orders
         WHERE organization_id = $1
           AND id = $2
+          AND product_type = 'credit_package'
         FOR UPDATE
       `,
       [devOrganizationId, input.orderId],
@@ -1022,6 +1023,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
             updated_at = $4
         WHERE organization_id = $1
           AND id = $2
+          AND product_type = 'credit_package'
           AND credit_grant_ledger_entry_id IS NULL
       `,
       [order.organization_id, order.id, creditGrant.id, input.now],

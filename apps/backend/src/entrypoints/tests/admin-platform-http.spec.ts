@@ -3112,6 +3112,132 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("does not repair membership orders through documented legacy credit repair route", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const adminOpsUserId = "84000000-0000-4000-8000-000000000101";
+    const membershipPlanId = "87000000-0000-4000-8000-000000000101";
+    const membershipOrderId = "88000000-0000-4000-8000-000000000101";
+
+    await db.query(
+      `
+        INSERT INTO users (id, phone_e164, display_name, status)
+        VALUES ($1, '+8613999999101', '后台会员订单用户', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [adminOpsUserId],
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Ops Membership Org', 'active')
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          gift_credits,
+          seat_limit,
+          status
+        ) VALUES (
+          $1,
+          'admin_ops_membership',
+          'Admin Ops Membership',
+          'professional',
+          'month',
+          1,
+          19900,
+          10,
+          5,
+          'active'
+        )
+      `,
+      [membershipPlanId],
+    );
+    await db.query(
+      `
+        INSERT INTO billing_orders (
+          id,
+          organization_id,
+          created_by_user_id,
+          order_no,
+          product_type,
+          membership_plan_id,
+          package_snapshot_json,
+          product_snapshot_json,
+          credits,
+          amount_minor,
+          currency,
+          status,
+          expires_at,
+          paid_at,
+          successful_payment_intent_id
+        ) VALUES (
+          $1,
+          '10000000-0000-4000-8000-000000000001',
+          $2,
+          'ORD-ADMIN-OPS-MEMBERSHIP-1',
+          'membership_plan',
+          $3,
+          '{}'::jsonb,
+          '{"code":"admin_ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb,
+          10,
+          19900,
+          'CNY',
+          'paid',
+          '2026-06-05T00:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '89000000-0000-4000-8000-000000000101'
+        )
+      `,
+      [membershipOrderId, adminOpsUserId, membershipPlanId],
+    );
+
+    try {
+      const repairResponse = await fetch(
+        `${server.origin}/api/admin/ops/payments/${membershipOrderId}/repair-credit`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-platform-membership-payment-repair",
+            cookie,
+          },
+          body: JSON.stringify({ reason: "会员订单不能走旧积分补发" }),
+        },
+      );
+      const repairPayload = await repairResponse.json();
+
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [membershipOrderId],
+      );
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = '10000000-0000-4000-8000-000000000001'",
+      );
+      const ledgerCount = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order' AND source_id = $1",
+        [membershipOrderId],
+      );
+
+      assert.equal(repairResponse.status, 404);
+      assert.equal(repairPayload.error.code, "payment_issue_not_found");
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(ledgerCount.rows[0]?.count, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves dashboard overview metrics to logged-in admins", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);

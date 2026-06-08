@@ -1002,6 +1002,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                     updated_at = $4
                 WHERE organization_id = $1
                   AND id = $2
+                  AND product_type = 'credit_package'
                   AND status = 'paid'
                   AND credit_grant_ledger_entry_id IS NULL
                 RETURNING *
@@ -1342,6 +1343,7 @@ async function listPaymentIssuesForOps(
        AND cle.source_id = bo.id
        AND cle.entry_type = 'grant'
       WHERE bo.organization_id = $1
+        AND bo.product_type = 'credit_package'
         AND bo.status = 'paid'
         AND bo.credit_grant_ledger_entry_id IS NULL
         AND cle.id IS NULL
@@ -1384,6 +1386,7 @@ async function getBillingOrderForOps(
       FROM billing_orders
       WHERE organization_id = $1
         AND id = $2
+        AND product_type = 'credit_package'
       LIMIT 1
     `,
     [input.organizationId, input.orderId],
@@ -1410,6 +1413,7 @@ async function getPaymentIssueForOps(
       FROM billing_orders bo
       WHERE bo.organization_id = $1
         AND bo.id = $2
+        AND bo.product_type = 'credit_package'
       LIMIT 1
     `,
     [input.organizationId, input.orderId],

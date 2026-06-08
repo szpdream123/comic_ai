@@ -1,4 +1,5 @@
 export const capabilities = {
+  workspaceRead: "workspace:read",
   projectView: "project:view",
   projectCreate: "project:create",
   projectEdit: "project:edit",
@@ -8,6 +9,7 @@ export const capabilities = {
   exportCreate: "export:create",
   billingPurchase: "billing:purchase",
   billingRefund: "billing:refund",
+  adminAuthManage: "admin:auth",
   opsSettle: "ops:settle",
   teamMemberRead: "team:member:read",
   teamMemberManageAll: "team:member:manage_all",

@@ -129,6 +129,27 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
   }
 
+  if (
+    !(await tableExists(db, "membership_plans")) ||
+    !(await tableExists(db, "membership_plan_revisions")) ||
+    !(await tableExists(db, "organization_membership_subscriptions")) ||
+    !(await tableExists(db, "membership_periods")) ||
+    !(await tableExists(db, "credit_lots")) ||
+    !(await tableExists(db, "credit_reservation_lot_allocations")) ||
+    !(await tableExists(db, "membership_reminders")) ||
+    !(await columnExists(db, "billing_orders", "product_type")) ||
+    !(await constraintExists(db, "billing_orders", "billing_orders_credits_product_shape_check")) ||
+    !(await constraintExists(
+      db,
+      "organization_membership_subscriptions",
+      "organization_membership_subscriptions_latest_order_fk",
+    )) ||
+    !(await constraintExists(db, "membership_periods", "membership_periods_order_fk")) ||
+    !(await constraintExists(db, "credit_lots", "credit_lots_grant_ledger_entry_fk"))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0016_membership_subscription_payment.sql" });
+  }
+
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
   }

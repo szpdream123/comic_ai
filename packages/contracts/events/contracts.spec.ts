@@ -38,6 +38,26 @@ describe("event contracts", () => {
     assert.ok(paymentSucceeded.deduplicationKeys.includes("payment_intent_id"));
   });
 
+  it("declares membership period start contract", () => {
+    const membershipPeriodStarted = allEventContracts.find(
+      (event) => event.eventType === "membership.period.started",
+    );
+
+    assert.ok(membershipPeriodStarted);
+    assert.equal(membershipPeriodStarted.producer, "membership");
+    assert.deepEqual(membershipPeriodStarted.sourceIds, [
+      "membership_period_id",
+      "order_id",
+      "plan_id",
+      "gift_credits",
+      "period_end_at",
+    ]);
+    assert.deepEqual(membershipPeriodStarted.deduplicationKeys, [
+      "membership_period_id",
+      "order_id",
+    ]);
+  });
+
   it("has a contract for every exported P0 event type", () => {
     const contractedEventTypes = new Set(
       allEventContracts.map((event) => event.eventType),

@@ -7,6 +7,7 @@ export const eventTypes = {
   paymentSucceeded: "payment.succeeded",
   paymentRefundSucceeded: "payment.refund.succeeded",
   creditGrantCreated: "credit.grant.created",
+  membershipPeriodStarted: "membership.period.started",
   invoiceIssued: "invoice.issued",
   exportReady: "export.ready",
 } as const;
