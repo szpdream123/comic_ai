@@ -51,7 +51,6 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/exports/risks.csv",
     "/api/admin/audit-events",
     "/api/admin/exports/audit-events.csv",
-    "/api/admin/team-permission-accounts",
     "/api/admin/storyboard-prompt/packages",
     "/api/admin/image-prompt/styles",
     "/api/admin/secret-references",
@@ -76,11 +75,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "credits/ledger",
     "subaccounts",
     "contact/reveal",
-    "teamPermissionAccounts",
-    "loadTeamPermissionAccounts",
     "当前管理员资料",
     "openAdminProfileDrawer",
-    "团队权限账户摘要",
     "查看完整联系方式",
     "归档账户",
     "archived",
@@ -146,9 +142,25 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "确认保存密钥",
     "确认修改账户",
     "确认重置密码",
-    "工单号",
-    "requireWorkOrder",
+    "关联工单号（选填）",
+    "optionalWorkOrder",
     "metadata?.workOrderNo",
+    "adjustmentScenario",
+    "adjustmentScenarioOptions",
+    "compensation",
+    "recharge_bonus",
+    "default_grant",
+    "ledgerResult.summary",
+    "renderCreditSummary",
+    "balanceScope",
+    "userFilters",
+    "filteredUsers",
+    "refreshUserTable",
+    "bindUserFilterControls",
+    "userFilterStatusOptions",
+    "userFilterAccountTypeOptions",
+    "team.default_subaccount_limit",
+    "默认团队子账号上限",
     "确认归档账户",
     "归档账户",
   ]) {
@@ -156,6 +168,106 @@ test("admin shell wires final design actions to real admin APIs", () => {
   }
 
   new vm.Script(script);
+});
+
+test("admin user credit table uses a single edit entry for row actions", () => {
+  assert.match(script, /openUserActionDrawer/);
+  assert.match(script, /用户操作/);
+  assert.match(script, /查看账户/);
+  assert.match(script, /手动添加积分/);
+  assert.match(script, /手动扣减积分/);
+  assert.match(script, /调整到目标积分/);
+  assert.match(script, /openCreditGrantDrawer/);
+  assert.match(script, /openCreditDeductDrawer/);
+  assert.match(script, /openCreditSetBalanceDrawer/);
+  assert.match(script, /onclick="openUserActionDrawer\('\$\{user\.userId\}'\)"/);
+  assert.doesNotMatch(script, /<button class="icon-btn" title="查看账户" onclick="openUserDetailDrawer\('\$\{user\.userId\}'\)"/);
+});
+
+test("admin user credit secondary drawers return to the action menu", () => {
+  assert.match(script, /function userDrawerHead\(title, userId\)/);
+  assert.match(script, /onclick="openUserActionDrawer\('\$\{userId\}'\)">返回/);
+  for (const contract of [
+    /openUserDetailDrawer\(userId\)[\s\S]*userDrawerHead\("账户详情", userId\)/,
+    /openUserProfileDrawer\(userId\)[\s\S]*userDrawerHead\("修改资料", userId\)/,
+    /openCreditGrantDrawer\(userId\)[\s\S]*userDrawerHead\("手动添加积分", userId\)/,
+    /openCreditDeductDrawer\(userId\)[\s\S]*userDrawerHead\("手动扣减积分", userId\)/,
+    /openCreditSetBalanceDrawer\(userId\)[\s\S]*userDrawerHead\("调整到目标积分", userId\)/,
+    /openUserStatusDrawer\(userId, status\)[\s\S]*userDrawerHead\(`\$\{action\}账户`, userId\)/,
+  ]) {
+    assert.match(script, contract);
+  }
+});
+
+test("admin user credit exposes team limit configuration only for team users", () => {
+  assert.match(script, /function openTeamLimitDrawer\(userId\)/);
+  assert.match(script, /function renderTeamLimitDrawer/);
+  assert.match(script, /function isTeamUserAccount\(user\)/);
+  assert.match(script, /frontendAccountTypeKey\(user\) === "team_user"/);
+  assert.match(script, /api\(`\/api\/admin\/organizations\/\$\{encodeURIComponent\(organizationId\)\}\/team-plan-limit`\)/);
+  assert.match(script, /userActionAttrs\(user, "teamLimit", "user\.write"\)/);
+  assert.match(script, /restoreTeamLimitDefault/);
+  assert.match(script, /window\.openTeamLimitDrawer = openTeamLimitDrawer/);
+  assert.match(script, /window\.restoreTeamLimitDefault = restoreTeamLimitDefault/);
+});
+
+test("admin user credit search filters rows without rerendering the shell input", () => {
+  assert.match(script, /id="user-search-input"/);
+  assert.match(script, /id="user-table-body"/);
+  assert.match(script, /id="user-visible-count"/);
+  assert.match(script, /function refreshUserTable/);
+  assert.match(script, /function bindUserFilterControls/);
+  assert.match(script, /addEventListener\("input"/);
+  assert.match(script, /refreshUserTable\(\)/);
+  assert.doesNotMatch(script, /oninput="updateUserFilter/);
+  assert.doesNotMatch(script, /function updateUserFilter\(key, value\) \{[\s\S]*?renderShell\(\);[\s\S]*?\}/);
+});
+
+test("admin user credit account taxonomy only exposes normal and team users", () => {
+  assert.match(script, /"normal_user", "普通用户"/);
+  assert.match(script, /"team_user", "团队用户"/);
+  assert.match(script, /function frontendAccountTypeKey/);
+  assert.doesNotMatch(script, /<th>前端身份<\/th>/);
+  assert.doesNotMatch(script, /前端身份/);
+  assert.doesNotMatch(script, /个人创作者/);
+  assert.doesNotMatch(script, /团队成员账户/);
+});
+
+test("admin user credit refresh reloads the whole user credit page", () => {
+  assert.match(script, /function refreshUserCreditPage/);
+  assert.match(script, /await loadUsers\(\);\s*renderShell\(\);\s*showToast\("用户积分数据已刷新"\)/);
+  assert.match(script, /onclick="refreshUserCreditPage\(\)"/);
+  assert.doesNotMatch(script, /loadTeamPermissionAccounts/);
+  assert.doesNotMatch(script, /前端团队成员摘要/);
+});
+
+test("admin user credit work order is optional but still validated when present", () => {
+  assert.match(script, /关联工单号（选填）/);
+  assert.match(script, /function optionalWorkOrder/);
+  assert.match(script, /const workOrderNo = optionalWorkOrder\(form, error\)/);
+  assert.match(script, /if \(workOrderNo\) payload\.workOrderNo = workOrderNo/);
+  assert.doesNotMatch(script, /name="workOrderNo"[^>]*required/);
+  assert.doesNotMatch(script, /const workOrderNo = optionalWorkOrder\(form, error\);\s*if \(!workOrderNo\) return/);
+});
+
+test("admin archive account drawer explains the business impact", () => {
+  assert.match(script, /归档后该用户及成员关系会进入历史状态/);
+  assert.match(script, /不会删除积分流水和审计记录/);
+  assert.doesNotMatch(script, /\$\{user\?\.[^}]+userId\} 将变更为 \$\{status\}/);
+});
+
+test("admin user credit row locks disabled user actions except view and enable", () => {
+  assert.match(script, /function userStatusAllowsAction/);
+  assert.match(script, /action === "view"/);
+  assert.match(script, /action === "enable"/);
+  assert.match(script, /function userActionAttrs/);
+  assert.match(script, /function guardUserAction/);
+  assert.match(script, /userActionAttrs\(user, "credit", "credit\.adjust"\)/);
+  assert.match(script, /userActionAttrs\(user, "profile", "user\.write"\)/);
+  assert.match(script, /userActionAttrs\(user, "archive", "user\.write"\)/);
+  assert.match(script, /guardUserAction\(user, "credit"\)/);
+  assert.match(script, /guardUserAction\(user, "profile"\)/);
+  assert.match(script, /guardUserAction\(user, "archive"\)/);
 });
 
 test("admin shell disables sensitive actions from session permissions", () => {

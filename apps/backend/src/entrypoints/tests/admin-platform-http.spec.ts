@@ -1469,6 +1469,104 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets support admins configure a team's subaccount limit without granting finance write access", async () => {
+    const organizationId = "91000000-0000-4000-8000-000000000001";
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "support_admin",
+    });
+    await seedAdminUserListFixture(db);
+
+    try {
+      const defaultResponse = await fetch(
+        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        { headers: { cookie } },
+      );
+      const defaultPayload = await defaultResponse.json();
+
+      const updateResponse = await fetch(
+        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "support-admin-team-limit-120",
+            cookie,
+          },
+          body: JSON.stringify({ seatLimit: 120, reason: "enterprise support request" }),
+        },
+      );
+      const updatePayload = await updateResponse.json();
+
+      const restoreResponse = await fetch(
+        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "support-admin-team-limit-restore",
+            cookie,
+          },
+          body: JSON.stringify({ seatLimit: null, reason: "restore standard plan" }),
+        },
+      );
+      const restorePayload = await restoreResponse.json();
+
+      const auditEvents = await db.query<{ event_type: string }>(
+        `
+          SELECT event_type
+          FROM audit_events
+          WHERE event_type IN ('admin.team_plan_limit.updated', 'admin.team_plan_limit.cleared')
+          ORDER BY created_at ASC
+        `,
+      );
+
+      assert.equal(defaultResponse.status, 200);
+      assert.equal(defaultPayload.data.defaultSeatLimit, 50);
+      assert.equal(defaultPayload.data.effectiveSeatLimit, 50);
+      assert.equal(defaultPayload.data.usedSeats, 1);
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updatePayload.data.effectiveSeatLimit, 120);
+      assert.equal(updatePayload.data.limitSource, "override");
+      assert.equal(restoreResponse.status, 200);
+      assert.equal(restorePayload.data.effectiveSeatLimit, 50);
+      assert.equal(restorePayload.data.limitSource, "default");
+      assert.deepEqual(auditEvents.rows.map((row) => row.event_type), [
+        "admin.team_plan_limit.updated",
+        "admin.team_plan_limit.cleared",
+      ]);
+    } finally {
+      await server.close();
+    }
+
+    const financeDb = await createMigratedTestDb();
+    const { server: financeServer, cookie: financeCookie } = await createLoggedInAdminServer(financeDb, {
+      role: "finance_admin",
+    });
+    await seedAdminUserListFixture(financeDb);
+
+    try {
+      const forbiddenResponse = await fetch(
+        `${financeServer.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "finance-admin-team-limit-write",
+            cookie: financeCookie,
+          },
+          body: JSON.stringify({ seatLimit: 200, reason: "finance admin should not configure seats" }),
+        },
+      );
+      const forbiddenPayload = await forbiddenResponse.json();
+
+      assert.equal(forbiddenResponse.status, 403);
+      assert.equal(forbiddenPayload.error.code, "admin_forbidden");
+    } finally {
+      await financeServer.close();
+    }
+  });
+
   it("reveals full user contact only to authorized admins and writes audit records", async () => {
     const db = await createMigratedTestDb();
     const { server: supportServer, cookie: supportCookie } = await createLoggedInAdminServer(db, {
@@ -1574,7 +1672,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             "content-type": "application/json",
             cookie,
           },
-          body: JSON.stringify({ amount: 100, reason: "客服补偿", workOrderNo: "CS-20260605-001" }),
+          body: JSON.stringify({
+            amount: 100,
+            reason: "客服补偿",
+            adjustmentScenario: "compensation",
+          }),
         },
       );
       const missingIdempotencyPayload = await missingIdempotency.json();
@@ -1588,7 +1690,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             "idempotency-key": "admin-credit-grant-owner-100",
             cookie,
           },
-          body: JSON.stringify({ amount: 100, reason: "客服补偿", workOrderNo: "CS-20260605-001" }),
+          body: JSON.stringify({
+            amount: 100,
+            reason: "客服补偿",
+            adjustmentScenario: "compensation",
+          }),
         },
       );
       const grantPayload = await grantResponse.json();
@@ -1601,7 +1707,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             "idempotency-key": "admin-credit-grant-owner-100",
             cookie,
           },
-          body: JSON.stringify({ amount: 100, reason: "客服补偿", workOrderNo: "CS-20260605-001" }),
+          body: JSON.stringify({ amount: 100, reason: "客服补偿" }),
         },
       );
       const replayPayload = await replayResponse.json();
@@ -1612,9 +1718,18 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const ownerAfter = usersAfterPayload.data.find(
         (user: { userId: string }) => user.userId === owner.userId,
       );
-      const ledger = await db.query<{ amount: number | string; reason: string; work_order_no: string | null }>(
+      const ledger = await db.query<{
+        amount: number | string;
+        reason: string;
+        work_order_no: string | null;
+        adjustment_scenario: string | null;
+      }>(
         `
-          SELECT amount, reason, metadata_json->>'workOrderNo' AS work_order_no
+          SELECT
+            amount,
+            reason,
+            metadata_json->>'workOrderNo' AS work_order_no,
+            metadata_json->>'adjustmentScenario' AS adjustment_scenario
           FROM credit_ledger_entries
           WHERE source_type = 'admin_manual_grant'
         `,
@@ -1637,12 +1752,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(ownerAfter.availableCredits, 8520);
       assert.deepEqual(ledger.rows.map((row) => Number(row.amount)), [100]);
       assert.deepEqual(ledger.rows.map((row) => row.reason), ["客服补偿"]);
-      assert.deepEqual(ledger.rows.map((row) => row.work_order_no), ["CS-20260605-001"]);
+      assert.deepEqual(ledger.rows.map((row) => row.work_order_no), [null]);
+      assert.deepEqual(ledger.rows.map((row) => row.adjustment_scenario), ["compensation"]);
       assert.deepEqual(audit.rows, [
         {
           event_type: "admin.credit.granted",
           reason: "客服补偿",
-          work_order_no: "CS-20260605-001",
+          work_order_no: null,
         },
       ]);
     } finally {
@@ -1679,20 +1795,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const profilePayload = await profileResponse.json();
 
-      const statusResponse = await fetch(`${server.origin}/api/admin/users/${owner.userId}/status`, {
-        method: "PATCH",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "admin-user-disable-owner",
-          cookie,
-        },
-        body: JSON.stringify({
-          status: "disabled",
-          reason: "风险处理临时禁用",
-        }),
-      });
-      const statusPayload = await statusResponse.json();
-
       const deductResponse = await fetch(`${server.origin}/api/admin/users/${owner.userId}/credits/deduct`, {
         method: "POST",
         headers: {
@@ -1703,7 +1805,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           amount: 70,
           reason: "异常赠送扣回",
-          workOrderNo: "FIN-20260605-088",
         }),
       });
       const deductPayload = await deductResponse.json();
@@ -1717,7 +1818,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           amount: 70,
           reason: "异常赠送扣回",
-          workOrderNo: "FIN-20260605-088",
         }),
       });
       const replayDeductPayload = await replayDeductResponse.json();
@@ -1726,6 +1826,19 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         headers: { cookie },
       });
       const ledgerPayload = await ledgerResponse.json();
+      const statusResponse = await fetch(`${server.origin}/api/admin/users/${owner.userId}/status`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-user-disable-owner",
+          cookie,
+        },
+        body: JSON.stringify({
+          status: "disabled",
+          reason: "风险处理临时禁用",
+        }),
+      });
+      const statusPayload = await statusResponse.json();
       const usersAfterResponse = await fetch(`${server.origin}/api/admin/users`, {
         headers: { cookie },
       });
@@ -1771,12 +1884,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             entry.sourceType === "admin_manual_deduct" && entry.amount === 70,
         ),
       );
-      assert.deepEqual(creditLedger.rows, [{ reason: "异常赠送扣回", work_order_no: "FIN-20260605-088" }]);
+      assert.deepEqual(creditLedger.rows, [{ reason: "异常赠送扣回", work_order_no: null }]);
       assert.equal(ownerAfter.displayName, "白夜工作室 Pro");
       assert.equal(ownerAfter.status, "disabled");
       assert.equal(ownerAfter.availableCredits, 8350);
       assert.deepEqual(audit.rows, [
-        { event_type: "admin.credit.deducted", reason: "异常赠送扣回", work_order_no: "FIN-20260605-088" },
+        { event_type: "admin.credit.deducted", reason: "异常赠送扣回", work_order_no: null },
         { event_type: "admin.user.profile_updated", reason: "客服协助修改资料", work_order_no: null },
         { event_type: "admin.user.status_changed", reason: "风险处理临时禁用", work_order_no: null },
       ]);
@@ -1961,6 +2074,19 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(updateSettingResponse.status, 200);
       assert.equal(updateSettingPayload.data.key, "site.registration_enabled");
       assert.equal(updateSettingPayload.data.value, true);
+      assert.deepEqual(
+        settingsPayload.data.configs.find(
+          (config: { key: string }) => config.key === "team.default_subaccount_limit",
+        ),
+        {
+          key: "team.default_subaccount_limit",
+          value: 50,
+          valueType: "number",
+          scope: "creator",
+          description: "默认团队子账号上限",
+          updatedAt: null,
+        },
+      );
       assert.equal(secretResponse.status, 200);
       assert.equal(secretPayload.data.envName, "OPENAI_API_KEY");
       assert.equal(secretPayload.data.status, "unknown");
@@ -2498,9 +2624,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         ), (
           '83000000-0000-4000-8000-000000000002',
           '10000000-0000-4000-8000-000000000001',
-          'duplicate_payment',
+          'duplicate_trade',
           'warning',
-          'approve',
+          'allow',
           'reviewed',
           '{"provider":"paylab","orderNo":"PAY-1002"}'::jsonb,
           '2026-06-04T10:00:00.000Z',

@@ -5956,6 +5956,7 @@ describe("phone auth dev server", () => {
       assert.equal("password_hash" in created, false);
       assert.equal(overviewResponse.status, 200);
       assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.seats.limit, 50);
       assert.equal(overview.seats.used, 1);
       assert.equal(membersResponse.status, 200);
       assert.equal(members.members.length, 1);

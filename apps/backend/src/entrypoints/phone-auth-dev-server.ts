@@ -6414,22 +6414,6 @@ async function ensureDevWorkspaceAccess(
       `,
       [randomUUID(), devOrganizationId, randomUUID(), randomUUID()],
     );
-    await db.query(
-      `
-        INSERT INTO team_plan_limits (
-          id,
-          organization_id,
-          seat_limit,
-          single_account_concurrency_limit
-        )
-        VALUES ($1, $2, 5, 1)
-        ON CONFLICT (organization_id)
-        DO UPDATE SET
-          seat_limit = EXCLUDED.seat_limit,
-          single_account_concurrency_limit = EXCLUDED.single_account_concurrency_limit
-      `,
-      [randomUUID(), devOrganizationId],
-    );
   }
 }
 
@@ -7748,6 +7732,57 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      const adminOrganizationTeamPlanLimitMatch = pathname.match(/^\/api\/admin\/organizations\/([^/]+)\/team-plan-limit$/);
+      if (request.method === "GET" && adminOrganizationTeamPlanLimitMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.getTeamPlanLimit({
+            organizationId: decodeURIComponent(adminOrganizationTeamPlanLimitMatch[1]),
+          }),
+        );
+      }
+
+      if (request.method === "PATCH" && adminOrganizationTeamPlanLimitMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.userWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          seatLimit?: number | null;
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.updateTeamPlanLimit({
+            organizationId: decodeURIComponent(adminOrganizationTeamPlanLimitMatch[1]),
+            seatLimit: body.seatLimit === null ? null : Number(body.seatLimit),
+            reason: String(body.reason ?? ""),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminUserSubaccountsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/subaccounts$/);
       if (request.method === "GET" && adminUserSubaccountsMatch) {
         const adminRoute = await requireAdminRouteSession({
@@ -7785,6 +7820,7 @@ export function createPhoneAuthDevServer(
           amount?: number;
           reason?: string;
           workOrderNo?: string;
+          adjustmentScenario?: string;
         };
         const adminUsers = createAdminUserService({ db });
         return writeJson(
@@ -7794,6 +7830,7 @@ export function createPhoneAuthDevServer(
             amount: Number(body.amount ?? 0),
             reason: String(body.reason ?? ""),
             workOrderNo: String(body.workOrderNo ?? ""),
+            adjustmentScenario: String(body.adjustmentScenario ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
             auditOrganizationId: devOrganizationId,
@@ -7919,6 +7956,7 @@ export function createPhoneAuthDevServer(
           amount?: number;
           reason?: string;
           workOrderNo?: string;
+          adjustmentScenario?: string;
         };
         const adminUsers = createAdminUserService({ db });
         return writeJson(
@@ -7928,6 +7966,7 @@ export function createPhoneAuthDevServer(
             amount: Number(body.amount ?? 0),
             reason: String(body.reason ?? ""),
             workOrderNo: String(body.workOrderNo ?? ""),
+            adjustmentScenario: String(body.adjustmentScenario ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
             auditOrganizationId: devOrganizationId,

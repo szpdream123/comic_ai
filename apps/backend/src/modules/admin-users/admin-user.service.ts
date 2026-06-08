@@ -9,6 +9,9 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
+const TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY = "team.default_subaccount_limit";
+const DEFAULT_TEAM_SUBACCOUNT_LIMIT = 50;
+
 export interface AdminUserListItem {
   userId: string;
   displayName: string;
@@ -28,6 +31,17 @@ export interface AdminUserListItem {
   reservedCredits: number;
   usedCredits: number;
   subaccountCount: number;
+}
+
+export interface AdminTeamPlanLimitSummary {
+  organizationId: string;
+  organizationName: string;
+  defaultSeatLimit: number;
+  effectiveSeatLimit: number;
+  overrideSeatLimit: number | null;
+  limitSource: "default" | "override";
+  usedSeats: number;
+  remainingSeats: number;
 }
 
 interface AdminUserRow {
@@ -306,6 +320,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     amount: number;
     reason: string;
     workOrderNo?: string;
+    adjustmentScenario?: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
     auditOrganizationId: string;
@@ -327,8 +342,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         body: { error: { code: "reason_required", message: "请填写操作原因" } },
       };
     }
-    const workOrderNo = normalizeWorkOrderNo(input.workOrderNo);
-    if (!workOrderNo) {
+    const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
+    const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
+    if (rawWorkOrderNo && !workOrderNo) {
       return {
         status: 400,
         body: { error: { code: "invalid_work_order_no", message: "请填写有效工单号，例如 CS-20260605-001" } },
@@ -343,6 +359,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       };
     }
 
+    if (!isActiveUserStatus(target.status)) {
+      return inactiveUserOperationError(target.status);
+    }
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     const existingLedger = await queryOne<{ id: string }>(
       deps.db,
@@ -369,6 +388,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         targetMembershipId: target.membershipId,
         actorAdminAccountId: input.actorAdminAccountId,
         workOrderNo,
+        adjustmentScenario: normalizeAdjustmentScenario(input.adjustmentScenario),
       },
       createdByUserId: null,
       now: input.now,
@@ -426,6 +446,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           amount,
           ledgerEntryId: ledger.id,
           workOrderNo,
+          adjustmentScenario: normalizeAdjustmentScenario(input.adjustmentScenario),
           targetOrganizationId: target.organizationId,
           targetMembershipId: target.membershipId,
           actorAdminAccountId: input.actorAdminAccountId,
@@ -482,12 +503,13 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
   }) {
     const reason = input.reason.trim();
     if (!reason) return error(400, "reason_required", "请填写操作原因");
-    const existing = await queryOne<{ id: string; display_name: string | null; email: string | null }>(
+    const existing = await queryOne<{ id: string; display_name: string | null; email: string | null; status: string }>(
       deps.db,
-      "SELECT id, display_name, email FROM users WHERE id = $1",
+      "SELECT id, display_name, email, status FROM users WHERE id = $1",
       [input.userId],
     );
     if (!existing) return error(404, "admin_user_not_found", "用户不存在");
+    if (!isActiveUserStatus(existing.status)) return inactiveUserOperationError(existing.status);
     const displayName = input.displayName?.trim() || existing.display_name || null;
     const email = input.email === undefined ? existing.email : input.email?.trim() || null;
     const row = await queryOne<{ id: string; display_name: string | null; email: string | null; status: string }>(
@@ -543,11 +565,13 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       id: string;
       phone_e164: string | null;
       email: string | null;
+      status: string;
     }>(
       deps.db,
-      "SELECT id, phone_e164, email FROM users WHERE id = $1",
+      "SELECT id, phone_e164, email, status FROM users WHERE id = $1",
       [input.userId],
     );
+    if (user && !isActiveUserStatus(user.status)) return inactiveUserOperationError(user.status);
     if (!user) return error(404, "admin_user_not_found", "鐢ㄦ埛涓嶅瓨鍦?");
 
     await appendAuditEvent(deps.db, {
@@ -602,6 +626,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       [input.userId],
     );
     if (!existing) return error(404, "admin_user_not_found", "用户不存在");
+    if (!canTransitionUserStatus(existing.status, input.status)) return inactiveUserOperationError(existing.status);
     const row = await queryOne<{ id: string; status: string }>(
       deps.db,
       "UPDATE users SET status = $2, updated_at = $3 WHERE id = $1 RETURNING id, status",
@@ -634,6 +659,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     amount: number;
     reason: string;
     workOrderNo?: string;
+    adjustmentScenario?: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
     auditOrganizationId: string;
@@ -646,11 +672,13 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     }
     const reason = input.reason.trim();
     if (!reason) return error(400, "reason_required", "请填写操作原因");
-    const workOrderNo = normalizeWorkOrderNo(input.workOrderNo);
-    if (!workOrderNo) return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
+    const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
+    const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
+    if (rawWorkOrderNo && !workOrderNo) return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
     const target = await findUserCreditTarget(deps.db, input.userId);
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
     const existingLedger = await queryOne<LedgerRow>(
       deps.db,
       `
@@ -679,6 +707,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           targetMembershipId: target.membershipId,
           actorAdminAccountId: input.actorAdminAccountId,
           workOrderNo,
+          adjustmentScenario: normalizeAdjustmentScenario(input.adjustmentScenario),
         },
         createdByUserId: null,
         now: input.now,
@@ -693,6 +722,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           targetMembershipId: target.membershipId,
           actorAdminAccountId: input.actorAdminAccountId,
           workOrderNo,
+          adjustmentScenario: normalizeAdjustmentScenario(input.adjustmentScenario),
         },
         now: input.now,
       });
@@ -720,6 +750,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           amount,
           ledgerEntryId: settlement.ledgerEntry?.id ?? ledger!.id,
           workOrderNo,
+          adjustmentScenario: normalizeAdjustmentScenario(input.adjustmentScenario),
           targetOrganizationId: target.organizationId,
           targetMembershipId: target.membershipId,
           actorAdminAccountId: input.actorAdminAccountId,
@@ -756,21 +787,102 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const target = await findUserCreditTarget(deps.db, input.userId);
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
+    const ledgerScope = ledgerScopeForTarget(target);
     const result = await deps.db.query<LedgerRow>(
       `
         SELECT *
         FROM credit_ledger_entries
         WHERE organization_id = $1
-          AND (
-            metadata_json->>'targetUserId' = $2
-            OR source_type IN ('payment_order', 'admin_manual_grant', 'admin_manual_deduct')
-          )
+          AND ${ledgerScope.sql}
         ORDER BY created_at DESC, id ASC
-        LIMIT $3
+        LIMIT $4
       `,
-      [target.organizationId, input.userId, pageSize],
+      [target.organizationId, ...ledgerScope.params, pageSize],
     );
-    return { data: result.rows.map(ledgerFromRow), meta: { total: result.rows.length } };
+    const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
+    return {
+      data: result.rows.map(ledgerFromRow),
+      summary,
+      meta: { total: result.rows.length },
+    };
+  }
+
+  async function getTeamPlanLimit(input: { organizationId: string }) {
+    const summary = await buildTeamPlanLimitSummary(deps.db, input.organizationId);
+    if (!summary) {
+      return error(404, "admin_organization_not_found", "团队不存在");
+    }
+    return { status: 200, body: { data: summary } };
+  }
+
+  async function updateTeamPlanLimit(input: {
+    organizationId: string;
+    seatLimit: number | null;
+    reason: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const reason = input.reason.trim();
+    if (!reason) return error(400, "reason_required", "请填写操作原因");
+
+    const before = await buildTeamPlanLimitSummary(deps.db, input.organizationId);
+    if (!before) {
+      return error(404, "admin_organization_not_found", "团队不存在");
+    }
+
+    const isClearingOverride = input.seatLimit === null;
+    if (isClearingOverride) {
+      await deps.db.query("DELETE FROM team_plan_limits WHERE organization_id = $1", [input.organizationId]);
+    } else {
+      const seatLimit = Number(input.seatLimit);
+      if (!Number.isInteger(seatLimit) || seatLimit < 0) {
+        return error(400, "invalid_team_seat_limit", "子账号上限必须是大于等于 0 的整数");
+      }
+      await deps.db.query(
+        `
+          INSERT INTO team_plan_limits (
+            id,
+            organization_id,
+            seat_limit,
+            single_account_concurrency_limit,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, 1, $4, $4)
+          ON CONFLICT (organization_id)
+          DO UPDATE SET
+            seat_limit = EXCLUDED.seat_limit,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          uuidFromIdempotencyKey(`team-plan-limit:${input.organizationId}`),
+          input.organizationId,
+          seatLimit,
+          input.now,
+        ],
+      );
+    }
+
+    const after = (await buildTeamPlanLimitSummary(deps.db, input.organizationId))!;
+    await appendAuditEvent(deps.db, {
+      organizationId: input.auditOrganizationId,
+      workspaceId: input.auditWorkspaceId,
+      actorUserId: null,
+      eventType: isClearingOverride ? "admin.team_plan_limit.cleared" : "admin.team_plan_limit.updated",
+      targetType: "organization",
+      targetId: input.organizationId,
+      reason,
+      sensitive: false,
+      metadata: {
+        actorAdminAccountId: input.actorAdminAccountId,
+        before,
+        after,
+      },
+    });
+
+    return { status: 200, body: { data: after } };
   }
 
   return {
@@ -783,16 +895,34 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     updateUserStatus,
     deductUserCredits,
     listUserCreditLedger,
+    getTeamPlanLimit,
+    updateTeamPlanLimit,
   };
 }
 
 interface UserCreditTargetRow {
   user_id: string;
+  user_status: string;
   organization_id: string;
   workspace_id: string | null;
   membership_id: string;
   team_profile_id: string | null;
   created_by_user_id: string | null;
+}
+
+interface UserCreditTarget {
+  userId: string;
+  status: string;
+  organizationId: string;
+  workspaceId: string | null;
+  membershipId: string;
+  teamProfileId: string | null;
+  createdByUserId: string | null;
+}
+
+interface LedgerScope {
+  sql: string;
+  params: string[];
 }
 
 interface LedgerRow {
@@ -810,12 +940,95 @@ interface LedgerRow {
   created_at: Date | string;
 }
 
-async function findUserCreditTarget(db: SqlDatabase, userId: string) {
+async function buildTeamPlanLimitSummary(
+  db: SqlDatabase,
+  organizationId: string,
+): Promise<AdminTeamPlanLimitSummary | null> {
+  const organization = await queryOne<{
+    id: string;
+    name: string;
+  }>(
+    db,
+    `
+      SELECT id, name
+      FROM organizations
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [organizationId],
+  );
+  if (!organization) return null;
+
+  const defaultSeatLimit = await resolveAdminDefaultSubaccountLimit(db);
+  const override = await queryOne<{ seat_limit: number | string }>(
+    db,
+    `
+      SELECT seat_limit
+      FROM team_plan_limits
+      WHERE organization_id = $1
+      LIMIT 1
+    `,
+    [organizationId],
+  );
+  const usedSeats = await countOrganizationActiveSubaccounts(db, organizationId);
+  const overrideSeatLimit = override ? Number(override.seat_limit) : null;
+  const effectiveSeatLimit = overrideSeatLimit ?? defaultSeatLimit;
+
+  return {
+    organizationId: organization.id,
+    organizationName: organization.name,
+    defaultSeatLimit,
+    effectiveSeatLimit,
+    overrideSeatLimit,
+    limitSource: override ? "override" : "default",
+    usedSeats,
+    remainingSeats: Math.max(0, effectiveSeatLimit - usedSeats),
+  };
+}
+
+async function resolveAdminDefaultSubaccountLimit(db: SqlDatabase) {
+  const config = await queryOne<{ value_json: unknown }>(
+    db,
+    `
+      SELECT value_json
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY],
+  );
+  return normalizeAdminSubaccountLimit(config?.value_json);
+}
+
+function normalizeAdminSubaccountLimit(value: unknown) {
+  const limit = value === null || value === undefined ? DEFAULT_TEAM_SUBACCOUNT_LIMIT : Number(value);
+  if (!Number.isInteger(limit) || limit < 0) return DEFAULT_TEAM_SUBACCOUNT_LIMIT;
+  return limit;
+}
+
+async function countOrganizationActiveSubaccounts(db: SqlDatabase, organizationId: string) {
+  const result = await queryOne<{ count: string | number }>(
+    db,
+    `
+      SELECT COUNT(*) AS count
+      FROM memberships
+      WHERE organization_id = $1
+        AND role = 'sub_account'
+        AND status = 'active'
+    `,
+    [organizationId],
+  );
+
+  return Number(result?.count ?? 0);
+}
+
+async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<UserCreditTarget | undefined> {
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
       SELECT
         u.id AS user_id,
+        u.status AS user_status,
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
@@ -839,11 +1052,116 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string) {
 
   return {
     userId: row.user_id,
+    status: row.user_status,
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
     teamProfileId: row.team_profile_id,
     createdByUserId: row.created_by_user_id,
+  };
+}
+
+function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
+  const targetFilter = "(metadata_json->>'targetUserId' = $2 OR metadata_json->>'targetMembershipId' = $3)";
+  if (target.teamProfileId) {
+    return {
+      sql: targetFilter,
+      params: [target.userId, target.membershipId],
+    };
+  }
+  return {
+    sql: `(${targetFilter} OR source_type = 'payment_order')`,
+    params: [target.userId, target.membershipId],
+  };
+}
+
+async function buildUserCreditSummary(
+  db: SqlDatabase,
+  target: UserCreditTarget,
+  ledgerScope: LedgerScope,
+) {
+  const organization = await queryOne<{
+    credit_balance_cached: number | string;
+    credit_reserved_cached: number | string;
+  }>(
+    db,
+    `
+      SELECT credit_balance_cached, credit_reserved_cached
+      FROM organizations
+      WHERE id = $1
+    `,
+    [target.organizationId],
+  );
+  const member = target.teamProfileId
+    ? await queryOne<{
+        credit_balance_cached: number | string;
+        credit_used_cached: number | string;
+      }>(
+        db,
+        `
+          SELECT credit_balance_cached, credit_used_cached
+          FROM team_member_profiles
+          WHERE id = $1
+        `,
+        [target.teamProfileId],
+      )
+    : null;
+  const totals = await queryOne<{
+    total_granted: number | string;
+    total_consumed: number | string;
+    total_released: number | string;
+  }>(
+    db,
+    `
+      SELECT
+        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'grant'), 0) AS total_granted,
+        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'consume'), 0) AS total_consumed,
+        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'release'), 0) AS total_released
+      FROM credit_ledger_entries
+      WHERE organization_id = $1
+        AND ${ledgerScope.sql}
+    `,
+    [target.organizationId, ...ledgerScope.params],
+  );
+  const reservations = await queryOne<{
+    active_count: number | string;
+    manual_review_count: number | string;
+    active_reserved: number | string;
+  }>(
+    db,
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'active') AS active_count,
+        COUNT(*) FILTER (WHERE status = 'manual_review_required') AS manual_review_count,
+        COALESCE(SUM(amount_reserved) FILTER (WHERE status = 'active'), 0) AS active_reserved
+      FROM credit_reservations
+      WHERE organization_id = $1
+        AND (
+          metadata_json->>'targetUserId' = $2
+          OR metadata_json->>'targetMembershipId' = $3
+        )
+    `,
+    [target.organizationId, target.userId, target.membershipId],
+  );
+
+  const organizationAvailable = Number(organization?.credit_balance_cached ?? 0);
+  const organizationReserved = Number(organization?.credit_reserved_cached ?? 0);
+  const memberAvailable = member ? Number(member.credit_balance_cached ?? 0) : null;
+  const memberUsed = member ? Number(member.credit_used_cached ?? 0) : null;
+  const targetReserved = Number(reservations?.active_reserved ?? 0);
+  return {
+    balanceScope: target.teamProfileId ? "member" : "organization",
+    organizationAvailableCredits: organizationAvailable,
+    organizationReservedCredits: organizationReserved,
+    memberAvailableCredits: memberAvailable,
+    memberUsedCredits: memberUsed,
+    displayAvailableCredits: memberAvailable ?? organizationAvailable,
+    displayReservedCredits: target.teamProfileId ? targetReserved : organizationReserved,
+    totalGrantedCredits: Number(totals?.total_granted ?? 0),
+    totalConsumedCredits: Number(totals?.total_consumed ?? 0),
+    totalReleasedCredits: Number(totals?.total_released ?? 0),
+    activeReservationCount: Number(reservations?.active_count ?? 0),
+    manualReviewReservationCount: Number(reservations?.manual_review_count ?? 0),
   };
 }
 
@@ -945,6 +1263,44 @@ function normalizeWorkOrderNo(value: string | undefined): string {
   const workOrderNo = String(value ?? "").trim().toUpperCase();
   if (!/^[A-Z]{2,8}-\d{8}-\d{3,8}$/.test(workOrderNo)) return "";
   return workOrderNo;
+}
+
+function normalizeAdjustmentScenario(value: string | undefined): string {
+  const scenario = String(value ?? "").trim();
+  if (
+    [
+      "manual_adjustment",
+      "compensation",
+      "recharge_bonus",
+      "default_grant",
+      "correction",
+      "promotion",
+    ].includes(scenario)
+  ) {
+    return scenario;
+  }
+  return "manual_adjustment";
+}
+
+function isActiveUserStatus(status: string | null | undefined): boolean {
+  return status === "active";
+}
+
+function canTransitionUserStatus(currentStatus: string, nextStatus: string): boolean {
+  if (currentStatus === "active") {
+    return nextStatus === "disabled" || nextStatus === "archived";
+  }
+  if (currentStatus === "disabled") {
+    return nextStatus === "active";
+  }
+  return false;
+}
+
+function inactiveUserOperationError(status: string | null | undefined) {
+  const message = status === "archived"
+    ? "账户已归档，仅允许查看历史记录"
+    : "账户未启用，仅允许查看或启用后再操作";
+  return error(409, "inactive_user_operation_blocked", message);
 }
 
 function error(status: number, code: string, message: string) {

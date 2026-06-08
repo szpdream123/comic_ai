@@ -187,12 +187,12 @@ function resolveCreateMemberState(overview) {
     return {
       canCreate: false,
       reason: "seat_limit",
-      action: "open-pricing",
-      message: "团队席位已满，扩容后才能继续创建成员账号。",
+      action: "show-library-placeholder",
+      message: "子账号数量已达上限，请联系客服调整团队子账号额度。",
       badgeLabel: "席位已满",
-      buttonLabel: "扩容席位",
-      secondaryLabel: "扩容席位",
-      statusText: "团队席位已满",
+      buttonLabel: "联系客服",
+      secondaryLabel: "联系客服",
+      statusText: "团队子账号已达上限",
     };
   }
 
@@ -561,10 +561,10 @@ function renderTeamGate(createState) {
       <section class="library-team-upgrade-gate" aria-label="团队席位已满">
         <div>
           <p class="library-team-kicker">团队额度</p>
-          <h2>团队席位已用完</h2>
-          <p>当前专业版席位已满，扩容后才能继续创建成员账号。</p>
+          <h2>团队子账号已达上限</h2>
+          <p>当前团队子账号数量已达后台配置上限，请联系客服调整额度后继续创建。</p>
         </div>
-        <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">扩容席位</button>
+        <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>联系客服</button>
       </section>
     `;
   }

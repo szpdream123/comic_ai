@@ -12,6 +12,9 @@ import {
   type TeamBusinessRole,
 } from "./team-roles.ts";
 
+const DEFAULT_TEAM_SUBACCOUNT_LIMIT = 50;
+const TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY = "team.default_subaccount_limit";
+
 export type TeamServiceErrorCode =
   | "team_member_management_required"
   | "team_seat_limit_reached"
@@ -576,11 +579,34 @@ async function resolvePlanLimits(db: SqlDatabase, organizationId: string) {
     `,
     [organizationId],
   );
+  const defaultSeatLimit = await resolveDefaultSubaccountLimit(db);
 
   return {
-    seatLimit: limits?.seat_limit ?? 5,
+    seatLimit: limits?.seat_limit ?? defaultSeatLimit,
     singleAccountConcurrencyLimit: limits?.single_account_concurrency_limit ?? 1,
   };
+}
+
+async function resolveDefaultSubaccountLimit(db: SqlDatabase) {
+  const config = await queryOne<{ value_json: unknown }>(
+    db,
+    `
+      SELECT value_json
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY],
+  );
+  return normalizeSubaccountLimit(config?.value_json);
+}
+
+function normalizeSubaccountLimit(value: unknown) {
+  const limit = value === null || value === undefined
+    ? DEFAULT_TEAM_SUBACCOUNT_LIMIT
+    : Number(value);
+  if (!Number.isInteger(limit) || limit < 0) return DEFAULT_TEAM_SUBACCOUNT_LIMIT;
+  return limit;
 }
 
 async function countActiveSubaccounts(db: SqlDatabase, actor: ActorContext) {

@@ -255,7 +255,7 @@
       .table-wrap.compact table { min-width: 760px; font-size: 12px; }
       .table-wrap.dense table { min-width: 900px; font-size: 12px; }
       .table-wrap.models table { min-width: 1040px; }
-      .table-wrap.users table { min-width: 980px; }
+      .table-wrap.users table { min-width: 900px; }
       .table-wrap.settings table { min-width: 820px; }
       th, td {
         padding: 11px 12px;
@@ -287,7 +287,7 @@
       .table-wrap.dense td.actions,
       .table-wrap.dense th.actions { width: 132px; min-width: 132px; max-width: 132px; }
       .table-wrap.users td.actions,
-      .table-wrap.users th.actions { width: 184px; min-width: 184px; max-width: 184px; }
+      .table-wrap.users th.actions { width: 96px; min-width: 96px; max-width: 96px; }
       .tag {
         display: inline-flex;
         align-items: center;
@@ -316,6 +316,18 @@
         height: 28px;
         font-size: 12px;
       }
+      .table-wrap.users .user-edit-btn {
+        min-width: 58px;
+        padding-inline: 12px;
+      }
+      .user-action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .user-action-grid .btn { min-height: 38px; }
+      .user-action-grid .btn.full-row { grid-column: 1 / -1; }
       .btn:disabled,
       .icon-btn:disabled {
         cursor: not-allowed;
@@ -472,8 +484,11 @@
         padding: 20px;
         box-shadow: -20px 0 50px rgba(15, 23, 42, .18);
       }
-      .drawer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+      .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
       .drawer-head h3 { margin: 0; }
+      .drawer-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .drawer-title-group h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .drawer-back-btn { min-height: 30px; padding: 5px 10px; }
       .deerflow-signature {
         position: fixed;
         right: 14px;
@@ -590,9 +605,8 @@
         selectedModelId: null,
         modelLoadError: "",
         users: [],
-        teamPermissionAccounts: [],
+        userFilters: { keyword: "", status: "all", accountType: "all" },
         userLoadError: "",
-        teamPermissionLoadError: "",
         promptManagementMode: "script",
         scriptPromptPackageType: "genre",
         scriptPromptKeyword: "",
@@ -639,6 +653,17 @@
         forbiddenPages: {},
       };
 
+      const runtimeConfigHints = [
+        {
+          key: "team.default_subaccount_limit",
+          value: 50,
+          valueType: "number",
+          scope: "creator",
+          description: "默认团队子账号上限",
+          updatedAt: null,
+        },
+      ];
+
       const app = document.getElementById("admin-app");
 
       function routeFromPath() {
@@ -674,6 +699,38 @@
           return `data-required-permission="${permission}"`;
         }
         return `data-required-permission="${permission}" disabled aria-disabled="true" title="无权限执行该操作"`;
+      }
+
+      function userStatusAllowsAction(user, action) {
+        const status = user?.status || "active";
+        if (action === "view") return true;
+        if (status === "active") {
+          return ["credit", "profile", "reveal", "disable", "archive", "teamLimit"].includes(action);
+        }
+        if (status === "disabled") {
+          return action === "enable";
+        }
+        return false;
+      }
+
+      function userStatusBlockedTitle(user) {
+        return user?.status === "archived"
+          ? "账户已归档，仅允许查看历史记录"
+          : "账户禁用期间仅允许查看或启用";
+      }
+
+      function userActionAttrs(user, action, permission) {
+        const requiredPermission = permission ? `data-required-permission="${permission}"` : "";
+        if (!userStatusAllowsAction(user, action)) {
+          return `${requiredPermission} disabled aria-disabled="true" title="${userStatusBlockedTitle(user)}"`;
+        }
+        return permission ? permissionAttrs(permission) : "";
+      }
+
+      function guardUserAction(user, action) {
+        if (userStatusAllowsAction(user, action)) return true;
+        showToast(userStatusBlockedTitle(user));
+        return false;
       }
 
       function setPageLoading(page, loading) {
@@ -755,7 +812,7 @@
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
           state.page = routeFromPath();
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           renderShell();
         } catch {
           history.replaceState(null, "", "/admin/login");
@@ -768,7 +825,7 @@
         try {
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           history.replaceState(null, "", "/admin/dashboard");
           state.page = "dashboard";
           renderShell();
@@ -813,7 +870,7 @@
               }),
             });
             state.session = result.data;
-            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadTeamPermissionAccounts(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
             history.replaceState(null, "", "/admin/dashboard");
             state.page = "dashboard";
             renderShell();
@@ -861,6 +918,7 @@
           button.addEventListener("click", () => navigate(button.dataset.page));
         });
         document.getElementById("logout-btn").addEventListener("click", logout);
+        bindUserFilterControls();
       }
 
       async function loadModels() {
@@ -900,20 +958,12 @@
         }
       }
 
-      async function loadTeamPermissionAccounts() {
+      async function refreshUserCreditPage() {
         setPageLoading("users", true);
-        try {
-          const result = await api("/api/admin/team-permission-accounts?pageSize=100");
-          state.teamPermissionAccounts = result.data || [];
-          state.teamPermissionLoadError = "";
-          clearPageForbidden("users");
-        } catch (error) {
-          setPageForbidden("users", error);
-          state.teamPermissionLoadError = error.payload?.error?.message || "团队权限账户加载失败";
-          state.teamPermissionAccounts = [];
-        } finally {
-          setPageLoading("users", false);
-        }
+        renderShell();
+        await loadUsers();
+        renderShell();
+        showToast("用户积分数据已刷新");
       }
 
       async function loadPromptManagement() {
@@ -1646,7 +1696,7 @@ scene：{{scene_json}}
             api("/api/admin/settings"),
             api("/api/admin/admin-accounts"),
           ]);
-          state.settings = settingsResult.data || { configs: [], secretReferences: [] };
+          state.settings = settingsWithRuntimeConfigHints(settingsResult.data || { configs: [], secretReferences: [] });
           state.adminAccounts = accountsResult.data || [];
           state.settingsLoadError = "";
           clearPageForbidden("settings");
@@ -1658,6 +1708,22 @@ scene：{{scene_json}}
         } finally {
           setPageLoading("settings", false);
         }
+      }
+
+      function settingsWithRuntimeConfigHints(settings) {
+        const configs = Array.isArray(settings.configs) ? [...settings.configs] : [];
+        for (const hint of runtimeConfigHints) {
+          if (!configs.some((config) => config.key === hint.key)) configs.push(hint);
+        }
+        configs.sort((left, right) => {
+          const scopeOrder = String(left.scope || "").localeCompare(String(right.scope || ""));
+          return scopeOrder || String(left.key || "").localeCompare(String(right.key || ""));
+        });
+        return {
+          ...settings,
+          configs,
+          secretReferences: Array.isArray(settings.secretReferences) ? settings.secretReferences : [],
+        };
       }
 
       async function loadRiskAudit() {
@@ -2081,32 +2147,136 @@ scene：{{scene_json}}
         return `<label class="field"><span>${label}</span><input value="${value}" /></label>`;
       }
 
+      function filteredUsers() {
+        const filters = state.userFilters || {};
+        const keyword = String(filters.keyword || "").trim().toLowerCase();
+        const status = filters.status || "all";
+        const accountType = filters.accountType || "all";
+        return state.users.filter((user) => {
+          const haystack = [
+            user.userId,
+            user.displayName,
+            user.phone,
+            user.email,
+            user.organizationName,
+            user.teamGroupName,
+            user.teamRole,
+            user.membershipRole,
+            frontendAccountTypeLabel(user),
+          ].filter(Boolean).join(" ").toLowerCase();
+          if (keyword && !haystack.includes(keyword)) return false;
+          if (status !== "all" && user.status !== status) return false;
+          if (accountType !== "all" && frontendAccountTypeKey(user) !== accountType) return false;
+          return true;
+        });
+      }
+
+      const updateUserFilter = (key, value) => {
+        state.userFilters = { ...(state.userFilters || {}), [key]: value };
+        refreshUserTable();
+      };
+
+      function refreshUserTable() {
+        const visibleUsers = filteredUsers();
+        const body = document.getElementById("user-table-body");
+        const count = document.getElementById("user-visible-count");
+        if (body) body.innerHTML = userRowsHtml(visibleUsers);
+        if (count) {
+          count.textContent = `显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}`;
+        }
+      }
+
+      function bindUserFilterControls() {
+        if (state.page !== "users") return;
+        document.getElementById("user-search-input")?.addEventListener("input", (event) => {
+          updateUserFilter("keyword", event.currentTarget.value);
+        });
+        document.getElementById("user-status-filter")?.addEventListener("change", (event) => {
+          updateUserFilter("status", event.currentTarget.value);
+        });
+        document.getElementById("user-account-type-filter")?.addEventListener("change", (event) => {
+          updateUserFilter("accountType", event.currentTarget.value);
+        });
+      }
+
+      function teamOrganizationIds() {
+        return new Set(state.users
+          .filter((user) => (
+            user.teamGroupName ||
+            user.teamRole ||
+            user.accountType === "team_permission_account" ||
+            user.accountType === "subaccount" ||
+            Number(user.subaccountCount || 0) > 0
+          ))
+          .map((user) => user.organizationId)
+          .filter(Boolean));
+      }
+
+      function frontendAccountTypeKey(user) {
+        if (!user) return "normal_user";
+        if (
+          user.teamGroupName ||
+          user.teamRole ||
+          user.accountType === "team_permission_account" ||
+          user.accountType === "subaccount" ||
+          Number(user.subaccountCount || 0) > 0
+        ) {
+          return "team_user";
+        }
+        if (user.organizationId && teamOrganizationIds().has(user.organizationId)) return "team_user";
+        return "normal_user";
+      }
+
+      function isTeamUserAccount(user) {
+        return Boolean(user?.organizationId) &&
+          frontendAccountTypeKey(user) === "team_user" &&
+          (
+            user.accountType === "owner_account" ||
+            user.accountType === "team_permission_account" ||
+            user.teamRole === "admin" ||
+            user.teamRole === "group_admin" ||
+            Number(user.subaccountCount || 0) > 0
+          );
+      }
+
+      function frontendAccountTypeLabel(userOrType) {
+        const accountType = typeof userOrType === "string" ? userOrType : frontendAccountTypeKey(userOrType);
+        return {
+          normal_user: "普通用户",
+          team_user: "团队用户",
+        }[accountType] || "普通用户";
+      }
+
+      function frontendRoleLabel(role) {
+        return {
+          owner_admin: "团队主账号",
+          creator: "普通成员",
+          admin: "团队管理员",
+          group_admin: "小组负责人",
+          animator_plus: "创作成员",
+          animator: "创作成员",
+          sub_account: "子账户",
+        }[role] || role || "-";
+      }
+
       function usersPage() {
-        const rows = state.users.length
-          ? state.users.map((user) => userRow(user)).join("")
-          : `<tr><td colspan="7">${state.userLoadError || "暂无用户数据"}</td></tr>`;
-        const teamAccountRows = state.teamPermissionAccounts.length
-          ? state.teamPermissionAccounts.map(teamPermissionAccountCard).join("")
-          : `<div class="metric-note">${state.teamPermissionLoadError || "暂无团队权限账户"}</div>`;
-        return `<div class="toolbar"><div class="filters"><input placeholder="搜索用户 / 手机号 / 邮箱 / 团队" /><select><option>全部状态</option><option>正常</option><option>禁用</option></select><select><option>全部账户</option><option>主账户</option><option>团队权限账户</option><option>子账户</option></select></div><button class="btn primary" onclick="openDrawer('批量积分','请选择列表中的具体用户进行积分操作，避免误操作。')" ${permissionAttrs("credit.adjust")}>手动加积分</button></div>
-          <section class="card" style="margin-bottom:14px;">
-            <div class="toolbar"><h3>团队权限账户摘要</h3><button class="btn ghost" onclick="loadTeamPermissionAccounts().then(renderShell)">刷新</button></div>
-            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">${teamAccountRows}</div>
-          </section>
-          <div class="table-wrap users dense"><table><thead><tr><th>用户</th><th>账户类型</th><th>团队权限</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
-          ${rows}
+        const visibleUsers = filteredUsers();
+        const filters = state.userFilters || {};
+        return `<div class="toolbar"><div class="filters">
+          <input id="user-search-input" value="${escapeAttribute(filters.keyword || "")}" placeholder="搜索用户 / 手机号 / 邮箱" />
+          <select id="user-status-filter">${userFilterStatusOptions(filters.status || "all")}</select>
+          <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
+          <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}</span>
+        </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
+          <div class="table-wrap users dense"><table><thead><tr><th>前端用户</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+          ${userRowsHtml(visibleUsers)}
         </tbody></table></div>`;
       }
 
-      function teamPermissionAccountCard(user) {
-        return `<button class="card ghost" style="text-align:left;cursor:pointer;" onclick="openUserDetailDrawer('${user.userId}')">
-          <h4>${user.displayName}</h4>
-          <div class="metric-note">${user.teamGroupName || "-"} / ${user.teamRole || "-"}</div>
-          <div class="check-list" style="margin-top:10px;">
-            <div><span>子账户</span><span>${Number(user.subaccountCount || 0).toLocaleString()}</span></div>
-            <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
-          </div>
-        </button>`;
+      function userRowsHtml(users) {
+        return users.length
+          ? users.map((user) => userRow(user)).join("")
+          : `<tr><td colspan="6">${state.userLoadError || "暂无用户数据"}</td></tr>`;
       }
 
       const scriptPromptTypes = [
@@ -2624,18 +2794,43 @@ scene：{{scene_json}}
       }
 
       function userRow(user) {
-        const typeLabel = {
-          owner_account: "主账户",
-          team_permission_account: "团队权限账户",
-          subaccount: "子账户",
-          user: "普通用户",
-        }[user.accountType] || "普通用户";
+        const typeLabel = frontendAccountTypeLabel(user);
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
-        const groupText = user.teamGroupName
-          ? `${user.teamRole || "-"} / ${user.teamGroupName} / 子账户 ${user.subaccountCount}`
-          : user.membershipRole || "-";
+        return `<tr><td>${user.displayName}<div class="metric-note">${user.phone || user.email || user.userId}</div></td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">编辑</button></td></tr>`;
+      }
+
+      function openUserActionDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        if (!user) return;
         const nextStatus = user.status === "active" ? "disabled" : "active";
-        return `<tr><td>${user.displayName}<div class="metric-note">${user.phone || user.email || user.userId}</div></td><td><span class="tag blue">${typeLabel}</span></td><td>${groupText}</td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看账户" onclick="openUserDetailDrawer('${user.userId}')">查</button><button class="icon-btn" title="手动添加积分" onclick="openCreditGrantDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>加</button><button class="icon-btn" title="手动扣减积分" onclick="openCreditDeductDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>扣</button><button class="icon-btn" title="调整到目标积分" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${permissionAttrs("credit.adjust")}>调</button><button class="icon-btn" title="修改资料" onclick="openUserProfileDrawer('${user.userId}')" ${permissionAttrs("user.write")}>改</button><button class="icon-btn" title="${nextStatus === "disabled" ? "禁用账户" : "启用账户"}" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${permissionAttrs("user.write")}>${nextStatus === "disabled" ? "停" : "启"}</button><button class="icon-btn" title="归档账户" onclick="openUserStatusDrawer('${user.userId}','archived')" ${permissionAttrs("user.write")}>归</button></div></td></tr>`;
+        const statusAction = nextStatus === "disabled" ? "disable" : "enable";
+        const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>用户操作</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">${user.displayName || userId}</p>
+          <div class="check-list">
+            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>当前状态</span><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></div>
+            <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
+            <div><span>冻结积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
+          </div>
+          <div class="user-action-grid">
+            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户</button>
+            <button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button>
+            <button class="btn ghost" onclick="openCreditGrantDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动添加积分</button>
+            <button class="btn ghost" onclick="openCreditDeductDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动扣减积分</button>
+            <button class="btn ghost" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整到目标积分</button>
+            ${isTeamUserAccount(user) ? `<button class="btn ghost" onclick="openTeamLimitDrawer('${user.userId}')" ${userActionAttrs(user, "teamLimit", "user.write")}>团队额度</button>` : ""}
+            <button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用账户" : "启用账户"}</button>
+            <button class="btn danger full-row" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>归档账户</button>
+          </div>
+        </aside>`;
+      }
+
+      function userDrawerHead(title, userId) {
+        return `<div class="drawer-head"><div class="drawer-title-group"><button class="btn ghost drawer-back-btn" type="button" onclick="openUserActionDrawer('${userId}')">返回</button><h3>${title}</h3></div><button class="icon-btn" onclick="closeDrawer()">×</button></div>`;
       }
 
       function risksPage() {
@@ -3007,15 +3202,17 @@ scene：{{scene_json}}
 
       function openCreditGrantDrawer(userId) {
         const targetUser = state.users.find((user) => user.userId === userId);
+        if (!guardUserAction(targetUser, "credit")) return;
         const displayName = targetUser?.displayName || userId;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>手动添加积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${userDrawerHead("手动添加积分", userId)}
           <p style="color:var(--muted);line-height:1.7">给 ${displayName} 添加积分。提交后会写入 credit_ledger_entries、更新余额并记录后台审计。</p>
           <form id="credit-grant-form">
             <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
-            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("compensation")}</select></label>
+            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="例如：客服补偿 / 活动赠送" required></textarea></label>
             <div class="error-text" id="credit-grant-error"></div>
             <button class="btn primary full" type="submit">确认添加</button>
@@ -3025,17 +3222,19 @@ scene：{{scene_json}}
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("credit-grant-error");
-          const workOrderNo = requireWorkOrder(form, error);
-          if (!workOrderNo) return;
+          const workOrderNo = optionalWorkOrder(form, error);
+          if (workOrderNo === null) return;
+          const payload = {
+            amount: Number(form.get("amount")),
+            reason: String(form.get("reason") || "").trim(),
+            adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
+          };
+          if (workOrderNo) payload.workOrderNo = workOrderNo;
           await runAdminMutation(event.currentTarget, error, async () => {
             await api(`/api/admin/users/${userId}/credits/grant`, {
               method: "POST",
               headers: { "idempotency-key": `admin-ui-credit-${userId}-${Date.now()}` },
-              body: JSON.stringify({
-                amount: Number(form.get("amount")),
-                reason: String(form.get("reason") || "").trim(),
-                workOrderNo,
-              }),
+              body: JSON.stringify(payload),
             });
             await loadUsers();
             closeDrawer();
@@ -3049,27 +3248,27 @@ scene：{{scene_json}}
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>账户详情</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${userDrawerHead("账户详情", userId)}
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
           <div class="check-list">
-            <div><span>账户类型</span><span class="tag blue">${user?.accountType || "-"}</span></div>
+            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
             <div><span>手机</span><span id="user-contact-phone">${user?.phone || "-"}</span></div>
             <div><span>邮箱</span><span id="user-contact-email">${user?.email || "-"}</span></div>
             <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
-            <div><span>团队权限</span><span>${user?.teamRole || user?.membershipRole || "-"}</span></div>
-            <div><span>子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
+            <div><span>关联子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
             <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
             <div><span>冻结积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <form id="contact-reveal-form" style="margin-top:16px;">
             <label class="field"><span>查看完整联系方式原因</span><textarea name="reason" rows="3" placeholder="例如：核对工单联系方式" required></textarea></label>
             <div class="error-text" id="contact-reveal-error"></div>
-            <button class="btn ghost full" type="submit" ${permissionAttrs("user.write")}>查看完整联系方式</button>
+            <button class="btn ghost full" type="submit" ${userActionAttrs(user, "reveal", "user.write")}>查看完整联系方式</button>
           </form>
           <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
         </aside>`;
         document.getElementById("contact-reveal-form").addEventListener("submit", async (event) => {
           event.preventDefault();
+          if (!guardUserAction(user, "reveal")) return;
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("contact-reveal-error");
           error.textContent = "";
@@ -3090,17 +3289,19 @@ scene：{{scene_json}}
             api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
             api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
           ]);
+          const creditSummary = renderCreditSummary(ledgerResult.summary || {});
           const ledgerRows = (ledgerResult.data || [])
-            .map((entry) => `<tr><td>${entry.entryType}</td><td>${entry.sourceType}</td><td>${Number(entry.amount).toLocaleString()}</td><td>${entry.metadata?.workOrderNo || "-"}</td><td>${entry.reason}</td></tr>`)
-            .join("") || `<tr><td colspan="5">暂无流水</td></tr>`;
+            .map((entry) => `<tr><td>${entry.entryType}</td><td>${entry.sourceType}</td><td>${Number(entry.amount).toLocaleString()}</td><td>${entry.metadata?.workOrderNo || "-"}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${entry.reason}</td></tr>`)
+            .join("") || `<tr><td colspan="6">暂无流水</td></tr>`;
           const subRows = (subaccountsResult.data || [])
-            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${item.teamRole || "子账户"}</span></div>`)
+            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
             .join("");
           document.getElementById("user-ledger-panel").innerHTML = `
+            ${creditSummary}
             <h4>积分流水</h4>
-            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分</th><th>工单号</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
-            <h4 style="margin-top:14px;">子账户</h4>
-            <div class="check-list">${subRows || "<div><span>暂无子账户</span><span>-</span></div>"}</div>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+            <h4 style="margin-top:14px;">关联子账户</h4>
+            <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
           `;
         } catch (err) {
           document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
@@ -3109,10 +3310,11 @@ scene：{{scene_json}}
 
       function openUserProfileDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
+        if (!guardUserAction(user, "profile")) return;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>修改资料</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${userDrawerHead("修改资料", userId)}
           <form id="user-profile-form">
             <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(user?.displayName || "")}" required /></label>
             <label class="field"><span>邮箱</span><input name="email" value="${escapeAttribute(user?.email || "")}" /></label>
@@ -3142,15 +3344,147 @@ scene：{{scene_json}}
         });
       }
 
-      function openUserStatusDrawer(userId, status) {
+      async function openTeamLimitDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
-        const action = status === "disabled" ? "禁用" : status === "archived" ? "归档" : "启用";
-        const isDangerStatus = status === "disabled" || status === "archived";
+        if (!isTeamUserAccount(user)) {
+          showToast("普通用户没有团队额度配置");
+          return;
+        }
+        if (!guardUserAction(user, "teamLimit")) return;
+        const organizationId = user.organizationId;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>${action}账户</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId} 将变更为 ${status}。</p>
+          ${userDrawerHead("团队额度", userId)}
+          <p style="color:var(--muted);line-height:1.7">${user.displayName || userId} 所属团队正在加载子账号上限配置...</p>
+        </aside>`;
+        try {
+          const result = await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`);
+          renderTeamLimitDrawer(userId, result.data || {});
+        } catch (err) {
+          drawer.innerHTML = `<aside class="drawer-panel">
+            ${userDrawerHead("团队额度", userId)}
+            <p class="error-text">${err.payload?.error?.message || "团队额度加载失败"}</p>
+          </aside>`;
+        }
+      }
+
+      function renderTeamLimitDrawer(userId, summary) {
+        const user = state.users.find((item) => item.userId === userId);
+        const organizationId = user?.organizationId;
+        const effectiveSeatLimit = Number(summary.effectiveSeatLimit ?? 0);
+        const usedSeats = Number(summary.usedSeats ?? 0);
+        const remainingSeats = Number(summary.remainingSeats ?? 0);
+        const isOverride = summary.limitSource === "override";
+        const overLimit = usedSeats > effectiveSeatLimit;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("团队额度", userId)}
+          <p style="color:var(--muted);line-height:1.7">为特殊团队单独配置可创建子账号数量。恢复默认后，该团队会重新跟随系统默认值。</p>
+          <div class="check-list">
+            <div><span>团队</span><span>${escapeHtml(summary.organizationName || user?.organizationName || "-")}</span></div>
+            <div><span>额度来源</span><span class="tag ${isOverride ? "blue" : "green"}">${isOverride ? "特殊配置" : "系统默认"}</span></div>
+            <div><span>系统默认上限</span><span>${Number(summary.defaultSeatLimit ?? 50).toLocaleString()}</span></div>
+            <div><span>当前有效上限</span><span>${effectiveSeatLimit.toLocaleString()}</span></div>
+            <div><span>当前已用子账号数</span><span>${usedSeats.toLocaleString()}</span></div>
+            <div><span>剩余可创建</span><span>${remainingSeats.toLocaleString()}</span></div>
+          </div>
+          ${overLimit ? `<p class="error-text" style="margin:12px 0 0;">当前已用数量超过配置上限。系统不会删除已有账号，但前端会阻止继续创建，直到已用数量低于上限。</p>` : ""}
+          <form id="team-limit-form" style="margin-top:16px;">
+            <label class="field"><span>可创建子账号上限</span><input id="team-limit-seat-input" name="seatLimit" type="number" min="0" step="1" value="${effectiveSeatLimit}" required /></label>
+            <small style="color:var(--muted);line-height:1.6;display:block;margin-top:-6px;">特殊团队可配置为任意非负整数；普通团队仍使用系统默认上限。</small>
+            <div class="metric-note" id="team-limit-preview" style="margin-top:10px;"></div>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：企业客户申请扩容 / 合同降级恢复默认"></textarea></label>
+            <div class="error-text" id="team-limit-error"></div>
+            <button class="btn primary full" type="submit">保存团队额度</button>
+            <button class="btn ghost full" type="button" style="margin-top:10px;" onclick="restoreTeamLimitDefault('${userId}')">恢复系统默认</button>
+          </form>
+        </aside>`;
+        const formElement = document.getElementById("team-limit-form");
+        const input = document.getElementById("team-limit-seat-input");
+        const preview = document.getElementById("team-limit-preview");
+        const updatePreview = () => {
+          const nextLimit = Number(input.value);
+          if (!Number.isInteger(nextLimit) || nextLimit < 0) {
+            preview.textContent = "请输入大于等于 0 的整数。";
+            return;
+          }
+          const nextRemaining = Math.max(0, nextLimit - usedSeats);
+          preview.textContent = nextLimit < usedSeats
+            ? `保存后不会删除已有账号，但会禁止继续创建；当前已用 ${usedSeats.toLocaleString()}，新上限 ${nextLimit.toLocaleString()}。`
+            : `保存后剩余可创建 ${nextRemaining.toLocaleString()} 个子账号。`;
+        };
+        input.addEventListener("input", updatePreview);
+        updatePreview();
+        formElement.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (!guardUserAction(user, "teamLimit")) return;
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("team-limit-error");
+          const seatLimit = Number(form.get("seatLimit"));
+          if (!Number.isInteger(seatLimit) || seatLimit < 0) {
+            error.textContent = "子账号上限必须是大于等于 0 的整数";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-team-limit-${organizationId}-${Date.now()}` },
+              body: JSON.stringify({
+                seatLimit,
+                reason: String(form.get("reason") || "").trim(),
+              }),
+            });
+            await loadUsers();
+            await openTeamLimitDrawer(userId);
+          }, "团队额度已更新").catch(() => undefined);
+        });
+      }
+
+      async function restoreTeamLimitDefault(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        if (!isTeamUserAccount(user)) {
+          showToast("普通用户没有团队额度配置");
+          return;
+        }
+        if (!guardUserAction(user, "teamLimit")) return;
+        const organizationId = user.organizationId;
+        const formElement = document.getElementById("team-limit-form");
+        const error = document.getElementById("team-limit-error");
+        if (!formElement || !error) return;
+        const form = new FormData(formElement);
+        await runAdminMutation(formElement, error, async () => {
+          await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-team-limit-restore-${organizationId}-${Date.now()}` },
+            body: JSON.stringify({
+              seatLimit: null,
+              reason: String(form.get("reason") || "").trim(),
+            }),
+          });
+          await loadUsers();
+          await openTeamLimitDrawer(userId);
+        }, "团队额度已恢复默认").catch(() => undefined);
+      }
+
+      function openUserStatusDrawer(userId, status) {
+        const user = state.users.find((item) => item.userId === userId);
+        if (status === "archived" && !guardUserAction(user, "archive")) return;
+        if (status === "disabled" && !guardUserAction(user, "disable")) return;
+        if (status === "active" && !guardUserAction(user, "enable")) return;
+        const action = status === "disabled" ? "禁用" : status === "archived" ? "归档" : "启用";
+        const isDangerStatus = status === "disabled" || status === "archived";
+        const statusImpact = status === "archived"
+          ? "归档后该用户及成员关系会进入历史状态，通常用于离职或不再维护的账户。前台访问会被拦截，但不会删除积分流水和审计记录。"
+          : status === "disabled"
+            ? "禁用后该用户将无法继续访问前台功能，历史数据、积分流水和审计记录仍会保留。"
+            : "启用后该用户会恢复正常访问权限。";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead(`${action}账户`, userId)}
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}：${statusImpact}</p>
           <form id="user-status-form">
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="危险操作必须填写原因"></textarea></label>
             ${status === "archived" ? dangerConfirmField("确认归档账户") : ""}
@@ -3178,14 +3512,16 @@ scene：{{scene_json}}
 
       function openCreditDeductDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
+        if (!guardUserAction(user, "credit")) return;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>手动扣减积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${userDrawerHead("手动扣减积分", userId)}
           <p style="color:var(--muted);line-height:1.7">从 ${user?.displayName || userId} 扣减积分。提交后写入 credit_ledger_entries 并记录审计。</p>
           <form id="credit-deduct-form">
             <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
-            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
+            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：异常赠送扣回 / 账务修正"></textarea></label>
             <div class="error-text" id="credit-deduct-error"></div>
             <button class="btn danger full" type="submit">确认扣减</button>
@@ -3195,17 +3531,19 @@ scene：{{scene_json}}
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("credit-deduct-error");
-          const workOrderNo = requireWorkOrder(form, error);
-          if (!workOrderNo) return;
+          const workOrderNo = optionalWorkOrder(form, error);
+          if (workOrderNo === null) return;
+          const payload = {
+            amount: Number(form.get("amount")),
+            reason: String(form.get("reason") || "").trim(),
+            adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
+          };
+          if (workOrderNo) payload.workOrderNo = workOrderNo;
           await runAdminMutation(event.currentTarget, error, async () => {
             await api(`/api/admin/users/${userId}/credits/deduct`, {
               method: "POST",
               headers: { "idempotency-key": `admin-ui-credit-deduct-${userId}-${Date.now()}` },
-              body: JSON.stringify({
-                amount: Number(form.get("amount")),
-                reason: String(form.get("reason") || "").trim(),
-                workOrderNo,
-              }),
+              body: JSON.stringify(payload),
             });
             await loadUsers();
             closeDrawer();
@@ -3216,11 +3554,12 @@ scene：{{scene_json}}
 
       function openCreditSetBalanceDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
+        if (!guardUserAction(user, "credit")) return;
         const currentCredits = Number(user?.availableCredits || 0);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>调整到目标积分</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${userDrawerHead("调整到目标积分", userId)}
           <p style="color:var(--muted);line-height:1.7">为 ${user?.displayName || userId} 手动修改可用积分。系统会自动计算差额，并通过添加或扣减接口写入 credit_ledger_entries，不直接改余额缓存。</p>
           <form id="credit-set-balance-form">
             <div class="check-list" style="margin-bottom:14px;">
@@ -3228,7 +3567,8 @@ scene：{{scene_json}}
               <div><span>调整差额</span><span id="credit-balance-delta">-</span></div>
             </div>
             <label class="field"><span>目标可用积分</span><input name="targetBalance" type="number" min="0" step="1" required /></label>
-            <label class="field"><span>工单号</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" required /></label>
+            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
+            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：财务核账后修正用户可用积分"></textarea></label>
             <div class="error-text" id="credit-set-balance-error"></div>
             <button class="btn primary full" type="submit">确认调整积分</button>
@@ -3251,8 +3591,8 @@ scene：{{scene_json}}
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("credit-set-balance-error");
-          const workOrderNo = requireWorkOrder(form, error);
-          if (!workOrderNo) return;
+          const workOrderNo = optionalWorkOrder(form, error);
+          if (workOrderNo === null) return;
           const targetBalance = Number(form.get("targetBalance"));
           if (!Number.isInteger(targetBalance) || targetBalance < 0) {
             error.textContent = "目标可用积分必须是大于等于 0 的整数";
@@ -3264,15 +3604,17 @@ scene：{{scene_json}}
             return;
           }
           const direction = delta > 0 ? "grant" : "deduct";
+          const payload = {
+            amount: Math.abs(delta),
+            reason: String(form.get("reason") || "").trim(),
+            adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
+          };
+          if (workOrderNo) payload.workOrderNo = workOrderNo;
           await runAdminMutation(event.currentTarget, error, async () => {
             await api(`/api/admin/users/${userId}/credits/${direction}`, {
               method: "POST",
               headers: { "idempotency-key": `admin-ui-credit-set-balance-${userId}-${Date.now()}` },
-              body: JSON.stringify({
-                amount: Math.abs(delta),
-                reason: String(form.get("reason") || "").trim(),
-                workOrderNo,
-              }),
+              body: JSON.stringify(payload),
             });
             await loadUsers();
             closeDrawer();
@@ -3958,13 +4300,82 @@ scene：{{scene_json}}
         return true;
       }
 
-      function requireWorkOrder(form, errorElement) {
+      function optionalWorkOrder(form, errorElement) {
         const workOrderNo = String(form.get("workOrderNo") || "").trim();
+        if (!workOrderNo) return "";
         if (!/^[A-Za-z]{2,8}-\d{8}-\d{3,8}$/.test(workOrderNo)) {
-          errorElement.textContent = "请填写有效工单号，例如 CS-20260605-001";
-          return "";
+          errorElement.textContent = "工单号格式不正确，例如 CS-20260605-001";
+          return null;
         }
         return workOrderNo.toUpperCase();
+      }
+
+      function adjustmentScenarioOptions(selected = "manual_adjustment") {
+        return [
+          ["manual_adjustment", "手动调整"],
+          ["compensation", "补偿积分"],
+          ["recharge_bonus", "充值赠送"],
+          ["default_grant", "默认赠送"],
+          ["correction", "财务修正"],
+          ["promotion", "活动赠送"],
+        ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+      }
+
+      function userFilterStatusOptions(selected = "all") {
+        return [
+          ["all", "全部状态"],
+          ["active", "正常"],
+          ["disabled", "禁用"],
+          ["archived", "归档"],
+        ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+      }
+
+      function userFilterAccountTypeOptions(selected = "all") {
+        return [
+          ["all", "全部账户"],
+          ["normal_user", "普通用户"],
+          ["team_user", "团队用户"],
+        ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+      }
+
+      function adjustmentScenarioLabel(value) {
+        return {
+          manual_adjustment: "手动调整",
+          compensation: "补偿积分",
+          recharge_bonus: "充值赠送",
+          default_grant: "默认赠送",
+          correction: "财务修正",
+          promotion: "活动赠送",
+        }[value] || "手动调整";
+      }
+
+      function renderCreditSummary(summary = {}) {
+        const balanceScope = summary.balanceScope === "member" ? "团队成员余额" : "组织余额";
+        const memberAvailable = summary.memberAvailableCredits === null || summary.memberAvailableCredits === undefined
+          ? "-"
+          : Number(summary.memberAvailableCredits || 0).toLocaleString();
+        const memberUsed = summary.memberUsedCredits === null || summary.memberUsedCredits === undefined
+          ? "-"
+          : Number(summary.memberUsedCredits || 0).toLocaleString();
+        return `
+          <section class="card" style="margin-top:14px;">
+            <h4>积分摘要</h4>
+            <div class="check-list">
+              <div><span>余额口径</span><span class="tag blue">${balanceScope}</span></div>
+              <div><span>当前可用积分</span><span>${Number(summary.displayAvailableCredits || 0).toLocaleString()}</span></div>
+              <div><span>当前冻结积分</span><span>${Number(summary.displayReservedCredits || 0).toLocaleString()}</span></div>
+              <div><span>组织可用积分</span><span>${Number(summary.organizationAvailableCredits || 0).toLocaleString()}</span></div>
+              <div><span>组织冻结积分</span><span>${Number(summary.organizationReservedCredits || 0).toLocaleString()}</span></div>
+              <div><span>成员可用积分</span><span>${memberAvailable}</span></div>
+              <div><span>成员已用积分</span><span>${memberUsed}</span></div>
+              <div><span>账本发放合计</span><span>${Number(summary.totalGrantedCredits || 0).toLocaleString()}</span></div>
+              <div><span>账本消耗合计</span><span>${Number(summary.totalConsumedCredits || 0).toLocaleString()}</span></div>
+              <div><span>账本释放合计</span><span>${Number(summary.totalReleasedCredits || 0).toLocaleString()}</span></div>
+              <div><span>冻结任务数</span><span>${Number(summary.activeReservationCount || 0).toLocaleString()}</span></div>
+              <div><span>待人工复核</span><span>${Number(summary.manualReviewReservationCount || 0).toLocaleString()}</span></div>
+            </div>
+          </section>
+        `;
       }
 
       function modelPayloadFromForm(form) {
@@ -4551,9 +4962,12 @@ scene：{{scene_json}}
       window.openCreditGrantDrawer = openCreditGrantDrawer;
       window.openCreditDeductDrawer = openCreditDeductDrawer;
       window.openCreditSetBalanceDrawer = openCreditSetBalanceDrawer;
+      window.openUserActionDrawer = openUserActionDrawer;
       window.openUserDetailDrawer = openUserDetailDrawer;
       window.openUserProfileDrawer = openUserProfileDrawer;
       window.openUserStatusDrawer = openUserStatusDrawer;
+      window.openTeamLimitDrawer = openTeamLimitDrawer;
+      window.restoreTeamLimitDefault = restoreTeamLimitDefault;
       window.updatePromptManagementMode = updatePromptManagementMode;
       window.loadScriptPrompts = loadScriptPrompts;
       window.loadImagePromptStyles = loadImagePromptStyles;
@@ -4582,6 +4996,8 @@ scene：{{scene_json}}
       window.openScenePromptTemplateDrawer = openScenePromptTemplateDrawer;
       window.copyScenePromptTemplate = copyScenePromptTemplate;
       window.toggleScenePromptTemplateStatus = toggleScenePromptTemplateStatus;
+      window.refreshUserCreditPage = refreshUserCreditPage;
+      window.updateUserFilter = updateUserFilter;
       window.openRiskReviewDrawer = openRiskReviewDrawer;
       window.openDashboardModelHealthDrawer = openDashboardModelHealthDrawer;
       window.openDashboardEventDrawer = openDashboardEventDrawer;

@@ -5,6 +5,17 @@ import { hashAdminPassword } from "../admin-auth/admin-auth.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
+const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
+  {
+    key: "team.default_subaccount_limit",
+    value_json: 50,
+    value_type: "number",
+    scope: "creator",
+    description: "默认团队子账号上限",
+    updated_at: null,
+  },
+];
+
 export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
   async function listSettings() {
     const configs = await deps.db.query<RuntimeConfigRow>(
@@ -24,7 +35,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
     return {
       data: {
-        configs: configs.rows.map(configFromRow),
+        configs: withDefaultRuntimeConfigs(configs.rows).map(configFromRow),
         secretReferences: secretReferences.rows.map(secretReferenceFromRow),
       },
     };
@@ -789,7 +800,7 @@ interface RuntimeConfigRow {
   value_type: string;
   scope: string;
   description: string | null;
-  updated_at: Date | string;
+  updated_at: Date | string | null;
 }
 
 interface RuntimeConfigRevisionRow {
@@ -838,8 +849,21 @@ function configFromRow(row: RuntimeConfigRow) {
     valueType: row.value_type,
     scope: row.scope,
     description: row.description,
-    updatedAt: new Date(row.updated_at).toISOString(),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
   };
+}
+
+function withDefaultRuntimeConfigs(rows: RuntimeConfigRow[]) {
+  const configsByKey = new Map(rows.map((row) => [row.key, row]));
+  for (const defaultConfig of DEFAULT_RUNTIME_CONFIGS) {
+    if (!configsByKey.has(defaultConfig.key)) {
+      configsByKey.set(defaultConfig.key, defaultConfig);
+    }
+  }
+  return Array.from(configsByKey.values()).sort((left, right) => {
+    const scopeOrder = left.scope.localeCompare(right.scope);
+    return scopeOrder || left.key.localeCompare(right.key);
+  });
 }
 
 function secretReferenceFromRow(row: SecretReferenceRow) {

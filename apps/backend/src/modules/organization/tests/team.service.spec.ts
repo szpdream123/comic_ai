@@ -412,6 +412,38 @@ describe("team service", { concurrency: false }, () => {
     }
   });
 
+  it("uses the admin runtime config as the default team subaccount limit", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { skipPlanLimits: true });
+      await seedTeamEntitlement(db);
+
+      const defaultOverview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      await db.query(
+        `
+          INSERT INTO runtime_config_entries (key, value_json, value_type, scope, description)
+          VALUES ('team.default_subaccount_limit', '80'::jsonb, 'number', 'creator', '默认团队子账号上限')
+        `,
+      );
+
+      const configuredOverview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(defaultOverview.seats.limit, 50);
+      assert.equal(defaultOverview.seats.remaining, 50);
+      assert.equal(configuredOverview.seats.limit, 80);
+      assert.equal(configuredOverview.seats.remaining, 80);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("reports read-only team overview actors without create-member permission", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -496,7 +528,7 @@ function groupAdminActor(groupId: string): ActorContext {
 
 async function seedTeamTenant(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-  input: { seatLimit?: number; credits?: number } = {},
+  input: { seatLimit?: number; credits?: number; skipPlanLimits?: boolean } = {},
 ) {
   await db.query(
     `
@@ -533,23 +565,25 @@ async function seedTeamTenant(
     `,
     [organizationId, workspaceId, ownerUserId],
   );
-  await db.query(
-    `
-      INSERT INTO team_plan_limits (
-        id,
-        organization_id,
-        seat_limit,
-        single_account_concurrency_limit
-      )
-      VALUES (
-        '33000000-0000-4000-8000-000000000001',
-        $1,
-        $2,
-        1
-      )
-    `,
-    [organizationId, input.seatLimit ?? 5],
-  );
+  if (!input.skipPlanLimits) {
+    await db.query(
+      `
+        INSERT INTO team_plan_limits (
+          id,
+          organization_id,
+          seat_limit,
+          single_account_concurrency_limit
+        )
+        VALUES (
+          '33000000-0000-4000-8000-000000000001',
+          $1,
+          $2,
+          1
+        )
+      `,
+      [organizationId, input.seatLimit ?? 50],
+    );
+  }
 }
 
 async function seedTeamEntitlement(
