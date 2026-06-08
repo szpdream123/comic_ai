@@ -41,6 +41,49 @@ export const createMembershipOrderCommand: ApiCommandContract = {
   verificationIds: ["IDEMP-membership-order-create", "MEMBERSHIP-order-create"],
 };
 
+export const saveMembershipPlanCommand: ApiCommandContract = {
+  name: "SaveMembershipPlan",
+  operationName: operationNames.membershipPlanSave,
+  capability: capabilities.adminBillingConfig,
+  idempotencyRequired: true,
+  requestSchema: {
+    id: "uuid|null",
+    code: "required text",
+    displayName: "required text",
+    tier: "experience|professional",
+    periodUnit: "day|month|quarter|year",
+    periodCount: "positive integer",
+    amountMinor: "positive integer",
+    currency: "CNY",
+    giftCredits: "non-negative integer",
+    seatLimit: "positive integer|null",
+    entitlements: "string[]",
+    priorityRules: "json object",
+    displayMetadata: "json object",
+    status: "active|inactive|archived",
+    validFrom: "iso8601|null",
+    validUntil: "iso8601|null",
+    reason: "required text",
+  },
+  responseSchema: {
+    plan: "membership plan view",
+  },
+  resourceScope: "admin:membership_plan:{plan_id|new}",
+  statePreconditions: [
+    "actor has admin billing configuration capability",
+    "membership_plan.code is unique",
+  ],
+  businessErrors: [
+    "idempotency_conflict",
+    "membership_plan_code_conflict",
+    "reason_required",
+    "invalid_membership_plan",
+    "admin_forbidden",
+  ],
+  auditEvent: "membership.plan.saved",
+  verificationIds: ["IDEMP-membership-plan-save", "MEMBERSHIP-plan-save"],
+};
+
 export const getMembershipStatusCommand: ApiCommandContract = {
   name: "GetMembershipStatus",
   operationName: operationNames.membershipStatusGet,
@@ -62,5 +105,6 @@ export const getMembershipStatusCommand: ApiCommandContract = {
 export const membershipCommandContracts = [
   listMembershipPlansCommand,
   createMembershipOrderCommand,
+  saveMembershipPlanCommand,
   getMembershipStatusCommand,
 ];

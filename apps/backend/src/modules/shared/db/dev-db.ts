@@ -31,17 +31,87 @@ export async function createDevDb(): Promise<DevDatabase> {
     return createLocalDevDb();
   }
 
+  return createPooledDevDatabase(pool);
+}
+
+export function createPooledDevDatabaseForTests(pool: PooledDevDatabasePool): DevDatabase {
+  return createPooledDevDatabase(pool);
+}
+
+function createPooledDevDatabase(pool: PooledDevDatabasePool): DevDatabase {
+  let activeTransactionClient: PooledDevDatabaseClient | null = null;
+
   return {
     async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
-      const result = await pool.query(sql, params);
-      return {
-        rows: result.rows as T[],
-      };
+      const command = transactionCommand(sql);
+
+      if (command === "begin" && !activeTransactionClient) {
+        const client = await pool.connect();
+        try {
+          const result = await client.query<T>(sql, params);
+          activeTransactionClient = client;
+          return { rows: result.rows as T[] };
+        } catch (error) {
+          client.release();
+          throw error;
+        }
+      }
+
+      if (activeTransactionClient) {
+        const client = activeTransactionClient;
+        try {
+          const result = await client.query<T>(sql, params);
+          return { rows: result.rows as T[] };
+        } catch (error) {
+          if (command === "commit" || command === "rollback") {
+            activeTransactionClient = null;
+            client.release();
+          }
+          throw error;
+        } finally {
+          if (
+            (command === "commit" || command === "rollback") &&
+            activeTransactionClient === client
+          ) {
+            activeTransactionClient = null;
+            client.release();
+          }
+        }
+      }
+
+      const result = await pool.query<T>(sql, params);
+      return { rows: result.rows as T[] };
     },
     async close() {
+      if (activeTransactionClient) {
+        activeTransactionClient.release();
+        activeTransactionClient = null;
+      }
       await pool.end();
     },
   };
+}
+
+interface PooledDevDatabasePool {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<SqlQueryResult<T>>;
+  connect(): Promise<PooledDevDatabaseClient>;
+  end(): Promise<void>;
+}
+
+interface PooledDevDatabaseClient {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<SqlQueryResult<T>>;
+  release(): void;
+}
+
+type TransactionCommand = "begin" | "commit" | "rollback" | "rollback_to_savepoint" | "other";
+
+function transactionCommand(sql: string): TransactionCommand {
+  const normalized = sql.trim().replace(/;+$/, "").trim().replace(/\s+/g, " ").toUpperCase();
+  if (normalized === "BEGIN" || normalized.startsWith("BEGIN ")) return "begin";
+  if (normalized === "COMMIT") return "commit";
+  if (normalized === "ROLLBACK") return "rollback";
+  if (normalized.startsWith("ROLLBACK TO SAVEPOINT")) return "rollback_to_savepoint";
+  return "other";
 }
 
 async function createLocalDevDb(): Promise<DevDatabase> {

@@ -9,6 +9,7 @@ export const capabilities = {
   exportCreate: "export:create",
   billingPurchase: "billing:purchase",
   billingRefund: "billing:refund",
+  adminBillingConfig: "admin:billing_config",
   adminAuthManage: "admin:auth",
   opsSettle: "ops:settle",
   teamMemberRead: "team:member:read",

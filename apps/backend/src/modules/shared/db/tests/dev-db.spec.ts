@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { createDevDb } from "../dev-db.ts";
+import { createDevDb, createPooledDevDatabaseForTests } from "../dev-db.ts";
 
 describe("createDevDb", () => {
   it("uses persistent local storage when DATABASE_URL is not configured", async () => {
@@ -349,6 +349,62 @@ describe("createDevDb", () => {
     }
   });
 
+  it("pins DATABASE_URL transactions to one pool client and releases on commit", async () => {
+    const pool = new FakePool();
+    const db = createPooledDevDatabaseForTests(pool);
+
+    await db.query("SELECT outside_transaction");
+    await db.query("BEGIN");
+    await db.query("INSERT INTO membership_plans (code) VALUES ($1)", ["test"]);
+    await db.query("COMMIT");
+    await db.query("SELECT after_transaction");
+    await db.close();
+
+    assert.deepEqual(pool.poolQueries, ["SELECT outside_transaction", "SELECT after_transaction"]);
+    assert.equal(pool.clients.length, 1);
+    assert.deepEqual(pool.clients[0].queries, [
+      "BEGIN",
+      "INSERT INTO membership_plans (code) VALUES ($1)",
+      "COMMIT",
+    ]);
+    assert.equal(pool.clients[0].releaseCount, 1);
+    assert.equal(pool.endCount, 1);
+  });
+
+  it("keeps transaction pinned for rollback-to-savepoint and releases only on plain rollback", async () => {
+    const pool = new FakePool();
+    const db = createPooledDevDatabaseForTests(pool);
+
+    await db.query("BEGIN");
+    await db.query("ROLLBACK TO SAVEPOINT plan_revision");
+    assert.equal(pool.clients[0].releaseCount, 0);
+    await db.query("ROLLBACK");
+    await db.query("SELECT after_rollback");
+
+    assert.equal(pool.clients.length, 1);
+    assert.deepEqual(pool.clients[0].queries, [
+      "BEGIN",
+      "ROLLBACK TO SAVEPOINT plan_revision",
+      "ROLLBACK",
+    ]);
+    assert.equal(pool.clients[0].releaseCount, 1);
+    assert.deepEqual(pool.poolQueries, ["SELECT after_rollback"]);
+  });
+
+  it("releases a pinned transaction client when plain commit fails", async () => {
+    const pool = new FakePool();
+    const db = createPooledDevDatabaseForTests(pool);
+
+    await db.query("BEGIN");
+    pool.clients[0].failOnSql = "COMMIT";
+
+    await assert.rejects(db.query("COMMIT"), /COMMIT failed/);
+    await db.query("SELECT after_failed_commit");
+
+    assert.equal(pool.clients[0].releaseCount, 1);
+    assert.deepEqual(pool.poolQueries, ["SELECT after_failed_commit"]);
+  });
+
 });
 
 function restoreEnv(key: string, value: string | undefined) {
@@ -357,4 +413,43 @@ function restoreEnv(key: string, value: string | undefined) {
     return;
   }
   process.env[key] = value;
+}
+
+class FakePool {
+  readonly poolQueries: string[] = [];
+  readonly clients: FakeClient[] = [];
+  endCount = 0;
+
+  async query<T = Record<string, unknown>>(sql: string) {
+    this.poolQueries.push(sql);
+    return { rows: [] as T[] };
+  }
+
+  async connect() {
+    const client = new FakeClient();
+    this.clients.push(client);
+    return client;
+  }
+
+  async end() {
+    this.endCount += 1;
+  }
+}
+
+class FakeClient {
+  readonly queries: string[] = [];
+  releaseCount = 0;
+  failOnSql: string | null = null;
+
+  async query<T = Record<string, unknown>>(sql: string) {
+    this.queries.push(sql);
+    if (this.failOnSql === sql) {
+      throw new Error(`${sql} failed`);
+    }
+    return { rows: [] as T[] };
+  }
+
+  release() {
+    this.releaseCount += 1;
+  }
 }

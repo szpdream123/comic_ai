@@ -31,6 +31,7 @@ import { createAdminImagePromptService } from "../modules/admin-image-prompts/ad
 import { createAdminScenePromptService } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
+import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
@@ -390,6 +391,27 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
+function objectBody(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeMembershipTier(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["experience", "professional"].includes(normalized) ? normalized : normalized;
+}
+
+function normalizeMembershipPeriodUnit(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["day", "month", "quarter", "year"].includes(normalized) ? normalized : normalized;
+}
+
+function normalizeMembershipPlanStatus(value: unknown) {
+  const normalized = String(value ?? "active").trim().toLowerCase();
+  return ["active", "inactive", "archived"].includes(normalized) ? normalized : normalized;
+}
+
 function storyboardPromptPackageBody(body: Record<string, unknown>) {
   return {
     name: String(body.name ?? ""),
@@ -609,6 +631,7 @@ const adminRouteRoles = {
   opsTaskRetry: ["super_admin", "ops_admin"],
   storyboardPromptWrite: ["super_admin", "ops_admin"],
   storyboardPromptExport: ["super_admin"],
+  membershipPlanManage: ["super_admin", "finance_admin"],
 } as const;
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -8123,6 +8146,70 @@ export function createPhoneAuthDevServer(
           body: exported.body,
           fileName: exported.fileName,
         });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/membership/plans") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await membershipPlans.listPlans({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/membership/plans") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(
+          response,
+          await membershipPlans.savePlan({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            tier: normalizeMembershipTier(body.tier),
+            periodUnit: normalizeMembershipPeriodUnit(body.periodUnit),
+            periodCount: Number(body.periodCount),
+            amountMinor: Number(body.amountMinor),
+            currency: String(body.currency ?? "CNY"),
+            giftCredits: Number(body.giftCredits),
+            seatLimit: body.seatLimit === undefined || body.seatLimit === null
+              ? null
+              : Number(body.seatLimit),
+            entitlements: stringArray(body.entitlements),
+            priorityRules: objectBody(body.priorityRules),
+            displayMetadata: objectBody(body.displayMetadata),
+            status: normalizeMembershipPlanStatus(body.status),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
       }
 
       if (request.method === "GET" && pathname === "/api/admin/settings") {

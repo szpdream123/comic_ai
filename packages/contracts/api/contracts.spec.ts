@@ -78,6 +78,13 @@ describe("API command contracts", () => {
     assert.equal(createOrder.auditEvent, "membership.order.created");
     assert.equal(createOrder.idempotencyRequired, true);
 
+    const savePlan = commandsByName.get("SaveMembershipPlan");
+    assert.ok(savePlan);
+    assert.equal(savePlan.operationName, "membership.plan.save");
+    assert.equal(savePlan.capability, "admin:billing_config");
+    assert.equal(savePlan.auditEvent, "membership.plan.saved");
+    assert.equal(savePlan.idempotencyRequired, true);
+
     const getStatus = commandsByName.get("GetMembershipStatus");
     assert.ok(getStatus);
     assert.equal(getStatus.operationName, "membership.status.get");

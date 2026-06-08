@@ -2288,6 +2288,172 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets finance admins create, replay, and list membership plans", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      const planBody = {
+        code: `professional_monthly_${randomUUID().slice(0, 8)}`,
+        displayName: "Professional Monthly",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 19900,
+        currency: "CNY",
+        giftCredits: 100,
+        seatLimit: 50,
+        entitlements: ["team_member_management", "priority_generation"],
+        priorityRules: { modelFamilies: ["seedance"] },
+        displayMetadata: { sortOrder: 20 },
+        status: "active",
+        reason: "Create professional monthly membership plan",
+      };
+      const createResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-membership-plan-professional-monthly",
+          cookie,
+        },
+        body: JSON.stringify(planBody),
+      });
+      const createPayload = await createResponse.json();
+
+      const replayResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-membership-plan-professional-monthly",
+          cookie,
+        },
+        body: JSON.stringify(planBody),
+      });
+      const replayPayload = await replayResponse.json();
+
+      const conflictResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-membership-plan-professional-monthly",
+          cookie,
+        },
+        body: JSON.stringify({
+          ...planBody,
+          amountMinor: 29900,
+        }),
+      });
+      const conflictPayload = await conflictResponse.json();
+
+      const listResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const revisions = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM membership_plan_revisions WHERE plan_id = $1",
+        [createPayload.plan?.id],
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.plan.displayName, "Professional Monthly");
+      assert.equal(createPayload.plan.periodUnit, "month");
+      assert.equal(createPayload.plan.amountMinor, 19900);
+      assert.equal(createPayload.plan.giftCredits, 100);
+      assert.equal(createPayload.plan.seatLimit, 50);
+      assert.deepEqual(createPayload.plan.entitlements, ["team_member_management", "priority_generation"]);
+      assert.deepEqual(createPayload.plan.priorityRules, { modelFamilies: ["seedance"] });
+      assert.deepEqual(createPayload.plan.displayMetadata, { sortOrder: 20 });
+      assert.equal(replayResponse.status, 200);
+      assert.equal(replayPayload.plan.id, createPayload.plan.id);
+      assert.equal(conflictResponse.status, 409);
+      assert.equal(conflictPayload.error.code, "idempotency_conflict");
+      assert.deepEqual(revisions.rows, [{ count: 1 }]);
+      assert.equal(listResponse.status, 200);
+      assert.deepEqual(
+        listPayload.data.plans.map((plan: { id: string }) => plan.id),
+        [createPayload.plan.id],
+      );
+      assert.deepEqual(listPayload.data.plans[0].priorityRules, { modelFamilies: ["seedance"] });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("requires idempotency keys for membership plans writes", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      const response = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          code: "professional_monthly_missing_key",
+          displayName: "Professional Monthly",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 19900,
+          currency: "CNY",
+          giftCredits: 100,
+          seatLimit: 50,
+          status: "active",
+          reason: "Create plan without idempotency key",
+        }),
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(payload, { error: "idempotency_key_required" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("forbids non-finance roles from writing membership plans", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "support_admin",
+    });
+
+    try {
+      const response = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "support-admin-membership-plan-write",
+          cookie,
+        },
+        body: JSON.stringify({
+          code: "professional_monthly_forbidden",
+          displayName: "Professional Monthly",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 19900,
+          currency: "CNY",
+          giftCredits: 100,
+          seatLimit: 50,
+          status: "active",
+          reason: "Support admin should not write membership plans",
+        }),
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 403);
+      assert.equal(payload.error.code, "admin_forbidden");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets admins inspect setting revisions, rollback settings, and update admin accounts", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);

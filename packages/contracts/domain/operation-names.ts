@@ -15,6 +15,7 @@ export const operationNames = {
   billingCreatePaymentIntent: "billing.create_payment_intent",
   billingRequestRefund: "billing.request_refund",
   membershipPlansList: "membership.plans.list",
+  membershipPlanSave: "membership.plan.save",
   membershipOrderCreate: "membership.order.create",
   membershipStatusGet: "membership.status.get",
   opsManualSettleTask: "ops.manual_settle_task",
