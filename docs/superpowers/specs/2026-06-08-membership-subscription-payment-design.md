@@ -13,7 +13,7 @@
 
 | 档位 | 周期 | 购买限制 | 赠送积分 | 第一版强约束权益 |
 | --- | --- | --- | --- | --- |
-| 体验版会员 | 7 天 | 每个组织只能购买一次 | 后台配置，少量积分 | 基础体验，不开放团队管理，不开放 Seedance 系列免排队 |
+| 体验版会员 | 7 天 | 可反复购买，手动续费 | 后台配置，少量积分 | 基础体验，不开放团队管理，不开放 Seedance 系列免排队 |
 | 专业版会员 | 月 / 季 / 年 | 可重复购买，手动续费 | 后台配置 | 团队管理、50 人团队、Seedance 系列当前会员优先模型免排队 |
 | 企业版 | 联系商务 | 不走自助支付 | 人工方案 | 人工配置 |
 
@@ -38,7 +38,13 @@
 ### 2.1 购买与续费
 
 - 会员按组织生效。主账号购买后，组织获得会员能力；子账号在角色、项目、积分分配范围内使用组织会员能力。
-- 体验版会员按组织限购一次。
+- 体验版会员可反复购买，不做组织限购。
+- 体验版重复购买按体验版周期顺延：
+
+```text
+newExperienceExpiresAt = max(currentExperienceExpiresAt, paidAt) + 7 days
+```
+
 - 体验版升级专业版立即生效，体验版剩余时间不折算。
 - 专业版月/季/年都是手动续费，不做自动扣款。
 - 专业版续费和切换周期统一按顺延处理：
@@ -55,13 +61,14 @@ newExpiresAt = max(currentProfessionalExpiresAt, paidAt) + purchasedDuration
 - 赠送积分数量由后台套餐配置决定。
 - 会员赠送积分必须按批次记录，有独立 `expires_at`。
 - 体验版赠送积分随体验版到期。
+- 体验版续费后，组织内未过期的体验版赠送积分顺延到新的体验版到期时间。
 - 专业版月卡赠送积分随月卡到期，季卡随季卡到期，年卡随年卡到期。
 - 专业版续费后，组织内未过期的专业会员赠送积分顺延到新的专业会员到期时间。
 - 已过期积分不复活。
 - 会员到期时，未使用的会员赠送积分立即失效。
 - 消耗积分时，优先扣减最早过期的积分批次。
 
-体验版升级专业版时，体验版剩余时间不折算；体验版赠送积分也不因为升级而自动顺延。专业版支付成功会发放新的专业版赠送积分。
+体验版升级专业版时，体验版剩余时间不折算；体验版赠送积分也不因为升级专业版而自动顺延。专业版支付成功会发放新的专业版赠送积分。
 
 ### 2.3 到期后的产品表现
 
@@ -124,8 +131,8 @@ Admin 配置会员套餐
 | 字段 | 含义 |
 | --- | --- |
 | `id` | 套餐 ID |
-| `code` | 稳定编码，如 `trial_7d`、`professional_monthly` |
-| `tier` | `trial` / `professional` |
+| `code` | 稳定编码，如 `experience_7d`、`professional_monthly` |
+| `tier` | `experience` / `professional` |
 | `period_unit` | `day` / `month` / `quarter` / `year` |
 | `period_count` | 周期数量，体验版为 7 天，月卡为 1 月 |
 | `amount_minor` | 售价，单位分 |
@@ -160,11 +167,10 @@ Admin 配置会员套餐
 | 字段 | 含义 |
 | --- | --- |
 | `organization_id` | 组织 |
-| `status` | `none` / `trialing` / `active` / `expired` |
+| `status` | `none` / `experience_active` / `professional_active` / `expired` |
 | `current_tier` | 当前档位 |
 | `current_period_start_at` | 当前周期开始 |
 | `current_period_end_at` | 当前周期结束 |
-| `trial_used_at` | 体验版是否已用 |
 | `latest_order_id` | 最近一次支付订单 |
 | `updated_at` | 更新时间 |
 
@@ -178,7 +184,7 @@ Admin 配置会员套餐
 | `organization_id` | 组织 |
 | `order_id` | 来源订单 |
 | `plan_id` | 来源套餐 |
-| `tier` | `trial` / `professional` |
+| `tier` | `experience` / `professional` |
 | `period_start_at` | 本次周期开始 |
 | `period_end_at` | 本次周期结束 |
 | `gift_credits` | 本次赠送积分 |
@@ -218,7 +224,7 @@ Admin 配置会员套餐
 对于 `product_type = membership_plan` 的订单：
 
 1. `membership.payment-succeeded` 消费事件。
-2. 校验订单已支付、套餐快照存在、体验版未被该组织购买过。
+2. 校验订单已支付、套餐快照存在、套餐处于可售状态。
 3. 计算会员周期。
 4. 写入 `membership_periods`。
 5. 更新 `organization_membership_subscriptions`。
@@ -246,7 +252,7 @@ Admin 配置会员套餐
 3. 将这些批次的 `expires_at` 顺延到新的专业会员到期时间。
 4. 新支付产生的新积分批次也使用新的专业会员到期时间。
 
-体验版积分不参与专业版续费顺延。
+体验版积分只参与体验版续费顺延，不参与专业版续费顺延。
 
 ### 5.4 到期处理
 
@@ -321,7 +327,7 @@ Admin 配置会员套餐
 - 当前会员状态
 - 当前到期时间
 - 已发放积分批次
-- 体验版是否已使用
+- 体验版最近购买和到期状态
 - 最近提醒记录
 
 ### 7.3 人工处理
@@ -372,7 +378,7 @@ Admin 配置会员套餐
 
 ## 10. 测试重点
 
-- 体验版一个组织只能购买一次。
+- 体验版可重复购买，重复购买按体验版周期顺延并发放新的体验版赠送积分。
 - 专业版月/季/年支付成功后正确开通或顺延。
 - 专业版续费后未过期专业会员积分顺延到新到期时间。
 - 已过期会员积分不会被续费复活。
