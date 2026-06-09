@@ -60,8 +60,11 @@ interface BillingOrderRow {
   organization_id: string;
   created_by_user_id: string;
   order_no: string;
-  credit_package_id: string;
+  product_type: string;
+  credit_package_id: string | null;
+  membership_plan_id: string | null;
   package_snapshot_json: Record<string, unknown> | string;
+  product_snapshot_json: Record<string, unknown> | string;
   credits: number;
   amount_minor: number;
   currency: string;
@@ -284,8 +287,11 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
                   organization_id,
                   created_by_user_id,
                   order_no,
+                  product_type,
                   credit_package_id,
+                  membership_plan_id,
                   package_snapshot_json,
+                  product_snapshot_json,
                   credits,
                   amount_minor,
                   currency,
@@ -301,7 +307,10 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
                   $2,
                   $3,
                   $4,
+                  'credit_package',
                   $5,
+                  NULL,
+                  $6::jsonb,
                   $6::jsonb,
                   $7,
                   $8,
@@ -384,6 +393,12 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           return { status: 200, body: intentResponseBody(prepared.intent) };
         }
 
+        const orderSnapshot = normalizeJson(
+          prepared.order.product_snapshot_json ?? prepared.order.package_snapshot_json,
+        );
+        const subject = prepared.order.product_type === "membership_plan"
+          ? `Membership ${String(orderSnapshot.code ?? prepared.order.id)}`
+          : `Credit package ${prepared.order.credits}`;
         const providerResult = await createProviderIntentSafely(adapter, {
           provider: prepared.intent.provider,
           productMode: prepared.intent.product_mode,
@@ -391,13 +406,15 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           providerIdempotencyKey: providerIdempotencyKey(prepared.intent),
           amountMinor: prepared.intent.amount_minor,
           currency: prepared.intent.currency as "CNY",
-          subject: `Credit package ${prepared.order.credits}`,
+          subject,
           notifyUrl: providerCallbackUrl(deps.providerCallbackBaseUrl, prepared.intent.provider),
           returnUrl: deps.paymentReturnUrl,
           expiresAt: new Date(prepared.intent.expires_at),
           safeMetadata: {
             orderId: prepared.order.id,
+            productType: prepared.order.product_type,
             creditPackageId: prepared.order.credit_package_id,
+            membershipPlanId: prepared.order.membership_plan_id,
             idempotencyRecordId: prepared.idempotencyRecord.id,
           },
         });
@@ -2539,8 +2556,11 @@ function orderViewFromRow(row: BillingOrderRow) {
     id: row.id,
     orderNo: row.order_no,
     status: row.status,
+    productType: row.product_type,
     creditPackageId: row.credit_package_id,
+    membershipPlanId: row.membership_plan_id,
     packageSnapshot: normalizeJson(row.package_snapshot_json),
+    productSnapshot: normalizeJson(row.product_snapshot_json),
     credits: row.credits,
     amountMinor: row.amount_minor,
     currency: row.currency,

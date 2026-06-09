@@ -90,20 +90,28 @@ export class AuthorizationError extends Error {
 const roleCapabilities: Record<MembershipRole, Capability[]> = {
   owner_admin: [...p0Capabilities],
   producer: [
+    capabilities.workspaceRead,
     capabilities.projectView,
     capabilities.projectCreate,
     capabilities.projectEdit,
     capabilities.generationStart,
     capabilities.exportCreate,
+    capabilities.billingPurchase,
   ],
   creator: [
+    capabilities.workspaceRead,
     capabilities.projectView,
     capabilities.projectCreate,
     capabilities.projectEdit,
     capabilities.generationStart,
     capabilities.exportCreate,
+    capabilities.billingPurchase,
   ],
-  viewer: [capabilities.projectView],
+  viewer: [
+    capabilities.workspaceRead,
+    capabilities.projectView,
+    capabilities.billingPurchase,
+  ],
   sub_account: [],
 };
 

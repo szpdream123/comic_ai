@@ -31,6 +31,7 @@ import { createAdminImagePromptService } from "../modules/admin-image-prompts/ad
 import { createAdminScenePromptService } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
+import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
 import {
   createCommercePaymentService,
@@ -8779,6 +8780,61 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           }),
         );
+      }
+
+      if (pathname.startsWith("/api/membership/")) {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+
+        const membershipOrders = createMembershipOrderService({
+          db,
+          workspaceId: devWorkspaceId,
+        });
+
+        if (request.method === "GET" && pathname === "/api/membership/plans") {
+          return writeJson(response, {
+            status: 200,
+            body: await membershipOrders.listPurchasablePlans({ now: new Date() }),
+          });
+        }
+
+        if (request.method === "GET" && pathname === "/api/membership/status") {
+          return writeJson(
+            response,
+            await membershipOrders.getMembershipStatus({
+              user: { sessionToken: authenticated.sessionToken },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/membership/orders") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            membershipPlanId: string;
+          };
+          return writeJson(
+            response,
+            await membershipOrders.createMembershipOrder({
+              user: { sessionToken: authenticated.sessionToken },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
+        }
       }
 
       if (pathname.startsWith("/api/billing/")) {

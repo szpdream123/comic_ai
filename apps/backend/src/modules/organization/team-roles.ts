@@ -20,7 +20,9 @@ export interface TeamBusinessRoleMetadata {
 }
 
 const viewAndAssignedProject: Capability[] = [
+  capabilities.workspaceRead,
   capabilities.projectView,
+  capabilities.billingPurchase,
   capabilities.teamKnowledgeTemplateUse,
 ];
 

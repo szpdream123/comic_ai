@@ -135,6 +135,57 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("exposes authenticated membership plan, status, and order routes", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const planId = "95000000-0000-4000-8000-000000020101";
+      await seedMembershipPlan(db, {
+        id: planId,
+        code: "professional_monthly_http",
+      });
+
+      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
+        headers: { cookie },
+      });
+      const plans = await plansResponse.json();
+
+      const statusResponse = await fetch(`${server.origin}/api/membership/status`, {
+        headers: { cookie },
+      });
+      const status = await statusResponse.json();
+
+      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-http-order-create",
+          cookie,
+        },
+        body: JSON.stringify({ membershipPlanId: planId }),
+      });
+      const order = await orderResponse.json();
+
+      assert.equal(plansResponse.status, 200);
+      assert.equal(plans.data.plans[0].id, planId);
+      assert.equal(statusResponse.status, 200);
+      assert.deepEqual(status.membership, {
+        status: "none",
+        currentTier: null,
+        currentPeriodEndAt: null,
+      });
+      assert.equal(orderResponse.status, 200);
+      assert.equal(order.order.productType, "membership_plan");
+      assert.equal(order.order.membershipPlanId, planId);
+      assert.equal(order.order.productSnapshot.code, "professional_monthly_http");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns SMS send metadata and records cooldown through the auth request route", async () => {
     const server = createPhoneAuthDevServer();
     try {
@@ -6124,6 +6175,63 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
+}
+
+async function seedMembershipPlan(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    id: string;
+    code: string;
+  },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        'Professional Monthly HTTP',
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        50,
+        $3::jsonb,
+        $4::jsonb,
+        $5::jsonb,
+        'active',
+        $6,
+        $6
+      )
+    `,
+    [
+      input.id,
+      input.code,
+      JSON.stringify(["team_member_management", "priority_generation"]),
+      JSON.stringify({ modelFamilies: ["seedance"] }),
+      JSON.stringify({ sortOrder: 20 }),
+      new Date("2026-06-08T07:30:00.000Z"),
+    ],
+  );
 }
 
 async function prepareDirectUpload(
