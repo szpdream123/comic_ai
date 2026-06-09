@@ -37,6 +37,7 @@ import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
+import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
   createDefaultPaymentProviderRegistry,
   createLocalPaymentProviderAdapter,
@@ -8736,15 +8737,15 @@ export function createPhoneAuthDevServer(
           callbackSecret: devPaymentCallbackSecret,
           providerRegistry: devPaymentProviderRegistry,
         });
-        return writeJson(
-          response,
-          await commercePayment.processProviderCallback({
-            provider,
-            rawBody: await readTextBody(request),
-            headers: singleValueHeaders(request.headers),
-            now: new Date(),
-          }),
-        );
+        const now = new Date();
+        const callbackResult = await commercePayment.processProviderCallback({
+          provider,
+          rawBody: await readTextBody(request),
+          headers: singleValueHeaders(request.headers),
+          now,
+        });
+        await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 10 });
+        return writeJson(response, callbackResult);
       }
 
       if (
@@ -8773,13 +8774,13 @@ export function createPhoneAuthDevServer(
           merchantId: string;
           signature: string;
         };
-        return writeJson(
-          response,
-          await commercePayment.processPaymentCallback({
-            body,
-            now: new Date(),
-          }),
-        );
+        const now = new Date();
+        const callbackResult = await commercePayment.processPaymentCallback({
+          body,
+          now,
+        });
+        await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 10 });
+        return writeJson(response, callbackResult);
       }
 
       if (pathname.startsWith("/api/membership/")) {

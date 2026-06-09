@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 describe.configure?.({ concurrency: 1 });
 
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
+import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
@@ -181,6 +182,82 @@ describe("phone auth dev server", () => {
       assert.equal(order.order.productType, "membership_plan");
       assert.equal(order.order.membershipPlanId, planId);
       assert.equal(order.order.productSnapshot.code, "professional_monthly_http");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("activates membership status after a successful mock payment callback", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const planId = "95000000-0000-4000-8000-000000020102";
+      await seedMembershipPlan(db, {
+        id: planId,
+        code: "professional_monthly_callback",
+      });
+
+      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-http-callback-order",
+          cookie,
+        },
+        body: JSON.stringify({ membershipPlanId: planId }),
+      });
+      const order = await orderResponse.json();
+
+      const intentResponse = await fetch(`${server.origin}/api/billing/payment-intents`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-http-callback-intent",
+          cookie,
+        },
+        body: JSON.stringify({
+          orderId: order.order.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        }),
+      });
+      const intent = await intentResponse.json();
+      const callbackBody = {
+        provider: "wechat_pay" as const,
+        providerEventDedupKey: "membership-http-callback-paid",
+        merchantOrderNo: intent.paymentIntent.merchantOrderNo,
+        providerTradeId: "wx-membership-http-callback-paid",
+        eventType: "payment_succeeded" as const,
+        amountMinor: intent.paymentIntent.amountMinor,
+        currency: "CNY",
+        merchantId: "comic-ai-dev-merchant",
+      };
+      const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, "dev-payment-secret"),
+        }),
+      });
+      const callback = await callbackResponse.json();
+
+      const statusResponse = await fetch(`${server.origin}/api/membership/status`, {
+        headers: { cookie },
+      });
+      const status = await statusResponse.json();
+
+      assert.equal(orderResponse.status, 200);
+      assert.equal(intentResponse.status, 200);
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callback.order.status, "paid");
+      assert.equal(statusResponse.status, 200);
+      assert.equal(status.membership.status, "professional_active");
+      assert.equal(status.membership.currentTier, "professional");
+      assert.match(status.membership.currentPeriodEndAt, /^\d{4}-\d{2}-\d{2}T/);
     } finally {
       await server.close();
     }
