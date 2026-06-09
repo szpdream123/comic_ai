@@ -8,12 +8,24 @@ import { eventTypes } from "../../../../../packages/contracts/domain/event-types
 import type { RecomputedCreditBalance } from "./credit-balance-reconciliation.contract.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import {
+  allocateCreditLotsForReservation,
+  applyLotSettlement,
+  createCreditLotInTransaction,
+} from "./credit-lot.service.ts";
 
-type CreditLedgerEntryType = "grant" | "reservation" | "consume" | "release";
+type CreditLedgerEntryType = "grant" | "reservation" | "consume" | "release" | "expire";
 export type CreditAllocationOutcome = Extract<
   CreditReservationAllocationStatus,
   "consumed" | "released" | "manual_review_required"
 >;
+
+interface CreditGrantLotInput {
+  sourceType: string;
+  sourceId: string;
+  expiresAt: Date | null;
+  metadata?: Record<string, unknown>;
+}
 
 export interface CreditLedgerEntryRecord {
   id: string;
@@ -190,6 +202,7 @@ export async function grantCredits(
     sourceId: string;
     reason?: string | null;
     metadata?: Record<string, unknown>;
+    lot?: CreditGrantLotInput;
     createdByUserId?: string | null;
     now: Date;
   },
@@ -221,6 +234,7 @@ export async function grantCreditsInTransaction(
     sourceId: string;
     reason?: string | null;
     metadata?: Record<string, unknown>;
+    lot?: CreditGrantLotInput;
     createdByUserId?: string | null;
     now: Date;
   },
@@ -257,6 +271,19 @@ export async function grantCreditsInTransaction(
     await appendCreditGrantCreatedOutboxEvent(db, {
       organizationId: input.organizationId,
       ledgerEntry: inserted.entry,
+      now: input.now,
+    });
+    await createCreditLotInTransaction(db, {
+      organizationId: input.organizationId,
+      sourceType: input.lot?.sourceType ?? input.sourceType,
+      sourceId: input.lot?.sourceId ?? input.sourceId,
+      grantLedgerEntryId: inserted.entry.id,
+      amount: input.amount,
+      expiresAt: input.lot?.expiresAt ?? null,
+      metadata: input.lot?.metadata ?? {
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+      },
       now: input.now,
     });
   }
@@ -368,20 +395,39 @@ export async function reserveCredits(
     const updatedOrganization = await queryOne<{ id: string }>(
       db,
       `
-        UPDATE organizations
-        SET credit_balance_cached = credit_balance_cached - $2,
-            credit_reserved_cached = credit_reserved_cached + $2,
-            updated_at = $3
+        SELECT id
+        FROM organizations
         WHERE id = $1
           AND credit_balance_cached >= $2
-        RETURNING id
+        LIMIT 1
       `,
-      [input.organizationId, input.amount, input.now],
+      [input.organizationId, input.amount],
     );
 
     if (!updatedOrganization) {
       throw new InsufficientCreditsError();
     }
+
+    const lotAllocation = await allocateCreditLotsForReservation(db, {
+      organizationId: input.organizationId,
+      reservationId,
+      amount: input.amount,
+      now: input.now,
+    });
+    if (lotAllocation.allocatedAmount !== input.amount) {
+      throw new InsufficientCreditsError();
+    }
+
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = credit_balance_cached - $2,
+            credit_reserved_cached = credit_reserved_cached + $2,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [input.organizationId, input.amount, input.now],
+    );
 
     const ledger = await insertLedgerEntry(db, {
       organizationId: input.organizationId,
@@ -548,6 +594,13 @@ export async function settleReservationAllocationInTransaction(
         };
 
   const updatedReservation = await applyReservationSettlement(db, {
+    reservationId: reservation.id,
+    amount: input.amount,
+    outcome: input.outcome,
+    now: input.now,
+  });
+  await applyLotSettlement(db, {
+    organizationId: reservation.organizationId,
     reservationId: reservation.id,
     amount: input.amount,
     outcome: input.outcome,

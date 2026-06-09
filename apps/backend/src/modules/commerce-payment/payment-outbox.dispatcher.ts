@@ -1,5 +1,6 @@
 import { eventTypes } from "../../../../../packages/contracts/domain/event-types.ts";
 import { consumePaymentSucceededCreditGrant } from "../credit-billing/payment-succeeded-credit-consumer.service.ts";
+import { consumeMembershipPeriodCreditGrant } from "../membership/membership-period-credit-consumer.service.ts";
 import { consumePaymentSucceededMembershipActivation } from "../membership/payment-succeeded-membership-consumer.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
@@ -48,7 +49,40 @@ export async function dispatchPaymentOutboxBatch(
     }
   }
 
+  await dispatchMembershipPeriodCreditEvents(db, input);
+
   return { processedEventIds, failedEventIds };
+}
+
+async function dispatchMembershipPeriodCreditEvents(
+  db: SqlDatabase,
+  input: { now: Date; limit: number; retryDelayMs?: number },
+) {
+  const events = await claimOutboxEventsForDispatch(db, {
+    now: input.now,
+    limit: input.limit,
+    eventTypes: [eventTypes.membershipPeriodStarted],
+  });
+
+  for (const event of events) {
+    try {
+      await consumeMembershipPeriodCreditGrant(db, {
+        event,
+        now: input.now,
+      });
+      await markOutboxEventProcessed(db, {
+        outboxEventId: event.id,
+        now: input.now,
+      });
+    } catch (error) {
+      await markOutboxEventFailed(db, {
+        outboxEventId: event.id,
+        errorMessage: errorMessageFromUnknown(error),
+        retryAt: new Date(input.now.getTime() + (input.retryDelayMs ?? defaultRetryDelayMs)),
+        now: input.now,
+      });
+    }
+  }
 }
 
 function errorMessageFromUnknown(error: unknown) {

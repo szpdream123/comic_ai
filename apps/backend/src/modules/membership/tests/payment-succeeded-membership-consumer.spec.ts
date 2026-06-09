@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { consumePaymentSucceededMembershipActivation } from "../payment-succeeded-membership-consumer.service.ts";
 
@@ -109,6 +110,22 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         event: first.event,
         now: new Date("2026-06-08T08:00:00.000Z"),
       });
+      assert.equal(firstResult.kind, "applied");
+      await grantCredits(db, {
+        organizationId,
+        amount: 800,
+        sourceType: "membership_gift",
+        sourceId: firstResult.period.id,
+        reason: "seed first membership gift lot",
+        metadata: { tier: "experience" },
+        lot: {
+          sourceType: "membership_gift",
+          sourceId: firstResult.period.id,
+          expiresAt: new Date(firstResult.period.periodEndAt),
+          metadata: { tier: "experience" },
+        },
+        now: new Date("2026-06-08T08:01:00.000Z"),
+      });
       const secondResult = await consumePaymentSucceededMembershipActivation(db, {
         event: second.event,
         now: new Date("2026-06-10T08:00:00.000Z"),
@@ -126,8 +143,11 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         "SELECT count(*)::int AS count FROM team_plan_limits WHERE organization_id = $1",
         [organizationId],
       );
+      const giftLot = await db.query<{ expires_at: Date | string; metadata_json: Record<string, unknown> }>(
+        "SELECT expires_at, metadata_json FROM credit_lots WHERE organization_id = $1 AND source_type = 'membership_gift'",
+        [organizationId],
+      );
 
-      assert.equal(firstResult.kind, "applied");
       assert.equal(secondResult.kind, "applied");
       assert.equal(subscription.rows[0]?.current_tier, "experience");
       assert.equal(
@@ -136,6 +156,8 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       );
       assert.equal(professionalEntitlements.rows[0]?.count, 0);
       assert.equal(limits.rows[0]?.count, 0);
+      assert.equal(new Date(giftLot.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
+      assert.equal(giftLot.rows[0]?.metadata_json.tier, "experience");
     } finally {
       await db.close();
     }

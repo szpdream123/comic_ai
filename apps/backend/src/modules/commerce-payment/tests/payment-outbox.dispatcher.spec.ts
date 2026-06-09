@@ -43,6 +43,13 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
       const creditLedger = await db.query<{ source_id: string; amount: number }>(
         "SELECT source_id, amount FROM credit_ledger_entries WHERE source_type = 'payment_order'",
       );
+      const membershipGiftLots = await db.query<{ available_amount: number; expires_at: Date | string | null }>(
+        "SELECT available_amount, expires_at FROM credit_lots WHERE source_type = 'membership_gift'",
+      );
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+        [organizationId],
+      );
 
       assert.deepEqual(result, {
         processedEventIds: [
@@ -59,6 +66,13 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
       assert.deepEqual(creditLedger.rows, [
         { source_id: "91000000-0000-4000-8000-000000040001", amount: 120 },
       ]);
+      assert.equal(membershipGiftLots.rows.length, 1);
+      assert.equal(Number(membershipGiftLots.rows[0]?.available_amount), 3000);
+      assert.equal(
+        new Date(membershipGiftLots.rows[0]!.expires_at!).toISOString(),
+        "2026-07-08T08:05:00.000Z",
+      );
+      assert.equal(organization.rows[0]?.credit_balance_cached, 3120);
     } finally {
       await db.close();
     }

@@ -249,6 +249,9 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const status = await statusResponse.json();
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = '10000000-0000-4000-8000-000000000001'",
+      );
 
       assert.equal(orderResponse.status, 200);
       assert.equal(intentResponse.status, 200);
@@ -258,6 +261,7 @@ describe("phone auth dev server", () => {
       assert.equal(status.membership.status, "professional_active");
       assert.equal(status.membership.currentTier, "professional");
       assert.match(status.membership.currentPeriodEndAt, /^\d{4}-\d{2}-\d{2}T/);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 13000);
     } finally {
       await server.close();
     }

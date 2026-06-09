@@ -182,6 +182,13 @@ export async function consumePaymentSucceededMembershipActivation(
           });
         }
 
+        await extendUnexpiredMembershipGiftLots(db, {
+          organizationId: order.organization_id,
+          tier: planSnapshot.tier,
+          periodEndAt: window.periodEndAt,
+          now: input.now,
+        });
+
         await appendMembershipPeriodStartedOutboxEvent(db, {
           period: insertedPeriod,
           now: input.now,
@@ -460,6 +467,32 @@ async function appendMembershipPeriodStartedOutboxEvent(
       }),
       input.now,
     ],
+  );
+}
+
+async function extendUnexpiredMembershipGiftLots(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    tier: string;
+    periodEndAt: Date;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE credit_lots
+      SET expires_at = $3,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND source_type = 'membership_gift'
+        AND metadata_json ->> 'tier' = $2
+        AND expires_at IS NOT NULL
+        AND expires_at > $4
+        AND expires_at < $3
+        AND (available_amount > 0 OR reserved_amount > 0)
+    `,
+    [input.organizationId, input.tier, input.periodEndAt, input.now],
   );
 }
 
