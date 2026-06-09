@@ -13,7 +13,7 @@ export class GenerationModelExecutionResolutionError extends Error {
 }
 
 export interface GenerationModelExecution {
-  providerExecutor: "gpt-image-2" | "seedance" | "mock";
+  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "mock";
   queueName: string;
   taskMode: string;
   parameters: Record<string, unknown>;
@@ -53,7 +53,11 @@ export function resolveGenerationModelExecution(input: {
     providerExecutor: providerExecutorFromProtocol(input.kind, input.modelConfig.providerProtocol),
     queueName: input.dispatchPolicy?.submitQueueName || input.fallbackQueueName,
     taskMode: taskModeFromParameters(input.kind, input.parameters),
-    parameters: mergeDefaultParameters(input.modelConfig.defaultParams, input.parameters),
+    parameters: mergeDefaultParameters(
+      input.modelConfig.defaultParams,
+      input.parameters,
+      input.modelConfig.parameterSchema,
+    ),
   };
 }
 
@@ -72,7 +76,10 @@ function providerExecutorFromProtocol(
   if (kind === "image" && protocol === "openai_images") {
     return "gpt-image-2";
   }
-  if (kind === "video" && protocol === "volcengine_ark_video") {
+  if (kind === "image" && protocol === "custom_http") {
+    return "image-http";
+  }
+  if (kind === "video" && (protocol === "volcengine_ark_video" || protocol === "aliyun_bailian_video")) {
     return "seedance";
   }
   throw new GenerationModelExecutionResolutionError(
@@ -84,11 +91,58 @@ function providerExecutorFromProtocol(
 function mergeDefaultParameters(
   defaultParams: Record<string, unknown>,
   parameters: Record<string, unknown>,
+  parameterSchema: Record<string, unknown> = {},
 ) {
-  return {
+  return normalizeEnumParameters({
     ...defaultParams,
     ...parameters,
-  };
+  }, parameterSchema);
+}
+
+function normalizeEnumParameters(
+  parameters: Record<string, unknown>,
+  parameterSchema: Record<string, unknown>,
+) {
+  const normalized = { ...parameters };
+  for (const [key, schema] of Object.entries(parameterSchema)) {
+    const allowed = readEnumValues(schema);
+    if (!allowed.length) {
+      continue;
+    }
+    const value = normalized[key];
+    if (value == null || value === "") {
+      normalized[key] = allowed[0];
+      continue;
+    }
+    if (!allowed.includes(String(value).trim())) {
+      normalized[key] = allowed[0];
+    }
+  }
+  return normalized;
+}
+
+function readEnumValues(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const schema = value as Record<string, unknown>;
+  return readStringArray(schema.options).length
+    ? readStringArray(schema.options)
+    : readStringArray(schema.enum);
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => readEnumValue(item)).filter(Boolean)
+    : [];
+}
+
+function readEnumValue(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const option = value as Record<string, unknown>;
+    return readString(option.value) || readString(option.providerValue) || readString(option.label);
+  }
+  return readString(value);
 }
 
 function taskModeFromParameters(kind: "image" | "video", parameters: Record<string, unknown>) {

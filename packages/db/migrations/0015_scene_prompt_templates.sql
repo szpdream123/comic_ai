@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS scene_prompt_templates (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz NULL,
-  CHECK (stage IN ('split', 'extract', 'merge', 'detail', 'image')),
+  CHECK (stage IN ('split')),
   CHECK (model_family IN ('general', 'doubao', 'seedream')),
   CHECK (status IN ('enabled', 'disabled')),
   CHECK (code ~ '^[a-z0-9_]+$')

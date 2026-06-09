@@ -135,6 +135,7 @@ describe("ai model configuration schema", () => {
         media_type: string;
         provider_config_json: Record<string, unknown>;
         pricing_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
       }>(
         `
           SELECT
@@ -144,7 +145,8 @@ describe("ai model configuration schema", () => {
             invocation_mode,
             media_type,
             provider_config_json,
-            pricing_json
+            pricing_json,
+            ui_config_json
           FROM ai_model_configs
           WHERE model_code IN ('gpt-image-2-cn', 'seedance-i2v-pro')
           ORDER BY model_code
@@ -158,6 +160,11 @@ describe("ai model configuration schema", () => {
       assert.equal(result.rows[0]?.provider_protocol, "openai_images");
       assert.equal(result.rows[0]?.media_type, "image");
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
+      assert.deepEqual(result.rows[0]?.ui_config_json.supportedModes, [
+        "text_to_image",
+        "multi_reference",
+        "image_to_image",
+      ]);
       assert.equal(result.rows[1]?.provider_protocol, "volcengine_ark_video");
       assert.equal(result.rows[1]?.provider_model, "seedance-2-0-i2v");
       assert.equal(result.rows[1]?.invocation_mode, "async_polling");
@@ -186,6 +193,65 @@ describe("ai model configuration schema", () => {
           poll_queue_name: "generation-poll-video",
         },
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds Aliyun Bailian HappyHorse as an active async video model", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        provider_config_json: Record<string, unknown>;
+        default_params_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            provider_config_json,
+            default_params_json,
+            pricing_json
+          FROM ai_model_configs
+          WHERE model_code = 'happyhorse-1.0-r2v'
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(result.rows[0]?.model_code, "happyhorse-1.0-r2v");
+      assert.equal(result.rows[0]?.provider_name, "aliyun-bailian");
+      assert.equal(result.rows[0]?.provider_model, "happyhorse-1.0-r2v");
+      assert.equal(result.rows[0]?.provider_protocol, "aliyun_bailian_video");
+      assert.equal(result.rows[0]?.invocation_mode, "async_polling");
+      assert.equal(result.rows[0]?.media_type, "video");
+      assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://dashscope.aliyuncs.com");
+      assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "ALIYUNBAILIAN_API_KEY");
+      assert.equal(result.rows[0]?.default_params_json.aspectRatio, "16:9");
+      assert.equal(result.rows[0]?.pricing_json.baseCredits, 120);
+
+      const policies = await db.query<{ submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code = 'happyhorse-1.0-r2v'
+          LIMIT 1
+        `,
+      );
+      assert.equal(policies.rows[0]?.submit_queue_name, "generation-submit-video");
+      assert.equal(policies.rows[0]?.poll_queue_name, "generation-poll-video");
     } finally {
       await db.close();
     }

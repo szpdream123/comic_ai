@@ -205,6 +205,71 @@ test("generation queue health targets the admin ops queue endpoint", async () =>
   assert.equal(calls[0].options.credentials, "include");
 });
 
+test("ai storyboard preview uses a 180 second request timeout", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timers.push(delay);
+    return previousSetTimeout(callback, 0, ...args);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.createAiStoryboardPreview("project/1", {
+      scriptText: "test",
+      packages: {},
+    });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview");
+  assert.equal(timers[0], 180000);
+});
+
+test("commit ai storyboard preview targets the project preview commit route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { episode: { id: "episode-1" } },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const result = await creatorApi.commitAiStoryboardPreview("project/1", {
+    episodeTitle: "第 1 集",
+    commitPayload: { storyboards: [{ plot: "分镜" }] },
+  });
+
+  assert.equal(result.episode.id, "episode-1");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview/commit");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    episodeTitle: "第 1 集",
+    commitPayload: { storyboards: [{ plot: "分镜" }] },
+  });
+});
+
 test("generation queue job ops targets the admin ops queue job endpoint with idempotency", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

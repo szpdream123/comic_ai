@@ -413,6 +413,93 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("deletes creator projects with export records through the HTTP route", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138199");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-delete-export-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "HTTP delete export project",
+          scriptInput: "Episode 1: A project is exported before deletion.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-parse",
+          cookie,
+        },
+      });
+
+      const confirmResponse = await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
+        method: "POST",
+        headers: { cookie },
+      });
+
+      const calibrationResponse = await fetch(`${server.origin}/api/creator/calibration/run`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-calibration",
+          cookie,
+        },
+      });
+
+      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-image",
+          cookie,
+        },
+      });
+
+      const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-export",
+          cookie,
+        },
+      });
+      const exported = await exportResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId: created.project.id }),
+      });
+      const deleted = await deleteResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(parseResponse.status, 202);
+      assert.equal(confirmResponse.status, 200);
+      assert.equal(calibrationResponse.status, 200);
+      assert.equal(imageResponse.status, 200);
+      assert.equal(exportResponse.status, 200);
+      assert.equal(exported.exportRecord.manifestStatus, "ready");
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deleted.deleted, true);
+      assert.equal(deleted.projectId, created.project.id);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires and replays Idempotency-Key for creator script parsing", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -1859,7 +1946,7 @@ describe("phone auth dev server", () => {
         assert.deepEqual(tasksEnvelope.data.items, []);
         assert.equal(generationConfigResponse.status, 200);
         assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "gpt-image-2-cn");
-        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "video_mock_1");
+        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
         assert.equal(generationConfigEnvelope.data.creditBalance, 10000);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
@@ -1875,6 +1962,414 @@ describe("phone auth dev server", () => {
       } finally {
         await server.close();
       }
+  });
+
+  it("uses active admin video model configs for episode generation config", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET model_code = 'happyhorse-1.0-r2v',
+            display_name = '快乐马1.0',
+            provider_name = 'aliyun-bailian',
+            provider_model = 'happyhorse-1.0-r2v',
+            provider_protocol = 'aliyun_bailian_video',
+            provider_config_json = '{"baseURL":"https://dashscope.aliyuncs.com","createTaskEndpoint":"/api/v1/services/aigc/video-generation/video-synthesis","queryTaskEndpoint":"/api/v1/tasks/{taskId}","apiKeyEnv":"ALIYUNBAILIAN_API_KEY"}'::jsonb,
+            pricing_json = '{"unit":"video","baseCredits":120}'::jsonb,
+            sort_order = 1,
+            status = 'active'
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-video-config-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Admin video config project",
+          scriptInput: "Episode 1: Use the configured video model.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Configured Video" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-config`,
+        { headers: { cookie } },
+      );
+      const generationConfigEnvelope = await generationConfigResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "happyhorse-1.0-r2v");
+      assert.ok(
+        generationConfigEnvelope.data.models.some(
+          (model: { modelCode?: string; modelLabel?: string }) =>
+            model.modelCode === "happyhorse-1.0-r2v" && model.modelLabel === "快乐马1.0",
+        ),
+      );
+      assert.equal(
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "video_mock_1"),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes enabled storyboard prompt packages to authenticated creators", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const envelope = await packagesResponse.json();
+
+      assert.equal(packagesResponse.status, 200);
+      assert.ok(Array.isArray(envelope.packages));
+      assert.ok(envelope.packages.some((item: { package_type?: string }) => item.package_type === "genre"));
+      assert.ok(envelope.packages.some((item: { package_type?: string }) => item.package_type === "emotion"));
+      assert.equal(envelope.packages.every((item: { status?: string }) => item.status === "enabled"), true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("generates an AI storyboard preview from creator-selected prompt packages", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        title: "第一章",
+        logline: "少年托付妹妹。",
+        scriptBeats: [
+          {
+            beatNo: 1,
+            plot: "任小野把小草托付给闵婶子。",
+            characters: ["任小野", "闵婶子"],
+            locationHint: "闵婶家门前",
+            props: ["饭食"],
+            dialogue: "今天又得麻烦您照看小草了。",
+          },
+        ],
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138210");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview project",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(previewResponse.status, 200);
+      assert.equal(textChatGateway.calls.length, 4);
+      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /按玄幻修仙风格改编/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /节奏强、冲突硬/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /请按分镜表输出/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /以下【改写要求】必须作为上方任务说明的一部分执行/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /通用禁忌：/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景默认提示词/);
+      assert.match(textChatGateway.calls[2]?.prompt ?? "", /角色默认提示词/);
+      assert.match(textChatGateway.calls[3]?.prompt ?? "", /分镜默认提示词/);
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.script.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.scenes.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("commits AI storyboard preview payload into a real episode workspace", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138212");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-commit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard commit project",
+          scriptInput: "任小野把机械腿残骸掷向食人花树。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const commitResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview/commit`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            episodeTitle: "第 1 集",
+            commitPayload: {
+              characters: [
+                {
+                  characterName: "任小野",
+                  characterDescription: "灰晶收割者少年。",
+                  characterImagePrompt: "任小野角色设定图",
+                },
+              ],
+              scenes: [
+                {
+                  sceneName: "黑山密林",
+                  sceneDescription: "腐叶和断根包围的密林。",
+                  sceneImagePrompt: "黑山密林场景图",
+                },
+              ],
+              props: [
+                {
+                  propName: "机械腿残骸",
+                  propDescription: "沉重的金属残骸。",
+                  propImagePrompt: "机械腿残骸道具图",
+                },
+              ],
+              storyboards: [
+                {
+                  plot: "任小野把机械腿残骸掷向食人花树。",
+                  dialogue: "任小野：别过来。",
+                  imagePrompt: "静态分镜图提示词",
+                  videoPrompt: "动态视频提示词",
+                },
+              ],
+            },
+          }),
+        },
+      );
+      const commitEnvelope = await commitResponse.json();
+      const episodeId = commitEnvelope.episode?.id;
+
+      const [assetsResponse, storyboardsResponse] = await Promise.all([
+        fetch(`${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+      ]);
+      const assetsEnvelope = await assetsResponse.json();
+      const storyboardsEnvelope = await storyboardsResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(commitResponse.status, 200);
+      assert.equal(commitEnvelope.episode.title, "第 1 集");
+      assert.equal(commitEnvelope.storyboards.length, 1);
+      assert.equal(assetsEnvelope.data.items[0].name, "任小野");
+      assert.equal(storyboardsEnvelope.data.items[0].sceneAnalysis, "任小野把机械腿残骸掷向食人花树。\n\n任小野：别过来。");
+      assert.deepEqual(
+        storyboardsEnvelope.data.items[0].generationDrafts.map((draft: { mode: string; prompt: string }) => ({
+          mode: draft.mode,
+          prompt: draft.prompt,
+        })).sort((left: { mode: string }, right: { mode: string }) => left.mode.localeCompare(right.mode)),
+        [
+          { mode: "image", prompt: "静态分镜图提示词" },
+          { mode: "video", prompt: "动态视频提示词" },
+        ],
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("streams AI storyboard preview text before the final parsed payload", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      [
+        '{"title":"第一章","scriptBeats":[',
+        '{"beatNo":1,"plot":"任小野托付妹妹。","characters":["任小野"],"locationHint":"门前","props":[],"dialogue":""}',
+        "]}",
+      ],
+      [
+        '{"scenes":[{"sceneName":"门前","sceneDescription":"旧木屋","sceneImagePrompt":"旧木屋。"}]}',
+      ],
+      [
+        '{"characters":[{"characterName":"任小野","characterDescription":"少年","characterImagePrompt":"少年。"}]}',
+      ],
+      [
+        '{"storyboards":[{"plot":"递出饭食","dialogue":"","imagePrompt":"递出饭食。","videoPrompt":"中景。"}]}',
+      ],
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138211");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-stream-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard stream project",
+          scriptInput: "任小野托付妹妹。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "text/event-stream", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野托付妹妹。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const text = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      assert.ok(text.indexOf("event: script_delta") < text.indexOf("event: complete"));
+      assert.ok(text.indexOf("event: asset_delta") < text.indexOf("event: complete"));
+      assert.match(text, /event: script_prompt/);
+      assert.match(text, /event: asset_prompt/);
+      assert.match(text, /场景提示词生成/);
+      assert.match(text, /角色提示词生成/);
+      assert.match(text, /分镜提示词生成/);
+      assert.match(text, /请按分镜表输出/);
+      assert.match(text, /避免魔改原著核心设定/);
+      assert.match(text, /任小野托付妹妹/);
+      assert.match(text, /递出饭食/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes enabled image prompt styles as project styles to authenticated creators", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const stylesResponse = await fetch(
+        `${server.origin}/api/creator/project-styles?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const envelope = await stylesResponse.json();
+
+      assert.equal(stylesResponse.status, 200);
+      assert.ok(Array.isArray(envelope.styles));
+      assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
+      assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
+      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/admin/assets/prompt-covers/")));
+      assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
+    } finally {
+      await server.close();
+    }
   });
 
   it("creates and updates project members through the project-scoped team API", async () => {
@@ -4138,6 +4633,105 @@ describe("phone auth dev server", () => {
         ],
       );
 
+      const emptyResponseTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-empty-response-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "empty provider response",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const emptyResponseTask = (await emptyResponseTaskResponse.json()).data;
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [emptyResponseTask.taskId, new Date("2026-06-03T07:04:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          emptyResponseTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            errorMessage: "Unexpected end of JSON input",
+            displayMessage: "provider_failed",
+          }),
+          new Date("2026-06-03T07:04:01.000Z"),
+        ],
+      );
+
+      const fetchFailedTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-fetch-failed-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "fetch failed",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const fetchFailedTask = (await fetchFailedTaskResponse.json()).data;
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [fetchFailedTask.taskId, new Date("2026-06-03T07:05:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          fetchFailedTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            providerMessage: "fetch failed",
+          }),
+          new Date("2026-06-03T07:05:01.000Z"),
+        ],
+      );
+
       const ambiguousLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${ambiguousTask.taskId}`, {
         headers: { cookie },
       });
@@ -4146,11 +4740,27 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const timeoutEnvelope = await timeoutLookupResponse.json();
+      const emptyResponseLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${emptyResponseTask.taskId}`, {
+        headers: { cookie },
+      });
+      const emptyResponseEnvelope = await emptyResponseLookupResponse.json();
+      const fetchFailedLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${fetchFailedTask.taskId}`, {
+        headers: { cookie },
+      });
+      const fetchFailedEnvelope = await fetchFailedLookupResponse.json();
 
       assert.equal(ambiguousLookupResponse.status, 200);
       assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
       assert.equal(timeoutLookupResponse.status, 200);
       assert.equal(timeoutEnvelope.data.failure.displayMessage, "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
+      assert.equal(emptyResponseLookupResponse.status, 200);
+      assert.equal(emptyResponseEnvelope.data.failure.displayMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.equal(emptyResponseEnvelope.data.failure.providerMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.doesNotMatch(JSON.stringify(emptyResponseEnvelope.data.failure), /Unexpected end of JSON input/);
+      assert.equal(fetchFailedLookupResponse.status, 200);
+      assert.equal(fetchFailedEnvelope.data.failure.displayMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.equal(fetchFailedEnvelope.data.failure.providerMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.doesNotMatch(JSON.stringify(fetchFailedEnvelope.data.failure), /fetch failed/);
     } finally {
       await server.close();
     }
@@ -6124,6 +6734,29 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
+}
+
+class FakeAiStoryboardTextGateway {
+  readonly calls: Array<{ model: string; prompt: string }> = [];
+
+  constructor(private readonly responses: Array<string | string[]>) {}
+
+  async completeJson(input: { model: string; prompt: string }) {
+    this.calls.push(input);
+    const response = this.responses.shift();
+    assert.ok(response, "missing fake AI storyboard response");
+    return Array.isArray(response) ? response.join("") : response;
+  }
+
+  async *streamJson(input: { model: string; prompt: string }) {
+    this.calls.push(input);
+    const response = this.responses.shift();
+    assert.ok(response, "missing fake AI storyboard response");
+    const chunks = Array.isArray(response) ? response : [response];
+    for (const chunk of chunks) {
+      yield chunk;
+    }
+  }
 }
 
 async function prepareDirectUpload(

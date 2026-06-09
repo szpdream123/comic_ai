@@ -74,6 +74,66 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("resolves configured Aliyun Bailian video models to the video provider executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "happyhorse-1.0-r2v",
+      modelConfig: videoModelConfig({
+        modelCode: "happyhorse-1.0-r2v",
+        providerName: "aliyun-bailian",
+        providerProtocol: "aliyun_bailian_video",
+        providerModel: "happyhorse-1.0-r2v",
+        defaultParams: {
+          aspectRatio: "16:9",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {},
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+    assert.equal(execution.taskMode, "video.image_to_video");
+    assert.deepEqual(execution.parameters, {
+      aspectRatio: "16:9",
+      resolution: "720p",
+      durationSec: "5",
+    });
+  });
+
+  it("resolves configured custom-http image models and normalizes stale defaults from schema", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "Doubao-Seedream-4.5",
+      modelConfig: imageModelConfig({
+        modelCode: "Doubao-Seedream-4.5",
+        providerName: "volcengine",
+        providerProtocol: "custom_http",
+        parameterSchema: {
+          quality: { type: "enum", options: ["2K", "4K"] },
+          aspectRatio: { type: "enum", options: ["1:1", "16:9"] },
+        },
+        defaultParams: {
+          quality: "standard",
+          aspectRatio: "1:1",
+          count: 1,
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: {},
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "image-http");
+    assert.equal(execution.queueName, "generation-submit-image");
+    assert.deepEqual(execution.parameters, {
+      quality: "2K",
+      aspectRatio: "1:1",
+      count: 1,
+    });
+  });
+
   it("rejects generation requests without an explicit model", () => {
     assertExecutionError(
       () => resolveGenerationModelExecution({

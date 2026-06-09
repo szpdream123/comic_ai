@@ -1030,6 +1030,7 @@ async function uploadProviderArtifactToStorage(
         objectKey: storageObject.objectKey,
         body: counted.stream,
         contentType,
+        contentLength: knownSizeBytes,
       });
       return {
         storageObject,

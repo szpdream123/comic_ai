@@ -357,6 +357,12 @@
         gap: 14px;
         align-items: start;
       }
+      .prompt-workbench-no-stage-nav {
+        grid-template-columns: minmax(0, 1fr) minmax(360px, .66fr);
+      }
+      .prompt-workbench-no-stage-nav > aside:first-of-type {
+        display: none;
+      }
       .prompt-kind-list { display: grid; gap: 8px; }
       .prompt-kind-card {
         width: 100%;
@@ -450,6 +456,45 @@
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
       .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
+      #parameter-schema-list table {
+        min-width: 0;
+        table-layout: fixed;
+        font-size: 12px;
+      }
+      #parameter-schema-list th,
+      #parameter-schema-list td {
+        padding: 9px 10px;
+      }
+      #parameter-schema-list th:nth-child(1) { width: 30%; }
+      #parameter-schema-list th:nth-child(2) { width: 18%; }
+      #parameter-schema-list th:nth-child(3) { width: 24%; }
+      #parameter-schema-list th:nth-child(4) { width: 88px; }
+      #parameter-schema-list td.parameter-visible-cell,
+      #parameter-schema-list th.parameter-visible-cell {
+        overflow: visible;
+        text-overflow: clip;
+      }
+      #parameter-schema-list td.actions,
+      #parameter-schema-list th.actions {
+        width: 84px;
+        min-width: 84px;
+        max-width: 84px;
+      }
+      .parameter-visible-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        color: #30445f;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .parameter-visible-toggle input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--primary);
+      }
       .json-box {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -626,6 +671,14 @@
         scenePromptKeyword: "",
         scenePromptTemplates: [],
         scenePromptLoadError: "",
+        propPromptStage: "extract",
+        propPromptKeyword: "",
+        propPromptTemplates: [],
+        propPromptLoadError: "",
+        shotPromptStage: "outline",
+        shotPromptKeyword: "",
+        shotPromptTemplates: [],
+        shotPromptLoadError: "",
         settings: { configs: [], secretReferences: [] },
         adminAccounts: [],
         settingsLoadError: "",
@@ -969,7 +1022,7 @@
       async function loadPromptManagement() {
         setPageLoading("prompts", true);
         try {
-          await Promise.allSettled([loadScriptPrompts(), loadImagePromptStyles(), loadCharacterPromptTemplates(), loadScenePromptTemplates()]);
+          await Promise.allSettled([loadScriptPrompts(), loadImagePromptStyles(), loadCharacterPromptTemplates(), loadScenePromptTemplates(), loadPropPromptTemplates(), loadShotPromptTemplates()]);
           clearPageForbidden("prompts");
         } catch (error) {
           setPageForbidden("prompts", error);
@@ -1019,104 +1072,6 @@
           status: "enabled",
           remark: "每块 3000-8000 字，overlap 300-800 字。第一步只负责证据抽取。",
         },
-        {
-          id: "character-prompt-merge-default",
-          name: "人物档案合并去重",
-          code: "novel_character_merge",
-          stage: "merge",
-          model_family: "general",
-          tags: ["合并去重", "冲突处理", "人物档案"],
-          variables: ["{{all_chunk_character_json}}"],
-          chunk_min_chars: 0,
-          chunk_max_chars: 0,
-          overlap_chars: 0,
-          json_schema: "final_characters[].id, name, aliases, appearance, costume, weapons, conflicts",
-          prompt_content: `你是小说人物档案合并专家。请根据多个分块抽取结果，合并同一人物，去重别名，修正冲突，并生成最终人物档案。
-
-重要规则：
-1. 判断同一人物时，综合 name、aliases、身份、阵营、关系、场景。
-2. 同名不同人必须拆开，并在 name 后加区分称谓。
-3. 不确定冲突不要强行合并，写入 conflicts。
-4. 最终只保留主角、重要配角、反派、关键阵营人物。
-5. 不要编造小说没有支撑的重大设定。
-6. 可以补全视觉设定，但必须符合原文身份、年龄、气质和时代背景。
-7. 输出必须是合法 JSON，不要 Markdown，不要解释。
-
-分块抽取结果：
-{{all_chunk_character_json}}`,
-          is_default: true,
-          sort_order: 200,
-          status: "enabled",
-          remark: "第二步负责把证据合并成人物档案，保留 conflicts 供人工复核。",
-        },
-        {
-          id: "character-prompt-grid-default",
-          name: "九宫格角色设定图生成",
-          code: "character_grid_sheet",
-          stage: "grid",
-          model_family: "doubao",
-          tags: ["九宫格", "角色设定", "一致性"],
-          variables: ["{{character_profile_json}}"],
-          chunk_min_chars: 0,
-          chunk_max_chars: 0,
-          overlap_chars: 0,
-          json_schema: "中文提示词 sections: 人物, 九宫格角色设定图提示词, 负面提示词",
-          prompt_content: `你是 AI 生图提示词专家。请根据输入的最终人物档案，生成一条“小说人物九宫格角色设定图提示词”。
-
-要求：
-1. 生成的是 3x3 九宫格角色设定图，不是单人海报。
-2. 九个格子必须内容明确、互不重复。
-3. 同一人物在九宫格中必须保持同一张脸、同一发型、同一服装、同一武器、同一色彩方案。
-4. 默认中国人/东亚人面孔，除非人物档案明确不是。
-5. 年龄感、身份、阵营、气质必须准确。
-6. 输出中文提示词，适合直接给生图模型使用。
-
-请按以下格式输出：
-
-【人物】
-姓名：
-身份：
-核心气质：
-视觉锚点：
-
-【九宫格角色设定图提示词】
-生成一张3x3九宫格角色设定图，专业影视美术角色参考板，游戏角色原画设定九宫格，电影级写实质感，超高清，九个格子边框清晰，人物身份统一，画面整洁，细节丰富。
-
-角色：
-{姓名，年龄，性别，身份，阵营，核心气质}
-
-第1格：高清面部特写，展示脸型、五官、眼神、妆容或胡须，面部清晰，有辨识度。
-第2格：半身定妆照，展示发型、发饰、肩颈、衣领、上身服装、配饰。
-第3格：全身正面图，单人正面站姿，服装完整可见，身体比例准确。
-第4格：全身侧面图，展示侧面轮廓、发型长度、服装层次、武器挂载方式。
-第5格：全身背面图，展示背面发型、披风、衣摆、背部纹样、武器背负方式。
-第6格：服装细节拆解，展示衣领、袖口、腰封、护腕、鞋履、披风、纹样、材质细节。
-第7格：武器与配饰细节，展示主武器、副武器、发饰、玉佩、腰牌、戒指、护腕、挂坠或法器。
-第8格：表情参考，展示冷漠、审视、微怒、沉思四种表情，保持同一张脸。
-第9格：动作与场景参考，展示代表动作和适配背景，背景与小说场景一致。
-
-完整人物外观：
-{完整外观描述}
-
-完整服装设计：
-{完整服装描述}
-
-完整武器配饰：
-{完整武器与配饰描述}
-
-整体风格：
-cinematic realistic character design sheet, professional game character concept art, 3x3 grid layout, ultra detailed, sharp focus, consistent character identity, realistic fabric texture, realistic metal texture, realistic skin texture, high detail, clean panel borders.
-
-负面提示词：
-不要一次性塞进九宫格提示词，不要单人海报，不要普通写真，不要九宫格缺失，不要格子混乱，不要人物换脸，不要服装变化，不要发型变化，不要武器变化，不要三视图不一致，不要多人，不要西方面孔，不要欧美五官，不要网红脸，不要肢体畸形，不要多手，不要多脚，不要多手指，不要手指畸形，不要身体扭曲，不要比例失衡，不要头身比异常，不要低清晰度，不要模糊，不要水印，不要logo，不要乱码文字，不要廉价网游风，不要卡通Q版。
-
-人物档案：
-{{character_profile_json}}`,
-          is_default: true,
-          sort_order: 100,
-          status: "enabled",
-          remark: "第三步才生成 3x3九宫格角色设定图，锁定一致性。",
-        },
       ];
 
       async function loadCharacterPromptTemplates() {
@@ -1161,116 +1116,6 @@ cinematic realistic character design sheet, professional game character concept 
           status: "enabled",
           remark: "第一步：把长篇章节稳定拆成可追踪 scene_id 和 location_id。",
         },
-        {
-          id: "scene-prompt-extract-default",
-          name: "场景要素抽取",
-          code: "scene_extract_elements",
-          stage: "extract",
-          model_family: "general",
-          tags: ["场景要素抽取", "空间结构", "伏笔"],
-          variables: ["{{scene_json}}", "{{novel_scene_text}}"],
-          json_schema: "environment, spatial_layers, visual_details, sounds, smells, tactile_details, props, foreshadowing, continuity_notes",
-          prompt_content: `你是小说场景资料整理师。请只分析当前 scene_json 和对应原文，抽取可用于写作、分镜和生图的场景要素。
-
-要求：
-1. 不要改写剧情，不要新增原文没有依据的重大设定。
-2. 把空间分为前景、中景、远景或入口、主体、深处。
-3. 记录具体物件、声音、气味、触感、光线、材质。
-4. 标出 location_id、visual_motifs、continuity_notes 中必须延续的内容。
-5. 输出合法 JSON，不要 Markdown。
-
-scene_json：{{scene_json}}
-原文场景片段：{{novel_scene_text}}`,
-          is_default: true,
-          sort_order: 400,
-          status: "enabled",
-          remark: "第二步：从单场景原文抽取空间、五感、道具和伏笔证据。",
-        },
-        {
-          id: "scene-prompt-merge-default",
-          name: "长篇场景库合并",
-          code: "scene_merge_library",
-          stage: "merge",
-          model_family: "general",
-          tags: ["场景库合并", "地点去重", "连续性"],
-          variables: ["{{all_scene_extract_json}}", "{{existing_scene_library_json}}"],
-          json_schema: "scene_library[].location_id, location_name, fixed_features, variable_states, appearances, visual_motifs, continuity_rules, unresolved_hooks",
-          prompt_content: `你是长篇小说场景库管理员。请根据多个场景抽取结果和已有场景库，合并重复地点，形成可长期复用的场景圣经。
-
-规则：
-1. 同一地点必须复用同一个 location_id。
-2. 固定空间结构写入 fixed_features。
-3. 随章节变化的损毁、天气、血迹、灯光、封锁状态写入 variable_states。
-4. 人物留下的痕迹、未回收道具、伏笔写入 continuity_rules 或 unresolved_hooks。
-5. 冲突信息不要强行覆盖，写入 conflict_notes。
-6. 输出合法 JSON，不要 Markdown。
-
-已有场景库：{{existing_scene_library_json}}
-本轮抽取结果：{{all_scene_extract_json}}`,
-          is_default: true,
-          sort_order: 300,
-          status: "enabled",
-          remark: "第三步：维护长篇场景圣经，避免同一地点前后不一致。",
-        },
-        {
-          id: "scene-prompt-detail-default",
-          name: "小说场景设定拆解表",
-          code: "scene_detail_breakdown",
-          stage: "detail",
-          model_family: "general",
-          tags: ["场景设定拆解", "影视概念设定", "短视频场景稿"],
-          variables: ["{{scene_json}}", "{{scene_extract_json}}", "{{scene_library_json}}"],
-          json_schema: "sections: 场景名称, 所属篇章, 场景定位, 环境类型, 时间设定, 整体氛围, 场景主体, 场景描述, 细节元素拆解, 人物与场景关系, 剧情功能, 长篇连续性记录, 视觉母题, 光影版本, 声音氛围, 气味与触感, AI绘图提示词, 写作建议, 下一场景衔接建议",
-          prompt_content: `你是影视概念设定师和小说场景美术指导。请根据输入的 scene 对象、场景要素抽取结果和场景库资料，生成完整的小说场景设定拆解表。
-
-必须包含：
-【场景名称】【所属篇章 / 长篇位置】【场景定位】【环境类型】【时间设定】【整体氛围】【场景主体】【场景描述】【细节元素拆解】【人物与场景关系】【剧情功能】【长篇连续性记录】【视觉母题】【光影版本】【声音氛围】【气味与触感】【可用于 AI 绘图的场景提示词】【小说写作使用建议】【下一场景衔接建议】。
-
-要求：
-1. 保持 location_id 对应地点的一致性。
-2. 不要改变已存在的伏笔、道具、空间结构。
-3. 如果本场景是旧地点再次出现，需要写出“本次变化”。
-4. 场景描述 150-300 字，有空间层次、视觉细节、声音、气味或触感。
-5. AI 绘图提示词必须包含主体、环境、时间、光影、氛围、细节元素、镜头视角、画面风格。
-
-scene：{{scene_json}}
-场景抽取：{{scene_extract_json}}
-场景库：{{scene_library_json}}`,
-          is_default: true,
-          sort_order: 200,
-          status: "enabled",
-          remark: "第四步：生成完整场景拆解表。",
-        },
-        {
-          id: "scene-prompt-image-default",
-          name: "场景概念图提示词",
-          code: "scene_image_concept_art",
-          stage: "image",
-          model_family: "doubao",
-          tags: ["场景生图提示词", "影视概念设定图", "前景中景远景"],
-          variables: ["{{scene_detail_json}}", "{{style_prompt}}"],
-          json_schema: "positive_prompt, negative_prompt, aspect_ratio, camera, style_notes",
-          prompt_content: `你是 AI 场景概念图提示词设计师。请根据场景设定拆解结果，生成适合生图模型的中文场景提示词。
-
-格式：
-主体空间 + 环境类型 + 时间 + 光影 + 氛围 + 前景细节 + 中景主体 + 远景背景 + 镜头视角 + 画面风格 + 长篇视觉母题。
-
-要求：
-1. 优先生成场景概念图，不做人物海报。
-2. 人物只能作为小比例叙事点出现。
-3. 必须体现前景、中景、远景。
-4. 必须保留 visual_motifs 和 continuity_notes 中的重要元素。
-5. 画面风格参考影视概念设定图、剧集美术设定稿、短视频场景设定稿。
-6. 输出正向提示词和负向提示词。
-
-场景拆解：{{scene_detail_json}}
-风格补充：{{style_prompt}}`,
-          negative_prompt: "避免文字、水印、logo、人物大特写、单人海报、画面主体缺失、空间混乱、透视错误、低清晰度、过曝",
-          is_default: true,
-          sort_order: 100,
-          status: "enabled",
-          remark: "第五步：把场景拆解转成可直接生图的概念图提示词。",
-        },
       ];
 
       async function loadScenePromptTemplates() {
@@ -1285,6 +1130,36 @@ scene：{{scene_json}}
         }
       }
 
+      const propPromptTemplateFallback = [
+        { id: "prop-prompt-extract-default", name: "默认道具抽取", code: "default_prop_extract", stage: "extract", model_family: "general", tags: ["道具", "抽取"], variables: ["{{script_scene}}"], json_schema: "props[].propName, props[].propDescription, props[].propImagePrompt", prompt_content: "请根据输入剧本场景抽取需要出镜或被提及的重要道具，输出名称、用途说明和可用于生图的道具提示词。\n\n剧本内容：\n{{script_scene}}", is_default: true, sort_order: 100, status: "enabled", remark: "默认道具抽取模板" },
+      ];
+
+      async function loadPropPromptTemplates() {
+        try {
+          const result = await api("/api/admin/prop-prompt/templates?page_size=100");
+          state.propPromptTemplates = Array.isArray(result.data) && result.data.length ? result.data : propPromptTemplateFallback;
+          state.propPromptLoadError = "";
+        } catch (error) {
+          const saved = localStorage.getItem("admin-prop-prompt-templates");
+          state.propPromptTemplates = saved ? JSON.parse(saved) : propPromptTemplateFallback;
+          state.propPromptLoadError = error.payload?.error?.message || "道具提示词接口暂不可用，当前展示内置样例";
+        }
+      }
+
+      const shotPromptTemplateFallback = [
+        { id: "shot-prompt-outline-default", name: "默认分镜大纲", code: "shot_outline_from_scene", stage: "outline", model_family: "general", tags: ["分镜大纲", "节奏", "JSON"], variables: ["{{script_scene}}"], json_schema: "shots[].shot_no, scene, action, emotion, visual_focus, prompt", prompt_content: "请根据输入剧本场景生成分镜大纲，输出每个镜头的剧情目标、动作、情绪、视觉重点和简要提示词。\n\n剧本内容：\n{{script_scene}}", is_default: true, sort_order: 400, status: "enabled", remark: "默认分镜大纲模板" },
+      ];
+      async function loadShotPromptTemplates() {
+        try {
+          const result = await api("/api/admin/shot-prompt/templates?page_size=100");
+          state.shotPromptTemplates = Array.isArray(result.data) && result.data.length ? result.data : shotPromptTemplateFallback;
+          state.shotPromptLoadError = "";
+        } catch (error) {
+          const saved = localStorage.getItem("admin-shot-prompt-templates");
+          state.shotPromptTemplates = saved ? JSON.parse(saved) : shotPromptTemplateFallback;
+          state.shotPromptLoadError = error.payload?.error?.message || "分镜提示词接口暂不可用，当前展示内置样例";
+        }
+      }
       const imagePromptNegativeFallback = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
       const imagePromptStyleFallback = [
         {
@@ -1680,7 +1555,11 @@ scene：{{scene_json}}
       async function loadImagePromptStyles() {
         try {
           const result = await api("/api/admin/image-prompt/styles?page_size=200");
-          const loadedStyles = Array.isArray(result.data) ? result.data : [];
+          const loadedStyles = Array.isArray(result.data)
+            ? result.data
+            : Array.isArray(result.data?.data)
+              ? result.data.data
+              : [];
           state.imagePromptStyles = loadedStyles.length ? loadedStyles : imagePromptStyleFallback;
           state.imagePromptLoadError = "";
         } catch (error) {
@@ -2043,7 +1922,7 @@ scene：{{scene_json}}
           {
             key: "apiKeyEnv",
             label: "密钥引用",
-            ok: Boolean(model?.providerConfig?.apiKeyEnv),
+            ok: hasModelProviderSecret(model),
             message: "供应商配置必须填写 apiKeyEnv。",
           },
           {
@@ -2098,6 +1977,14 @@ scene：{{scene_json}}
         }
       }
 
+      function hasModelProviderSecret(model) {
+        return Boolean(model?.providerConfig?.apiKey || model?.providerConfig?.apiKeyEnv);
+      }
+
+      function modelProviderSecretLabel(model) {
+        return model?.providerConfig?.apiKeyEnv || (model?.providerConfig?.apiKey ? "已配置 API 密钥" : "待配置");
+      }
+
       function launchCheckHtml(checks) {
         return `<div class="check-list">${checks
           .map((check) => `<div><span>${check.label}</span><span class="tag ${check.ok ? "green" : "warn"}">${check.ok ? "通过" : check.message}</span></div>`)
@@ -2132,7 +2019,7 @@ scene：{{scene_json}}
             <div class="card"><h3>模型定价</h3><div class="form-grid">${field("基础积分", model.pricing?.baseCredits ?? "")}${field("计费单位", model.pricing?.unit ?? "")}${field("清晰度倍率", JSON.stringify(model.pricing?.qualityMultipliers || model.pricing?.resolutionMultipliers || {}))}${field("失败退款", JSON.stringify(model.pricing?.failureRefund || {}))}</div></div>
             <div class="card"><h3>请求映射</h3><div class="json-box">${providerJson}</div></div>
           </section>
-          <aside class="card workbench-aside"><h3>上线检查</h3><div class="check-list"><div><span>密钥引用</span><span class="tag ${model.providerConfig?.apiKeyEnv ? "green" : "warn"}">${model.providerConfig?.apiKeyEnv || "待配置"}</span></div><div><span>参数校验</span><span class="tag ${Object.keys(model.parameterSchema || {}).length ? "green" : "warn"}">${Object.keys(model.parameterSchema || {}).length ? "通过" : "缺失"}</span></div><div><span>计费规则</span><span class="tag ${model.pricing?.baseCredits ? "green" : "warn"}">${model.pricing?.baseCredits ? "完整" : "待配置"}</span></div><div><span>调度策略</span><span class="tag ${model.dispatchPolicy ? "green" : "warn"}">${model.dispatchPolicy?.submitQueueName || "待配置"}</span></div></div><button class="btn primary full" style="margin-top:16px" onclick="openModelStatusDrawer('${model.id}','active')" ${permissionAttrs("model.publish")}>发布模型</button><button class="btn ghost full" style="margin-top:10px" onclick="openModelRevisionsDrawer('${model.id}')">修订历史</button></aside>
+          <aside class="card workbench-aside"><h3>上线检查</h3><div class="check-list"><div><span>密钥引用</span><span class="tag ${hasModelProviderSecret(model) ? "green" : "warn"}">${modelProviderSecretLabel(model)}</span></div><div><span>参数校验</span><span class="tag ${Object.keys(model.parameterSchema || {}).length ? "green" : "warn"}">${Object.keys(model.parameterSchema || {}).length ? "通过" : "缺失"}</span></div><div><span>计费规则</span><span class="tag ${model.pricing?.baseCredits ? "green" : "warn"}">${model.pricing?.baseCredits ? "完整" : "待配置"}</span></div><div><span>调度策略</span><span class="tag ${model.dispatchPolicy ? "green" : "warn"}">${model.dispatchPolicy?.submitQueueName || "待配置"}</span></div></div><button class="btn primary full" style="margin-top:16px" onclick="openModelStatusDrawer('${model.id}','active')" ${permissionAttrs("model.publish")}>发布模型</button><button class="btn ghost full" style="margin-top:10px" onclick="openModelRevisionsDrawer('${model.id}')">修订历史</button></aside>
         </div>`;
       }
 
@@ -2282,8 +2169,6 @@ scene：{{scene_json}}
       const scriptPromptTypes = [
         { key: "genre", title: "题材包", note: "控制故事类型、世界观表达和题材爽点" },
         { key: "emotion", title: "情绪包", note: "控制情绪基调、叙事张力和爽点类型" },
-        { key: "camera", title: "镜头包", note: "控制分镜方式、画面语言和 AI 视频友好度" },
-        { key: "output", title: "输出格式包", note: "规定最终返回结构，如表格、JSON 或文本" },
         { key: "taboo", title: "通用禁忌包", note: "维护质量底线、负向要求和一致性约束" },
       ];
 
@@ -2298,6 +2183,8 @@ scene：{{scene_json}}
         { key: "image", label: "生图题词", note: "管理分镜生成后用于生图模型的画风、质量和负向约束" },
         { key: "character", label: "人物提示词", note: "管理角色设定、人物外观和一致性描述使用的提示词" },
         { key: "scene", label: "场景提示词", note: "管理空间环境、时代氛围和镜头场景使用的提示词" },
+        { key: "prop", label: "道具提示词", note: "管理剧本转道具清单和道具生图提示词" },
+        { key: "shot", label: "分镜提示词", note: "管理剧本转分镜大纲时使用的提示词" },
       ];
 
       function promptTabs() {
@@ -2319,6 +2206,8 @@ scene：{{scene_json}}
         if (state.promptManagementMode === "image") return imagePromptStylesPage();
         if (state.promptManagementMode === "character") return characterPromptTemplatesPage();
         if (state.promptManagementMode === "scene") return scenePromptTemplatesPage();
+        if (state.promptManagementMode === "prop") return propPromptTemplatesPage();
+        if (state.promptManagementMode === "shot") return shotPromptTemplatesPage();
         return scriptPromptsPage();
       }
 
@@ -2330,9 +2219,7 @@ scene：{{scene_json}}
       }
 
       const characterPromptStages = [
-        { key: "extract", title: "分块抽取", note: "每次传 3000-8000 字小说片段，只抽取当前片段的人物证据。" },
-        { key: "merge", title: "合并去重", note: "合并所有 chunk JSON，修正同人别名、冲突和最终人物档案。" },
-        { key: "grid", title: "九宫格生成", note: "为每个最终人物生成 3x3九宫格角色设定图提示词。" },
+        { key: "extract", title: "人物抽取", note: "根据剧本抽取人物证据、外观、身份、关系和可用于生成的人物提示词。" },
       ];
 
       function characterPromptTemplatesPage() {
@@ -2352,17 +2239,11 @@ scene：{{scene_json}}
         const rows = filtered.length
           ? filtered.map(characterPromptTemplateRow).join("")
           : `<tr><td colspan="9">${state.characterPromptLoadError || "暂无该阶段的人物提示词模板"}</td></tr>`;
-        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+        return `${promptTabs()}<section class="prompt-workbench prompt-workbench-no-stage-nav" data-required-permission="storyboard_prompt:view">
           <aside class="card">
             <div class="prompt-kind-list">${characterPromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updateCharacterPromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${characterPromptStageCount(item.key)} 个模板</span></button>`).join("")}</div>
           </aside>
           <section class="section">
-            <section class="card" style="box-shadow:none;border:1px solid var(--line);">
-              <div class="toolbar">
-                <div class="prompt-toolbar-title"><h3>三段式人物提示词流水线</h3><div class="metric-note">不要一次性塞进九宫格提示词。先证据抽取，再合并档案，最后逐个角色生成设定图提示词。</div></div>
-              </div>
-              ${characterPromptWorkflowGuide()}
-            </section>
             <div class="toolbar">
                 <div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note} 当前仅显示所选阶段，切换左侧阶段可查看合并和九宫格模板。</div></div>
               <div class="filters">
@@ -2378,19 +2259,11 @@ scene：{{scene_json}}
             <div class="toolbar"><h3 style="margin:0;">模板预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
             <div class="prompt-preview-box" id="prompt-preview">${characterPromptPreview(filtered)}</div>
             <div class="toolbar"><h3 style="margin:0;">后端组装测试</h3><button class="btn ghost" onclick="composeCharacterPromptFromPreview()">组装</button></div>
-            <textarea class="prompt-result-box" id="character-compose-variables" placeholder="填写变量 JSON，后端会识别并替换 {{character_profile_json}} 等变量。">${escapeHtml(characterPromptVariableSample(activeStage.key))}</textarea>
+            <textarea class="prompt-result-box" id="character-compose-variables" placeholder="填写变量 JSON，后端会识别并替换 {{script}} 等变量。">${escapeHtml(characterPromptVariableSample(activeStage.key))}</textarea>
             <div class="error-text">${escapeHtml(state.characterPromptComposeError || "")}</div>
             <textarea class="prompt-result-box" id="character-compose-result" readonly placeholder="后端组装后的完整人物提示词会显示在这里。">${escapeHtml(state.characterPromptComposeResult || "每块 3000-8000 中文字\n相邻块 overlap 300-800 字\n先抽取所有 chunk\n再合并 final_characters\n最后逐个 character 生成九宫格提示词")}</textarea>
           </aside>
         </section>`;
-      }
-
-      function characterPromptWorkflowGuide() {
-        return `<div class="character-flow">
-          <div class="character-flow-step"><strong>1. 分块抽取</strong><span>输入 {{chunk_id}} 和 {{novel_chunk}}，输出合法 JSON 人物线索。</span></div>
-          <div class="character-flow-step"><strong>2. 合并去重</strong><span>输入 {{all_chunk_character_json}}，输出 final_characters 人物档案。</span></div>
-          <div class="character-flow-step"><strong>3. 九宫格生成</strong><span>输入 {{character_profile_json}}，输出单个人物九宫格提示词。</span></div>
-        </div>`;
       }
 
       function characterPromptStageCount(stage) {
@@ -2410,7 +2283,7 @@ scene：{{scene_json}}
           <td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td>
           <td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td>
           <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
-          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setCharacterPromptTemplateDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td>
           <td>${escapeHtml(chunkText)}</td>
           <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openCharacterPromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyCharacterPromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleCharacterPromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
@@ -2432,22 +2305,8 @@ scene：{{scene_json}}
       }
 
       function characterPromptVariableSample(stage) {
-        if (stage === "extract") {
-          return JSON.stringify({ chunk_id: "chunk_001", novel_chunk: "这里粘贴 3000-8000 字小说片段。" }, null, 2);
-        }
-        if (stage === "merge") {
-          return JSON.stringify({ all_chunk_character_json: [{ chunk_id: "chunk_001", characters: [] }] }, null, 2);
-        }
-        return JSON.stringify({
-          character_profile_json: {
-            name: "沈青舟",
-            gender: "男",
-            age: "二十七岁",
-            identity: "落魄剑修",
-            temperament: "冷静克制",
-            visual_anchors: ["青色旧袍", "断剑", "眉尾伤痕"],
-          },
-        }, null, 2);
+        void stage;
+        return JSON.stringify({ script: "请填写一段用于人物抽取的剧本文本" }, null, 2);
       }
 
       async function composeCharacterPromptFromPreview() {
@@ -2491,11 +2350,7 @@ scene：{{scene_json}}
       }
 
       const scenePromptStages = [
-        { key: "split", title: "长篇分场景", note: "按地点、时间和冲突变化拆出 scene_id，并保留 location_id。" },
-        { key: "extract", title: "场景要素抽取", note: "从单场景原文抽取空间层次、五感、道具、伏笔和视觉元素。" },
-        { key: "merge", title: "场景库合并", note: "合并重复地点，维护长篇 scene_library 和连续性规则。" },
-        { key: "detail", title: "场景设定拆解", note: "生成小说场景设定拆解表，服务写作、分镜和短视频场景稿。" },
-        { key: "image", title: "场景生图提示词", note: "输出前景、中景、远景清楚的影视概念设定图提示词。" },
+        { key: "split", title: "场景拆分", note: "根据剧本抽取场景、空间环境、时间氛围和可用于生成的场景提示词。" },
       ];
 
       function scenePromptTemplatesPage() {
@@ -2515,17 +2370,11 @@ scene：{{scene_json}}
         const rows = filtered.length
           ? filtered.map(scenePromptTemplateRow).join("")
           : `<tr><td colspan="8">${state.scenePromptLoadError || "暂无该阶段的场景提示词模板"}</td></tr>`;
-        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+        return `${promptTabs()}<section class="prompt-workbench prompt-workbench-no-stage-nav" data-required-permission="storyboard_prompt:view">
           <aside class="card">
             <div class="prompt-kind-list">${scenePromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updateScenePromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${scenePromptStageCount(item.key)} 个模板</span></button>`).join("")}</div>
           </aside>
           <section class="section">
-            <section class="card" style="box-shadow:none;border:1px solid var(--line);">
-              <div class="toolbar">
-                <div class="prompt-toolbar-title"><h3>长篇小说场景提示词流水线</h3><div class="metric-note">先拆分章节，再抽取要素，合并场景库，最后生成场景拆解表和影视概念设定图提示词。</div></div>
-              </div>
-              ${scenePromptWorkflowGuide()}
-            </section>
             <div class="toolbar">
               <div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note}</div></div>
               <div class="filters">
@@ -2543,7 +2392,7 @@ scene：{{scene_json}}
             <h3 style="margin:0;">接入建议</h3>
             <textarea class="prompt-result-box" readonly>章节文本
 → split 长篇分场景
-→ extract 场景要素抽取
+→ extract 场景拆分
 → merge 更新 scene_library
 → detail 生成拆解表
 → image 生成场景概念图提示词</textarea>
@@ -2551,22 +2400,12 @@ scene：{{scene_json}}
         </section>`;
       }
 
-      function scenePromptWorkflowGuide() {
-        return `<div class="character-flow">
-          <div class="character-flow-step"><strong>1. 长篇分场景</strong><span>输入 {{novel_chapter}}，输出带 location_id、visual_motifs、continuity_notes 的场景列表。</span></div>
-          <div class="character-flow-step"><strong>2. 要素抽取</strong><span>输入 {{scene_json}} 和原文，抽取空间层次、五感、道具与伏笔。</span></div>
-          <div class="character-flow-step"><strong>3. 场景库合并</strong><span>输入 {{scene_library_json}}，维护长篇地点连续性和本次变化。</span></div>
-          <div class="character-flow-step"><strong>4. 设定拆解</strong><span>生成完整场景设定拆解表，支持写作和短视频场景稿。</span></div>
-          <div class="character-flow-step"><strong>5. 生图提示词</strong><span>输出前景、中景、远景明确的影视概念设定图提示词。</span></div>
-        </div>`;
-      }
-
       function scenePromptStageCount(stage) {
         return (state.scenePromptTemplates || []).filter((item) => (item.stage || item.promptStage) === stage).length;
       }
 
       function scenePromptTemplateRow(item) {
-        const stageKey = item.stage || item.promptStage || "detail";
+        const stageKey = item.stage || item.promptStage || "split";
         const stage = scenePromptStages.find((stageItem) => stageItem.key === stageKey);
         const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
         return `<tr>
@@ -2575,7 +2414,7 @@ scene：{{scene_json}}
           <td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td>
           <td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td>
           <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
-          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setScenePromptTemplateDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td>
           <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openScenePromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyScenePromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleScenePromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
         </tr>`;
@@ -2602,6 +2441,93 @@ scene：{{scene_json}}
         renderShell();
       }
 
+      const propPromptStages = [
+        { key: "extract", title: "道具抽取", note: "从剧本中提取关键道具、外观、用途和生图提示词" },
+      ];
+
+      function propPromptTemplatesPage() {
+        const activeStage = propPromptStages.find((item) => item.key === state.propPromptStage) || propPromptStages[0];
+        const keyword = (state.propPromptKeyword || "").trim().toLowerCase();
+        const filtered = (state.propPromptTemplates || [])
+          .filter((item) => (item.stage || item.promptStage) === activeStage.key)
+          .filter((item) => !keyword || [item.name, item.code, item.stage, item.model_family || item.modelFamily, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length ? filtered.map(propPromptTemplateRow).join("") : `<tr><td colspan="8">${state.propPromptLoadError || "暂无道具提示词模板"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench prompt-workbench-no-stage-nav" data-required-permission="storyboard_prompt:view"><aside class="card"><div class="prompt-kind-list">${propPromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updatePropPromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${propPromptStageCount(item.key)} 个模板</span></button>`).join("")}</div></aside><section class="section"><div class="toolbar"><div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note}</div></div><div class="filters"><input value="${escapeAttribute(state.propPromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updatePropPromptKeyword(this.value)" /><select onchange="updatePropPromptStage(this.value)">${optionList(propPromptStages.map((item) => item.key), activeStage.key)}</select><button class="btn primary" onclick="openPropPromptTemplateDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增道具提示词</button><button class="btn ghost" onclick="loadPropPromptTemplates().then(renderShell)">刷新</button></div></div><div class="table-wrap dense"><table><thead><tr><th>名称</th><th>编码</th><th>阶段</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section><aside class="card prompt-preview"><div class="toolbar"><h3 style="margin:0;">模板预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div><div class="prompt-preview-box" id="prompt-preview">${propPromptPreview(filtered)}</div><h3 style="margin:0;">接入建议</h3><textarea class="prompt-result-box" readonly>剧本完成后，将第一次 DeepSeek 返回的剧本文字填充到道具提示词中的【剧本】位置，再请求 DeepSeek 生成道具词。</textarea></aside></section>`;
+      }
+
+      function propPromptStageCount(stage) {
+        return (state.propPromptTemplates || []).filter((item) => (item.stage || item.promptStage) === stage).length;
+      }
+
+      function propPromptTemplateRow(item) {
+        const stageKey = item.stage || item.promptStage || "extract";
+        const stage = propPromptStages.find((stageItem) => stageItem.key === stageKey);
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        return `<tr><td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="character-template-meta">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag blue">${escapeHtml(tag)}</span>`).join("")}</div></div></td><td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td><td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td><td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td><td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td><td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setPropPromptTemplateDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td><td>${Number(item.sort_order || item.sortOrder || 0)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openPropPromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyPropPromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="togglePropPromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td></tr>`;
+      }
+
+      function propPromptPreview(items) {
+        const selected = items[0] || (state.propPromptTemplates || []).find((item) => (item.stage || item.promptStage) === state.propPromptStage);
+        if (!selected) return "暂无可预览的道具提示词模板。";
+        const variables = (selected.variables || []).join(" / ") || "-";
+        return escapeHtml(`【${selected.name}】\n阶段：${selected.stage || selected.promptStage}\n变量：${variables}\n\n${selected.prompt_content || selected.promptContent || ""}\n\nJSON Schema：\n${selected.json_schema || selected.jsonSchema || "-"}`);
+      }
+
+      function updatePropPromptStage(stage) {
+        state.propPromptStage = propPromptStages.some((item) => item.key === stage) ? stage : "extract";
+        renderShell();
+      }
+
+      function updatePropPromptKeyword(value) {
+        state.propPromptKeyword = value || "";
+        renderShell();
+      }
+
+      function propPromptTemplateById(id) {
+        return (state.propPromptTemplates || []).find((item) => String(item.id) === String(id));
+      }
+
+      function persistPropPromptTemplates() {
+        localStorage.setItem("admin-prop-prompt-templates", JSON.stringify(state.propPromptTemplates || []));
+      }
+
+      /* shot-tab-contract: 分镜提示词 */
+      /* 分镜提示词 */
+      const shotPromptStages = [
+        { key: "outline", title: "分镜大纲", note: "把剧本场景拆成有戏剧目的、情绪推进和视觉重点的 beats" },
+      ];
+
+      function shotPromptTemplatesPage() {
+        const activeStage = shotPromptStages.find((item) => item.key === state.shotPromptStage) || shotPromptStages[0];
+        const keyword = (state.shotPromptKeyword || "").trim().toLowerCase();
+        const filtered = (state.shotPromptTemplates || [])
+          .filter((item) => (item.stage || item.promptStage) === activeStage.key)
+          .filter((item) => !keyword || [item.name, item.code, item.stage, item.model_family || item.modelFamily, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
+        const rows = filtered.length ? filtered.map(shotPromptTemplateRow).join("") : `<tr><td colspan="8">${state.shotPromptLoadError || "暂无分镜提示词模板"}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench prompt-workbench-no-stage-nav" data-required-permission="storyboard_prompt:view"><aside class="card"><div class="prompt-kind-list">${shotPromptStages.map((item) => `<button class="prompt-kind-card ${item.key === activeStage.key ? "active" : ""}" onclick="updateShotPromptStage('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span><span class="tag blue" style="margin-top:8px;">${shotPromptStageCount(item.key)} 个模板</span></button>`).join("")}</div></aside><section class="section"><div class="toolbar"><div class="prompt-toolbar-title"><h3>${activeStage.title}模板</h3><div class="metric-note">${activeStage.note}</div></div><div class="filters"><input value="${escapeAttribute(state.shotPromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateShotPromptKeyword(this.value)" /><select onchange="updateShotPromptStage(this.value)">${optionList(shotPromptStages.map((item) => item.key), activeStage.key)}</select><button class="btn primary" onclick="openShotPromptTemplateDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增分镜提示词</button><button class="btn ghost" onclick="loadShotPromptTemplates().then(renderShell)">刷新</button></div></div><div class="table-wrap dense"><table><thead><tr><th>名称</th><th>编码</th><th>阶段</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section><aside class="card prompt-preview"><div class="toolbar"><h3 style="margin:0;">模板预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div><div class="prompt-preview-box" id="prompt-preview">${shotPromptPreview(filtered)}</div><h3 style="margin:0;">接入建议</h3><textarea class="prompt-result-box" readonly>测试结果会显示在这里。</textarea></aside></section>`;
+      }
+
+      function shotPromptStageCount(stage) { return (state.shotPromptTemplates || []).filter((item) => (item.stage || item.promptStage) === stage).length; }
+
+      function shotPromptTemplateRow(item) {
+        const stageKey = item.stage || item.promptStage || "outline";
+        const stage = shotPromptStages.find((stageItem) => stageItem.key === stageKey);
+        const nextStatus = item.status === "enabled" ? "disabled" : "enabled";
+        return `<tr><td><div class="prompt-title-cell">${escapeHtml(item.name || "-")}<div class="character-template-meta">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag blue">${escapeHtml(tag)}</span>`).join("")}</div></div></td><td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td><td><span class="tag blue">${escapeHtml(stage?.title || stageKey)}</span></td><td>${escapeHtml(item.model_family || item.modelFamily || "general")}</td><td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td><td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setShotPromptTemplateDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td><td>${Number(item.sort_order || item.sortOrder || 0)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openShotPromptTemplateDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyShotPromptTemplate('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleShotPromptTemplateStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td></tr>`;
+      }
+
+      function shotPromptPreview(items) {
+        const selected = items[0] || (state.shotPromptTemplates || []).find((item) => (item.stage || item.promptStage) === state.shotPromptStage);
+        if (!selected) return "暂无可预览的分镜提示词模板。";
+        const variables = (selected.variables || []).join(" / ") || "-";
+        return escapeHtml(`【${selected.name}】\n阶段：${selected.stage || selected.promptStage}\n变量：${variables}\n\n${selected.prompt_content || selected.promptContent || ""}\n\nJSON Schema：\n${selected.json_schema || selected.jsonSchema || "-"}`);
+      }
+
+      function shotPromptTemplateById(id) { return (state.shotPromptTemplates || []).find((item) => String(item.id) === String(id)); }
+      function updateShotPromptStage(stage) { state.shotPromptStage = shotPromptStages.some((item) => item.key === stage) ? stage : "outline"; renderShell(); }
+      function updateShotPromptKeyword(value) { state.shotPromptKeyword = value || ""; renderShell(); }
       function scriptPromptsPage() {
         const activeType = scriptPromptTypes.find((item) => item.key === state.scriptPromptPackageType) || scriptPromptTypes[0];
         const keyword = (state.scriptPromptKeyword || "").trim().toLowerCase();
@@ -2646,7 +2572,7 @@ scene：{{scene_json}}
           <td class="prompt-code-cell">${escapeHtml(item.code || "-")}</td>
           <td><span class="tag blue">${escapeHtml(type?.title || item.package_type || item.packageType || "-")}</span></td>
           <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
-          <td>${item.is_default || item.isDefault || item.is_global_default || item.isGlobalDefault ? `<span class="tag green">默认</span>` : "-"}</td>
+          <td>${item.is_default || item.isDefault || item.is_global_default || item.isGlobalDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setScriptPromptPackageDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td>
           <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
           <td>${formatShortDate(item.updated_at || item.updatedAt)}</td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openScriptPromptPackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyScriptPromptPackage('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleScriptPromptPackageStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
@@ -2654,7 +2580,7 @@ scene：{{scene_json}}
       }
 
       function scriptPromptPreview() {
-        const preferred = ["genre", "emotion", "camera", "output", "taboo"];
+        const preferred = ["genre", "emotion", "taboo"];
         const sections = preferred.flatMap((typeKey) => {
           const type = scriptPromptTypes.find((item) => item.key === typeKey);
           const item = state.scriptPromptPackages
@@ -2722,7 +2648,7 @@ scene：{{scene_json}}
           .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
         const rows = filtered.length
           ? filtered.map(imagePromptStyleRow).join("")
-          : `<tr><td colspan="8">${state.imagePromptLoadError || "暂无该分类的生图题词"}</td></tr>`;
+          : `<tr><td colspan="10">${state.imagePromptLoadError || "暂无该分类的生图题词"}</td></tr>`;
         return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
           <aside class="card">
             <div class="prompt-kind-list">${imagePromptKinds.map((item) => `<button class="prompt-kind-card ${item.key === activeKind.key ? "active" : ""}" onclick="updateImagePromptCategory('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
@@ -2737,7 +2663,7 @@ scene：{{scene_json}}
                 <button class="btn ghost" onclick="loadImagePromptStyles().then(renderShell)">刷新</button>
               </div>
             </div>
-            <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>分类</th><th>模型族</th><th>状态</th><th>排序</th><th>提示词</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+            <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>分类</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th>提示词</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
           </section>
           <aside class="card prompt-preview">
             <div class="toolbar"><h3 style="margin:0;">样式预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
@@ -2757,6 +2683,7 @@ scene：{{scene_json}}
           <td><span class="tag blue">${escapeHtml(item.category || "-")}</span></td>
           <td>${escapeHtml(item.model_family || item.modelFamily || "doubao")}</td>
           <td><span class="tag ${item.status === "enabled" ? "green" : "warn"}">${item.status === "enabled" ? "启用" : "停用"}</span></td>
+          <td>${item.is_default || item.isDefault ? `<span class="tag green">默认</span>` : `<button class="btn ghost" onclick="setImagePromptStyleDefault('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`}</td>
           <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
           <td style="max-width:360px;">${escapeHtml(item.prompt_content || item.promptContent || "")}</td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openImagePromptStyleDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyImagePromptStyle('${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="${nextStatus === "disabled" ? "停用" : "启用"}" onclick="toggleImagePromptStyleStatus('${escapeAttribute(item.id)}','${nextStatus}')" ${permissionAttrs("storyboard_prompt:enable")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td>
@@ -3935,6 +3862,194 @@ scene：{{scene_json}}
         });
       }
 
+      function modelEditorTemplateDefaults(kind = "image") {
+        if (kind === "video") {
+          return {
+            modelCode: "",
+            displayName: "",
+            providerName: "volcengine",
+            providerModel: "",
+            providerProtocol: "volcengine_ark_video",
+            invocationMode: "async_polling",
+            mediaType: "video",
+            taskModes: ["video.text_to_video", "video.image_to_video"],
+            status: "disabled",
+            sortOrder: 100,
+            remark: "",
+            capabilities: {},
+            parameterSchema: {
+              aspectRatio: {
+                label: "视频比例",
+                type: "enum",
+                required: true,
+                options: ["16:9", "9:16"],
+                adminEditableOptions: true,
+              },
+            },
+            defaultParams: { aspectRatio: "16:9" },
+            providerConfig: {
+              baseURL: "",
+              createTaskEndpoint: "",
+              queryTaskEndpoint: "",
+              apiKeyEnv: "",
+              requestFormat: "json",
+            },
+            pricing: { unit: "video", baseCredits: 120 },
+            limits: {},
+            uiConfig: {},
+            dispatchPolicy: {
+              submitQueueName: "generation-submit-video",
+              pollQueueName: "generation-poll-video",
+              providerRpmLimit: 60,
+              providerConcurrentLimit: 5,
+              submitConcurrencyLimit: 5,
+              pollingIntervalMs: 15000,
+              pollingConcurrencyLimit: 20,
+            },
+          };
+        }
+        return {
+          modelCode: "",
+          displayName: "",
+          providerName: "",
+          providerModel: "",
+          providerProtocol: "custom_http",
+          invocationMode: "sync",
+          mediaType: "image",
+          taskModes: ["image.generate", "image.edit", "image.reference_generate"],
+          status: "disabled",
+          sortOrder: 100,
+          remark: "",
+          capabilities: {
+            input: ["prompt", "image"],
+            output: ["image"],
+          },
+          parameterSchema: {
+            prompt: {
+              label: "正向提示词",
+              type: "string",
+              required: true,
+            },
+            negativePrompt: {
+              label: "反向提示词",
+              type: "string",
+              required: false,
+            },
+            referenceImages: {
+              label: "参考图",
+              type: "file[]",
+              required: false,
+            },
+            editInstruction: {
+              label: "编辑指令",
+              type: "string",
+              required: false,
+            },
+            aspectRatio: {
+              label: "画面比例",
+              type: "enum",
+              required: true,
+              options: ["1:1", "16:9", "9:16", "3:2", "2:3"],
+              adminEditableOptions: true,
+            },
+            quality: {
+              label: "质量档位",
+              type: "enum",
+              required: true,
+              options: ["standard", "hd", "2K"],
+              adminEditableOptions: true,
+            },
+            count: {
+              label: "生成数量",
+              type: "integer",
+              required: true,
+              min: 1,
+              max: 4,
+            },
+          },
+          defaultParams: { aspectRatio: "1:1", quality: "standard", count: 1 },
+          providerConfig: {
+            baseURL: "",
+            createTaskEndpoint: "",
+            apiKeyEnv: "",
+            requestFormat: "json",
+          },
+          pricing: {
+            unit: "image",
+            baseCredits: 90,
+            qualityMultipliers: { standard: 1, hd: 1.2, "2K": 1.5 },
+          },
+          limits: {},
+          uiConfig: {},
+          dispatchPolicy: {
+            submitQueueName: "generation-submit-image",
+            pollQueueName: null,
+            providerRpmLimit: 60,
+            providerConcurrentLimit: 5,
+            submitConcurrencyLimit: 5,
+            pollingIntervalMs: 15000,
+            pollingConcurrencyLimit: 20,
+          },
+        };
+      }
+
+      function applyModelEditorTemplate(kind = "image") {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const template = modelEditorTemplateDefaults(kind);
+        form.elements.providerName.value = template.providerName;
+        form.elements.providerModel.value = template.providerModel;
+        form.elements.providerProtocol.value = template.providerProtocol;
+        form.elements.invocationMode.value = template.invocationMode;
+        form.elements.mediaType.value = template.mediaType;
+        form.elements.taskModes.value = template.taskModes.join(", ");
+        form.elements.parameterSchema.value = JSON.stringify(template.parameterSchema, null, 2);
+        form.elements.defaultParams.value = JSON.stringify(template.defaultParams, null, 2);
+        form.elements.pricing.value = JSON.stringify(template.pricing, null, 2);
+        form.elements.providerConfig.value = JSON.stringify(template.providerConfig, null, 2);
+        if (form.elements.modelApiKeyEnv) form.elements.modelApiKeyEnv.value = template.providerConfig.apiKeyEnv || "";
+        if (form.elements.modelApiKey) form.elements.modelApiKey.value = template.providerConfig.apiKey || "";
+        form.elements.limits.value = JSON.stringify(template.limits, null, 2);
+        form.elements.uiConfig.value = JSON.stringify(template.uiConfig, null, 2);
+        form.elements.submitQueueName.value = template.dispatchPolicy.submitQueueName || "";
+        form.elements.pollQueueName.value = template.dispatchPolicy.pollQueueName || "";
+        form.elements.providerRpmLimit.value = template.dispatchPolicy.providerRpmLimit;
+        form.elements.providerConcurrentLimit.value = template.dispatchPolicy.providerConcurrentLimit;
+        form.elements.submitConcurrencyLimit.value = template.dispatchPolicy.submitConcurrencyLimit;
+        form.elements.pollingIntervalMs.value = template.dispatchPolicy.pollingIntervalMs;
+        refreshParameterSchemaList(template.parameterSchema);
+      }
+
+      function modelSecretReferenceOptions(selectedEnvName = "") {
+        const options = [`<option value="">Select secret reference</option>`];
+        for (const secret of state.settings.secretReferences || []) {
+          const label = `${secret.secretRef || secret.envName} / ${secret.envName}${secret.status ? ` (${secret.status})` : ""}`;
+          options.push(`<option value="${escapeAttribute(secret.envName)}" ${secret.envName === selectedEnvName ? "selected" : ""}>${escapeHtml(label)}</option>`);
+        }
+        return options.join("");
+      }
+
+      function setModelEditorProviderConfigApiKeyEnv(envName) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const config = parseJsonTextarea(new FormData(form), "providerConfig");
+        config.apiKeyEnv = String(envName || "").trim();
+        form.elements.providerConfig.value = JSON.stringify(config, null, 2);
+      }
+
+      function setModelEditorProviderConfigApiKey(apiKey) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const config = parseJsonTextarea(new FormData(form), "providerConfig");
+        const value = String(apiKey || "").trim();
+        if (value) {
+          config.apiKey = value;
+        } else {
+          delete config.apiKey;
+        }
+        form.elements.providerConfig.value = JSON.stringify(config, null, 2);
+      }
+
       function openModelEditorDrawer(modelId = "") {
         const model = modelId ? state.models.find((item) => item.id === modelId) : null;
         const isEdit = Boolean(model);
@@ -3981,17 +4096,30 @@ scene：{{scene_json}}
             pollingConcurrencyLimit: 20,
           },
         };
+        if (!model) Object.assign(defaults, modelEditorTemplateDefaults("image"));
+        const selectedApiKeyEnv = defaults.providerConfig?.apiKeyEnv || "";
+        const selectedApiKey = defaults.providerConfig?.apiKey || "";
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
           <div class="drawer-head"><h3>${isEdit ? "编辑模型配置" : "新增模型配置"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <form id="model-editor-form">
+            ${isEdit ? "" : `<section class="card" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar">
+                <h4>模板选择</h4>
+                <span class="metric-note">先选模型类型，下面会自动填好媒体类型、任务模式、参数 schema 和队列。</span>
+              </div>
+              <div class="actions-row">
+                <button class="btn ghost" type="button" id="image-model-template-btn">Image model template</button>
+                <button class="btn ghost" type="button" id="video-model-template-btn">Video model template</button>
+              </div>
+            </section>`}
             <div class="form-grid">
-              <label class="field"><span>模型编码</span><input name="modelCode" value="${escapeAttribute(defaults.modelCode)}" ${isEdit ? "readonly" : ""} required /></label>
+              <label class="field"><span>模型编码</span><input name="modelCode" value="${escapeAttribute(defaults.modelCode)}" required /></label>
               <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName)}" required /></label>
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -4002,7 +4130,7 @@ scene：{{scene_json}}
               <div class="toolbar"><h4>手动添加参数</h4><span class="metric-note">用于视频比率、分辨率、时长、数量、质量等管理员自定义项</span></div>
               <div class="table-wrap" id="parameter-schema-list" style="margin-bottom:12px;">
                 <table>
-                  <thead><tr><th>现有参数</th><th>类型</th><th>选项</th><th class="actions">操作</th></tr></thead>
+                  <thead><tr><th>现有参数</th><th>类型</th><th>选项</th><th class="parameter-visible-cell">是否显示</th><th class="actions">操作</th></tr></thead>
                   <tbody>${parameterSchemaRows(defaults.parameterSchema || {})}</tbody>
                 </table>
               </div>
@@ -4013,11 +4141,16 @@ scene：{{scene_json}}
                 <label class="field"><span>选项内容</span><input name="manualParameterOptions" placeholder="16:9, 9:16, 1:1" /></label>
               </div>
               <label class="inline-check"><input name="manualParameterRequired" type="checkbox" checked /> 必填参数</label>
+              <label class="inline-check"><input name="manualParameterVisible" type="checkbox" checked /> 是否显示</label>
               <button class="btn ghost full" type="button" id="manual-parameter-add-btn">合并到参数 schema</button>
             </section>
             <label class="field"><span>参数 schema JSON</span><textarea name="parameterSchema" rows="8" required>${escapeHtml(JSON.stringify(defaults.parameterSchema || {}, null, 2))}</textarea></label>
             <label class="field"><span>默认参数 JSON</span><textarea name="defaultParams" rows="4">${escapeHtml(JSON.stringify(defaults.defaultParams || {}, null, 2))}</textarea></label>
             <label class="field"><span>模型定价 JSON</span><textarea name="pricing" rows="5" required>${escapeHtml(JSON.stringify(defaults.pricing || {}, null, 2))}</textarea></label>
+            <div class="form-grid">
+              <label class="field"><span>API 密钥</span><input name="modelApiKey" type="password" autocomplete="off" value="${escapeAttribute(selectedApiKey)}" placeholder="直接填写供应商 API Key" /></label>
+              <label class="field"><span>密钥引用</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv)}</select></label>
+            </div>
             <label class="field"><span>供应商配置 JSON</span><textarea name="providerConfig" rows="7" required>${escapeHtml(JSON.stringify(defaults.providerConfig || {}, null, 2))}</textarea></label>
             <div class="form-grid">
               <label class="field"><span>提交队列</span><input name="submitQueueName" value="${escapeAttribute(defaults.dispatchPolicy?.submitQueueName || "")}" required /></label>
@@ -4036,6 +4169,27 @@ scene：{{scene_json}}
           </form>
         </aside>`;
         const modelEditorForm = document.getElementById("model-editor-form");
+        modelEditorForm.elements.modelApiKeyEnv.addEventListener("change", (event) => {
+          try {
+            setModelEditorProviderConfigApiKeyEnv(event.target.value);
+          } catch (err) {
+            document.getElementById("model-editor-error").textContent = err.message || "密钥引用写入供应商配置失败";
+          }
+        });
+        modelEditorForm.elements.modelApiKey.addEventListener("input", (event) => {
+          try {
+            setModelEditorProviderConfigApiKey(event.target.value);
+          } catch (err) {
+            document.getElementById("model-editor-error").textContent = err.message || "API 密钥写入供应商配置失败";
+          }
+        });
+        if (!isEdit) {
+          document.getElementById("image-model-template-btn")?.addEventListener("click", () => applyModelEditorTemplate("image"));
+          document.getElementById("video-model-template-btn")?.addEventListener("click", () => applyModelEditorTemplate("video"));
+          modelEditorForm.elements.mediaType.addEventListener("change", (event) => {
+            applyModelEditorTemplate(event.target.value === "video" ? "video" : "image");
+          });
+        }
         document.getElementById("manual-parameter-add-btn").addEventListener("click", () => {
           const error = document.getElementById("model-editor-error");
           error.textContent = "";
@@ -4109,9 +4263,19 @@ scene：{{scene_json}}
         });
       }
 
-      function openModelStatusDrawer(modelId, status) {
-        const model = state.models.find((item) => item.id === modelId);
+      async function openModelStatusDrawer(modelId, status) {
+        let model = state.models.find((item) => item.id === modelId);
         if (!model) return;
+        try {
+          const result = await api(`/api/admin/models/${modelId}`);
+          model = result.data || model;
+          const modelIndex = state.models.findIndex((item) => item.id === modelId);
+          if (modelIndex >= 0) {
+            state.models[modelIndex] = model;
+          }
+        } catch {
+          // The submit step will surface auth/API failures. Keep the cached row visible meanwhile.
+        }
         const label = status === "active" ? "启用/发布" : status === "disabled" ? "禁用" : "归档";
         const launchCheck = modelLaunchCheckUi(model);
         const launchCheckBlock = status === "active"
@@ -4389,8 +4553,8 @@ scene：{{scene_json}}
           providerName: String(form.get("providerName") || "").trim(),
           providerModel: String(form.get("providerModel") || "").trim(),
           providerProtocol: String(form.get("providerProtocol") || "custom_http"),
-          invocationMode: String(form.get("invocationMode") || "async_polling"),
-          mediaType: String(form.get("mediaType") || "video"),
+          invocationMode: String(form.get("invocationMode") || "sync"),
+          mediaType: String(form.get("mediaType") || "image"),
           taskModes,
           status: String(form.get("status") || "disabled"),
           sortOrder: Number(form.get("sortOrder") || 100),
@@ -4432,18 +4596,48 @@ scene：{{scene_json}}
           type: String(form.get("manualParameterType") || "string"),
           options: String(form.get("manualParameterOptions") || ""),
           required: Boolean(form.get("manualParameterRequired")),
+          visible: Boolean(form.get("manualParameterVisible")),
         });
+      }
+
+      function modelParameterDisplayName(key, parameter) {
+        const knownNames = {
+          prompt: "正向提示词",
+          negativePrompt: "反向提示词",
+          referenceImages: "参考图",
+          editInstruction: "编辑指令",
+          aspectRatio: "画面比例",
+          quality: "质量档位",
+          count: "生成数量",
+        };
+        return knownNames[key] || parameter.label || key;
+      }
+
+      function parameterTypeLabel(type) {
+        const labels = {
+          string: "文本",
+          number: "数字",
+          integer: "整数",
+          boolean: "开关",
+          enum: "选项",
+          array: "列表",
+          file: "文件",
+          "file[]": "文件列表",
+          json: "JSON",
+        };
+        return labels[type] || type || "JSON";
       }
 
       function parameterSchemaRows(schema) {
         const entries = Object.entries(schema || {});
         if (entries.length === 0) {
-          return `<tr><td colspan="4">暂无现有参数</td></tr>`;
+          return `<tr><td colspan="5">暂无现有参数</td></tr>`;
         }
         return entries.map(([key, value]) => {
           const parameter = value && typeof value === "object" ? value : {};
           const options = Array.isArray(parameter.options) ? parameter.options.join(", ") : "-";
-          return `<tr><td>${escapeHtml(parameter.label || key)}<div class="metric-note">${escapeHtml(key)}</div></td><td><span class="tag blue">${escapeHtml(parameter.type || "json")}</span></td><td>${escapeHtml(options)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑参数" type="button" onclick="fillManualParameterEditor('${escapeAttribute(key)}')">编</button><button class="icon-btn" title="删除参数" type="button" onclick="removeManualParameterFromSchema('${escapeAttribute(key)}')">删</button></div></td></tr>`;
+          const visibleChecked = parameter.visible !== false ? "checked" : "";
+          return `<tr><td>${escapeHtml(modelParameterDisplayName(key, parameter))}<div class="metric-note">${escapeHtml(key)}</div></td><td><span class="tag blue">${escapeHtml(parameterTypeLabel(parameter.type || "json"))}</span></td><td>${escapeHtml(options)}</td><td class="parameter-visible-cell"><label class="parameter-visible-toggle"><input type="checkbox" ${visibleChecked} onchange="toggleParameterVisibilityInSchema('${escapeAttribute(key)}', this.checked)" /> 显示</label></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑参数" type="button" onclick="fillManualParameterEditor('${escapeAttribute(key)}')">编</button><button class="icon-btn" title="删除参数" type="button" onclick="removeManualParameterFromSchema('${escapeAttribute(key)}')">删</button></div></td></tr>`;
         }).join("");
       }
 
@@ -4463,10 +4657,26 @@ scene：{{scene_json}}
         const schema = currentModelEditorSchema();
         const parameter = schema[parameterKey] || {};
         form.elements.manualParameterKey.value = parameterKey;
-        form.elements.manualParameterLabel.value = parameter.label || parameterKey;
+        form.elements.manualParameterLabel.value = modelParameterDisplayName(parameterKey, parameter);
         form.elements.manualParameterType.value = parameter.type || "string";
         form.elements.manualParameterOptions.value = Array.isArray(parameter.options) ? parameter.options.join(", ") : "";
         form.elements.manualParameterRequired.checked = Boolean(parameter.required);
+        form.elements.manualParameterVisible.checked = parameter.visible !== false;
+      }
+
+      function toggleParameterVisibilityInSchema(parameterKey, visible) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const schema = currentModelEditorSchema();
+        const parameter = schema[parameterKey] && typeof schema[parameterKey] === "object" && !Array.isArray(schema[parameterKey])
+          ? schema[parameterKey]
+          : {};
+        schema[parameterKey] = {
+          ...parameter,
+          visible: Boolean(visible),
+        };
+        form.elements.parameterSchema.value = JSON.stringify(schema, null, 2);
+        refreshParameterSchemaList(schema);
       }
 
       function removeManualParameterFromSchema(parameterKey) {
@@ -4489,6 +4699,7 @@ scene：{{scene_json}}
           label: String(input.label || key).trim(),
           type,
           required: Boolean(input.required),
+          visible: input.visible !== false,
         };
         const options = String(input.options || "")
           .split(",")
@@ -4520,7 +4731,7 @@ scene：{{scene_json}}
             <div class="form-grid">
               <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
               <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
-              <label class="field"><span>类型</span><select name="package_type">${optionList(["genre", "emotion", "camera", "output", "taboo"], existing?.package_type || existing?.packageType || "genre")}</select></label>
+              <label class="field"><span>类型</span><select name="package_type">${optionList(["genre", "emotion", "taboo"], existing?.package_type || existing?.packageType || "genre")}</select></label>
               <label class="field"><span>受众</span><select name="audience">${optionList(["", "male", "female", "general"], existing?.audience || "")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
@@ -4604,6 +4815,31 @@ scene：{{scene_json}}
         }
       }
 
+      async function setScriptPromptPackageDefault(packageId) {
+        const existing = scriptPromptPackageById(packageId);
+        if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try {
+          await api(`/api/admin/storyboard-prompt/packages/${encodeURIComponent(packageId)}`, {
+            method: "PUT",
+            headers: { "idempotency-key": `admin-ui-script-prompt-default-${packageId}-${Date.now()}` },
+            body: JSON.stringify(payload),
+          });
+          await loadScriptPrompts();
+        } catch {
+          const type = existing.package_type || existing.packageType;
+          state.scriptPromptPackages = setDefaultInList(state.scriptPromptPackages, packageId, (item) => (item.package_type || item.packageType) === type);
+        }
+        renderShell();
+        showToast("默认提示词已更新");
+      }
+
+      function setDefaultInList(items, id, sameGroup) {
+        return (items || []).map((item) => sameGroup(item)
+          ? { ...item, is_default: String(item.id) === String(id), isDefault: String(item.id) === String(id) }
+          : item);
+      }
+
       function persistCharacterPromptTemplates() {
         localStorage.setItem("admin-character-prompt-templates", JSON.stringify(state.characterPromptTemplates || []));
       }
@@ -4643,7 +4879,7 @@ scene：{{scene_json}}
             <div class="form-grid">
               <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
               <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
-              <label class="field"><span>阶段</span><select name="stage">${optionList(["extract", "merge", "grid"], stage)}</select></label>
+              <label class="field"><span>阶段</span><select name="stage">${optionList(["extract"], stage)}</select></label>
               <label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label>
@@ -4736,8 +4972,29 @@ scene：{{scene_json}}
         showToast(status === "enabled" ? "人物提示词已启用" : "人物提示词已停用");
       }
 
+      async function setCharacterPromptTemplateDefault(templateId) {
+        const existing = characterPromptTemplateById(templateId);
+        if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try {
+          await api(`/api/admin/character-prompt/templates/${encodeURIComponent(templateId)}`, {
+            method: "PUT",
+            headers: { "idempotency-key": `admin-ui-character-prompt-default-${templateId}-${Date.now()}` },
+            body: JSON.stringify(payload),
+          });
+          await loadCharacterPromptTemplates();
+        } catch {
+          const stage = existing.stage || existing.promptStage || "extract";
+          state.characterPromptTemplates = setDefaultInList(state.characterPromptTemplates, templateId, (item) => (item.stage || item.promptStage) === stage);
+          persistCharacterPromptTemplates();
+        }
+        renderShell();
+        showToast("默认提示词已更新");
+      }
+
       function openImagePromptStyleDrawer(styleId = "") {
         const existing = imagePromptStyleById(styleId);
+        const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault);
         const drawer = document.getElementById("drawer");
         const defaultNegative = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
         drawer.classList.remove("hidden");
@@ -4753,6 +5010,7 @@ scene：{{scene_json}}
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
             </div>
             <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "图")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="参考豆包风格小图，可粘贴图片 URL 或 data:image/..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'image-prompt-style-form')" /></div></div></label>
+            <label class="inline-check"><input name="is_default" type="checkbox" ${isLockedDefault ? "checked disabled" : ""} /> 设为该分类默认样式</label>
             <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="摄影, 国风, 二次元" /></label>
             <label class="field"><span>豆包生图提示词</span><textarea name="prompt_content" rows="8" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
             <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="4">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaultNegative)}</textarea></label>
@@ -4778,6 +5036,7 @@ scene：{{scene_json}}
               tags: String(form.get("tags") || "").split(",").map((item) => item.trim()).filter(Boolean),
               prompt_content: String(form.get("prompt_content") || "").trim(),
               negative_prompt: String(form.get("negative_prompt") || "").trim(),
+              is_default: isLockedDefault || form.get("is_default") === "on",
               status: String(form.get("status") || "enabled"),
               sort_order: Number(form.get("sort_order") || 0),
               remark: String(form.get("remark") || ""),
@@ -4826,8 +5085,165 @@ scene：{{scene_json}}
         }
       }
 
+      async function setImagePromptStyleDefault(styleId) {
+        const existing = imagePromptStyleById(styleId);
+        if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try {
+          const result = await api(`/api/admin/image-prompt/styles/${encodeURIComponent(styleId)}`, {
+            method: "PUT",
+            headers: { "idempotency-key": `admin-ui-image-prompt-default-${styleId}-${Date.now()}` },
+            body: JSON.stringify(payload),
+          });
+          state.imagePromptStyles = setDefaultInList(
+            (state.imagePromptStyles || []).map((item) => String(item.id) === String(styleId) ? { ...item, ...(result.data || {}), is_default: true, isDefault: true } : item),
+            styleId,
+            (item) => item.category === existing.category && (item.model_family || item.modelFamily) === (existing.model_family || existing.modelFamily),
+          );
+          await loadImagePromptStyles();
+          renderShell();
+          showToast("默认提示词已更新");
+        } catch (error) {
+          renderShell();
+          showToast(error.payload?.error?.message || "默认提示词更新失败");
+          return;
+        }
+      }
+
       function persistScenePromptTemplates() {
         localStorage.setItem("admin-scene-prompt-templates", JSON.stringify(state.scenePromptTemplates || []));
+      }
+
+      function propPromptPayloadFromForm(form, existing) {
+        const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+        return {
+          id: existing?.id || `prop-prompt-${String(form.get("code") || Date.now()).trim()}`,
+          name: String(form.get("name") || "").trim(),
+          code: String(form.get("code") || "").trim(),
+          stage: String(form.get("stage") || "extract"),
+          model_family: String(form.get("model_family") || "general"),
+          tags: splitList("tags"),
+          variables: splitList("variables"),
+          json_schema: String(form.get("json_schema") || "").trim(),
+          prompt_content: String(form.get("prompt_content") || "").trim(),
+          negative_prompt: String(form.get("negative_prompt") || "").trim(),
+          is_default: form.get("is_default") === "on",
+          status: String(form.get("status") || "enabled"),
+          sort_order: Number(form.get("sort_order") || 0),
+          remark: String(form.get("remark") || "").trim(),
+        };
+      }
+
+      function openPropPromptTemplateDrawer(templateId = "") {
+        const existing = propPromptTemplateById(templateId);
+        const stage = existing?.stage || existing?.promptStage || state.propPromptStage || "extract";
+        const defaults = existing || propPromptTemplateFallback.find((item) => item.stage === stage) || propPromptTemplateFallback[0];
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(900px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑道具提示词" : "新增道具提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="prop-prompt-template-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
+              <label class="field"><span>阶段</span><select name="stage">${optionList(["extract"], stage)}</select></label>
+              <label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label>
+            </div>
+            <label class="inline-check"><input name="is_default" type="checkbox" ${existing?.is_default || existing?.isDefault || defaults?.is_default ? "checked" : ""} /> 设为该阶段默认模板</label>
+            <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || defaults?.tags || []).join(", "))}" placeholder="道具, 剧本, 生图提示词" /></label>
+            <label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{剧本}}, {{script}}" /></label>
+            <label class="field"><span>JSON Schema / 输出结构</span><textarea name="json_schema" rows="4">${escapeHtml(existing?.json_schema || existing?.jsonSchema || defaults?.json_schema || "")}</textarea></label>
+            <label class="field"><span>道具提示词正文</span><textarea name="prompt_content" rows="14" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || defaults?.prompt_content || "")}</textarea></label>
+            <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="3">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaults?.negative_prompt || "")}</textarea></label>
+            <label class="field"><span>内部备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || defaults?.remark || "")}</textarea></label>
+            <div class="error-text" id="prop-prompt-template-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存道具提示词</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("prop-prompt-template-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("prop-prompt-template-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = propPromptPayloadFromForm(form, existing);
+            if (!payload.name || !payload.code) throw new Error("名称和编码必填");
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("道具提示词正文不得为空，建议不少于 20 字");
+            try {
+              await api(existing ? `/api/admin/prop-prompt/templates/${encodeURIComponent(existing.id)}` : "/api/admin/prop-prompt/templates", {
+                method: existing ? "PUT" : "POST",
+                headers: { "idempotency-key": `admin-ui-prop-prompt-template-${existing?.id || payload.code}-${Date.now()}` },
+                body: JSON.stringify(payload),
+              });
+              await loadPropPromptTemplates();
+            } catch {
+              const others = (state.propPromptTemplates || []).filter((item) => String(item.id) !== String(payload.id));
+              state.propPromptTemplates = [...others, payload];
+              persistPropPromptTemplates();
+            }
+            state.propPromptStage = payload.stage;
+            closeDrawer();
+            renderShell();
+          }, "道具提示词已保存").catch(() => undefined);
+        });
+      }
+
+      async function copyPropPromptTemplate(templateId) {
+        const existing = propPromptTemplateById(templateId);
+        if (!existing) return;
+        try {
+          await api(`/api/admin/prop-prompt/templates/${encodeURIComponent(templateId)}/copy`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-prop-prompt-copy-${templateId}-${Date.now()}` },
+            body: "{}",
+          });
+          await loadPropPromptTemplates();
+        } catch {
+          state.propPromptTemplates = [...(state.propPromptTemplates || []), { ...existing, id: `${existing.id}-copy-${Date.now()}`, name: `${existing.name} 副本`, code: `${existing.code}_copy_${Date.now()}`, is_default: false }];
+          persistPropPromptTemplates();
+        }
+        renderShell();
+        showToast("道具提示词已复制");
+      }
+
+      async function togglePropPromptTemplateStatus(templateId, status) {
+        try {
+          await api(`/api/admin/prop-prompt/templates/${encodeURIComponent(templateId)}/status`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-prop-prompt-status-${templateId}-${Date.now()}` },
+            body: JSON.stringify({ status }),
+          });
+          await loadPropPromptTemplates();
+        } catch {
+          state.propPromptTemplates = (state.propPromptTemplates || []).map((item) => String(item.id) === String(templateId) ? { ...item, status } : item);
+          persistPropPromptTemplates();
+        }
+        renderShell();
+        showToast(status === "enabled" ? "道具提示词已启用" : "道具提示词已停用");
+      }
+
+      async function setPropPromptTemplateDefault(templateId) {
+        const existing = propPromptTemplateById(templateId);
+        if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try {
+          await api(`/api/admin/prop-prompt/templates/${encodeURIComponent(templateId)}`, {
+            method: "PUT",
+            headers: { "idempotency-key": `admin-ui-prop-prompt-default-${templateId}-${Date.now()}` },
+            body: JSON.stringify(payload),
+          });
+          await loadPropPromptTemplates();
+        } catch {
+          const stage = existing.stage || existing.promptStage || "extract";
+          state.propPromptTemplates = setDefaultInList(state.propPromptTemplates, templateId, (item) => (item.stage || item.promptStage) === stage);
+          persistPropPromptTemplates();
+        }
+        renderShell();
+        showToast("默认提示词已更新");
       }
 
       function scenePromptPayloadFromForm(form, existing) {
@@ -4836,7 +5252,7 @@ scene：{{scene_json}}
           id: existing?.id || `scene-prompt-${String(form.get("code") || Date.now()).trim()}`,
           name: String(form.get("name") || "").trim(),
           code: String(form.get("code") || "").trim(),
-          stage: String(form.get("stage") || "detail"),
+          stage: String(form.get("stage") || "split"),
           model_family: String(form.get("model_family") || "general"),
           tags: splitList("tags"),
           variables: splitList("variables"),
@@ -4862,14 +5278,14 @@ scene：{{scene_json}}
             <div class="form-grid">
               <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
               <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
-              <label class="field"><span>阶段</span><select name="stage">${optionList(["split", "extract", "merge", "detail", "image"], stage)}</select></label>
+              <label class="field"><span>阶段</span><select name="stage">${optionList(["split"], stage)}</select></label>
               <label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label>
             </div>
             <label class="inline-check"><input name="is_default" type="checkbox" ${existing?.is_default || existing?.isDefault || defaults?.is_default ? "checked" : ""} /> 设为该阶段默认模板</label>
             <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || defaults?.tags || []).join(", "))}" placeholder="长篇分场景, 场景库, 影视概念设定" /></label>
-            <label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{scene_json}}, {{scene_library_json}}" /></label>
+            <label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{script}}" /></label>
             <label class="field"><span>JSON Schema / 输出结构</span><textarea name="json_schema" rows="4">${escapeHtml(existing?.json_schema || existing?.jsonSchema || defaults?.json_schema || "")}</textarea></label>
             <label class="field"><span>场景提示词正文</span><textarea name="prompt_content" rows="14" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || defaults?.prompt_content || "")}</textarea></label>
             <label class="field"><span>负向提示词</span><textarea name="negative_prompt" rows="3">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaults?.negative_prompt || "")}</textarea></label>
@@ -4942,6 +5358,77 @@ scene：{{scene_json}}
         showToast(status === "enabled" ? "场景提示词已启用" : "场景提示词已停用");
       }
 
+      async function setScenePromptTemplateDefault(templateId) {
+        const existing = scenePromptTemplateById(templateId);
+        if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try {
+          await api(`/api/admin/scene-prompt/templates/${encodeURIComponent(templateId)}`, {
+            method: "PUT",
+            headers: { "idempotency-key": `admin-ui-scene-prompt-default-${templateId}-${Date.now()}` },
+            body: JSON.stringify(payload),
+          });
+          await loadScenePromptTemplates();
+        } catch {
+          const stage = existing.stage || existing.promptStage || "split";
+          state.scenePromptTemplates = setDefaultInList(state.scenePromptTemplates, templateId, (item) => (item.stage || item.promptStage) === stage);
+          persistScenePromptTemplates();
+        }
+        renderShell();
+        showToast("默认提示词已更新");
+      }
+
+      function persistShotPromptTemplates() { localStorage.setItem("admin-shot-prompt-templates", JSON.stringify(state.shotPromptTemplates || [])); }
+      function shotPromptPayloadFromForm(form, existing) {
+        const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
+        return { id: existing?.id || `shot-prompt-${String(form.get("code") || Date.now()).trim()}`, name: String(form.get("name") || "").trim(), code: String(form.get("code") || "").trim(), stage: String(form.get("stage") || "outline"), model_family: String(form.get("model_family") || "general"), tags: splitList("tags"), variables: splitList("variables"), json_schema: String(form.get("json_schema") || "").trim(), prompt_content: String(form.get("prompt_content") || "").trim(), negative_prompt: String(form.get("negative_prompt") || "").trim(), is_default: form.get("is_default") === "on", status: String(form.get("status") || "enabled"), sort_order: Number(form.get("sort_order") || 0), remark: String(form.get("remark") || "").trim() };
+      }
+      function openShotPromptTemplateDrawer(templateId = "") {
+        const existing = shotPromptTemplateById(templateId);
+        const stage = existing?.stage || existing?.promptStage || state.shotPromptStage || "outline";
+        const defaults = existing || shotPromptTemplateFallback.find((item) => item.stage === stage) || shotPromptTemplateFallback[0];
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(900px,100%);"><div class="drawer-head"><h3>${existing ? "编辑分镜提示词" : "新增分镜提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="shot-prompt-template-form"><div class="form-grid"><label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label><label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label><label class="field"><span>阶段</span><select name="stage">${optionList(["outline"], stage)}</select></label><label class="field"><span>模型族</span><select name="model_family">${optionList(["general", "doubao", "seedream"], existing?.model_family || existing?.modelFamily || defaults?.model_family || "general")}</select></label><label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label><label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || defaults?.sort_order || 100)}" /></label></div><label class="inline-check"><input name="is_default" type="checkbox" ${existing?.is_default || existing?.isDefault || defaults?.is_default ? "checked" : ""} /> 设为该阶段默认模板</label><label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || defaults?.tags || []).join(", "))}" placeholder="分镜大纲, 节奏, JSON" /></label><label class="field"><span>变量</span><input name="variables" value="${escapeAttribute((existing?.variables || defaults?.variables || []).join(", "))}" placeholder="{{script_scene}}" /></label><label class="field"><span>JSON Schema / 输出结构</span><textarea name="json_schema" rows="4">${escapeHtml(existing?.json_schema || existing?.jsonSchema || defaults?.json_schema || "")}</textarea></label><label class="field"><span>提示词正文</span><textarea name="prompt_content" rows="14" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || defaults?.prompt_content || "")}</textarea></label><label class="field"><span>负向约束</span><textarea name="negative_prompt" rows="3">${escapeHtml(existing?.negative_prompt || existing?.negativePrompt || defaults?.negative_prompt || "")}</textarea></label><label class="field"><span>备注</span><textarea name="remark" rows="3">${escapeHtml(existing?.remark || defaults?.remark || "")}</textarea></label><div class="error-text" id="shot-prompt-template-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存分镜提示词</button></div></form></aside>`;
+        document.getElementById("shot-prompt-template-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("shot-prompt-template-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = shotPromptPayloadFromForm(form, existing);
+            if (!payload.name || !payload.code) throw new Error("名称和编码不能为空");
+            if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("分镜提示词正文不能为空，建议不少于 20 字");
+            try {
+              await api(existing ? `/api/admin/shot-prompt/templates/${encodeURIComponent(existing.id)}` : "/api/admin/shot-prompt/templates", { method: existing ? "PUT" : "POST", headers: { "idempotency-key": `admin-ui-shot-prompt-template-${existing?.id || payload.code}-${Date.now()}` }, body: JSON.stringify(payload) });
+              await loadShotPromptTemplates();
+            } catch {
+              const others = (state.shotPromptTemplates || []).filter((item) => String(item.id) !== String(payload.id));
+              state.shotPromptTemplates = [...others, payload];
+              persistShotPromptTemplates();
+            }
+            state.shotPromptStage = payload.stage;
+            closeDrawer(); renderShell();
+          }, "分镜提示词已保存").catch(() => undefined);
+        });
+      }
+      async function copyShotPromptTemplate(templateId) {
+        const existing = shotPromptTemplateById(templateId); if (!existing) return;
+        try { await api(`/api/admin/shot-prompt/templates/${encodeURIComponent(templateId)}/copy`, { method: "POST", headers: { "idempotency-key": `admin-ui-shot-prompt-copy-${templateId}-${Date.now()}` }, body: "{}" }); await loadShotPromptTemplates(); }
+        catch { state.shotPromptTemplates = [...(state.shotPromptTemplates || []), { ...existing, id: `${existing.id}-copy-${Date.now()}`, name: `${existing.name} 副本`, code: `${existing.code}_copy_${Date.now()}`, is_default: false }]; persistShotPromptTemplates(); }
+        renderShell(); showToast("分镜提示词已复制");
+      }
+      async function toggleShotPromptTemplateStatus(templateId, status) {
+        try { await api(`/api/admin/shot-prompt/templates/${encodeURIComponent(templateId)}/status`, { method: "PATCH", headers: { "idempotency-key": `admin-ui-shot-prompt-status-${templateId}-${Date.now()}` }, body: JSON.stringify({ status }) }); await loadShotPromptTemplates(); }
+        catch { state.shotPromptTemplates = (state.shotPromptTemplates || []).map((item) => String(item.id) === String(templateId) ? { ...item, status } : item); persistShotPromptTemplates(); }
+        renderShell(); showToast(status === "enabled" ? "分镜提示词已启用" : "分镜提示词已停用");
+      }
+      async function setShotPromptTemplateDefault(templateId) {
+        const existing = shotPromptTemplateById(templateId); if (!existing) return;
+        const payload = { ...existing, is_default: true, isDefault: true };
+        try { await api(`/api/admin/shot-prompt/templates/${encodeURIComponent(templateId)}`, { method: "PUT", headers: { "idempotency-key": `admin-ui-shot-prompt-default-${templateId}-${Date.now()}` }, body: JSON.stringify(payload) }); await loadShotPromptTemplates(); }
+        catch { const stage = existing.stage || existing.promptStage || "outline"; state.shotPromptTemplates = setDefaultInList(state.shotPromptTemplates, templateId, (item) => (item.stage || item.promptStage) === stage); persistShotPromptTemplates(); }
+        renderShell(); showToast("默认提示词已更新");
+      }
       function optionList(options, selected) {
         return options.map((option) => `<option value="${option}" ${option === selected ? "selected" : ""}>${option}</option>`).join("");
       }
@@ -4982,20 +5469,38 @@ scene：{{scene_json}}
       window.updateScenePromptStage = updateScenePromptStage;
       window.updateScenePromptKeyword = updateScenePromptKeyword;
       window.loadScenePromptTemplates = loadScenePromptTemplates;
+      window.updatePropPromptStage = updatePropPromptStage;
+      window.updatePropPromptKeyword = updatePropPromptKeyword;
+      window.loadPropPromptTemplates = loadPropPromptTemplates;
+      window.updateShotPromptStage = updateShotPromptStage;
+      window.updateShotPromptKeyword = updateShotPromptKeyword;
+      window.loadShotPromptTemplates = loadShotPromptTemplates;
       window.readPromptCoverFile = readPromptCoverFile;
       window.copyPromptPreview = copyPromptPreview;
       window.openScriptPromptPackageDrawer = openScriptPromptPackageDrawer;
       window.copyScriptPromptPackage = copyScriptPromptPackage;
       window.toggleScriptPromptPackageStatus = toggleScriptPromptPackageStatus;
+      window.setScriptPromptPackageDefault = setScriptPromptPackageDefault;
       window.openImagePromptStyleDrawer = openImagePromptStyleDrawer;
       window.copyImagePromptStyle = copyImagePromptStyle;
       window.toggleImagePromptStyleStatus = toggleImagePromptStyleStatus;
+      window.setImagePromptStyleDefault = setImagePromptStyleDefault;
       window.openCharacterPromptTemplateDrawer = openCharacterPromptTemplateDrawer;
       window.copyCharacterPromptTemplate = copyCharacterPromptTemplate;
       window.toggleCharacterPromptTemplateStatus = toggleCharacterPromptTemplateStatus;
+      window.setCharacterPromptTemplateDefault = setCharacterPromptTemplateDefault;
       window.openScenePromptTemplateDrawer = openScenePromptTemplateDrawer;
       window.copyScenePromptTemplate = copyScenePromptTemplate;
       window.toggleScenePromptTemplateStatus = toggleScenePromptTemplateStatus;
+      window.setScenePromptTemplateDefault = setScenePromptTemplateDefault;
+      window.openPropPromptTemplateDrawer = openPropPromptTemplateDrawer;
+      window.copyPropPromptTemplate = copyPropPromptTemplate;
+      window.togglePropPromptTemplateStatus = togglePropPromptTemplateStatus;
+      window.setPropPromptTemplateDefault = setPropPromptTemplateDefault;
+      window.openShotPromptTemplateDrawer = openShotPromptTemplateDrawer;
+      window.copyShotPromptTemplate = copyShotPromptTemplate;
+      window.toggleShotPromptTemplateStatus = toggleShotPromptTemplateStatus;
+      window.setShotPromptTemplateDefault = setShotPromptTemplateDefault;
       window.refreshUserCreditPage = refreshUserCreditPage;
       window.updateUserFilter = updateUserFilter;
       window.openRiskReviewDrawer = openRiskReviewDrawer;
@@ -5019,6 +5524,7 @@ scene：{{scene_json}}
       window.openModelStatusDrawer = openModelStatusDrawer;
       window.fillManualParameterEditor = fillManualParameterEditor;
       window.removeManualParameterFromSchema = removeManualParameterFromSchema;
+      window.toggleParameterVisibilityInSchema = toggleParameterVisibilityInSchema;
       window.openPasswordChangeDrawer = openPasswordChangeDrawer;
       window.loadAdminSessions = loadAdminSessions;
       window.revokeOtherAdminSessions = revokeOtherAdminSessions;

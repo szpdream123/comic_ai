@@ -19,6 +19,7 @@ interface ImagePromptStyleRow {
   cover_image_url: string | null;
   prompt_content: string;
   negative_prompt: string | null;
+  is_default: boolean;
   sort_order: number | string;
   status: string;
   remark: string | null;
@@ -44,6 +45,7 @@ interface SaveImagePromptStyleInput extends AdminMutationInput {
   cover_image_url?: string | null;
   prompt_content: string;
   negative_prompt?: string | null;
+  is_default?: boolean;
   sort_order?: number;
   status?: string;
   remark?: string | null;
@@ -85,14 +87,16 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
   async function saveStyle(input: SaveImagePromptStyleInput) {
     const validation = validateStylePayload(input);
     if (validation) return validation;
-    const id = input.id || randomUUID();
-    const existing = input.id
-      ? await queryOne<ImagePromptStyleRow>(deps.db, "SELECT * FROM image_prompt_styles WHERE id = $1 AND deleted_at IS NULL", [input.id])
-      : undefined;
+    const existing = await findStyleByIdentifier(input.id, input.code);
+    if (existing?.is_default && input.is_default === false) {
+      return error(400, "default_image_prompt_style_required", "当前默认生图提示词不能直接取消默认，请先将其他样式设为默认");
+    }
+    const existingId = existing?.id ?? (isUuid(input.id) ? input.id : null);
+    const id = existingId || randomUUID();
     const duplicate = await queryOne<{ id: string }>(
       deps.db,
       "SELECT id FROM image_prompt_styles WHERE code = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) AND deleted_at IS NULL",
-      [input.code.trim(), input.id || null],
+      [input.code.trim(), existingId],
     );
     if (duplicate) return error(409, "image_prompt_style_code_duplicate", "生图题词编码已存在");
 
@@ -100,10 +104,10 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
       `
         INSERT INTO image_prompt_styles (
           id, name, code, category, model_family, tags, cover_image_url, prompt_content,
-          negative_prompt, sort_order, status, remark, created_by_admin_id,
+          negative_prompt, is_default, sort_order, status, remark, created_by_admin_id,
           updated_by_admin_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $13, $14, $14)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15, $15)
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -114,6 +118,7 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
           cover_image_url = EXCLUDED.cover_image_url,
           prompt_content = EXCLUDED.prompt_content,
           negative_prompt = EXCLUDED.negative_prompt,
+          is_default = EXCLUDED.is_default,
           sort_order = EXCLUDED.sort_order,
           status = EXCLUDED.status,
           remark = EXCLUDED.remark,
@@ -130,6 +135,7 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
         input.cover_image_url?.trim() || null,
         input.prompt_content.trim(),
         input.negative_prompt?.trim() || defaultNegativePrompt,
+        Boolean(input.is_default),
         Number(input.sort_order || 0),
         input.status || "enabled",
         input.remark?.trim() || null,
@@ -137,12 +143,21 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
         input.now,
       ],
     );
+    if (input.is_default) {
+      await clearOtherDefaults({
+        id,
+        category: input.category || "official",
+        modelFamily: input.model_family || "doubao",
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      });
+    }
     await audit(input, existing ? "admin.image_prompt.style.updated" : "admin.image_prompt.style.created", id);
     return styleResponse(id);
   }
 
   async function copyStyle(input: AdminMutationInput & { id: string }) {
-    const existing = await queryOne<ImagePromptStyleRow>(deps.db, "SELECT * FROM image_prompt_styles WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await findStyleByIdentifier(input.id);
     if (!existing) return error(404, "image_prompt_style_not_found", "生图题词不存在");
     return saveStyle({
       ...styleFromRow(existing),
@@ -159,19 +174,34 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
 
   async function changeStyleStatus(input: AdminMutationInput & { id: string; status: string }) {
     if (!["enabled", "disabled"].includes(input.status)) return error(400, "invalid_image_prompt_status", "状态不支持");
-    const existing = await queryOne<ImagePromptStyleRow>(deps.db, "SELECT * FROM image_prompt_styles WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await findStyleByIdentifier(input.id);
     if (!existing) return error(404, "image_prompt_style_not_found", "生图题词不存在");
     await deps.db.query(
       "UPDATE image_prompt_styles SET status = $2, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1",
-      [input.id, input.status, input.actorAdminAccountId, input.now],
+      [existing.id, input.status, input.actorAdminAccountId, input.now],
     );
-    await audit(input, "admin.image_prompt.style.status_changed", input.id, { status: input.status });
-    return styleResponse(input.id);
+    await audit(input, "admin.image_prompt.style.status_changed", existing.id, { status: input.status });
+    return styleResponse(existing.id);
   }
 
   async function styleResponse(id: string) {
     const row = await queryOne<ImagePromptStyleRow>(deps.db, "SELECT * FROM image_prompt_styles WHERE id = $1", [id]);
     return { status: 200, body: { data: row ? styleFromRow(row) : { id } } };
+  }
+
+  async function clearOtherDefaults(input: { id: string; category: string; modelFamily: string; actorAdminAccountId: string; now: Date }) {
+    await deps.db.query(
+      `
+        UPDATE image_prompt_styles
+        SET is_default = false, updated_by_admin_id = $4, updated_at = $5
+        WHERE deleted_at IS NULL
+          AND category = $2
+          AND model_family = $3
+          AND id <> $1
+          AND is_default = true
+      `,
+      [input.id, input.category, input.modelFamily, input.actorAdminAccountId, input.now],
+    );
   }
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
@@ -197,6 +227,31 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
     return `${code}_copy_${Date.now()}`;
   }
 
+  async function findStyleByIdentifier(identifier?: string | null, code?: string | null) {
+    if (isUuid(identifier)) {
+      const row = await queryOne<ImagePromptStyleRow>(
+        deps.db,
+        "SELECT * FROM image_prompt_styles WHERE id = $1 AND deleted_at IS NULL",
+        [identifier],
+      );
+      if (row) return row;
+    }
+    const candidates = [
+      code?.trim(),
+      identifier?.trim(),
+      identifier?.trim().startsWith("image-style-") ? identifier.trim().slice("image-style-".length) : "",
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      const row = await queryOne<ImagePromptStyleRow>(
+        deps.db,
+        "SELECT * FROM image_prompt_styles WHERE code = $1 AND deleted_at IS NULL",
+        [candidate],
+      );
+      if (row) return row;
+    }
+    return undefined;
+  }
+
   return {
     listStyles,
     saveStyle,
@@ -214,6 +269,28 @@ export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
         [item.code, item.cover_image_url || null],
       );
     }
+    const currentDefault = await queryOne<{ id: string }>(
+      db,
+      "SELECT id FROM image_prompt_styles WHERE deleted_at IS NULL AND category = 'official' AND model_family = 'doubao' AND is_default = true LIMIT 1",
+    );
+    if (!currentDefault) {
+      await db.query(
+        `
+          UPDATE image_prompt_styles
+          SET is_default = true, updated_at = $1
+          WHERE id = (
+            SELECT id
+            FROM image_prompt_styles
+            WHERE deleted_at IS NULL
+              AND category = 'official'
+              AND model_family = 'doubao'
+            ORDER BY sort_order DESC, updated_at DESC, id ASC
+            LIMIT 1
+          )
+        `,
+        [seedUpdatedAt],
+      );
+    }
     return;
   }
   for (const item of defaultImagePromptStyles) {
@@ -221,9 +298,9 @@ export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
       `
         INSERT INTO image_prompt_styles (
           id, name, code, category, model_family, tags, cover_image_url, prompt_content,
-          negative_prompt, sort_order, status, remark, created_at, updated_at
+          negative_prompt, is_default, sort_order, status, remark, created_at, updated_at
         )
-        VALUES ($1, $2, $3, 'official', 'doubao', $4::jsonb, $5, $6, $7, $8, 'enabled', $9, $10, $10)
+        VALUES ($1, $2, $3, 'official', 'doubao', $4::jsonb, $5, $6, $7, $8, $9, 'enabled', $10, $11, $11)
         ON CONFLICT (code) DO NOTHING
       `,
       [
@@ -234,6 +311,7 @@ export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
         item.cover_image_url || null,
         item.prompt_content,
         defaultNegativePrompt,
+        Boolean((item as { is_default?: boolean }).is_default),
         item.sort_order,
         item.remark || null,
         seedUpdatedAt,
@@ -276,6 +354,8 @@ function styleFromRow(row: ImagePromptStyleRow) {
     coverImageUrl: row.cover_image_url || "",
     prompt_content: row.prompt_content,
     negative_prompt: row.negative_prompt || "",
+    is_default: Boolean(row.is_default),
+    isDefault: Boolean(row.is_default),
     sort_order: Number(row.sort_order || 0),
     status: row.status,
     remark: row.remark || "",
@@ -305,6 +385,10 @@ function stableUuid(seed: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function style(name: string, code: string, promptContent: string, sortOrder: number, tags: string[] = []) {
   return {
     id: stableUuid(`image-prompt-style:${code}`),
@@ -312,6 +396,7 @@ function style(name: string, code: string, promptContent: string, sortOrder: num
     code,
     cover_image_url: styleCoverDataUrl(code, name),
     prompt_content: promptContent,
+    is_default: false,
     sort_order: sortOrder,
     tags,
     remark: "豆包生图风格预设",
@@ -324,7 +409,7 @@ function styleCoverDataUrl(code: string, name: string) {
 }
 
 const defaultImagePromptStyles = [
-  style("人像摄影", "portrait_photography", "真实人像摄影风格，皮肤质感自然，表情细腻，浅景深背景虚化，柔和棚拍光，画面清晰高级", 320, ["摄影", "人像"]),
+  { ...style("人像摄影", "portrait_photography", "真实人像摄影风格，皮肤质感自然，表情细腻，浅景深背景虚化，柔和棚拍光，画面清晰高级", 320, ["摄影", "人像"]), is_default: true },
   style("电影写真", "cinematic_portrait", "电影剧照写真风格，强叙事氛围，胶片色调，侧逆光，光影层次丰富，镜头感明显", 310, ["电影", "写真"]),
   style("中国风", "chinese_style", "中国传统美学风格，东方构图，古典纹样，雅致配色，含蓄留白，画面有国风意境", 300, ["国风", "东方"]),
   style("动画", "animation", "高质量动画电影风格，角色造型生动，色彩明快，线条干净，表情动作夸张但自然", 290, ["动画"]),

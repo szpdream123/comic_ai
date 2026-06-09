@@ -182,9 +182,12 @@ export function renderProjectDetail(context = {}) {
         busy: ui.busy,
         defaultName: ui.createProjectName ?? "",
         selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-        selectedProjectType: ui.createProjectType ?? "anime",
+        selectedProjectType: ui.createProjectType ?? "animation",
+        projectStyles: ui.projectStyles ?? [],
+        isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
+      ${renderSingleEpisodeAiPreview(ui)}
     `;
   }
 
@@ -209,7 +212,9 @@ export function renderProjectDetail(context = {}) {
         busy: ui.busy,
         defaultName: ui.createProjectName ?? "",
         selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-        selectedProjectType: ui.createProjectType ?? "anime",
+        selectedProjectType: ui.createProjectType ?? "animation",
+        projectStyles: ui.projectStyles ?? [],
+        isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
     `;
@@ -240,7 +245,9 @@ export function renderProjectDetail(context = {}) {
       busy: ui.busy,
       defaultName: ui.createProjectName ?? "",
       selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-      selectedProjectType: ui.createProjectType ?? "anime",
+      selectedProjectType: ui.createProjectType ?? "animation",
+      projectStyles: ui.projectStyles ?? [],
+      isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
       notice: ui.createProjectNotice ?? "",
     })}
     ${renderOriginalScriptModal({
@@ -376,6 +383,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           imageResolution: ui.imageResolution,
           imageAspectRatio: ui.imageAspectRatio,
           multiImageStrategy: ui.multiImageStrategy,
+          parameterValues: ui.generationParameterValues ?? null,
           uploadLimits: ui.episodeGenerationConfig?.uploadLimits ?? null,
         },
         episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
@@ -385,6 +393,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
           activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
           isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+          videoGenerationMode: ui.videoGenerationMode ?? "first-frame",
           museBoardMode: ui.museBoardMode ?? "operation",
           museScopeMode: ui.museScopeMode ?? "storyboard",
           musePromptMenu: ui.musePromptMenu ?? null,
@@ -921,17 +930,10 @@ function renderEpisodeHubMenu(episode) {
 }
 
 function renderSingleEpisodeModal(ui) {
-  const aspectOptions = [
-    { value: "16:9", label: "水平" },
-    { value: "9:16", label: "垂直" },
-    { value: "1:1", label: "自定义" },
-  ];
-  const modelOptions = [
-    { value: "veo-3.1", label: "多参模式（Veo3.1）" },
-    { value: "seedance-2.0", label: "主体固定模式（seeDance2.0）" },
-  ];
-  const selectedAspect = ui.singleEpisodeAspectRatio ?? "9:16";
-  const selectedModel = ui.singleEpisodeModel ?? "seedance-2.0";
+  const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
+  const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
+  const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
+  const notice = String(ui.singleEpisodeNotice ?? "").trim();
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -949,46 +951,429 @@ function renderSingleEpisodeModal(ui) {
         </label>
         <div class="single-episode-toolbar single-episode-toolbar-replica">
           <div class="single-episode-toolbar-left">
-            <div class="single-episode-aspect-group">
-              ${aspectOptions
-                .map(
-                  (option) => `
-                    <button
-                      class="single-episode-aspect-chip ${selectedAspect === option.value ? "active" : ""}"
-                      type="button"
-                      data-action="set-single-episode-aspect"
-                      data-aspect="${option.value}"
-                    >
-                      <strong>${option.label}</strong>
-                    </button>
-                  `,
-                )
+            <div class="single-episode-look-controls">
+              ${SINGLE_EPISODE_LOOK_TYPES
+                .map((option) => renderSingleEpisodeLookSelect({
+                  option,
+                  activeType: activeLookPanel,
+                  packages,
+                  selectedPackageIds,
+                }))
                 .join("")}
             </div>
-            <label class="single-episode-model-field">
-              <select id="single-episode-model-select">
-                ${modelOptions
-                  .map(
-                    (option) => `
-                      <option value="${option.value}" ${selectedModel === option.value ? "selected" : ""}>${option.label}</option>
-                    `,
-                  )
-                  .join("")}
-              </select>
-            </label>
-          </div>
+            </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode">创建空白章节</button>
             <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">AI 智能分镜</button>
           </div>
         </div>
-        <div class="single-episode-status-row">
-          <p class="modal-inline-status">${escapeHtml(ui.singleEpisodeNotice ?? "")}</p>
-          <button class="secondary-action single-episode-cancel" type="button" data-action="close-single-episode-modal">取消</button>
+        ${notice ? `<p class="single-episode-inline-notice">${escapeHtml(notice)}</p>` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderSingleEpisodeAiPreview(ui) {
+  const preview = ui.singleEpisodeAiPreview ?? { status: "idle", data: null, error: "" };
+  if (!preview || preview.status === "idle") {
+    return "";
+  }
+  if (preview.status === "loading") {
+    return `
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜">
+        <div class="single-episode-ai-overlay-top">
+          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <div class="single-episode-ai-top-status" aria-live="polite">
+            <p>AI Storyboard</p>
+            <h3>${resolveSingleEpisodeAiLoadingTitle(preview.activeStage)}</h3>
+          </div>
+          <div class="single-episode-ai-overlay-actions">
+            <button class="single-episode-ai-create" type="button" disabled>创建章节</button>
+            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+          </div>
+        </div>
+        <div class="single-episode-ai-loading-bar"><span></span></div>
+        <div class="single-episode-ai-preview loading" aria-live="polite">
+          ${renderSingleEpisodeAiLiveOutput(preview)}
+          ${renderSingleEpisodeAiLiveTables(preview)}
+        </div>
+      </section>
+    `;
+  }
+  if (preview.status === "error") {
+    return `
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜生成失败">
+        <div class="single-episode-ai-overlay-top">
+          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <div class="single-episode-ai-overlay-actions">
+            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+          </div>
+        </div>
+        <div class="single-episode-ai-preview error" aria-live="polite">
+          <div class="single-episode-ai-preview-head">
+            <div>
+              <p>AI Storyboard</p>
+              <h3>生成失败</h3>
+            </div>
+          </div>
+          <p class="single-episode-ai-error">${escapeHtml(preview.error || "请稍后重试")}</p>
+        </div>
+      </section>
+    `;
+  }
+  const previewPayload = preview.data?.displayTables ? preview.data : preview;
+  const tables = previewPayload?.displayTables ?? {};
+  return `
+    <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
+      <div class="single-episode-ai-overlay-top">
+        <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+        <div class="single-episode-ai-overlay-actions">
+          <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
+          <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+        </div>
+      </div>
+      <div class="single-episode-ai-preview ready">
+        <div class="single-episode-ai-preview-head">
+          <div>
+          <p>AI Storyboard</p>
+          <h3>AI智能分镜</h3>
+        </div>
+        </div>
+        <div class="single-episode-ai-table-stack">
+          ${["script", "characters", "scenes", "props", "storyboards"]
+            .map((key) => renderSingleEpisodeAiTable(tables[key], key))
+            .join("")}
         </div>
       </div>
     </section>
   `;
+}
+
+function resolveSingleEpisodeAiLoadingTitle(stage) {
+  const normalized = String(stage ?? "");
+  if (normalized === "scene") return "场景提示词生成中";
+  if (normalized === "character") return "角色提示词生成中";
+  if (normalized === "prop") return "道具提示词生成中";
+  if (normalized === "shot" || normalized === "prompt") return "分镜提示词生成中";
+  if (normalized === "complete") return "列表化数据生成中";
+  return "剧本生成中";
+}
+
+function renderSingleEpisodeAiLiveOutput(preview) {
+  const liveOutput = resolveSingleEpisodeAiLiveOutput(preview);
+  return `
+    <article class="single-episode-ai-live-output">
+      <header>
+        <strong>${escapeHtml(liveOutput.title)}</strong>
+        <span>实时回显</span>
+      </header>
+      <pre>${escapeHtml(formatSingleEpisodeAiLiveText(liveOutput.text, { maxChars: 12000 }) || liveOutput.emptyText)}</pre>
+    </article>
+  `;
+}
+
+function formatSingleEpisodeAiLiveText(rawText, options = {}) {
+  const maxChars = Number(options.maxChars ?? 0);
+  const raw = truncateSingleEpisodeAiPreviewText(String(rawText ?? ""), maxChars);
+  if (!raw.trim()) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const values = [];
+    collectSingleEpisodeAiLiveValues(parsed, values);
+    return values.join("\n").trim();
+  } catch {
+    return raw
+      .replace(/\\n/g, "\n")
+      .replace(/"[^"]+"\s*:/g, "")
+      .replace(/[{}\[\],]/g, "\n")
+      .replace(/^["\s]+|["\s]+$/gm, "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+}
+
+function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
+  const text = String(value ?? "");
+  if (!maxChars || text.length <= maxChars) {
+    return text;
+  }
+  return `…已截断，仅展示最近 ${maxChars} 字符…\n${text.slice(-maxChars)}`;
+}
+
+function collectSingleEpisodeAiLiveValues(value, output) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSingleEpisodeAiLiveValues(item, output));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, item]) => {
+      if (/id$/i.test(key)) {
+        return;
+      }
+      collectSingleEpisodeAiLiveValues(item, output);
+    });
+    return;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text) {
+      output.push(text);
+    }
+    return;
+  }
+  if (typeof value === "number") {
+    output.push(String(value));
+  }
+}
+
+function resolveSingleEpisodeAiLiveOutput(preview) {
+  const stage = String(preview?.activeStage ?? "script");
+  const stageConfig = {
+    script: { label: "剧本", empty: "等待 DeepSeek 返回剧本数据..." },
+    scene: { label: "场景", empty: "等待 DeepSeek 返回场景数据..." },
+    character: { label: "角色", empty: "等待 DeepSeek 返回角色数据..." },
+    prop: { label: "道具", empty: "等待 DeepSeek 返回道具数据..." },
+    shot: { label: "分镜", empty: "等待 DeepSeek 返回分镜数据..." },
+    prompt: { label: "分镜", empty: "等待 DeepSeek 返回分镜数据..." },
+  };
+  const config = stageConfig[stage] ?? stageConfig.script;
+  if (stage === "script") {
+    return {
+      title: `DeepSeek ${config.label}实时返回`,
+      text: String(preview?.scriptRawText ?? preview?.scriptText ?? ""),
+      emptyText: config.empty,
+    };
+  }
+  const assetStage = stage === "prompt" ? "shot" : stage;
+  const step = Array.isArray(preview?.assetPromptSteps)
+    ? preview.assetPromptSteps.find((item) => String(item?.stage ?? "") === assetStage)
+    : null;
+  return {
+    title: `DeepSeek ${config.label}实时返回`,
+    text: String(step?.responseText ?? step?.rawResponseText ?? ""),
+    emptyText: config.empty,
+  };
+}
+
+function renderSingleEpisodeAiLiveTables(preview) {
+  const tables = preview?.data?.displayTables ?? preview?.displayTables ?? {};
+  return `
+    <div class="single-episode-ai-table-stack live">
+      ${["script", "characters", "scenes", "props", "storyboards"]
+        .map((key) => renderSingleEpisodeAiTable(tables[key], key, { previewMode: "live" }))
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSingleEpisodeAiTable(table, key, options = {}) {
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const visibleRows = options.previewMode === "live" ? rows.slice(0, 8) : rows;
+  const hiddenRowCount = rows.length - visibleRows.length;
+  const title = table?.title ?? AI_PREVIEW_TABLE_TITLES[key] ?? "结果";
+  const columns = resolveSingleEpisodeAiTableColumns(table, key);
+  if (key === "script") {
+    return renderSingleEpisodeAiScriptText(table);
+  }
+  return `
+    <article class="single-episode-ai-table-card ${escapeAttr(key)}">
+      <header>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${rows.length} 条</span>
+      </header>
+      <div class="single-episode-ai-table-wrap">
+        <table>
+          <thead>
+            <tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+          </thead>
+          <tbody>
+            ${
+              visibleRows.length
+                ? visibleRows.map((row) => renderSingleEpisodeAiTableRow(row, key, columns, options)).join("")
+                : `<tr><td colspan="${Math.max(columns.length, 1)}">暂无数据</td></tr>`
+            }
+            ${hiddenRowCount > 0 ? `<tr><td colspan="${Math.max(columns.length, 1)}">实时预览仅展示前 ${visibleRows.length} 条，完整结果生成后显示。</td></tr>` : ""}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function resolveSingleEpisodeAiTableColumns(table, key) {
+  if (key === "storyboards" && Array.isArray(table?.columns) && table.columns.length) {
+    return table.columns;
+  }
+  const fixedColumns = {
+    characters: ["角色名称（角色名称/服装描述）", "角色描述（仅含年龄、国籍、性别、服装、脸部特征、细节特征）"],
+    scenes: ["场景名称（角色名称/天气和时间描述）", "场景描述（仅含空间结构、建筑风格、建筑细节、光影规则、氛围基调、关键道具）"],
+    props: ["道具名称", "道具描述（仅含外观、颜色、细节特征）"],
+    storyboards: ["镜号", "分镜剧情", "对话/旁白", "时长", "时间段", "转场", "景别/运镜", "静态图片提示词", "动态视频提示词（多镜头序列，每一分镜镜头总时长≤15s）", "分镜详细字段"],
+  };
+  if (fixedColumns[key]) {
+    return fixedColumns[key];
+  }
+  return Array.isArray(table?.columns) ? table.columns : [];
+}
+
+function renderSingleEpisodeAiScriptText(table) {
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const text = rows
+    .map((row) => [row.scriptContent, row.dialogue].filter(Boolean).join("\n"))
+    .filter(Boolean)
+    .join("\n\n");
+  return `
+    <article class="single-episode-ai-script-text">
+      <header>
+        <strong>${escapeHtml(table?.title ?? "剧本")}</strong>
+        <span>${rows.length} 段</span>
+      </header>
+      <div>${escapeHtml(text || "暂无剧本文字")}</div>
+    </article>
+  `;
+}
+
+function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}) {
+  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const valuesByKey = {
+    script: [row.beatNo, row.scriptContent, row.characters, row.sceneHint, row.propHints, row.dialogue],
+    scenes: [row.sceneName, row.sceneDescription],
+    characters: [row.characterName, row.characterDescription],
+    props: [row.propName, row.propDescription],
+    storyboards: columns.length === chapterStoryboardColumns.length && columns.every((column, index) => column === chapterStoryboardColumns[index])
+      ? [row.plot, row.dialogue, row.imagePrompt, row.videoPrompt]
+      : [row.shotNo, row.plot, row.dialogue, row.durationSec, row.timeRange, row.transition, row.shotDirection, row.imagePrompt, row.videoPrompt, row.shotDetails],
+  };
+  const values = valuesByKey[key] ?? Object.values(row ?? {});
+  const maxCellChars = options.previewMode === "live" ? 900 : 0;
+  return `<tr>${values.map((value) => `<td>${escapeHtml(truncateSingleEpisodeAiPreviewText(value ?? "", maxCellChars))}</td>`).join("")}</tr>`;
+}
+
+const AI_PREVIEW_TABLE_TITLES = {
+  script: "剧本",
+  scenes: "场景",
+  characters: "角色",
+  props: "道具",
+  storyboards: "分镜",
+};
+
+const SINGLE_EPISODE_LOOK_TYPES = [
+  { type: "genre", label: "题材看点", title: "题材", empty: "暂无启用的题材包", limit: 3 },
+  { type: "emotion", label: "情绪看点", title: "情绪", empty: "暂无启用的情绪包", limit: 3 },
+];
+
+function renderSingleEpisodeLookSelect({ option, activeType, packages = [], selectedPackageIds = {} }) {
+  const type = option.type;
+  const isOpen = activeType === type;
+  const selectedIds = new Set(selectedPackageIds[type] ?? []);
+  const items = packages
+    .filter((item) => resolvePackageType(item) === type && item.status !== "disabled")
+    .slice(0, 48);
+  const summary = resolveSingleEpisodeLookSummary(items, selectedIds);
+
+  return `
+    <section class="single-episode-look-select ${isOpen ? "open" : ""}" aria-label="${escapeAttr(option.label)}">
+      <div class="single-episode-look-label">
+        <span>${escapeHtml(option.label)}</span>
+        <i aria-hidden="true">?</i>
+      </div>
+      <button
+        class="single-episode-look-trigger"
+        type="button"
+        data-action="toggle-single-episode-look-panel"
+        data-look-type="${escapeAttr(type)}"
+        aria-expanded="${isOpen ? "true" : "false"}"
+      >
+        <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
+        <b aria-hidden="true">${isOpen ? "⌃" : "⌄"}</b>
+      </button>
+      ${isOpen ? renderSingleEpisodeLookDropdown({ option, items, selectedIds }) : ""}
+    </section>
+  `;
+}
+
+function renderSingleEpisodeLookDropdown({ option, items, selectedIds }) {
+  const type = option.type;
+  return `
+    <div class="single-episode-look-dropdown" role="listbox" aria-label="${escapeAttr(option.title)}">
+      <header>
+        <strong>${escapeHtml(option.title)}</strong>
+      </header>
+      <div class="single-episode-look-grid">
+        <button
+          class="single-episode-look-chip ${selectedIds.size === 0 ? "active" : ""}"
+          type="button"
+          data-action="toggle-single-episode-look-package"
+          data-look-type="${escapeAttr(type)}"
+          data-package-id="auto"
+          aria-pressed="${selectedIds.size === 0 ? "true" : "false"}"
+        >
+          自动适配
+        </button>
+        ${
+          items.length
+            ? items.map((item) => {
+              const selected = selectedIds.has(item.id);
+              return `
+                <button
+                  class="single-episode-look-chip ${selected ? "active" : ""}"
+                  type="button"
+                  data-action="toggle-single-episode-look-package"
+                  data-look-type="${escapeAttr(type)}"
+                  data-package-id="${escapeAttr(item.id)}"
+                  aria-pressed="${selected ? "true" : "false"}"
+                >
+                  ${escapeHtml(item.name)}
+                </button>
+              `;
+            }).join("")
+            : `<p class="single-episode-look-empty">${escapeHtml(option.empty)}</p>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function resolveSingleEpisodeLookSummary(items, selectedIds) {
+  const names = items
+    .filter((item) => selectedIds.has(item.id))
+    .map((item) => item.name)
+    .filter(Boolean);
+  return names.length ? names.join("，") : "自动适配，自动适配";
+}
+
+function normalizeOpenSingleEpisodeLookType(value) {
+  return SINGLE_EPISODE_LOOK_TYPES.some((item) => item.type === value) ? value : "";
+}
+
+function normalizeSingleEpisodeLookSelections(value = {}) {
+  return {
+    genre: Array.isArray(value.genre) ? value.genre.map(String) : [],
+    emotion: Array.isArray(value.emotion) ? value.emotion.map(String) : [],
+  };
+}
+
+function normalizeStoryboardPromptPackages(packages = []) {
+  return Array.isArray(packages)
+    ? packages
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: String(item.id ?? item.code ?? item.name ?? ""),
+          name: String(item.name ?? item.label ?? item.code ?? ""),
+          package_type: String(item.package_type ?? item.packageType ?? ""),
+          status: String(item.status ?? "enabled"),
+        }))
+        .filter((item) => item.id && item.name)
+    : [];
+}
+
+function resolvePackageType(item) {
+  return String(item?.package_type ?? item?.packageType ?? "");
 }
 
 function getEpisodeHubEntries(state, ui) {
@@ -2636,6 +3021,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         imageResolution: ui.imageResolution,
         imageAspectRatio: ui.imageAspectRatio,
         multiImageStrategy: ui.multiImageStrategy,
+        parameterValues: ui.generationParameterValues ?? null,
       },
       episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
       generationUiState: {
@@ -2644,6 +3030,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
         activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
         isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+        videoGenerationMode: ui.videoGenerationMode ?? "first-frame",
         promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
         promptMentionQuery: ui.promptMentionQuery ?? "",
         promptMentionSuggestions: ui.promptMentionSuggestions ?? [],

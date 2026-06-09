@@ -5,8 +5,13 @@ import { resolveApiUrl } from "../../shared/creator-api.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
-  { id: "video", label: "做视频" },
-  { id: "lip-sync", label: "对口型" },
+];
+
+const STORYBOARD_MEDIA_TABS = [
+  { id: "first-frame", label: "首帧生视频", action: "set-video-generation-mode", mode: "first-frame" },
+  { id: "first-last-frame", label: "首尾帧生视频", action: "set-video-generation-mode", mode: "first-last-frame" },
+  { id: "reference-video", label: "全能参考", action: "set-video-generation-mode", mode: "reference-video" },
+  { id: "lip-sync", label: "对口型", action: "set-episode-media-mode", mode: "lip-sync" },
 ];
 
 const ASSET_TABS = [
@@ -14,6 +19,7 @@ const ASSET_TABS = [
   { id: "scene", label: "场景" },
   { id: "prop", label: "道具" },
 ];
+const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
 
@@ -207,17 +213,18 @@ export function renderEpisodeWorkbench({
   projectDetail = null,
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
-  const storyboardVisibleMediaTabs = MEDIA_TABS.filter((tab) => tab.id !== "image");
+  const storyboardVisibleMediaTabs = STORYBOARD_MEDIA_TABS;
   const effectiveMediaMode =
     scopeMode === "assets"
       ? "image"
       : mediaMode === "image"
-        ? (storyboardVisibleMediaTabs[0]?.id ?? "video")
+        ? "video"
         : mediaMode;
   const visibleMediaTabs =
     scopeMode === "assets"
       ? MEDIA_TABS.filter((tab) => tab.id === "image")
       : storyboardVisibleMediaTabs;
+  const activeVideoGenerationMode = generationUiState.videoGenerationMode ?? "first-frame";
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
     scopeMode === "assets" && effectiveMediaMode === "image"
@@ -329,7 +336,7 @@ export function renderEpisodeWorkbench({
         <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
           <div class="episode-replica-stage-head">
             <div class="episode-replica-stage-tabs">
-              ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode)).join("")}
+              ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
             </div>
             <p class="episode-replica-stage-title">${
               scopeMode === "storyboard"
@@ -585,9 +592,9 @@ function renderAssetCard(asset, assetKind, active, checked) {
       <span class="preview">${renderAssetPreviewVisual(asset, assetKind)}</span>
       ${voiceButton}
       <label class="episode-replica-asset-desc-wrap">
-        <textarea class="episode-replica-asset-desc-input" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" placeholder="可以编辑，点击框外后自动保存">${escapeHtml(desc)}</textarea>
+        <textarea class="episode-replica-asset-desc-input" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" maxlength="${EPISODE_ASSET_DESCRIPTION_LIMIT}" placeholder="可以编辑，点击框外后自动保存">${escapeHtml(desc)}</textarea>
       </label>
-      <span class="count">${[...desc].length} / 800</span>
+      <span class="count">${[...desc].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}</span>
     </article>
   `;
 }
@@ -699,10 +706,6 @@ function renderStoryboardCard(storyboard, active, checked = false, assetGroups =
             </span>
           </span>
           <span class="episode-replica-shot-card-column copy">
-            <span class="episode-replica-shot-copy-head">
-              <span class="tabs">做图片 / 做视频</span>
-              <span class="comment">●</span>
-            </span>
             <label class="episode-replica-shot-desc-wrap">
               <textarea
                 class="episode-replica-shot-desc-input ${desc ? "" : "placeholder"}"
@@ -1108,7 +1111,6 @@ function renderStoryboardStage(
       mediaKind,
       generationResult: activeGenerationResult,
       conversationEntries,
-      selectedConversationTaskId,
       fallbackContent: renderCurrentStoryboardMediaStage(selectedStoryboard, true),
     });
   }
@@ -1775,20 +1777,21 @@ export function renderPromptDock({
   const mentionPreviewAsset = generationUiState.promptMentionPreviewAsset ?? null;
   const quickReferenceItems = generationState.quickReferenceItems ?? [];
   const generationAttachmentCards = buildGenerationAttachmentCards(generationState);
-  const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
-  const resolution = generationControls.imageResolution ?? "2K";
-  const duration = generationControls.videoDurationSec ?? "5";
   const uploadLimits = generationControls.uploadLimits ?? {};
   const activePromptMenu = generationUiState.musePromptMenu ?? null;
+  const isVideoModelMenuOpen = Boolean(generationUiState.isVideoModelMenuOpen);
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
   const configuredModels = buildConfiguredPromptDockModels(episodeGenerationConfig, isVideoMode ? "video" : "image");
   const models = configuredModels.length ? configuredModels : (isVideoMode ? VIDEO_MODELS : IMAGE_MODELS);
   const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
-  const ratioOptions = optionPairsFromValues(selectedModel?.supportedRatios, isVideoMode ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"]);
-  const qualityOptions = optionPairsFromValues(selectedModel?.supportedQuality, isVideoMode ? ["1080p"] : ["2K"]);
-  const durationOptions = optionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
+  const parameterControls = buildModelParameterControls({
+    selectedModel,
+    isVideoMode,
+    generationControls,
+    openGenerationSelectMenu,
+  });
   const attachmentCards = [...generationAttachmentCards, ...(attachments ?? [])].map((item, index) =>
     renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
   );
@@ -1870,10 +1873,16 @@ export function renderPromptDock({
       }
       <div class="episode-replica-prompt-footer">
         <div class="episode-replica-prompt-selects">
-          ${renderControlMenu("model", selectedModel.label, openGenerationSelectMenu, models.map((item) => [item.id, item.label]), "select-video-model")}
-          ${renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions)}
-          ${renderControlMenu(isVideoMode ? "videoResolution" : "imageResolution", resolution, openGenerationSelectMenu, qualityOptions)}
-          ${isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, durationOptions) : ""}
+          ${renderControlMenu(
+            "model",
+            selectedModel.label,
+            isVideoModelMenuOpen ? "model" : null,
+            models.map((item) => [item.id, item.label]),
+            "select-video-model",
+            "",
+            "toggle-video-model-menu",
+          )}
+          ${parameterControls.join("")}
         </div>
         <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy)}>
           <span>${escapeHtml(String(generateCost))}</span>
@@ -2251,19 +2260,143 @@ function renderMiniMenu(menu, label, activeMenu, options, action = "select-gener
   `;
 }
 
-function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option") {
+function buildModelParameterControls({
+  selectedModel,
+  isVideoMode,
+  generationControls = {},
+  openGenerationSelectMenu,
+}) {
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object"
+    ? selectedModel.parameterSchema
+    : {};
+  const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
+    ? generationControls.parameterValues
+    : {};
+  const entries = Object.entries(schema)
+    .filter(([key, parameter]) => shouldRenderModelParameterControl(key, parameter));
+  if (!entries.length) {
+    return buildFallbackParameterControls({
+      selectedModel,
+      isVideoMode,
+      generationControls,
+      openGenerationSelectMenu,
+    });
+  }
+  return entries
+    .map(([key, parameter]) => {
+      const options = optionPairsFromParameter(parameter, [], []);
+      if (!options.length) {
+        return "";
+      }
+      const value = resolveModelParameterValue(key, {
+        parameterValues,
+        generationControls,
+        selectedModel,
+        isVideoMode,
+        options,
+      });
+      const label = labelForModelParameterValue(value, parameter, options);
+      return renderControlMenu(key, label, openGenerationSelectMenu, options, "select-generation-field-option", parameter?.label ?? key);
+    })
+    .filter(Boolean);
+}
+
+function buildFallbackParameterControls({
+  selectedModel,
+  isVideoMode,
+  generationControls = {},
+  openGenerationSelectMenu,
+}) {
+  const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
+  const resolution = isVideoMode
+    ? (generationControls.videoResolution ?? "1080p")
+    : (generationControls.imageResolution ?? "2K");
+  const duration = generationControls.videoDurationSec ?? "5";
+  const ratioOptions = optionPairsFromValues(
+    selectedModel?.supportedRatios,
+    isVideoMode ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"],
+  );
+  const qualityOptions = optionPairsFromValues(
+    selectedModel?.supportedQuality,
+    isVideoMode ? ["1080p"] : ["2K"],
+  );
+  const durationOptions = optionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
+  return [
+    renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions),
+    renderControlMenu(isVideoMode ? "videoResolution" : "imageResolution", resolution, openGenerationSelectMenu, qualityOptions),
+    isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, durationOptions) : "",
+  ].filter(Boolean);
+}
+
+function shouldRenderModelParameterControl(key, parameter) {
+  if (parameter?.visible === false) {
+    return false;
+  }
+  if (["prompt", "negativePrompt", "referenceImages", "editInstruction"].includes(key)) {
+    return false;
+  }
+  return optionPairsFromParameter(parameter, [], []).length > 0;
+}
+
+function resolveModelParameterValue(key, { parameterValues, generationControls, selectedModel, isVideoMode, options }) {
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object"
+    ? selectedModel.defaultParams
+    : {};
+  const candidates = [
+    parameterValues[key],
+    key === "aspectRatio" ? generationControls.imageAspectRatio : undefined,
+    key === "quality" && !isVideoMode ? generationControls.imageResolution : undefined,
+    key === "resolution" ? (isVideoMode ? generationControls.videoResolution : generationControls.imageResolution) : undefined,
+    key === "durationSec" ? generationControls.videoDurationSec : undefined,
+    key === "count" ? (isVideoMode ? generationControls.videoCount : generationControls.imageCount) : undefined,
+    defaults[key],
+    options[0]?.[0],
+  ];
+  if (options.length) {
+    const optionValues = new Set(options.map(([value]) => String(value)));
+    for (const candidate of candidates) {
+      if (candidate !== undefined && candidate !== null && candidate !== "" && optionValues.has(String(candidate))) {
+        return String(candidate);
+      }
+    }
+    return String(options[0]?.[0] ?? "");
+  }
+  return firstNonEmptyValue(...candidates);
+}
+
+function firstNonEmptyValue(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "") {
+      return String(candidate);
+    }
+  }
+  return "";
+}
+
+function labelForModelParameterValue(value, parameter, options) {
+  const matched = options.find(([optionValue]) => String(optionValue) === String(value));
+  return matched?.[1] ?? String(value ?? parameter?.label ?? "");
+}
+
+function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option", title = "", toggleAction = "toggle-generation-select-menu") {
   const open = openMenu === field;
+  const titleAttr = title ? ` title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"` : "";
   return `
     <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control" type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}">${escapeHtml(label)}</button>
+      <button class="episode-replica-control" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
       ${open ? `<span class="episode-replica-float-menu compact">${options.map(([value, text]) => `<button type="button" data-action="${escapeAttr(action)}" ${action === "select-video-model" ? `data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"` : `data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}"`}>${escapeHtml(text)}</button>`).join("")}</span>` : ""}
     </span>
   `;
 }
 
-function renderMediaTab(tab, activeMode) {
-  const isActive = tab.id === activeMode || (tab.id === "video" && activeMode === "lip-sync");
-  return `<button class="episode-replica-stage-tab ${isActive ? "active" : ""}" type="button" data-action="set-episode-media-mode" data-mode="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`;
+function renderMediaTab(tab, activeMode, activeVideoGenerationMode = "first-frame") {
+  const action = tab.action ?? "set-episode-media-mode";
+  const mode = tab.mode ?? tab.id;
+  const isActive =
+    action === "set-video-generation-mode"
+      ? activeMode === "video" && mode === activeVideoGenerationMode
+      : mode === activeMode;
+  return `<button class="episode-replica-stage-tab ${isActive ? "active" : ""}" type="button" data-action="${escapeAttr(action)}" data-mode="${escapeAttr(mode)}">${escapeHtml(tab.label)}</button>`;
 }
 
 function renderStoryboardDescriptionModal({ show, value, selectedStoryboard }) {
@@ -2424,9 +2557,15 @@ function buildConfiguredPromptDockModels(config, mediaType) {
         supportedRatios: normalizeOptionValues(model?.supportedRatios),
         supportedQuality: normalizeOptionValues(model?.supportedQuality),
         supportedDurations: normalizeOptionValues(model?.supportedDurations),
+        parameterSchema: normalizeParameterSchema(model?.parameterSchema),
+        defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {},
       };
     })
     .filter(Boolean);
+}
+
+function normalizeParameterSchema(schema) {
+  return schema && typeof schema === "object" && !Array.isArray(schema) ? schema : {};
 }
 
 function normalizeOptionValues(values) {
@@ -2441,9 +2580,63 @@ function optionPairsFromValues(values, fallback, labeler = (value) => value) {
   return source.map((value) => [value, labeler(value)]);
 }
 
+function optionPairsFromParameter(parameter, values, fallback) {
+  const options = enumValuesFromParameter(parameter).length
+    ? enumValuesFromParameter(parameter)
+    : integerValuesFromParameter(parameter);
+  if (options.length) {
+    return options.map((option) => [
+      option.value,
+      option.label || option.value,
+    ]);
+  }
+  return optionPairsFromValues(values, fallback);
+}
+
+function enumValuesFromParameter(parameter) {
+  if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
+    return [];
+  }
+  const rawOptions = Array.isArray(parameter.options)
+    ? parameter.options
+    : Array.isArray(parameter.enum)
+      ? parameter.enum
+      : [];
+  return rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const value = String(item.value ?? item.providerValue ?? item.label ?? "").trim();
+        if (!value) return null;
+        return {
+          value,
+          label: String(item.label ?? value).trim() || value,
+        };
+      }
+      const value = String(item ?? "").trim();
+      return value ? { value, label: value } : null;
+    })
+    .filter(Boolean);
+}
+
+function integerValuesFromParameter(parameter) {
+  if (!parameter || typeof parameter !== "object" || String(parameter.type ?? "") !== "integer") {
+    return [];
+  }
+  const minimum = Number(parameter.minimum ?? parameter.min ?? 1);
+  const maximum = Number(parameter.maximum ?? parameter.max ?? minimum);
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum < minimum || maximum - minimum > 12) {
+    return [];
+  }
+  const values = [];
+  for (let value = Math.ceil(minimum); value <= Math.floor(maximum); value += 1) {
+    values.push({ value: String(value), label: String(value) });
+  }
+  return values;
+}
+
 function modelMatchesPromptDockMediaType(model, mediaType) {
   const supportedModes = Array.isArray(model?.supportedModes)
-    ? model.supportedModes.map((item) => String(item ?? "").trim()).filter(Boolean)
+    ? model.supportedModes.map((item) => normalizePromptDockModeToken(item)).filter(Boolean)
     : [];
   if (!supportedModes.length) {
     return true;
@@ -2467,6 +2660,10 @@ function modelMatchesPromptDockMediaType(model, mediaType) {
     });
   }
   return true;
+}
+
+function normalizePromptDockModeToken(mode) {
+  return String(mode ?? "").trim().replaceAll(".", "_").replaceAll("-", "_");
 }
 
 function renderAssetInspectorModal(inspector) {
@@ -2868,4 +3065,8 @@ function matchesAssetQuery(asset, query) {
     .map((item) => String(item ?? "").toLowerCase())
     .filter(Boolean);
   return haystacks.some((item) => item.includes(query));
+}
+
+export function renderEpisodeAssetCardForTest(asset, assetKind = "character") {
+  return renderAssetCard(asset, assetKind, false, false);
 }

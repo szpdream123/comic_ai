@@ -243,6 +243,7 @@ async function uploadProviderArtifactBytesToStorage(
         objectKey: storageObject.objectKey,
         body: input.bytes,
         contentType: input.contentType,
+        contentLength: input.bytes.byteLength,
       });
       return {
         storageObject,
@@ -332,6 +333,7 @@ async function uploadProviderArtifactUrlToStorage(
         objectKey: storageObject.objectKey,
         body: counted.stream,
         contentType,
+        contentLength: knownSizeBytes,
       });
       return {
         storageObject,

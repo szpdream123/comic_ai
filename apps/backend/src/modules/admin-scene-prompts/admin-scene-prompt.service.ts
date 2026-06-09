@@ -8,7 +8,7 @@ const seedUpdatedAt = new Date("2026-06-06T08:00:00.000Z");
 const defaultNegativePrompt = "避免文字、水印、logo、人物大特写、单人海报、画面主体缺失、空间混乱、透视错误、低清晰度、过曝、畸形建筑、重复门窗、无前景中景远景层次";
 
 type JsonValue = unknown;
-type ScenePromptStage = "split" | "extract" | "merge" | "detail" | "image";
+type ScenePromptStage = "split";
 
 interface ScenePromptTemplateRow {
   id: string;
@@ -132,7 +132,7 @@ export function createAdminScenePromptService(deps: { db: SqlDatabase }) {
         id,
         input.name.trim(),
         input.code.trim(),
-        input.stage || "detail",
+        input.stage || "split",
         input.model_family || "general",
         JSON.stringify(input.tags || []),
         JSON.stringify(input.variables || []),
@@ -147,6 +147,14 @@ export function createAdminScenePromptService(deps: { db: SqlDatabase }) {
         input.now,
       ],
     );
+    if (input.is_default) {
+      await clearStageDefaults({
+        id,
+        stage: input.stage || "split",
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      });
+    }
     await audit(input, existing ? "admin.scene_prompt.template.updated" : "admin.scene_prompt.template.created", id);
     return templateResponse(id);
   }
@@ -183,6 +191,20 @@ export function createAdminScenePromptService(deps: { db: SqlDatabase }) {
   async function templateResponse(id: string) {
     const row = await queryOne<ScenePromptTemplateRow>(deps.db, "SELECT * FROM scene_prompt_templates WHERE id = $1", [id]);
     return { status: 200, body: { data: row ? templateFromRow(row) : { id } } };
+  }
+
+  async function clearStageDefaults(input: { id: string; stage: string; actorAdminAccountId: string; now: Date }) {
+    await deps.db.query(
+      `
+        UPDATE scene_prompt_templates
+        SET is_default = false, updated_by_admin_id = $3, updated_at = $4
+        WHERE deleted_at IS NULL
+          AND stage = $2
+          AND id <> $1
+          AND is_default = true
+      `,
+      [input.id, input.stage, input.actorAdminAccountId, input.now],
+    );
   }
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
@@ -257,7 +279,7 @@ function validateTemplatePayload(input: SaveScenePromptTemplateInput) {
   if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
     return error(400, "invalid_scene_prompt_code", "编码只能包含小写字母、数字和下划线");
   }
-  if (input.stage && !["split", "extract", "merge", "detail", "image"].includes(input.stage)) {
+  if (input.stage && input.stage !== "split") {
     return error(400, "invalid_scene_prompt_stage", "场景提示词阶段不支持");
   }
   if (input.model_family && !["general", "doubao", "seedream"].includes(input.model_family)) {
@@ -341,124 +363,5 @@ function template(input: {
 }
 
 const defaultScenePromptTemplates = [
-  template({
-    name: "长篇小说分场景拆分",
-    code: "scene_split_long_novel",
-    stage: "split",
-    tags: ["长篇分场景", "章节拆分", "JSON"],
-    variables: ["{{volume}}", "{{chapter}}", "{{novel_chapter}}", "{{previous_scene_summary}}"],
-    json_schema: "scenes[].scene_id, scene_name, volume, chapter, sequence, location_id, location_name, environment_type, time, scene_role, characters, plot_function, previous_scene_link, next_scene_hook, continuity_notes, visual_motifs, summary",
-    prompt_content: `你是长篇小说分场景策划。请根据输入的小说章节，将文本拆分为多个可独立拍摄、绘制、改编的场景。
 
-拆分原则：
-1. 地点变化必须拆分。
-2. 时间明显变化必须拆分。
-3. 人物目标、冲突状态或情绪重心变化明显时，可以拆分。
-4. 回忆、梦境、幻觉、插叙必须单独标记。
-5. 同一地点连续发生的小动作不要过度拆分，除非剧情功能发生变化。
-6. 必须为长篇连续性保留 location_id、visual_motifs、continuity_notes。
-
-请输出 JSON 数组。每个场景必须包含 scene_id、scene_name、volume、chapter、sequence、location_id、location_name、environment_type、time、scene_role、characters、plot_function、previous_scene_link、next_scene_hook、continuity_notes、visual_motifs、summary。
-
-章节信息：{{volume}} / {{chapter}}
-前一场景摘要：{{previous_scene_summary}}
-小说章节：{{novel_chapter}}`,
-    sort_order: 500,
-    remark: "第一步：把长篇章节稳定拆成可追踪 scene_id 和 location_id。",
-  }),
-  template({
-    name: "场景要素抽取",
-    code: "scene_extract_elements",
-    stage: "extract",
-    tags: ["场景要素抽取", "空间结构", "伏笔"],
-    variables: ["{{scene_json}}", "{{novel_scene_text}}"],
-    json_schema: "environment, spatial_layers, visual_details, sounds, smells, tactile_details, props, foreshadowing, continuity_notes",
-    prompt_content: `你是小说场景资料整理师。请只分析当前 scene_json 和对应原文，抽取可用于写作、分镜和生图的场景要素。
-
-要求：
-1. 不要改写剧情，不要新增原文没有依据的重大设定。
-2. 把空间分为前景、中景、远景或入口、主体、深处。
-3. 记录具体物件、声音、气味、触感、光线、材质。
-4. 标出 location_id、visual_motifs、continuity_notes 中必须延续的内容。
-5. 输出合法 JSON，不要 Markdown。
-
-scene_json：{{scene_json}}
-原文场景片段：{{novel_scene_text}}`,
-    sort_order: 400,
-    remark: "第二步：从单场景原文抽取空间、五感、道具和伏笔证据。",
-  }),
-  template({
-    name: "长篇场景库合并",
-    code: "scene_merge_library",
-    stage: "merge",
-    tags: ["场景库合并", "地点去重", "连续性"],
-    variables: ["{{all_scene_extract_json}}", "{{existing_scene_library_json}}"],
-    json_schema: "scene_library[].location_id, location_name, fixed_features, variable_states, appearances, visual_motifs, continuity_rules, unresolved_hooks",
-    prompt_content: `你是长篇小说场景库管理员。请根据多个场景抽取结果和已有场景库，合并重复地点，形成可长期复用的场景圣经。
-
-规则：
-1. 同一地点必须复用同一个 location_id。
-2. 固定空间结构写入 fixed_features。
-3. 随章节变化的损毁、天气、血迹、灯光、封锁状态写入 variable_states。
-4. 人物留下的痕迹、未回收道具、伏笔写入 continuity_rules 或 unresolved_hooks。
-5. 冲突信息不要强行覆盖，写入 conflict_notes。
-6. 输出合法 JSON，不要 Markdown。
-
-已有场景库：{{existing_scene_library_json}}
-本轮抽取结果：{{all_scene_extract_json}}`,
-    sort_order: 300,
-    remark: "第三步：维护长篇场景圣经，避免同一地点前后不一致。",
-  }),
-  template({
-    name: "小说场景设定拆解表",
-    code: "scene_detail_breakdown",
-    stage: "detail",
-    tags: ["场景设定拆解", "影视概念设定", "短视频场景稿"],
-    variables: ["{{scene_json}}", "{{scene_extract_json}}", "{{scene_library_json}}"],
-    json_schema: "sections: 场景名称, 所属篇章, 场景定位, 环境类型, 时间设定, 整体氛围, 场景主体, 场景描述, 细节元素拆解, 人物与场景关系, 剧情功能, 长篇连续性记录, 视觉母题, 光影版本, 声音氛围, 气味与触感, AI绘图提示词, 写作建议, 下一场景衔接建议",
-    prompt_content: `你是影视概念设定师和小说场景美术指导。请根据输入的 scene 对象、场景要素抽取结果和场景库资料，生成完整的小说场景设定拆解表。
-
-必须包含：
-【场景名称】【所属篇章 / 长篇位置】【场景定位】【环境类型】【时间设定】【整体氛围】【场景主体】【场景描述】【细节元素拆解】【人物与场景关系】【剧情功能】【长篇连续性记录】【视觉母题】【光影版本】【声音氛围】【气味与触感】【可用于 AI 绘图的场景提示词】【小说写作使用建议】【下一场景衔接建议】。
-
-要求：
-1. 保持 location_id 对应地点的一致性。
-2. 不要改变已存在的伏笔、道具、空间结构。
-3. 如果本场景是旧地点再次出现，需要写出“本次变化”。
-4. 场景描述 150-300 字，有空间层次、视觉细节、声音、气味或触感。
-5. AI 绘图提示词必须包含主体、环境、时间、光影、氛围、细节元素、镜头视角、画面风格。
-
-scene：{{scene_json}}
-场景抽取：{{scene_extract_json}}
-场景库：{{scene_library_json}}`,
-    sort_order: 200,
-    remark: "第四步：生成用户要看的完整场景拆解表。",
-  }),
-  template({
-    name: "场景概念图提示词",
-    code: "scene_image_concept_art",
-    stage: "image",
-    model_family: "doubao",
-    tags: ["场景生图提示词", "影视概念设定图", "前景中景远景"],
-    variables: ["{{scene_detail_json}}", "{{style_prompt}}"],
-    json_schema: "positive_prompt, negative_prompt, aspect_ratio, camera, style_notes",
-    prompt_content: `你是 AI 场景概念图提示词设计师。请根据场景设定拆解结果，生成适合生图模型的中文场景提示词。
-
-格式：
-主体空间 + 环境类型 + 时间 + 光影 + 氛围 + 前景细节 + 中景主体 + 远景背景 + 镜头视角 + 画面风格 + 长篇视觉母题。
-
-要求：
-1. 优先生成场景概念图，不做人物海报。
-2. 人物只能作为小比例叙事点出现。
-3. 必须体现前景、中景、远景。
-4. 必须保留 visual_motifs 和 continuity_notes 中的重要元素。
-5. 画面风格参考影视概念设定图、剧集美术设定稿、短视频场景设定稿。
-6. 输出正向提示词和负向提示词。
-
-场景拆解：{{scene_detail_json}}
-风格补充：{{style_prompt}}`,
-    negative_prompt: defaultNegativePrompt,
-    sort_order: 100,
-    remark: "第五步：把场景拆解转成可直接生图的概念图提示词。",
-  }),
 ];

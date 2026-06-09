@@ -70,6 +70,7 @@ export async function processGptImageSubmitJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
   const claim = await claimQueuedTask(db, {
     taskId: row.task_id,
     workerId: "gpt-image-submit-worker",
@@ -148,7 +149,7 @@ export async function processGptImageSubmitJob(
       providerRequestId,
       progressStage: "provider_succeeded",
       providerStatus: {
-        provider: "gpt-image-2",
+        provider: providerLabel,
         externalRequestId: submitted.request.externalRequestId,
       },
       now: input.now,
@@ -162,7 +163,7 @@ export async function processGptImageSubmitJob(
       failureCode,
       providerRequestId,
       metadata: {
-        provider: "gpt-image-2",
+        provider: providerLabel,
         failureCode,
         errorMessage: error instanceof Error ? error.message : String(error),
       },
@@ -176,6 +177,7 @@ export async function processGptImageSubmitJob(
         failureCode,
         displayMessage: failureCode,
         errorMessage: error instanceof Error ? error.message : String(error),
+        providerMessage: error instanceof Error ? error.message : String(error),
       },
       creditSummary: {
         released: Number(row.amount_reserved ?? 0),
@@ -207,6 +209,9 @@ export async function finalizeGptImageArtifactJob(
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
+  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const artifact = parseArtifactFromProviderResponse(providerResponse);
   if (!artifact) {
@@ -246,7 +251,7 @@ export async function finalizeGptImageArtifactJob(
         failureCode,
         providerRequestId: row.provider_request_id ?? null,
         metadata: {
-          provider: "gpt-image-2",
+          provider: providerLabel,
           failureCode,
           storageObjectKey,
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -277,7 +282,7 @@ export async function finalizeGptImageArtifactJob(
       failureCode,
       providerRequestId: row.provider_request_id ?? null,
       metadata: {
-        provider: "gpt-image-2",
+        provider: providerLabel,
         failureCode,
         errorMessage: error instanceof Error ? error.message : String(error),
       },
@@ -319,7 +324,7 @@ export async function finalizeGptImageArtifactJob(
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id ?? null,
       metadata: {
-        provider: "gpt-image-2",
+        provider: providerLabel,
         externalRequestId: row.external_request_id ?? null,
       },
       now: input.now,
@@ -331,7 +336,7 @@ export async function finalizeGptImageArtifactJob(
     providerRequestId: row.provider_request_id ?? null,
     resultAssets: [persisted],
     providerStatus: {
-      provider: "gpt-image-2",
+      provider: providerLabel,
       externalRequestId: row.external_request_id ?? null,
     },
     creditSummary: {
@@ -362,6 +367,9 @@ export async function persistGptImageArtifactJob(
     return { status: "skipped" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
+  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
   const failure = await findGenerationTaskSnapshotFailure(db, row.task_id);
   const storageObjectKey = readString(failure.storageObjectKey) ?? readString(failure.storage_object_key);
   if (!storageObjectKey) {
@@ -397,7 +405,7 @@ export async function persistGptImageArtifactJob(
       previewUrl: urls.previewUrl,
       sourceUrl: urls.sourceUrl,
       downloadUrl: urls.downloadUrl,
-      provider: "gpt-image-2",
+      provider: providerLabel,
       externalRequestId: row.external_request_id ?? null,
     },
     sourceTaskId: row.task_id,
@@ -439,7 +447,7 @@ export async function persistGptImageArtifactJob(
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id ?? null,
       metadata: {
-        provider: "gpt-image-2",
+        provider: providerLabel,
         externalRequestId: row.external_request_id ?? null,
         storageObjectKey,
       },
@@ -452,7 +460,7 @@ export async function persistGptImageArtifactJob(
     providerRequestId: row.provider_request_id ?? null,
     resultAssets: [persisted],
     providerStatus: {
-      provider: "gpt-image-2",
+      provider: providerLabel,
       externalRequestId: row.external_request_id ?? null,
     },
     creditSummary: {
@@ -529,7 +537,7 @@ async function findGptImageTaskForSubmit(db: SqlDatabase, taskId: string) {
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'queued'
-        AND t.input_snapshot_json->>'providerExecutor' = 'gpt-image-2'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       LIMIT 1
     `,
     [taskId],
@@ -567,7 +575,7 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'running'
-        AND t.input_snapshot_json->>'providerExecutor' = 'gpt-image-2'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
@@ -607,7 +615,7 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'manual_review_required'
         AND t.failure_code = 'provider_output_persist_failed'
-        AND t.input_snapshot_json->>'providerExecutor' = 'gpt-image-2'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
@@ -715,6 +723,8 @@ function fallbackGptImageModelConfig(env: NodeJS.ProcessEnv) {
       baseURL: env.GPT_IMAGE2_BASE_URL?.trim() || "https://api.openai.com",
       endpoint: env.GPT_IMAGE2_ENDPOINT?.trim() || "/v1/images/generations",
       apiKeyEnv: env.GPT_IMAGE2_API_KEY_ENV?.trim() || "GPT_IMAGE2_API_KEY",
+      resultFormat: env.GPT_IMAGE2_RESULT_FORMAT?.trim() || "b64_json",
+      timeoutMs: parsePositiveInteger(env.GPT_IMAGE2_TIMEOUT_MS, 600_000, 30 * 60_000),
     },
   };
 }

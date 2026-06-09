@@ -4,7 +4,7 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 
-const defaultModel = "seedance-2-0-i2v";
+const defaultModel = "doubao-seedance-2-0-260128";
 
 export class SeedanceVideoProviderAdapter implements ProviderAdapter {
   constructor(
@@ -165,30 +165,105 @@ function buildCreateTaskPayload(
     readString(payload.firstFrameUrl) ??
     readString(payload.imageUrl) ??
     readString(payload.referenceImageUrl);
+  const lastFrameUrl =
+    readString(payload.lastFrameUrl) ??
+    readMediaUrl(payload.lastFrame) ??
+    readMediaUrl(parameters.lastFrame);
+  const referenceImageUrls = [
+    ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.referenceImages),
+    ...readMediaUrlArray(parameters.referenceUploads),
+  ];
+  const referenceVideoUrl =
+    readString(payload.referenceVideoUrl) ??
+    readString(payload.sourceVideoUrl) ??
+    readMediaUrl(payload.sourceVideo) ??
+    readMediaUrl(parameters.sourceVideo) ??
+    readMediaUrl(parameters.editSourceVideo);
+  const referenceAudioUrl =
+    readString(payload.referenceAudioUrl) ??
+    readString(payload.audioUrl) ??
+    readMediaUrl(payload.referenceAudio) ??
+    readMediaUrl(parameters.referenceAudio);
 
   return {
     model: model ?? defaultModel,
-    content: buildContent(prompt, firstFrameUrl),
+    content: buildContent({
+      prompt,
+      firstFrameUrl,
+      lastFrameUrl,
+      referenceImageUrls,
+      referenceVideoUrl,
+      referenceAudioUrl,
+    }),
     ...optionalPayloadField("ratio", readString(parameters.aspectRatio)),
     ...optionalPayloadField("resolution", readString(parameters.resolution)),
     ...optionalPayloadField("duration", readInteger(parameters.durationSec)),
+    ...optionalPayloadField("seed", readInteger(parameters.seed)),
+    ...optionalPayloadField("camera_fixed", readBoolean(parameters.cameraFixed)),
+    ...optionalPayloadField("return_last_frame", readBoolean(parameters.returnLastFrame)),
+    ...optionalPayloadField("generate_audio", readBoolean(parameters.generateAudio)),
     watermark: readBoolean(parameters.watermark) ?? false,
   };
 }
 
-function buildContent(prompt: string, firstFrameUrl: string | undefined) {
+function buildContent(input: {
+  prompt: string;
+  firstFrameUrl?: string;
+  lastFrameUrl?: string;
+  referenceImageUrls: string[];
+  referenceVideoUrl?: string;
+  referenceAudioUrl?: string;
+}) {
   const content: Array<Record<string, unknown>> = [
     {
       type: "text",
-      text: prompt,
+      text: input.prompt,
     },
   ];
-  if (firstFrameUrl) {
+  if (input.firstFrameUrl) {
     content.push({
       type: "image_url",
       image_url: {
-        url: firstFrameUrl,
+        url: input.firstFrameUrl,
       },
+      role: "first_frame",
+    });
+  }
+  if (input.lastFrameUrl) {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: input.lastFrameUrl,
+      },
+      role: "last_frame",
+    });
+  }
+  for (const referenceImageUrl of input.referenceImageUrls) {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: referenceImageUrl,
+      },
+      role: "reference_image",
+    });
+  }
+  if (input.referenceVideoUrl) {
+    content.push({
+      type: "video_url",
+      video_url: {
+        url: input.referenceVideoUrl,
+      },
+      role: "reference_video",
+    });
+  }
+  if (input.referenceAudioUrl) {
+    content.push({
+      type: "audio_url",
+      audio_url: {
+        url: input.referenceAudioUrl,
+      },
+      role: "reference_audio",
     });
   }
   return content;
@@ -256,6 +331,31 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function readMediaUrl(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return readString(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["url", "sourceUrl", "downloadUrl", "previewUrl", "publicUrl", "src"]) {
+    const url = readString(record[key]);
+    if (url) {
+      return url;
+    }
+  }
+  return undefined;
+}
+
+function readMediaUrlArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    const url = readMediaUrl(value);
+    return url ? [url] : [];
+  }
+  return value.map((item) => readMediaUrl(item)).filter((item): item is string => Boolean(item));
 }
 
 function readInteger(value: unknown) {
