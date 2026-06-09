@@ -111,7 +111,7 @@ export async function handleGenerationSubmitImageJob(
     outboxEventId?: string;
   }>,
 ): Promise<{ status: SubmitImageResult["status"]; failureCode?: string }> {
-  if (input.job.data.providerExecutor !== "gpt-image-2") {
+  if (!isImageProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_image_provider_executor:${input.job.data.providerExecutor}`);
   }
   if (!input.processors.submitGptImage) {
@@ -214,7 +214,7 @@ export async function handleGenerationFinalizeArtifactJob(
       }
       return { status: result.status };
     }
-    if (input.job.data.providerExecutor === "gpt-image-2" && input.job.data.artifactKind === "image") {
+    if (isImageProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "image") {
       if (!input.processors.finalizeGptImageArtifact) {
         throw new Error("gpt_image_finalize_processor_missing");
       }
@@ -262,7 +262,7 @@ async function handlePersistOnlyFinalizeArtifactJob(
       : { status: result.status };
   }
 
-  if (input.job.data.providerExecutor === "gpt-image-2" && input.job.data.artifactKind === "image") {
+  if (isImageProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "image") {
     if (!input.processors.persistGptImageArtifact) {
       throw new Error("gpt_image_persist_processor_missing");
     }
@@ -276,6 +276,10 @@ async function handlePersistOnlyFinalizeArtifactJob(
   }
 
   throw new Error(`unsupported_persist_provider_executor:${input.job.data.providerExecutor}:${input.job.data.artifactKind}`);
+}
+
+function isImageProviderExecutor(providerExecutor: string) {
+  return providerExecutor === "gpt-image-2" || providerExecutor === "image-http";
 }
 
 async function acquireFinalizePermit(

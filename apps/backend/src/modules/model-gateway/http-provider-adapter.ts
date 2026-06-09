@@ -40,6 +40,7 @@ export class HttpProviderAdapter implements ProviderAdapter {
       externalRequestId: payload.externalRequestId,
       status: payload.status,
       redactedResponse: payload.redactedResponse ?? {},
+      artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : undefined,
     };
   }
 

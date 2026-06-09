@@ -171,15 +171,28 @@ function readString(value: unknown): string {
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.map((item) => readString(item)).filter(Boolean)
+    ? value.map((item) => readEnumValue(item)).filter(Boolean)
     : [];
+}
+
+function readEnumValue(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const option = value as Record<string, unknown>;
+    return readString(option.value) || readString(option.providerValue) || readString(option.label);
+  }
+  return readString(value);
 }
 
 function readEnumValues(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return [];
   }
-  return readStringArray((value as Record<string, unknown>).enum);
+  const schema = value as Record<string, unknown>;
+  const enumValues = readStringArray(schema.enum);
+  if (enumValues.length) {
+    return enumValues;
+  }
+  return readStringArray(schema.options);
 }
 
 function readNumberSchemaBound(schema: unknown, key: "minimum" | "maximum"): number | null {

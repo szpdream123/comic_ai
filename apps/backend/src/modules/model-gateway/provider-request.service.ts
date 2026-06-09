@@ -217,6 +217,7 @@ export async function submitProviderRequest(
     await markProviderRequestResultUnknown(db, {
       providerRequestId: started.id,
       failureCode: "provider_submission_ambiguous",
+      redactedResponse: readProviderDiagnostics(error),
       now: input.now,
     });
     throw error;
@@ -289,6 +290,7 @@ export async function markProviderRequestResultUnknown(
   input: {
     providerRequestId: string;
     failureCode: string;
+    redactedResponse?: Record<string, unknown>;
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
@@ -298,15 +300,28 @@ export async function markProviderRequestResultUnknown(
       UPDATE provider_requests
       SET status = 'result_unknown',
           failure_code = $2,
-          updated_at = $3
+          response_redacted_json = COALESCE($3::jsonb, response_redacted_json),
+          updated_at = $4
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
       RETURNING *
     `,
-    [input.providerRequestId, input.failureCode, input.now],
+    [
+      input.providerRequestId,
+      input.failureCode,
+      input.redactedResponse ? JSON.stringify(input.redactedResponse) : null,
+      input.now,
+    ],
   );
 
   return providerRequestFromRow(row!);
+}
+
+function readProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const diagnostics = (error as { providerDiagnostics?: unknown }).providerDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return undefined;
+  return { diagnostics: diagnostics as Record<string, unknown> };
 }
 
 export async function markProviderRequestSucceeded(

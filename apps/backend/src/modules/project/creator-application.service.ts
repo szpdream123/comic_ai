@@ -77,6 +77,7 @@ import {
   replaceEpisodesForProject,
   updateEpisodeForProject,
 } from "./episode-record.service.ts";
+import { upsertEpisodeGenerationDraft } from "./episode-generation-draft.service.ts";
 import {
   createCreatorExportArtifact,
   requestCreatorImageGenerationPlatformBatch,
@@ -1507,6 +1508,155 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         now: input.now,
       });
       return { status: 200, body: { episode } };
+    },
+
+    async commitAiStoryboardPreview(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      body: {
+        episodeTitle?: string | null;
+        commitPayload?: {
+          scriptText?: string | null;
+          scenes?: Array<Record<string, unknown>> | null;
+          characters?: Array<Record<string, unknown>> | null;
+          props?: Array<Record<string, unknown>> | null;
+          storyboards?: Array<Record<string, unknown>> | null;
+        } | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      await ensureSqlState(input.user.id, sqlState);
+      const projectId = input.projectId || sqlState.projectId;
+      if (!projectId) {
+        return { status: 409, body: { error: "creator_project_missing" } };
+      }
+      const payload = input.body.commitPayload;
+      if (!payload || typeof payload !== "object") {
+        return { status: 400, body: { error: "ai_storyboard_commit_payload_required" } };
+      }
+      const storyboards = Array.isArray(payload.storyboards) ? payload.storyboards : [];
+      if (!storyboards.length) {
+        return { status: 400, body: { error: "ai_storyboard_storyboards_required" } };
+      }
+      const title = input.body.episodeTitle?.trim() || "AI 分镜章节";
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId,
+        now: input.now,
+      });
+      const episode = await createEpisodeForProject(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        title,
+        createdByUserId: actor.actorId,
+        now: input.now,
+      });
+      sqlState.projectId = projectId;
+
+      const createdAssets = {
+        characters: await createAiPreviewEpisodeAssets(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+          episodeId: episode.id,
+          kind: "character",
+          records: Array.isArray(payload.characters) ? payload.characters : [],
+          createdByUserId: actor.actorId,
+          now: input.now,
+        }),
+        scenes: await createAiPreviewEpisodeAssets(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+          episodeId: episode.id,
+          kind: "scene",
+          records: Array.isArray(payload.scenes) ? payload.scenes : [],
+          createdByUserId: actor.actorId,
+          now: input.now,
+        }),
+        props: await createAiPreviewEpisodeAssets(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+          episodeId: episode.id,
+          kind: "prop",
+          records: Array.isArray(payload.props) ? payload.props : [],
+          createdByUserId: actor.actorId,
+          now: input.now,
+        }),
+      };
+      const shots = storyboards.map((storyboard, index) =>
+        aiPreviewStoryboardToShot({
+          organizationId: actor.organizationId,
+          projectId,
+          episodeId: episode.id,
+          storyboard,
+          index,
+          createdByUserId: actor.actorId,
+          now: input.now,
+        }),
+      );
+      await upsertShotsForProject(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        createdByUserId: actor.actorId,
+        shots,
+        now: input.now,
+      });
+      for (let index = 0; index < storyboards.length; index += 1) {
+        const storyboard = storyboards[index]!;
+        const shot = shots[index]!;
+        const imagePrompt =
+          firstAiPreviewText(storyboard, ["chapterImagePrompt", "chapter_image_prompt"]) ||
+          firstAiPreviewText(storyboard, ["imagePrompt", "image_prompt", "staticImagePrompt", "static_image_prompt"]);
+        const videoPrompt =
+          firstAiPreviewText(storyboard, ["chapterVideoPrompt", "chapter_video_prompt"]) ||
+          firstAiPreviewText(storyboard, ["videoPrompt", "video_prompt", "motionPrompt", "motion_prompt"]);
+        if (imagePrompt) {
+          await upsertEpisodeGenerationDraft(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? deps.workspaceId,
+            projectId,
+            episodeId: episode.id,
+            targetType: "storyboard",
+            targetId: shot.id,
+            mode: "image",
+            prompt: imagePrompt,
+            payload: { source: "ai_storyboard_preview", storyboard },
+            createdByUserId: actor.actorId,
+            now: input.now,
+          });
+        }
+        if (videoPrompt) {
+          await upsertEpisodeGenerationDraft(deps.db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? deps.workspaceId,
+            projectId,
+            episodeId: episode.id,
+            targetType: "storyboard",
+            targetId: shot.id,
+            mode: "video",
+            prompt: videoPrompt,
+            payload: { source: "ai_storyboard_preview", storyboard },
+            createdByUserId: actor.actorId,
+            now: input.now,
+          });
+        }
+      }
+      await updateProjectPhase(deps.db, projectId, "shot_generation");
+      await creatorApp.seedShotRecords(
+        await listShotsForProject(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+        }),
+      );
+
+      return {
+        status: 200,
+        body: {
+          episode,
+          assets: createdAssets,
+          storyboards: shots,
+        },
+      };
     },
 
     async updateEpisode(input: {
@@ -4247,11 +4397,11 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
-  await db.query("DELETE FROM workflows WHERE organization_id = $1 AND project_id = $2", [
+  await db.query("DELETE FROM export_records WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
   ]);
-  await db.query("DELETE FROM export_records WHERE organization_id = $1 AND project_id = $2", [
+  await db.query("DELETE FROM workflows WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
   ]);
@@ -5076,6 +5226,287 @@ function assetTypeForKind(kind: "character" | "scene" | "prop" | "image" | "vide
     return "prop_reference";
   }
   return kind === "video" ? "shot_video" : "shot_image";
+}
+
+async function createAiPreviewEpisodeAssets(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+    kind: "character" | "scene" | "prop";
+    records: Array<Record<string, unknown>>;
+    createdByUserId: string;
+    now: Date;
+  },
+) {
+  const created: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>> = [];
+  for (let index = 0; index < input.records.length; index += 1) {
+    const record = input.records[index]!;
+    const name = resolveAiPreviewAssetName(input.kind, record, index);
+    if (!name) {
+      continue;
+    }
+    const description = resolveAiPreviewAssetDescription(input.kind, record);
+    const prompt = resolveAiPreviewAssetPrompt(input.kind, record);
+    const assetKey = `episode-${input.kind}-${slugForAssetKey(name)}-${randomUUID().slice(0, 8)}`;
+    created.push(await createAssetVersionSnapshot(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+      assetType: assetTypeForKind(input.kind),
+      assetKey,
+      createdByUserId: input.createdByUserId,
+      storageObjectId: null,
+      storageObjectKey: `episodes/${input.episodeId}/assets/${input.kind}/${assetKey}`,
+      metadata: {
+        mimeType: "application/json",
+        width: 1,
+        height: 1,
+        episodeId: input.episodeId,
+        label: name,
+        description,
+        prompt,
+        source: "ai_storyboard_preview",
+        previewUrl: null,
+      },
+      sourceTaskId: null,
+      sourceAttemptId: null,
+      now: input.now,
+    }));
+  }
+  return created;
+}
+
+function aiPreviewStoryboardToShot(input: {
+  organizationId: string;
+  projectId: string;
+  episodeId: string;
+  storyboard: Record<string, unknown>;
+  index: number;
+  createdByUserId: string;
+  now: Date;
+}): ShotRecord {
+  const shotNo = Number(input.storyboard.shotNo ?? input.storyboard.shot_no ?? input.index + 1);
+  const plot = firstAiPreviewText(input.storyboard, ["plot", "description", "story", "summary", "sceneAnalysis", "scene_analysis"]);
+  const dialogue = firstAiPreviewText(input.storyboard, ["dialogue", "dialogue_or_os", "dialog", "voiceover", "narration"]);
+  const imagePrompt = firstAiPreviewText(input.storyboard, ["imagePrompt", "image_prompt", "staticImagePrompt", "static_image_prompt"]);
+  const videoPrompt =
+    firstAiPreviewText(input.storyboard, ["chapterVideoPrompt", "chapter_video_prompt"]) ||
+    firstAiPreviewText(input.storyboard, ["videoPrompt", "video_prompt", "motionPrompt", "motion_prompt"]);
+  const fallbackDescription = [plot, dialogue].filter(Boolean).join("\n\n");
+  const storyboardDescription = buildAiPreviewStoryboardDescription(input.storyboard);
+  const description = videoPrompt || storyboardDescription || fallbackDescription || imagePrompt || `AI 分镜 ${input.index + 1}`;
+  return {
+    id: randomUUID(),
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    episodeId: input.episodeId,
+    title: `分镜 ${Number.isFinite(shotNo) && shotNo > 0 ? shotNo : input.index + 1}`,
+    description,
+    sortOrder: input.index,
+    contentRevision: 1,
+    contentStatus: "ready",
+    imageStatus: imagePrompt ? "ready" : "draft",
+    videoStatus: videoPrompt ? "ready" : "not_ready",
+    currentImageAssetVersionId: null,
+    currentVideoAssetVersionId: null,
+    activeImageTaskId: null,
+    activeImageRevision: null,
+    activeVideoTaskId: null,
+    activeVideoImageAssetVersionId: null,
+    completedImageAssetVersionIds: [],
+    completedVideoAssetVersionIds: [],
+    createdByUserId: input.createdByUserId,
+    createdAt: input.now,
+    updatedAt: input.now,
+  };
+}
+
+function buildAiPreviewStoryboardDescription(storyboard: Record<string, unknown>) {
+  const lines = [
+    ["分镜剧情", firstAiPreviewText(storyboard, ["plot", "description", "story", "summary", "sceneAnalysis", "scene_analysis"])],
+    ["对白/旁白", firstAiPreviewText(storyboard, ["dialogue", "dialogue_or_os", "dialog", "voiceover", "narration"])],
+    ["时间", firstAiPreviewText(storyboard, ["timeRange", "time_range", "originalTimeRange", "original_time_range"])],
+    ["转场", firstAiPreviewText(storyboard, ["transition", "cut", "transitionType", "transition_type"])],
+    ["镜头", [
+      firstAiPreviewText(storyboard, ["shotSize", "shot_size", "cameraShot", "camera_shot"]),
+      firstAiPreviewText(storyboard, ["cameraAngle", "camera_angle", "angle"]),
+      firstAiPreviewText(storyboard, ["cameraMovement", "camera_movement", "movement"]),
+    ].filter(Boolean).join("/")],
+    ["画面描述", firstAiPreviewText(storyboard, ["visualDescription", "visual_description", "pictureDescription", "picture_description", "frameDescription", "frame_description"])],
+    ["核心动作", firstAiPreviewText(storyboard, ["coreAction", "core_action", "keyAction", "key_action"])],
+    ["对手戏设计", firstAiPreviewText(storyboard, ["interactionDesign", "interaction_design", "opponentInteraction", "opponent_interaction"])],
+    ["人物底层逻辑", firstAiPreviewText(storyboard, ["characterLogic", "character_logic", "innerLogic", "inner_logic"])],
+    ["主体动作", firstAiPreviewText(storyboard, ["subjectAction", "subject_action", "mainAction", "main_action"])],
+    ["音效", firstAiPreviewText(storyboard, ["soundEffect", "sound_effect", "sfx"])],
+    ["配乐", firstAiPreviewText(storyboard, ["bgm", "music", "score"])],
+  ];
+  const values: string[] = [];
+  const seen = new Set<string>();
+  for (const [label, value] of lines) {
+    const textValue = String(value ?? "").trim();
+    if (!textValue || seen.has(textValue)) {
+      continue;
+    }
+    seen.add(textValue);
+    values.push(`${label}: ${textValue}`);
+  }
+  return values.join("\n");
+}
+
+function resolveAiPreviewAssetName(
+  kind: "character" | "scene" | "prop",
+  record: Record<string, unknown>,
+  index: number,
+) {
+  const keys = kind === "character"
+    ? ["characterName", "character_name", "name", "role", "character"]
+    : kind === "scene"
+      ? ["sceneName", "scene_name", "name", "location", "scene"]
+      : ["propName", "prop_name", "name", "prop"];
+  return firstAiPreviewText(record, keys) || `${kind}-${index + 1}`;
+}
+
+function resolveAiPreviewAssetDescription(kind: "character" | "scene" | "prop", record: Record<string, unknown>) {
+  const keys = kind === "character"
+    ? [
+      "rawCharacterDescription",
+      "raw_character_description",
+      "characterDescription",
+      "character_description",
+      "description",
+      "appearance",
+      "summary",
+      "age",
+      "nationality",
+      "gender",
+      "costume",
+      "clothing",
+      "face",
+      "facialFeatures",
+      "detailFeatures",
+      "bodyFeatures",
+      "personality",
+      "characterImagePrompt",
+      "character_image_prompt",
+      "imagePrompt",
+      "image_prompt",
+      "prompt",
+    ]
+    : kind === "scene"
+      ? [
+        "rawSceneDescription",
+        "raw_scene_description",
+        "sceneDescription",
+        "scene_description",
+        "description",
+        "summary",
+        "environment",
+        "weather",
+        "time",
+        "timeOfDay",
+        "spaceStructure",
+        "architecturalStyle",
+        "buildingStyle",
+        "buildingDetails",
+        "lighting",
+        "lightingRules",
+        "atmosphere",
+        "keyProps",
+        "sceneImagePrompt",
+        "scene_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ]
+      : [
+        "rawPropDescription",
+        "raw_prop_description",
+        "propDescription",
+        "prop_description",
+        "description",
+        "summary",
+        "usage",
+        "appearance",
+        "color",
+        "material",
+        "size",
+        "state",
+        "ownerOrUser",
+        "firstAppearance",
+        "consistency",
+        "propImagePrompt",
+        "prop_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ];
+  return joinAiPreviewText(record, keys);
+}
+
+function resolveAiPreviewAssetPrompt(kind: "character" | "scene" | "prop", record: Record<string, unknown>) {
+  const keys = kind === "character"
+    ? ["characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"]
+    : kind === "scene"
+      ? ["sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"]
+      : ["propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"];
+  return firstAiPreviewText(record, keys);
+}
+
+function firstAiPreviewText(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      const joined = value.map((item) => String(item ?? "").trim()).filter(Boolean).join("、");
+      if (joined) {
+        return joined;
+      }
+      continue;
+    }
+    const textValue = String(value ?? "").trim();
+    if (textValue) {
+      return textValue;
+    }
+  }
+  return "";
+}
+
+function joinAiPreviewText(record: Record<string, unknown>, keys: string[]) {
+  const values: string[] = [];
+  for (const key of keys) {
+    const value = record[key];
+    const textValue = Array.isArray(value)
+      ? value.map((item) => String(item ?? "").trim()).filter(Boolean).join("、")
+      : String(value ?? "").trim();
+    if (!textValue || aiPreviewTextContains(values, textValue)) {
+      continue;
+    }
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      if (aiPreviewTextIncludes(textValue, values[index]!)) {
+        values.splice(index, 1);
+      }
+    }
+    values.push(textValue);
+  }
+  return values.join("\n");
+}
+
+function aiPreviewTextContains(values: string[], candidate: string) {
+  return values.some((value) => aiPreviewTextIncludes(value, candidate));
+}
+
+function aiPreviewTextIncludes(container: string, candidate: string) {
+  const normalizedContainer = normalizeAiPreviewComparableText(container);
+  const normalizedCandidate = normalizeAiPreviewComparableText(candidate);
+  return Boolean(normalizedCandidate && normalizedContainer.includes(normalizedCandidate));
+}
+
+function normalizeAiPreviewComparableText(value: string) {
+  return String(value ?? "").replace(/\s+/g, "");
+}
+
+function slugForAssetKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-").replace(/^-+|-+$/g, "") || "asset";
 }
 
 function cleanOptionalText(value?: string | null) {

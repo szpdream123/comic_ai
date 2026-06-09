@@ -85,6 +85,23 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "episode_generation_drafts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+  } else if (
+    (await episodeGenerationDraftColumnsExist(db)) &&
+    ((await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+      "organization_id",
+      "episode_id",
+      "target_type",
+      "target_id",
+    ])) ||
+      !(await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+        "organization_id",
+        "episode_id",
+        "target_type",
+        "target_id",
+        "mode",
+      ])))
+  ) {
+    await ensureEpisodeGenerationDraftModeConstraint(db);
   }
 
   if (!(await tableExists(db, "episode_asset_conversation_threads"))) {
@@ -101,6 +118,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "ai_model_config_revisions"))
   ) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0007_ai_model_configs.sql" });
+  } else {
+    if (!(await seedanceModelConfigsCurrent(db))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0020_seedance_video_model_configs.sql" });
+    }
+    if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0021_aliyun_bailian_happyhorse_video_model.sql" });
+    }
   }
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
@@ -131,10 +155,24 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
+  } else {
+    if (!(await columnExists(db, "storyboard_prompt_packages", "cover_image_url"))) {
+      await db.query("ALTER TABLE storyboard_prompt_packages ADD COLUMN cover_image_url text NULL");
+    }
+    if (await needsStoryboardPromptCleanup(db)) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0017_remove_deprecated_prompt_categories.sql" });
+    }
   }
 
   if (!(await tableExists(db, "image_prompt_styles"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0012_image_prompt_styles.sql" });
+  } else {
+    if (!(await columnExists(db, "image_prompt_styles", "cover_image_url"))) {
+      await db.query("ALTER TABLE image_prompt_styles ADD COLUMN cover_image_url text NULL");
+    }
+    if (!(await columnExists(db, "image_prompt_styles", "is_default"))) {
+      await db.query("ALTER TABLE image_prompt_styles ADD COLUMN is_default boolean NOT NULL DEFAULT false");
+    }
   }
 
   if (!(await tableExists(db, "character_prompt_templates"))) {
@@ -143,6 +181,14 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "scene_prompt_templates"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0015_scene_prompt_templates.sql" });
+  }
+
+  if (!(await tableExists(db, "shot_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0016_shot_prompt_templates.sql" });
+  }
+
+  if (!(await tableExists(db, "prop_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0018_prop_prompt_templates.sql" });
   }
 }
 
@@ -387,9 +433,63 @@ async function executeSchemaPatch(db: SqlDatabase, sql: string) {
     return;
   }
 
-  for (const statement of sql.split(/;\s*(?:\r?\n|$)/).map((part) => part.trim()).filter(Boolean)) {
-    await db.query(`${statement};`);
+  await db.query(sql);
+}
+
+async function ensureEpisodeGenerationDraftModeConstraint(db: SqlDatabase) {
+  const legacyConstraints = await uniqueConstraintNamesForColumns(db, "episode_generation_drafts", [
+    "organization_id",
+    "episode_id",
+    "target_type",
+    "target_id",
+  ]);
+
+  for (const constraintName of legacyConstraints) {
+    await db.query(`ALTER TABLE episode_generation_drafts DROP CONSTRAINT ${quoteIdentifier(constraintName)}`);
   }
+
+  if (
+    !(await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+      "organization_id",
+      "episode_id",
+      "target_type",
+      "target_id",
+      "mode",
+    ]))
+  ) {
+    await db.query(`
+      ALTER TABLE episode_generation_drafts
+      ADD CONSTRAINT episode_generation_drafts_mode_unique
+      UNIQUE (organization_id, episode_id, target_type, target_id, mode)
+    `);
+  }
+}
+
+async function needsStoryboardPromptCleanup(db: SqlDatabase) {
+  if (!(await tableExists(db, "storyboard_prompt_templates"))) return false;
+
+  const columnCheck = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'storyboard_prompt_templates'
+        AND column_name = 'output_package_id'
+    `,
+  );
+  if (columnCheck.rows[0]?.is_nullable === "NO") return true;
+
+  const deprecatedPackages = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM storyboard_prompt_packages
+        WHERE package_type IN ('camera', 'output')
+          AND deleted_at IS NULL
+      ) AS exists
+    `,
+  );
+  return deprecatedPackages.rows[0]?.exists === true;
 }
 
 async function tableExists(db: SqlDatabase, tableName: string) {
@@ -408,6 +508,46 @@ async function tableExists(db: SqlDatabase, tableName: string) {
   return tableCheck.rows[0]?.exists === true;
 }
 
+async function aiModelConfigExists(db: SqlDatabase, modelCode: string) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM ai_model_configs
+        WHERE model_code = $1
+      ) AS exists
+    `,
+    [modelCode],
+  );
+
+  return result.rows[0]?.exists === true;
+}
+
+async function seedanceModelConfigsCurrent(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ count: number }>(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM ai_model_configs
+      WHERE status = 'active'
+        AND (
+          (model_code = 'Doubao-Seedance-2.0-fast' AND provider_model = 'doubao-seedance-2-0-fast-260128')
+          OR (model_code = 'Doubao-Seedance-2.0' AND provider_model = 'doubao-seedance-2-0-260128')
+          OR (model_code = 'doubao-seedance-1-0-pro-250528' AND provider_model = 'doubao-seedance-1-0-pro-250528')
+        )
+    `,
+  );
+
+  return result.rows[0]?.count === 3;
+}
+
 async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {
   const constraintCheck = await db.query<{ exists: boolean }>(
     `
@@ -423,6 +563,72 @@ async function constraintExists(db: SqlDatabase, tableName: string, constraintNa
   );
 
   return constraintCheck.rows[0]?.exists === true;
+}
+
+async function uniqueConstraintForColumnsExists(db: SqlDatabase, tableName: string, columnNames: string[]) {
+  const constraintCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = $1
+          AND con.contype = 'u'
+          AND (
+            SELECT array_agg(att.attname::text ORDER BY keys.ordinality)
+            FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ordinality)
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
+          ) = $2::text[]
+      ) AS exists
+    `,
+    [tableName, columnNames],
+  );
+
+  return constraintCheck.rows[0]?.exists === true;
+}
+
+async function uniqueConstraintNamesForColumns(db: SqlDatabase, tableName: string, columnNames: string[]) {
+  const constraints = await db.query<{ constraint_name: string }>(
+    `
+      SELECT con.conname AS constraint_name
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = 'public'
+        AND rel.relname = $1
+        AND con.contype = 'u'
+        AND (
+          SELECT array_agg(att.attname::text ORDER BY keys.ordinality)
+          FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ordinality)
+          JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
+        ) = $2::text[]
+    `,
+    [tableName, columnNames],
+  );
+
+  return constraints.rows.map((row) => row.constraint_name);
+}
+
+function quoteIdentifier(identifier: string) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+async function episodeGenerationDraftColumnsExist(db: SqlDatabase) {
+  const requiredColumns = ["organization_id", "episode_id", "target_type", "target_id", "mode"];
+  const columnCheck = await db.query<{ count: string | number }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'episode_generation_drafts'
+        AND column_name = ANY($1::text[])
+    `,
+    [requiredColumns],
+  );
+
+  return Number(columnCheck.rows[0]?.count ?? 0) === requiredColumns.length;
 }
 
 async function columnExists(db: SqlDatabase, tableName: string, columnName: string) {

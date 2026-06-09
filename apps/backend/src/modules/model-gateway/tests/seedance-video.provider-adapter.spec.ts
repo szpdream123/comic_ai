@@ -47,6 +47,10 @@ describe("seedance video provider adapter", () => {
           durationSec: 5,
           resolution: "1080p",
           aspectRatio: "16:9",
+          seed: 11,
+          cameraFixed: false,
+          returnLastFrame: true,
+          generateAudio: true,
         },
       },
     });
@@ -71,11 +75,16 @@ describe("seedance video provider adapter", () => {
           image_url: {
             url: "https://cdn.example.com/frame.png",
           },
+          role: "first_frame",
         },
       ],
       ratio: "16:9",
       resolution: "1080p",
       duration: 5,
+      seed: 11,
+      camera_fixed: false,
+      return_last_frame: true,
+      generate_audio: true,
       watermark: false,
     });
     assert.equal(result.externalRequestId, "seedance-task-123");
@@ -161,7 +170,77 @@ describe("seedance video provider adapter", () => {
       },
     });
 
-    assert.equal(JSON.parse(capturedBody).model, "seedance-2-0-i2v");
+    assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-260128");
+  });
+
+  it("maps Seedance frame and reference media to Volcengine content roles", async () => {
+    let capturedBody = "";
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      model: "doubao-seedance-2-0-260128",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-task-reference" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-reference",
+      providerName: "volcengine",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-reference:task-reference",
+      payloadRef: "creator://payload-reference",
+      payloadHash: "hash-reference",
+      redactedPayload: {
+        prompt: "first person tea commercial",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        parameters: {
+          lastFrame: { url: "https://cdn.example.com/last.png" },
+          referenceImages: [{ url: "https://cdn.example.com/ref.png" }],
+          editSourceVideo: { url: "https://cdn.example.com/ref.mp4" },
+          referenceAudio: { url: "https://cdn.example.com/ref.mp3" },
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody).content, [
+      {
+        type: "text",
+        text: "first person tea commercial",
+      },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example.com/first.png" },
+        role: "first_frame",
+      },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example.com/last.png" },
+        role: "last_frame",
+      },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example.com/ref.png" },
+        role: "reference_image",
+      },
+      {
+        type: "video_url",
+        video_url: { url: "https://cdn.example.com/ref.mp4" },
+        role: "reference_video",
+      },
+      {
+        type: "audio_url",
+        audio_url: { url: "https://cdn.example.com/ref.mp3" },
+        role: "reference_audio",
+      },
+    ]);
   });
 
   it("includes provider response details when Seedance rejects a submission", async () => {

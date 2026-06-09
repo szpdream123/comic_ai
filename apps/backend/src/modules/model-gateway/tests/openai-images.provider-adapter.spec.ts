@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { describe, it } from "node:test";
 
 import { OpenAIImagesProviderAdapter } from "../openai-images.provider-adapter.ts";
@@ -122,6 +123,7 @@ describe("openai images provider adapter", () => {
           baseURL: "https://relay.example.com",
           endpoint: "/v1/images/generations",
           apiKeyEnv: "GPT_IMAGE2_API_KEY",
+          resultFormat: "b64_json",
         },
       },
       {
@@ -166,6 +168,7 @@ describe("openai images provider adapter", () => {
     });
     assert.match(capturedBody, /"model":"gpt-image-2"/);
     assert.match(capturedBody, /floating library/);
+    assert.match(capturedBody, /"response_format":"b64_json"/);
     assert.equal(result.externalRequestId, "req_relay_123");
     assert.equal(result.status, "succeeded");
     assert.deepEqual(result.redactedResponse?.outputTypes, ["url"]);
@@ -176,6 +179,51 @@ describe("openai images provider adapter", () => {
         fileExtension: "png",
         url: "https://cdn.example.com/generated.png",
       },
+    ]);
+  });
+
+  it("honors OpenAI images timeoutMs from model config", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "openai_images",
+        providerModel: "gpt-image-2",
+        providerConfig: {
+          baseURL: "https://relay.example.com",
+          endpoint: "/v1/images/generations",
+          apiKeyEnv: "GPT_IMAGE2_API_KEY",
+          timeoutMs: 5,
+        },
+      },
+      {
+        GPT_IMAGE2_API_KEY: "relay-key",
+      },
+      (async (_url, init) => {
+        await new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")));
+        });
+        throw new Error("unreachable");
+      }) as typeof fetch,
+    );
+
+    const result = assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-config-timeout",
+          providerName: "gpt-image-2-cn",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-config-timeout:task-config-timeout",
+          payloadRef: "creator://payload-config-timeout",
+          payloadHash: "hash-config-timeout",
+          redactedPayload: {
+            prompt: "Vertical comic frame of a slow relay response.",
+          },
+        }),
+      /openai_images_timeout/,
+    );
+
+    await Promise.race([
+      result,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("model_config_timeout_not_honored")), 100)),
     ]);
   });
 
@@ -247,11 +295,174 @@ describe("openai images provider adapter", () => {
     assert.equal(capturedBody.get("model"), "gpt-image-2");
     assert.equal(capturedBody.get("prompt"), "Keep the same character and create a new comic panel.");
     assert.equal(capturedBody.get("size"), "1024x1536");
-    assert.equal(capturedBody.getAll("image").length, 1);
-    assert.equal(capturedBody.get("image") instanceof Blob, true);
+    assert.equal(capturedBody.getAll("image[]").length, 1);
+    assert.equal(capturedBody.get("image[]") instanceof Blob, true);
     assert.equal(result.externalRequestId, "req_edit_123");
     assert.equal(result.status, "succeeded");
     assert.deepEqual(result.redactedResponse?.outputTypes, ["b64_json"]);
+  });
+
+  it("times out image generation requests when the provider does not respond", async () => {
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      model: "gpt-image-2",
+      requestTimeoutMs: 10,
+      fetchImpl: (async (_url, init) => {
+        await new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")));
+        });
+        throw new Error("unreachable");
+      }) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-timeout",
+          providerName: "openai-images",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-timeout:task-timeout",
+          payloadRef: "creator://payload-timeout",
+          payloadHash: "hash-timeout",
+          redactedPayload: {
+            prompt: "Vertical comic frame of a stalled provider request.",
+          },
+        }),
+      /openai_images_timeout/,
+    );
+  });
+
+  it("reports an explicit empty response error instead of leaking JSON parser errors", async () => {
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      model: "gpt-image-2",
+      fetchImpl: (async () =>
+        new Response("", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-empty-response",
+          providerName: "openai-images",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-empty:task-empty",
+          payloadRef: "creator://payload-empty",
+          payloadHash: "hash-empty",
+          redactedPayload: {
+            prompt: "Vertical comic frame from an empty relay response.",
+          },
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /openai_images_empty_response/);
+        assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
+          httpStatus: 200,
+          contentType: "application/json",
+          responseBodyLength: 0,
+          responseBodyPreview: "",
+        });
+        return true;
+      },
+    );
+  });
+
+  it("attaches redacted response diagnostics when relay returns unexpected JSON", async () => {
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      model: "gpt-image-2",
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ ok: true, output: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-invalid-response",
+          providerName: "openai-images",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-invalid:task-invalid",
+          payloadRef: "creator://payload-invalid",
+          payloadHash: "hash-invalid",
+          redactedPayload: {
+            prompt: "Vertical comic frame from an unexpected relay response.",
+          },
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /openai_images_invalid_response/);
+        assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
+          httpStatus: 200,
+          contentType: "application/json",
+          responseBodyLength: 23,
+          responseBodyPreview: '{"ok":true,"output":[]}',
+        });
+        return true;
+      },
+    );
+  });
+
+  it("waits for slow relay responses longer than the platform's default fetch header timeout", async () => {
+    const server = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        setTimeout(() => {
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "x-request-id": "req_slow_relay_123",
+          });
+          response.end(JSON.stringify({
+            created: 1716026403,
+            data: [{ b64_json: Buffer.from(`slow:${body}`).toString("base64") }],
+          }));
+        }, 350);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const address = server.address();
+      assert.equal(typeof address, "object");
+      assert.ok(address);
+      const adapter = new OpenAIImagesProviderAdapter({
+        apiKey: "openai-key",
+        model: "gpt-image-2",
+        endpoint: `http://127.0.0.1:${address.port}/v1/images/generations`,
+        requestTimeoutMs: 1000,
+        resultFormat: "b64_json",
+      });
+
+      const result = await adapter.submit({
+        providerRequestId: "provider-request-slow-relay",
+        providerName: "openai-images",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-slow:task-slow",
+        payloadRef: "creator://payload-slow",
+        payloadHash: "hash-slow",
+        redactedPayload: {
+          prompt: "Vertical comic frame from a slow relay response.",
+        },
+      });
+
+      assert.equal(result.externalRequestId, "req_slow_relay_123");
+      assert.equal(result.status, "succeeded");
+      assert.deepEqual(result.redactedResponse?.outputTypes, ["b64_json"]);
+      assert.equal(result.artifacts.length, 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   });
 
   it("fails fast when model config references a missing API key env var", () => {
@@ -271,6 +482,50 @@ describe("openai images provider adapter", () => {
         ),
       /provider_api_key_missing/,
     );
+  });
+
+  it("accepts a direct API key from model provider config", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "openai_images",
+        providerModel: "gpt-image-2",
+        providerConfig: {
+          baseURL: "https://relay.example.com",
+          endpoint: "/v1/images/generations",
+          apiKey: "direct-provider-key",
+          resultFormat: "b64_json",
+        },
+      },
+      {},
+      (async (_url, init) => {
+        capturedHeaders = init?.headers;
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: "ZmFrZQ==" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    );
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-direct-key",
+      providerName: "gpt-image-2-cn",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-direct-key:task-direct-key",
+      payloadRef: "creator://payload-direct-key",
+      payloadHash: "hash-direct-key",
+      redactedPayload: {
+        prompt: "Vertical comic frame using a directly configured key.",
+      },
+    });
+
+    assert.equal((capturedHeaders as Record<string, string>).authorization, "Bearer direct-provider-key");
+    assert.equal(result.status, "succeeded");
   });
 
   it("accepts hyphenated OpenAI image provider protocol aliases", () => {

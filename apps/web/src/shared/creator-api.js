@@ -106,6 +106,72 @@ function postJson(url, body) {
   });
 }
 
+async function* postJsonSse(url, body, options = {}) {
+  const response = await fetch(resolveApiUrl(url), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+    },
+    body: JSON.stringify(body ?? {}),
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const error = new Error(text || `request_failed:${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const event = parseSseMessage(part);
+      if (event) {
+        yield event;
+      }
+    }
+  }
+  buffer += decoder.decode();
+  const event = parseSseMessage(buffer);
+  if (event) {
+    yield event;
+  }
+}
+
+function parseSseMessage(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return null;
+  }
+  const lines = text.split(/\r?\n/);
+  const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+  const dataText = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!dataText) {
+    return { event: eventName, data: null };
+  }
+  try {
+    return { event: eventName, data: JSON.parse(dataText) };
+  } catch {
+    return { event: eventName, data: dataText };
+  }
+}
+
 async function postMultipart(url, formData) {
   return fetchJson(url, {
     method: "POST",
@@ -705,6 +771,42 @@ export const creatorApi = {
 
   getBillingPackages() {
     return fetchJson("/api/billing/packages", { unwrapEnvelope: false });
+  },
+
+  getStoryboardPromptPackages() {
+    return fetchJson("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
+    });
+  },
+
+  createAiStoryboardPreview(projectId, input) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input ?? {}),
+      timeoutMs: 180000,
+    });
+  },
+
+  createAiStoryboardPreviewStream(projectId, input, options = {}) {
+    return postJsonSse(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  commitAiStoryboardPreview(projectId, input) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview/commit`,
+      input,
+    );
+  },
+
+  getProjectStyles() {
+    return fetchJson("/api/creator/project-styles?category=official&status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
+    });
   },
 
   createBillingOrder(input, options = {}) {

@@ -159,37 +159,28 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
     promptLimit: PROMPT_LIMITS.imageDefault,
     group: "Nano Banana",
   }),
-  imageTemplate({
+  volcengineImageTemplate({
     id: "jimeng-5-image",
     name: "火山引擎 · 即梦 5.0 图片",
-    providerName: "volcengine",
     modelCodeHint: "jimeng-5-image",
-    providerModelHint: "jimeng-5.0",
+    providerModelHint: "doubao-seedream-5-0-260128",
     baseCredits: 110,
-    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
-    promptLimit: PROMPT_LIMITS.imageDefault,
     group: "即梦",
   }),
-  imageTemplate({
+  volcengineImageTemplate({
     id: "jimeng-45-image",
     name: "火山引擎 · 即梦 4.5 图片",
-    providerName: "volcengine",
     modelCodeHint: "jimeng-4-5-image",
-    providerModelHint: "jimeng-4.5",
+    providerModelHint: "doubao-seedream-4-5-251128",
     baseCredits: 95,
-    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
-    promptLimit: PROMPT_LIMITS.imageDefault,
     group: "即梦",
   }),
-  imageTemplate({
+  volcengineImageTemplate({
     id: "jimeng-40-image",
     name: "火山引擎 · 即梦 4.0 图片",
-    providerName: "volcengine",
     modelCodeHint: "jimeng-4-0-image",
-    providerModelHint: "jimeng-4.0",
+    providerModelHint: "doubao-seedream-4-0",
     baseCredits: 80,
-    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
-    promptLimit: PROMPT_LIMITS.imageDefault,
     group: "即梦",
   }),
   {
@@ -213,6 +204,7 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       apiKeyEnv: "",
       requestFormat: "openai_images",
       resultFormat: "b64_json",
+      timeoutMs: 600000,
     },
   },
   imageTemplate({
@@ -293,52 +285,46 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
     group: "Grok",
   }),
   {
-    ...videoTemplate({
+    ...volcengineSeedanceVideoTemplate({
       id: "seedance-20-video",
       name: "火山引擎 · Seedance 2.0",
       providerName: "volcengine",
       modelCodeHint: "seedance-2-0-video",
-      providerModelHint: "seedance-2-0",
+      providerModelHint: "doubao-seedance-2-0-260128",
       baseCredits: 140,
       taskModes: VIDEO_FULL_IMAGE_REFERENCE,
       promptLimit: PROMPT_LIMITS.seedanceCloudflare,
       group: "Seedance",
+      resolutions: ["480p", "720p", "1080p"],
     }),
-    providerProtocol: "volcengine_ark_video",
-    adapterMode: "native",
-    providerConfig: volcengineVideoProviderConfig(),
   },
   {
-    ...videoTemplate({
+    ...volcengineSeedanceVideoTemplate({
       id: "seedance-20-pro-video",
-      name: "火山引擎 · Seedance 2.0 Pro",
+      name: "火山引擎 · Seedance 1.0 Pro",
       providerName: "volcengine",
-      modelCodeHint: "seedance-2-0-pro-video",
-      providerModelHint: "seedance-2-0-pro",
+      modelCodeHint: "seedance-1-0-pro-video",
+      providerModelHint: "doubao-seedance-1-0-pro-250528",
       baseCredits: 180,
-      taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+      taskModes: VIDEO_TEXT_IMAGE,
       promptLimit: PROMPT_LIMITS.seedanceCloudflare,
       group: "Seedance",
+      resolutions: ["720p", "1080p"],
     }),
-    providerProtocol: "volcengine_ark_video",
-    adapterMode: "native",
-    providerConfig: volcengineVideoProviderConfig(),
   },
   {
-    ...videoTemplate({
+    ...volcengineSeedanceVideoTemplate({
       id: "seedance-fast-video",
-      name: "火山引擎 · Seedance Fast",
+      name: "火山引擎 · Seedance 2.0 Fast",
       providerName: "volcengine",
       modelCodeHint: "seedance-fast-video",
-      providerModelHint: "seedance-fast",
+      providerModelHint: "doubao-seedance-2-0-fast-260128",
       baseCredits: 110,
       taskModes: VIDEO_TEXT_IMAGE,
       promptLimit: PROMPT_LIMITS.seedanceCloudflare,
       group: "Seedance",
+      resolutions: ["480p", "720p"],
     }),
-    providerProtocol: "volcengine_ark_video",
-    adapterMode: "native",
-    providerConfig: volcengineVideoProviderConfig(),
   },
   videoTemplate({
     id: "happy-horse-video",
@@ -775,30 +761,46 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     };
     const validation = validateModelWriteInput(merged, true);
     if (validation) return validation;
+    const nextModelCode = readString(merged.modelCode);
+    if (!nextModelCode) {
+      return error(400, "admin_model_required", "请填写模型编码");
+    }
+    if (nextModelCode !== existing.modelCode) {
+      const duplicate = await queryOne<{ id: string }>(
+        deps.db,
+        "SELECT id FROM ai_model_configs WHERE model_code = $1 AND id <> $2 LIMIT 1",
+        [nextModelCode, input.id],
+      );
+      if (duplicate) {
+        return error(400, "admin_model_code_exists", "模型编码已存在，请换一个唯一编码。");
+      }
+    }
     await deps.db.query(
       `
         UPDATE ai_model_configs
-        SET display_name = $2,
-            provider_name = $3,
-            provider_model = $4,
-            provider_protocol = $5,
-            invocation_mode = $6,
-            media_type = $7,
-            task_modes_json = $8::jsonb,
-            capabilities_json = $9::jsonb,
-            parameter_schema_json = $10::jsonb,
-            default_params_json = $11::jsonb,
-            provider_config_json = $12::jsonb,
-            pricing_json = $13::jsonb,
-            limits_json = $14::jsonb,
-            ui_config_json = $15::jsonb,
-            sort_order = $16,
-            remark = $17,
-            updated_at = $18
+        SET model_code = $2,
+            display_name = $3,
+            provider_name = $4,
+            provider_model = $5,
+            provider_protocol = $6,
+            invocation_mode = $7,
+            media_type = $8,
+            task_modes_json = $9::jsonb,
+            capabilities_json = $10::jsonb,
+            parameter_schema_json = $11::jsonb,
+            default_params_json = $12::jsonb,
+            provider_config_json = $13::jsonb,
+            pricing_json = $14::jsonb,
+            limits_json = $15::jsonb,
+            ui_config_json = $16::jsonb,
+            sort_order = $17,
+            remark = $18,
+            updated_at = $19
         WHERE id = $1
       `,
       [
         input.id,
+        nextModelCode,
         merged.displayName,
         merged.providerName,
         merged.providerModel,
@@ -1335,6 +1337,45 @@ function imageTemplate(input: {
   };
 }
 
+function volcengineImageTemplate(input: {
+  id: string;
+  name: string;
+  modelCodeHint: string;
+  providerModelHint: string;
+  baseCredits: number;
+  group: string;
+}): AdminModelTemplateView {
+  const template = imageTemplate({
+    ...input,
+    providerName: "volcengine",
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+  });
+  return {
+    ...template,
+    adapterMode: "native",
+    providerConfig: {
+      baseURL: "https://ark.cn-beijing.volces.com",
+      endpoint: "/api/v3/images/generations",
+      apiKeyEnv: "",
+      requestFormat: "volcengine_ark_images_generation",
+      timeoutMs: 120000,
+    },
+    parameterSchema: {
+      ...template.parameterSchema,
+      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
+      quality: { label: "清晰度", type: "enum", required: true, options: ["1K", "2K", "4K"] },
+      watermark: { label: "水印", type: "boolean", required: false },
+    },
+    defaultParams: {
+      aspectRatio: "1:1",
+      quality: "2K",
+      count: 1,
+      watermark: false,
+    },
+  };
+}
+
 function videoTemplate(input: {
   id: string;
   name: string;
@@ -1422,6 +1463,118 @@ function volcengineVideoProviderConfig() {
   };
 }
 
+function volcengineSeedanceVideoTemplate(input: {
+  id: string;
+  name: string;
+  providerName: string;
+  modelCodeHint: string;
+  providerModelHint: string;
+  baseCredits: number;
+  taskModes?: string[];
+  promptLimit: AdminModelPromptLimitView;
+  group: string;
+  resolutions: string[];
+}): AdminModelTemplateView {
+  const template = videoTemplate(input);
+  return {
+    ...template,
+    providerProtocol: "volcengine_ark_video",
+    adapterMode: "native",
+    providerConfig: {
+      ...volcengineVideoProviderConfig(),
+      timeoutMs: 120000,
+    },
+    parameterSchema: {
+      ...template.parameterSchema,
+      prompt: {
+        label: "提示词",
+        type: "string",
+        required: true,
+        maxLength: input.promptLimit.maxLength,
+        limitUnit: input.promptLimit.unit,
+      },
+      aspectRatio: {
+        label: "视频比例",
+        type: "enum",
+        required: false,
+        options: ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+        adminEditableOptions: true,
+      },
+      durationSec: {
+        label: "视频时长",
+        type: "integer",
+        required: false,
+        minimum: 4,
+        maximum: 15,
+      },
+      resolution: {
+        label: "分辨率",
+        type: "enum",
+        required: false,
+        options: input.resolutions,
+        adminEditableOptions: true,
+      },
+      seed: {
+        label: "随机种子",
+        type: "integer",
+        required: false,
+        minimum: 0,
+      },
+      cameraFixed: {
+        label: "固定镜头",
+        type: "boolean",
+        required: false,
+      },
+      generateAudio: {
+        label: "生成音频",
+        type: "boolean",
+        required: false,
+      },
+      returnLastFrame: {
+        label: "返回尾帧",
+        type: "boolean",
+        required: false,
+      },
+      watermark: {
+        label: "水印",
+        type: "boolean",
+        required: false,
+      },
+    },
+    defaultParams: {
+      aspectRatio: "adaptive",
+      durationSec: 5,
+      resolution: input.resolutions.includes("720p") ? "720p" : input.resolutions[0],
+      cameraFixed: false,
+      generateAudio: true,
+      returnLastFrame: false,
+      watermark: false,
+    },
+    limits: {
+      ...template.limits,
+      maxPromptLength: input.promptLimit.maxLength,
+      maxReferences: input.taskModes?.includes("video.reference_image_to_video") ? 4 : 1,
+      maxDurationSec: 15,
+      minDurationSec: 4,
+      allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff", "image/gif", "image/heic", "image/heif", "video/mp4", "audio/mpeg", "audio/wav"],
+      supportedRatios: ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+      supportedResolutions: input.resolutions,
+    },
+    pricing: {
+      ...template.pricing,
+      durationMultipliers: { "4": 0.9, "5": 1, "10": 1.8, "15": 2.6 },
+      resolutionMultipliers: { "480p": 0.8, "720p": 1, "1080p": 1.35 },
+    },
+    uiConfig: {
+      ...template.uiConfig,
+      label: input.name,
+      group: "火山引擎 Seedance",
+      providerDocUrl: "https://www.volcengine.com/docs/82379/1520757?lang=zh",
+      parameterDisplayLanguage: "zh-CN",
+    },
+  };
+}
+
 function videoParameterSchema(taskModes: string[], promptLimit: AdminModelPromptLimitView) {
   const schema: Record<string, unknown> = {
     prompt: { label: "提示词", type: "string", required: true, maxLength: promptLimit.maxLength, limitUnit: promptLimit.unit },
@@ -1498,9 +1651,10 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
   }
   const providerConfig = input.providerConfig ?? {};
   const apiKeyEnv = readString(providerConfig.apiKeyEnv);
-  if (!apiKeyEnv) {
-    failedItems.push({ step: "business", field: "apiKeyEnv", message: "请选择密钥引用。" });
-  } else if (looksLikeSecretValue(apiKeyEnv)) {
+  const apiKey = readString(providerConfig.apiKey);
+  if (!apiKeyEnv && !apiKey) {
+    failedItems.push({ step: "business", field: "apiKey", message: "请填写 API 密钥或选择密钥引用。" });
+  } else if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
     failedItems.push({ step: "business", field: "apiKeyEnv", message: "密钥引用只能保存环境变量名，不能填写明文密钥。" });
   }
   if (input.invocationMode === "async_polling" && !isValidOptionalProviderEndpoint(providerConfig.queryTaskEndpoint)) {
@@ -1519,7 +1673,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "volcengine_ark_video", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"].includes(providerProtocol);
 }
 
 function looksLikeSecretValue(value: string) {
@@ -1542,7 +1696,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -1575,11 +1729,11 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
 
 function modelLaunchCheck(model: AdminModelConfigView) {
   const failedItems: Array<{ key: string; label: string; message: string }> = [];
-  if (!readString(model.providerConfig?.apiKeyEnv)) {
+  if (!readString(model.providerConfig?.apiKeyEnv) && !readString(model.providerConfig?.apiKey)) {
     failedItems.push({
-      key: "apiKeyEnv",
-      label: "密钥引用",
-      message: "供应商配置必须填写 apiKeyEnv，且只能保存密钥引用名。",
+      key: "apiKey",
+      label: "API 密钥",
+      message: "供应商配置必须填写 apiKey 或 apiKeyEnv。",
     });
   }
   if (!hasValidProviderEndpoint(model.providerConfig)) {

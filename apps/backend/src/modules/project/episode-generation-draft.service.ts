@@ -70,7 +70,7 @@ export async function upsertEpisodeGenerationDraft(
         updated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $12)
-      ON CONFLICT (organization_id, episode_id, target_type, target_id)
+      ON CONFLICT (organization_id, episode_id, target_type, target_id, mode)
       DO UPDATE SET
         prompt = EXCLUDED.prompt,
         mode = EXCLUDED.mode,

@@ -159,8 +159,63 @@ export async function deleteEpisodeForProject(
 ): Promise<boolean> {
   await db.query(
     `
-      UPDATE shots
-      SET episode_id = NULL
+      DELETE FROM episode_asset_conversation_threads
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND episode_id = $3
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+  await db.query(
+    `
+      DELETE FROM episode_generation_drafts
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND episode_id = $3
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+  await db.query(
+    `
+      DELETE FROM export_records
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND episode_id = $3
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+  await db.query(
+    `
+      DELETE FROM shot_reference_assets
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND shot_id IN (
+          SELECT id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND episode_id = $3
+        )
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+  await db.query(
+    `
+      DELETE FROM calibration_items
+      WHERE organization_id = $1
+        AND shot_id IN (
+          SELECT id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND episode_id = $3
+        )
+    `,
+    [input.organizationId, input.projectId, input.episodeId],
+  );
+  await db.query(
+    `
+      DELETE FROM shots
       WHERE organization_id = $1
         AND project_id = $2
         AND episode_id = $3

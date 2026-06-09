@@ -43,6 +43,49 @@ describe("generation model request validator", () => {
     );
   });
 
+  it("accepts enum parameters declared with admin options", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "image",
+        modelCode: "gpt-image-2-cn",
+        modelConfig: imageModelConfig({
+          parameterSchema: {
+            aspectRatio: { options: ["auto", "1536x768 1K VR"] },
+          },
+        }),
+        parameters: {
+          mode: "single-image",
+          aspectRatio: "1536x768 1K VR",
+          resolution: "2K",
+          count: 1,
+        },
+        prompt: "panel concept art",
+      });
+    });
+  });
+
+  it("rejects parameters outside admin options", () => {
+    assertValidationError(
+      () => validateGenerationModelRequest({
+        kind: "image",
+        modelCode: "gpt-image-2-cn",
+        modelConfig: imageModelConfig({
+          parameterSchema: {
+            aspectRatio: { options: ["auto", "1536x768 1K VR"] },
+          },
+        }),
+        parameters: {
+          mode: "single-image",
+          aspectRatio: "16:9",
+          resolution: "2K",
+          count: 1,
+        },
+        prompt: "panel concept art",
+      }),
+      "model_parameter_unsupported",
+    );
+  });
+
   it("rejects media type mismatches", () => {
     assertValidationError(
       () => validateGenerationModelRequest({

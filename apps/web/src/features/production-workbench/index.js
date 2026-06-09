@@ -15,7 +15,7 @@ import {
   renderPromptDock,
   renderStoryboardStageForPartialUpdate,
 } from "./episode-workbench-rebuilt.js";
-import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
+import { resolveEpisodeWorkbenchPrompt, resolveStoryboardPromptForMode } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
@@ -25,6 +25,8 @@ const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
+const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
+const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
 }
@@ -479,8 +481,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       isCreateModalOpen: false,
       createProjectName: "",
       createAspectRatio: "9:16",
-      createProjectType: "anime",
+      createProjectType: "animation",
       createProjectNotice: "",
+      projectStyles: [],
+      isProjectStyleMenuOpen: false,
       projectLibrary: [],
       projectSearchQuery: "",
       projectLibraryPage: 1,
@@ -586,6 +590,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       singleEpisodeAspectRatio: "9:16",
       singleEpisodeModel: "seedance-2.0",
       singleEpisodeNotice: "",
+      singleEpisodeLookPanel: "",
+      storyboardPromptPackages: [],
+      singleEpisodeAiPreview: {
+        status: "idle",
+        data: null,
+        error: "",
+      },
+      selectedSingleEpisodeLookPackageIds: {
+        genre: [],
+        emotion: [],
+      },
       renameEpisodeId: null,
       renameEpisodeName: "",
       renameEpisodeNotice: "",
@@ -746,6 +761,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         workbench.ui.isVideoModelMenuOpen ||
         workbench.ui.openGenerationSelectMenu ||
         workbench.ui.musePromptMenu ||
+        workbench.ui.singleEpisodeLookPanel ||
         workbench.ui.isFirstFrameMenuOpen ||
         workbench.ui.referenceAssetPickerKind
       ) {
@@ -758,6 +774,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         workbench.ui.isFirstFrameMenuOpen = false;
         workbench.ui.activeGenerationFrameMenu = null;
         workbench.ui.referenceAssetPickerKind = null;
+        workbench.ui.singleEpisodeLookPanel = "";
         render(workbench);
       }
       return;
@@ -795,6 +812,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       !workbench.ui.isVideoModelMenuOpen &&
       !workbench.ui.openGenerationSelectMenu &&
       !workbench.ui.musePromptMenu &&
+      !workbench.ui.singleEpisodeLookPanel &&
       !workbench.ui.isFirstFrameMenuOpen &&
       !workbench.ui.activeGenerationFrameMenu &&
       !workbench.ui.referenceAssetPickerKind &&
@@ -816,6 +834,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.openGenerationSelectMenu = null;
     workbench.ui.musePromptMenu = null;
+    workbench.ui.singleEpisodeLookPanel = "";
     workbench.ui.isFirstFrameMenuOpen = false;
     workbench.ui.activeGenerationFrameMenu = null;
     workbench.ui.referenceAssetPickerKind = null;
@@ -861,12 +880,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('input[name="project-type"]')) {
       workbench.ui.createProjectType = target.value;
-      render(workbench);
-      return;
-    }
-
-    if (target?.matches?.("#single-episode-model-select")) {
-      workbench.ui.singleEpisodeModel = target.value;
+      workbench.ui.isProjectStyleMenuOpen = false;
       render(workbench);
       return;
     }
@@ -1250,7 +1264,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       if (counter) {
         counter.textContent = `${[...target.value].length}/5000`;
       }
-      const notice = workbench.root.querySelector(".single-episode-status-row .modal-inline-status");
+      const notice = workbench.root.querySelector(".single-episode-inline-notice");
       if (notice) {
         notice.textContent = "";
       }
@@ -1392,7 +1406,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (target?.matches?.(".episode-replica-asset-desc-input")) {
       const counter = target.closest(".episode-replica-asset-card")?.querySelector(".count");
       if (counter) {
-        counter.textContent = `${[...target.value].length} / 800`;
+        counter.textContent = `${[...target.value].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}`;
       }
       collectEpisodeWorkbenchEvent(workbench, "asset-description.input", {
         assetId: target.dataset.assetId ?? "",
@@ -1588,7 +1602,8 @@ async function refresh(workbench) {
     }
   }
   await syncProjectLibraryFromApi(workbench);
-  await syncAssetLibraryFromApi(workbench);
+  await syncProjectStyles(workbench);
+  await syncStoryboardPromptPackages(workbench);
   workbench.ui.exportHistory = workbench.state.project
     ? await loadExportHistory(workbench)
     : [];
@@ -1639,6 +1654,9 @@ async function refresh(workbench) {
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
   if (workbench.ui.activeNavTab === "team") {
     await loadTeamSurface(workbench);
+  }
+  if (shouldPrefetchReusableAssetLibrary(workbench)) {
+    await syncAssetLibraryFromApi(workbench);
   }
 }
 
@@ -1738,6 +1756,86 @@ async function syncBillingPackages(workbench) {
   }
 }
 
+async function syncProjectStyles(workbench) {
+  if (typeof workbench.api?.getProjectStyles !== "function") {
+    workbench.ui.projectStyles = [];
+    return;
+  }
+
+  try {
+    const payload = await workbench.api.getProjectStyles();
+    workbench.ui.projectStyles = resolveProjectStyleList(payload);
+    workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
+  } catch {
+    workbench.ui.projectStyles = [];
+  }
+}
+
+async function syncStoryboardPromptPackages(workbench) {
+  if (typeof workbench.api?.getStoryboardPromptPackages !== "function") {
+    workbench.ui.storyboardPromptPackages = [];
+    return;
+  }
+
+  try {
+    const payload = await workbench.api.getStoryboardPromptPackages();
+    workbench.ui.storyboardPromptPackages = resolveStoryboardPromptPackageList(payload);
+  } catch {
+    workbench.ui.storyboardPromptPackages = [];
+  }
+}
+
+function resolveStoryboardPromptPackageList(payload) {
+  if (Array.isArray(payload?.packages)) {
+    return payload.packages;
+  }
+  if (Array.isArray(payload?.data)) {
+    return payload.data;
+  }
+  if (Array.isArray(payload?.data?.packages)) {
+    return payload.data.packages;
+  }
+  if (Array.isArray(payload?.data?.data)) {
+    return payload.data.data;
+  }
+  return [];
+}
+
+function resolveProjectStyleList(payload) {
+  const raw = Array.isArray(payload?.styles)
+    ? payload.styles
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.data?.styles)
+        ? payload.data.styles
+        : Array.isArray(payload?.data?.data)
+          ? payload.data.data
+          : [];
+  return raw
+    .filter((item) => item && typeof item === "object" && item.status !== "disabled")
+    .map((item) => ({
+      id: String(item.id ?? item.code ?? ""),
+      name: String(item.name ?? ""),
+      code: String(item.code ?? ""),
+      coverImageUrl: String(item.coverImageUrl ?? item.cover_image_url ?? ""),
+      status: String(item.status ?? "enabled"),
+    }))
+    .filter((item) => item.code && item.name);
+}
+
+function resolveDefaultProjectStyleCode(workbench) {
+  return workbench.ui.projectStyles?.[0]?.code ?? "animation";
+}
+
+function resolveProjectStyleSelection(workbench) {
+  const current = String(workbench.ui.createProjectType ?? "");
+  const styles = Array.isArray(workbench.ui.projectStyles) ? workbench.ui.projectStyles : [];
+  if (!styles.length) {
+    return current || "animation";
+  }
+  return styles.some((style) => style.code === current) ? current : styles[0].code;
+}
+
 async function loadTeamSurface(workbench) {
   if (
     typeof workbench.api?.getTeamOverview !== "function" ||
@@ -1784,8 +1882,53 @@ function render(workbench, options = {}) {
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }
-  persistWorkbenchState(workbench);
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+    persistWorkbenchState(workbench);
+  }
   applyPostRenderEffects(workbench);
+  keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench);
+}
+
+function renderSingleEpisodeAiPreviewProgress(workbench) {
+  const now = Date.now();
+  const lastRenderAt = Number(workbench.singleEpisodeAiPreviewLastRenderAt ?? 0);
+  if (now - lastRenderAt < 350) {
+    workbench.singleEpisodeAiPreviewRenderPending = true;
+    if (!workbench.singleEpisodeAiPreviewRenderTimer) {
+      workbench.singleEpisodeAiPreviewRenderTimer = setTimeout(() => {
+        workbench.singleEpisodeAiPreviewRenderTimer = null;
+        if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+          return;
+        }
+        workbench.singleEpisodeAiPreviewLastRenderAt = Date.now();
+        workbench.singleEpisodeAiPreviewRenderPending = false;
+        render(workbench);
+      }, 350 - (now - lastRenderAt));
+    }
+    return;
+  }
+  workbench.singleEpisodeAiPreviewLastRenderAt = now;
+  workbench.singleEpisodeAiPreviewRenderPending = false;
+  render(workbench);
+}
+
+function clearSingleEpisodeAiPreviewRenderTimer(workbench) {
+  if (workbench.singleEpisodeAiPreviewRenderTimer) {
+    clearTimeout(workbench.singleEpisodeAiPreviewRenderTimer);
+    workbench.singleEpisodeAiPreviewRenderTimer = null;
+  }
+  workbench.singleEpisodeAiPreviewRenderPending = false;
+}
+
+function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench) {
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+    return;
+  }
+  const liveOutput = workbench.root.querySelector?.(".single-episode-ai-live-output pre");
+  if (!liveOutput) {
+    return;
+  }
+  liveOutput.scrollTop = liveOutput.scrollHeight;
 }
 
 function restoreLibraryScrollState(root, libraryScrollState) {
@@ -1891,8 +2034,10 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench) {
       imageResolution: workbench.ui.imageResolution,
       imageAspectRatio: workbench.ui.imageAspectRatio,
       multiImageStrategy: workbench.ui.multiImageStrategy,
+      parameterValues: workbench.ui.generationParameterValues ?? null,
       uploadLimits: workbench.ui.episodeGenerationConfig?.uploadLimits ?? null,
     },
+    episodeGenerationConfig: workbench.ui.episodeGenerationConfig ?? null,
     generationUiState: {
       isVideoModelMenuOpen: Boolean(workbench.ui.isVideoModelMenuOpen),
       openGenerationSelectMenu: workbench.ui.openGenerationSelectMenu ?? null,
@@ -1967,10 +2112,16 @@ function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
 function mergeGenerationState(currentState, nextState) {
   const current = currentState ?? createEmptyGenerationState();
   const next = nextState ?? createEmptyGenerationState();
-  return {
+  const merged = {
     ...createEmptyGenerationState(),
     ...next,
     ...current,
+  };
+  return {
+    ...merged,
+    prompt: resolveMergedGenerationPrompt(current.prompt, next.prompt),
+    imagePrompt: resolveMergedGenerationPrompt(current.imagePrompt, next.imagePrompt),
+    videoPrompt: resolveMergedGenerationPrompt(current.videoPrompt, next.videoPrompt),
     referenceUploads:
       (current.referenceUploads?.length ? current.referenceUploads : next.referenceUploads) ?? [],
     localReferenceRoles:
@@ -1978,6 +2129,12 @@ function mergeGenerationState(currentState, nextState) {
     referenceSelections:
       (current.referenceSelections?.length ? current.referenceSelections : next.referenceSelections) ?? [],
   };
+}
+
+function resolveMergedGenerationPrompt(currentPrompt, nextPrompt) {
+  const currentText = typeof currentPrompt === "string" ? currentPrompt : "";
+  const nextText = typeof nextPrompt === "string" ? nextPrompt : "";
+  return currentText.trim() ? currentText : nextText;
 }
 
 export async function handleProductionWorkbenchAction(workbench, target) {
@@ -2739,7 +2896,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.createProjectNotice = "";
     workbench.ui.createProjectName = "";
     workbench.ui.createAspectRatio = "9:16";
-    workbench.ui.createProjectType = "anime";
+    workbench.ui.createProjectType = resolveDefaultProjectStyleCode(workbench);
+    workbench.ui.isProjectStyleMenuOpen = false;
+    await syncProjectStyles(workbench);
+    workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
     render(workbench);
     return;
   }
@@ -2747,6 +2907,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-create-modal") {
     workbench.ui.isCreateModalOpen = false;
     workbench.ui.createProjectNotice = "";
+    workbench.ui.isProjectStyleMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-project-style-menu") {
+    workbench.ui.isProjectStyleMenuOpen = !workbench.ui.isProjectStyleMenuOpen;
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-project-style") {
+    workbench.ui.createProjectType = target.dataset.value ?? resolveDefaultProjectStyleCode(workbench);
+    workbench.ui.isProjectStyleMenuOpen = false;
     render(workbench);
     return;
   }
@@ -2875,6 +3049,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.selectedEpisodeCardId = assetId;
     workbench.ui.selectedEpisodeAssetId = assetId;
+    clearAssetPromptDraftForCurrentSelection(workbench);
     await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
     syncPromptFromCurrentScope(workbench);
     renderPreservingEpisodeAssetScroll(workbench);
@@ -3458,6 +3633,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.videoLipSyncEnabled = false;
       await ensureEpisodeWorkbenchAssetsHydrated(workbench);
       const assetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+      clearAssetPromptDraftForCurrentSelection(workbench);
       await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
     } else {
       if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
@@ -4355,6 +4531,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         mediaKind: resolveStoryboardConversationMediaKind(workbench),
       });
     }
+    syncPromptFromCurrentScope(workbench);
     workbench.ui.musePromptMenu = null;
     render(workbench);
     return;
@@ -4489,7 +4666,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "__legacy-open-single-episode-flow") {
-    openSingleEpisodeFlow(workbench);
+    await openSingleEpisodeFlow(workbench);
     return;
   }
 
@@ -4512,14 +4689,48 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "close-ai-storyboard-preview") {
+    workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+    render(workbench);
+    return;
+  }
+
   if (action === "create-empty-single-episode") {
     const nextName = getNextEpisodeTitle(getDetailEpisodes(workbench.state));
     await createSingleEpisodeAndEnterWorkbench(workbench, nextName);
     return;
   }
 
+  if (action === "commit-ai-storyboard-preview") {
+    await commitAiStoryboardPreviewAndEnterWorkbench(workbench);
+    return;
+  }
+
   if (action === "set-single-episode-aspect") {
     workbench.ui.singleEpisodeAspectRatio = target.dataset.aspect ?? "9:16";
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-single-episode-look-panel") {
+    const type = normalizeSingleEpisodeLookType(target.dataset.lookType);
+    if (!type) {
+      return;
+    }
+    const nextPanel = workbench.ui.singleEpisodeLookPanel === type ? "" : type;
+    workbench.ui.singleEpisodeLookPanel = nextPanel;
+    if (nextPanel && !hasStoryboardPromptPackagesForType(workbench, nextPanel)) {
+      await syncStoryboardPromptPackages(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-single-episode-look-package") {
+    toggleSingleEpisodeLookPackage(workbench, {
+      type: target.dataset.lookType,
+      packageId: target.dataset.packageId,
+    });
     render(workbench);
     return;
   }
@@ -4531,16 +4742,144 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    const nextName = buildSingleEpisodeTitle(nextScript, getDetailEpisodes(workbench.state));
-    workbench.ui.singleEpisodeName = nextName;
-    await runAction(workbench, "正在创建单集...", async () => {
-      await createSingleEpisodeAndEnterWorkbench(workbench, nextName, { skipRunAction: true });
-    });
+    const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
+    const packages = {
+      genrePackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "genre"),
+      emotionPackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "emotion"),
+    };
+    if (!projectId || !packages.genrePackageId || !packages.emotionPackageId) {
+      workbench.ui.singleEpisodeNotice = "请先选择题材、情绪看点后再生成。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(nextScript, getDetailEpisodes(workbench.state));
+    workbench.ui.singleEpisodeNotice = "";
+    workbench.ui.singleEpisodeAiPreview = {
+      status: "loading",
+      data: { displayTables: createSingleEpisodeAiLiveDisplayTables() },
+      error: "",
+      scriptText: "",
+      scriptRawText: "",
+      promptText: "",
+      scriptPromptText: "",
+      promptPromptText: "",
+      assetPromptSteps: [],
+      activeStage: "script",
+    };
+    render(workbench);
+    try {
+      const previewInput = {
+        scriptText: nextScript,
+        packages,
+      };
+      let preview = null;
+      if (typeof workbench.api.createAiStoryboardPreviewStream === "function") {
+        for await (const event of workbench.api.createAiStoryboardPreviewStream(projectId, previewInput)) {
+          const eventName = event?.event ?? "";
+          const data = event?.data ?? {};
+          if (eventName === "script_prompt") {
+            workbench.ui.singleEpisodeAiPreview.scriptPromptText = String(data.text ?? "");
+          } else if (eventName === "script_start") {
+            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+          } else if (eventName === "script_delta") {
+            workbench.ui.singleEpisodeAiPreview.scriptText = appendBoundedText(
+              workbench.ui.singleEpisodeAiPreview.scriptText,
+              data.text,
+              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+            );
+            workbench.ui.singleEpisodeAiPreview.scriptRawText = appendBoundedText(
+              workbench.ui.singleEpisodeAiPreview.scriptRawText,
+              data.text,
+              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+            );
+            syncSingleEpisodeAiScriptTable(workbench);
+            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+          } else if (eventName === "script_done") {
+            workbench.ui.singleEpisodeAiPreview.scriptText = String(data.text ?? workbench.ui.singleEpisodeAiPreview.scriptText ?? "");
+            workbench.ui.singleEpisodeAiPreview.scriptRawText = String(data.rawText ?? workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "");
+            syncSingleEpisodeAiScriptTable(workbench);
+            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+          } else if (eventName === "prompt_prompt") {
+            workbench.ui.singleEpisodeAiPreview.promptPromptText = String(data.text ?? "");
+          } else if (eventName === "prompt_start") {
+            workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
+          } else if (eventName === "prompt_delta") {
+            workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
+              workbench.ui.singleEpisodeAiPreview.promptText,
+              data.text,
+              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+            );
+            workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
+          } else if (eventName === "asset_prompt") {
+            upsertSingleEpisodeAiAssetStep(workbench, data, { promptText: String(data.text ?? "") });
+            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+          } else if (eventName === "asset_start") {
+            upsertSingleEpisodeAiAssetStep(workbench, data, { status: "loading" });
+            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+          } else if (eventName === "asset_delta") {
+            appendSingleEpisodeAiAssetStepText(workbench, data);
+            if (String(data.stage ?? "") === "shot") {
+              workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
+                workbench.ui.singleEpisodeAiPreview.promptText,
+                data.text,
+                SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+              );
+            }
+            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+          } else if (eventName === "asset_done") {
+            const rawResponseText = String(data.text ?? "");
+            upsertSingleEpisodeAiAssetStep(workbench, data, {
+              status: "done",
+              responseText: appendBoundedText("", rawResponseText, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+              rawResponseText,
+            });
+            syncSingleEpisodeAiAssetTable(workbench, data.stage);
+          } else if (eventName === "complete") {
+            preview = data;
+          } else if (eventName === "error") {
+            throw new Error(data.error ?? "ai_storyboard_stream_failed");
+          }
+          renderSingleEpisodeAiPreviewProgress(workbench);
+        }
+      } else {
+        preview = await workbench.api.createAiStoryboardPreview(projectId, previewInput);
+      }
+      clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      workbench.ui.singleEpisodeAiPreview = {
+        status: "ready",
+        data: preview,
+        error: "",
+        scriptText: workbench.ui.singleEpisodeAiPreview.scriptText || preview?.scriptText || "",
+        scriptRawText: workbench.ui.singleEpisodeAiPreview.scriptRawText || workbench.ui.singleEpisodeAiPreview.scriptText || preview?.scriptText || "",
+        promptText: workbench.ui.singleEpisodeAiPreview.promptText ?? "",
+        scriptPromptText: workbench.ui.singleEpisodeAiPreview.scriptPromptText ?? "",
+        promptPromptText: workbench.ui.singleEpisodeAiPreview.promptPromptText ?? "",
+        assetPromptSteps: workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [],
+        liveDisplayTables: workbench.ui.singleEpisodeAiPreview.data?.displayTables ?? null,
+        activeStage: "complete",
+      };
+    } catch (error) {
+      clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      workbench.ui.singleEpisodeAiPreview = {
+        status: "error",
+        data: null,
+        error: friendlyError(error),
+        scriptText: workbench.ui.singleEpisodeAiPreview.scriptText ?? "",
+        scriptRawText: workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "",
+        promptText: workbench.ui.singleEpisodeAiPreview.promptText ?? "",
+        scriptPromptText: workbench.ui.singleEpisodeAiPreview.scriptPromptText ?? "",
+        promptPromptText: workbench.ui.singleEpisodeAiPreview.promptPromptText ?? "",
+        assetPromptSteps: workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [],
+        activeStage: "error",
+      };
+      workbench.ui.singleEpisodeNotice = `AI 分镜失败：${friendlyError(error)}`;
+    }
+    render(workbench);
     return;
   }
 
   if (action === "open-single-episode-flow") {
-    openSingleEpisodeFlow(workbench);
+    await openSingleEpisodeFlow(workbench);
     return;
   }
 
@@ -4602,7 +4941,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
           workbench,
-          await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
+          await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
         );
       }
       workbench.ui.renameEpisodeId = null;
@@ -4631,7 +4970,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     await runAction(workbench, "正在删除剧集...", async () => {
-      await workbench.api.deleteEpisode({ episodeId });
+      const projectId = resolveActiveProjectId(workbench);
+      if (episodeId === "episode-primary") {
+        removeLocalPrimaryEpisode(workbench);
+      } else if (projectId && typeof workbench.api.deleteProjectEpisode === "function") {
+        await workbench.api.deleteProjectEpisode(projectId, episodeId);
+      } else {
+        await workbench.api.deleteEpisode({ projectId, episodeId });
+      }
       if (workbench.ui.selectedEpisodeId === episodeId) {
         workbench.ui.selectedEpisodeId = null;
         workbench.ui.projectPanelMode = "workspace";
@@ -4642,7 +4988,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
           workbench,
-          await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
+          await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
         );
       }
       workbench.ui.deleteEpisodeId = null;
@@ -4670,7 +5016,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.assetCardMenuId = null;
     if (workbench.ui.museScopeMode === "assets") {
+      clearAssetPromptDraftForCurrentSelection(workbench);
       await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+      syncPromptFromCurrentScope(workbench);
     }
     render(workbench);
     return;
@@ -6115,6 +6463,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "generate-images") {
+    syncPromptInputFromDom(workbench);
     if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
       const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
       if (!selectionContext.selectedAsset?.id) {
@@ -6156,6 +6505,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "generate-videos") {
+    syncPromptInputFromDom(workbench);
     if (workbench.ui.episodeMediaMode === "lip-sync") {
       const lipSyncValidation = validateLipSyncGeneration(workbench);
       if (!lipSyncValidation.ok) {
@@ -6418,7 +6768,11 @@ export async function handleWorkbenchActionForTest(workbench, target) {
   return handleAction(workbench, target);
 }
 
-function openSingleEpisodeFlow(workbench) {
+export function mapEpisodeStoryboardContractForTest(storyboard) {
+  return mapEpisodeStoryboardContract(storyboard);
+}
+
+async function openSingleEpisodeFlow(workbench) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = true;
   workbench.ui.isScriptModalOpen = false;
@@ -6427,7 +6781,11 @@ function openSingleEpisodeFlow(workbench) {
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
+  workbench.ui.singleEpisodeLookPanel = "";
+  workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+  workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
+  await syncStoryboardPromptPackages(workbench);
   render(workbench);
 }
 
@@ -6470,6 +6828,140 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
   await runAction(workbench, "正在创建剧集...", runCreation);
 }
 
+async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
+  const previewState = workbench.ui.singleEpisodeAiPreview ?? {};
+  const previewData = previewState.data?.commitPayload ? previewState.data : previewState.data?.data ?? previewState.data;
+  const commitPayload = bindSingleEpisodeAiPreviewStoryboardPrompts(previewData?.commitPayload ?? null, previewData);
+  const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
+  if (!projectId) {
+    workbench.ui.singleEpisodeNotice = "请先选择项目后再创建章节。";
+    render(workbench);
+    return;
+  }
+  if (!commitPayload || !Array.isArray(commitPayload.storyboards) || commitPayload.storyboards.length === 0) {
+    workbench.ui.singleEpisodeNotice = "AI 分镜结果缺少可创建的分镜，请重新生成。";
+    render(workbench);
+    return;
+  }
+  if (typeof workbench.api.commitAiStoryboardPreview !== "function") {
+    workbench.ui.singleEpisodeNotice = "当前接口不支持创建 AI 章节，请刷新后重试。";
+    render(workbench);
+    return;
+  }
+
+  await runAction(workbench, "正在创建章节...", async () => {
+    const result = await workbench.api.commitAiStoryboardPreview(projectId, {
+      episodeTitle: workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
+        workbench.ui.singleEpisodeScript || commitPayload.scriptText || previewData?.scriptText || "",
+        getDetailEpisodes(workbench.state),
+      ),
+      commitPayload,
+    });
+    if (workbench.ui.selectedProjectCardId) {
+      applyProjectDetail(
+        workbench,
+        await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
+      );
+    }
+    const createdEpisodeId =
+      result?.episode?.id ??
+      result?.episode?.episodeId ??
+      result?.body?.episode?.id ??
+      result?.body?.episode?.episodeId ??
+      null;
+    resetSingleEpisodeModalState(workbench);
+    workbench.ui.episodeCardMenuId = null;
+    await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
+      toast: "已创建章节并进入分镜工作台。",
+      shouldRender: false,
+      scopeMode: "storyboard",
+    });
+  }, {
+    successToast: "已创建章节并进入分镜工作台。",
+  });
+}
+
+function bindSingleEpisodeAiPreviewStoryboardPrompts(commitPayload, previewData) {
+  if (!commitPayload || typeof commitPayload !== "object" || !Array.isArray(commitPayload.storyboards)) {
+    return commitPayload;
+  }
+  const storyboardRows = resolveSingleEpisodeAiPreviewStoryboardRows(previewData);
+  if (!storyboardRows.length) {
+    return commitPayload;
+  }
+  const sourceStoryboards =
+    storyboardRows.length > 0 && storyboardRows.length !== commitPayload.storyboards.length
+      ? storyboardRows
+      : commitPayload.storyboards;
+  return {
+    ...commitPayload,
+    storyboards: sourceStoryboards.map((sourceStoryboard, index) => {
+      const storyboard =
+        sourceStoryboard === storyboardRows[index]
+          ? commitPayload.storyboards[index] && typeof commitPayload.storyboards[index] === "object"
+            ? { ...commitPayload.storyboards[index], ...sourceStoryboard }
+            : sourceStoryboard
+          : sourceStoryboard;
+      if (!storyboard || typeof storyboard !== "object") {
+        return storyboard;
+      }
+      const row = storyboardRows[index];
+      if (!row || typeof row !== "object") {
+        return storyboard;
+      }
+      const videoPrompt = firstSingleEpisodeAiPreviewRowText(row, [
+        "chapterVideoPrompt",
+        "chapter_video_prompt",
+        "videoPrompt",
+        "video_prompt",
+        "motionPrompt",
+        "motion_prompt",
+        "动态视频提示词",
+        "视频提示词",
+      ]);
+      const imagePrompt = firstSingleEpisodeAiPreviewRowText(row, [
+        "chapterImagePrompt",
+        "chapter_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "staticImagePrompt",
+        "static_image_prompt",
+        "静态图片提示词",
+      ]);
+      if (!videoPrompt && !imagePrompt) {
+        return storyboard;
+      }
+      return {
+        ...storyboard,
+        ...(imagePrompt ? { imagePrompt, chapterImagePrompt: imagePrompt } : {}),
+        ...(videoPrompt ? { videoPrompt, chapterVideoPrompt: videoPrompt, description: videoPrompt } : {}),
+      };
+    }),
+  };
+}
+
+function resolveSingleEpisodeAiPreviewStoryboardRows(previewData) {
+  const candidates = [
+    previewData?.displayTables?.storyboards?.rows,
+    previewData?.data?.displayTables?.storyboards?.rows,
+    previewData?.preview?.displayTables?.storyboards?.rows,
+  ];
+  return candidates.find((rows) => Array.isArray(rows)) ?? [];
+}
+
+function firstSingleEpisodeAiPreviewRowText(row, keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    const text = Array.isArray(value)
+      ? value.map((item) => String(item ?? "").trim()).filter(Boolean).join("\n")
+      : String(value ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
 function resetSingleEpisodeModalState(workbench) {
   workbench.ui.isSingleEpisodeModalOpen = false;
   workbench.ui.singleEpisodeName = "";
@@ -6477,6 +6969,507 @@ function resetSingleEpisodeModalState(workbench) {
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
+  workbench.ui.singleEpisodeLookPanel = "";
+  workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+  workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
+}
+
+function upsertSingleEpisodeAiAssetStep(workbench, data = {}, patch = {}) {
+  const stage = String(data.stage ?? "");
+  if (!stage) {
+    return;
+  }
+  const current = Array.isArray(workbench.ui.singleEpisodeAiPreview?.assetPromptSteps)
+    ? [...workbench.ui.singleEpisodeAiPreview.assetPromptSteps]
+    : [];
+  const index = current.findIndex((item) => item.stage === stage);
+  const next = {
+    stage,
+    title: String(data.title ?? patch.title ?? stage),
+    promptText: "",
+    responseText: "",
+    status: "idle",
+    ...(index >= 0 ? current[index] : {}),
+    ...patch,
+  };
+  if (index >= 0) {
+    current[index] = next;
+  } else {
+    current.push(next);
+  }
+  workbench.ui.singleEpisodeAiPreview.assetPromptSteps = current;
+}
+
+function appendSingleEpisodeAiAssetStepText(workbench, data = {}) {
+  const stage = String(data.stage ?? "");
+  const text = String(data.text ?? "");
+  if (!stage || !text) {
+    return;
+  }
+  const current = Array.isArray(workbench.ui.singleEpisodeAiPreview?.assetPromptSteps)
+    ? workbench.ui.singleEpisodeAiPreview.assetPromptSteps
+    : [];
+  const existing = current.find((item) => item.stage === stage);
+  upsertSingleEpisodeAiAssetStep(workbench, data, {
+    status: "loading",
+    responseText: appendBoundedText(existing?.responseText, text, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+  });
+}
+
+function appendBoundedText(current, next, maxChars) {
+  const combined = `${String(current ?? "")}${String(next ?? "")}`;
+  if (!maxChars || combined.length <= maxChars) {
+    return combined;
+  }
+  return combined.slice(-maxChars);
+}
+
+function createSingleEpisodeAiLiveDisplayTables() {
+  return {
+    script: {
+      title: "剧本",
+      columns: ["剧本文字"],
+      rows: [],
+    },
+    scenes: {
+      title: "场景",
+      columns: ["场景名称", "场景描述", "场景图片提示词"],
+      rows: [],
+    },
+    characters: {
+      title: "角色",
+      columns: ["角色名称", "角色描述", "角色图片提示词"],
+      rows: [],
+    },
+    props: {
+      title: "道具",
+      columns: ["道具名称", "道具描述", "道具图片提示词"],
+      rows: [],
+    },
+    storyboards: {
+      title: "分镜",
+      columns: ["镜号", "分镜剧情", "对话/旁白", "时长", "时间段", "转场", "景别/运镜", "静态图片提示词", "动态视频提示词", "分镜详细字段"],
+      rows: [],
+    },
+  };
+}
+
+function ensureSingleEpisodeAiLiveDisplayTables(workbench) {
+  const preview = workbench.ui.singleEpisodeAiPreview;
+  if (!preview.data || typeof preview.data !== "object") {
+    preview.data = { displayTables: createSingleEpisodeAiLiveDisplayTables() };
+  }
+  if (!preview.data.displayTables) {
+    preview.data.displayTables = createSingleEpisodeAiLiveDisplayTables();
+  }
+  return preview.data.displayTables;
+}
+
+function syncSingleEpisodeAiScriptTable(workbench) {
+  const scriptText = String(workbench.ui.singleEpisodeAiPreview?.scriptText ?? "");
+  const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+  tables.script = {
+    ...(tables.script ?? {}),
+    title: "剧本",
+    columns: ["剧本文字"],
+    rows: scriptText.trim()
+      ? [{ beatNo: 1, scriptContent: scriptText, dialogue: "" }]
+      : [],
+  };
+}
+
+function syncSingleEpisodeAiAssetTable(workbench, stage) {
+  const normalizedStage = String(stage ?? "");
+  const tableKeyByStage = {
+    scene: "scenes",
+    character: "characters",
+    prop: "props",
+    shot: "storyboards",
+  };
+  const tableKey = tableKeyByStage[normalizedStage];
+  if (!tableKey) {
+    return;
+  }
+  const step = (workbench.ui.singleEpisodeAiPreview?.assetPromptSteps ?? [])
+    .find((item) => item.stage === normalizedStage);
+  const raw = String(step?.rawResponseText ?? step?.responseText ?? "");
+  const rows = parseSingleEpisodeAiStageRows(raw, tableKey);
+  if (!rows) {
+    return;
+  }
+  const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+  tables[tableKey] = {
+    ...(tables[tableKey] ?? {}),
+    title: AI_LIVE_TABLE_TITLES[tableKey],
+    rows,
+  };
+}
+
+function parseSingleEpisodeAiStageRows(raw, tableKey) {
+  const parsed = parseSingleEpisodeAiJsonObject(raw);
+  if (!parsed) {
+    return null;
+  }
+  const keyAliases = {
+    scenes: ["scenes", "data"],
+    characters: ["characters", "data"],
+    props: ["props", "data"],
+    storyboards: ["storyboards", "shots", "data"],
+  };
+  const source = (keyAliases[tableKey] ?? [tableKey])
+    .map((key) => parsed[key])
+    .find(Array.isArray);
+  const records = Array.isArray(source)
+    ? source
+    : parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? [parsed]
+      : [];
+  return records
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((record) => normalizeSingleEpisodeAiTableRecord(record, tableKey));
+}
+
+function parseSingleEpisodeAiJsonObject(raw) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const parsed = JSON.parse(fenced?.[1] ?? trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
+  const first = (...keys) => {
+    for (const key of keys) {
+      const value = record[key];
+      if (value !== undefined && value !== null && String(value).trim()) {
+        return String(value);
+      }
+    }
+    return "";
+  };
+  if (tableKey === "scenes") {
+    return {
+      sceneName: first("sceneName", "scene_name", "name", "locationName", "location_name", "scene"),
+      sceneDescription: buildSingleEpisodeAiAssetDescription(record, [
+        "sceneDescription",
+        "scene_description",
+        "description",
+        "summary",
+        "environment",
+        "weather",
+        "天气",
+        "time",
+        "timeOfDay",
+        "时间",
+        "空间结构",
+        "spaceStructure",
+        "architecturalStyle",
+        "buildingStyle",
+        "建筑风格",
+        "buildingDetails",
+        "建筑细节",
+        "lighting",
+        "lightingRules",
+        "光影规则",
+        "atmosphere",
+        "氛围基调",
+        "keyProps",
+        "关键道具",
+        "sceneImagePrompt",
+        "scene_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ]),
+      sceneImagePrompt: first("sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+    };
+  }
+  if (tableKey === "characters") {
+    return {
+      characterName: first("characterName", "character_name", "name", "role", "character"),
+      characterDescription: buildSingleEpisodeAiAssetDescription(record, [
+        "characterDescription",
+        "character_description",
+        "description",
+        "appearance",
+        "summary",
+        "age",
+        "年龄",
+        "nationality",
+        "国籍",
+        "gender",
+        "性别",
+        "costume",
+        "clothing",
+        "服装",
+        "face",
+        "facialFeatures",
+        "脸部特征",
+        "detailFeatures",
+        "细节特征",
+        "bodyFeatures",
+        "personality",
+        "characterImagePrompt",
+        "character_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ]),
+      characterImagePrompt: first("characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+    };
+  }
+  if (tableKey === "props") {
+    return {
+      propName: first("propName", "prop_name", "name", "prop"),
+      propDescription: buildSingleEpisodeAiAssetDescription(record, [
+        "propDescription",
+        "prop_description",
+        "description",
+        "summary",
+        "usage",
+        "用途",
+        "appearance",
+        "外观",
+        "color",
+        "颜色",
+        "material",
+        "材质",
+        "size",
+        "尺寸",
+        "state",
+        "状态",
+        "ownerOrUser",
+        "所属角色",
+        "firstAppearance",
+        "首次出现",
+        "consistency",
+        "一致性约束",
+        "propImagePrompt",
+        "prop_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ]),
+      propImagePrompt: first("propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+    };
+  }
+  const timeRange = normalizeSingleEpisodeAiPerShotTimeRange(
+    first("timeRange", "time_range", "time", "timestamp", "timeline", "时间", "时间范围"),
+    first("durationSec", "duration_sec", "duration", "durationSeconds", "duration_seconds", "时长"),
+  );
+  const transition = first("transition", "cut", "sceneTransition", "scene_transition", "转场");
+  const shotSize = first("shotSize", "shot_size", "shot", "frameSize", "frame_size", "cameraShot", "camera_shot", "景别", "镜头");
+  const cameraMovement = first("cameraMovement", "camera_movement", "cameraMove", "camera_move", "movement", "motion", "lensMovement", "lens_movement", "cameraPrompt", "camera_prompt", "运镜", "镜头运动");
+  const visualDescription = first("visualDescription", "visual_description", "pictureDescription", "picture_description", "frameDescription", "frame_description", "画面描述", "画面");
+  const coreAction = first("coreAction", "core_action", "keyAction", "key_action", "核心动作");
+  const interactionDesign = first("interactionDesign", "interaction_design", "opponentDesign", "opponent_design", "counterpartDesign", "counterpart_design", "对手戏设计", "对手设计");
+  const characterLogic = first("characterLogic", "character_logic", "performanceLogic", "performance_logic", "motivation", "人物底层逻辑", "人物表演底层逻辑");
+  const subjectAction = first("subjectAction", "subject_action", "mainAction", "main_action", "主体动作");
+  const soundEffect = first("soundEffect", "sound_effect", "sfx", "sound", "audio", "音效", "声音");
+  const bgm = first("bgm", "music", "backgroundMusic", "background_music", "配乐", "背景音乐");
+  return {
+    shotNo: first("shotNo", "shot_no", "index", "no", "镜号"),
+    plot: first("plot", "action", "story", "summary", "description", "scene", "画面", "动作"),
+    dialogue: first("dialogue", "dialog", "lines", "voiceover", "voice_over", "narration", "台词", "旁白"),
+    durationSec: first("durationSec", "duration_sec", "duration", "durationSeconds", "duration_seconds", "时长"),
+    timeRange,
+    transition,
+    shotDirection: [shotSize, cameraMovement].filter(Boolean).join("/"),
+    imagePrompt: first("imagePrompt", "image_prompt", "prompt", "visualPrompt", "visual_prompt", "visual_focus"),
+    videoPrompt: buildSingleEpisodeAiLiveVideoPrompt({
+      baseVideoPrompt: sanitizeSingleEpisodeAiPerShotVideoPrompt(first("videoPrompt", "video_prompt", "video_prompt_text", "motionPrompt", "motion_prompt", "视频提示词", "动态视频提示词")),
+      timeRange,
+      transition,
+      shotSize,
+      cameraMovement,
+      visualDescription,
+      coreAction,
+      interactionDesign,
+      characterLogic,
+      subjectAction,
+      soundEffect,
+      bgm,
+    }),
+    shotDetails: buildSingleEpisodeAiStoryboardDetails({
+      visualDescription,
+      coreAction,
+      interactionDesign,
+      characterLogic,
+      subjectAction,
+      soundEffect,
+      bgm,
+      scene: first("sceneName", "scene_name", "sceneId", "scene_id", "scene"),
+      characters: first("characterNames", "character_names", "characterIds", "character_ids", "characters"),
+      props: first("props", "propNames", "prop_names", "propIds", "prop_ids"),
+    }),
+  };
+}
+
+function buildSingleEpisodeAiStoryboardDetails(parts = {}) {
+  return [
+    ["画面描述", parts.visualDescription],
+    ["核心动作", parts.coreAction],
+    ["对手戏设计", parts.interactionDesign],
+    ["人物底层逻辑", parts.characterLogic],
+    ["主体动作", parts.subjectAction],
+    ["音效", parts.soundEffect],
+    ["配乐", parts.bgm],
+    ["场景", parts.scene],
+    ["角色", parts.characters],
+    ["道具", parts.props],
+  ]
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label}: ${value}`)
+    .join("\n");
+}
+
+function buildSingleEpisodeAiAssetDescription(record, keys) {
+  const lines = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const value = record?.[key];
+    const text = value === undefined || value === null ? "" : String(value).trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    lines.push(text);
+  }
+  return lines.join("\n");
+}
+
+function buildSingleEpisodeAiLiveVideoPrompt(parts = {}) {
+  const labeledParts = [
+    ["时间", parts.timeRange],
+    ["转场", parts.transition],
+    ["镜头", [parts.shotSize, parts.cameraMovement].filter(Boolean).join("/")],
+    ["画面描述", parts.visualDescription],
+    ["核心动作", parts.coreAction],
+    ["对手戏设计", parts.interactionDesign],
+    ["人物底层逻辑", parts.characterLogic],
+    ["主体动作", parts.subjectAction],
+    ["音效", parts.soundEffect],
+    ["配乐", parts.bgm],
+  ]
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label}: ${value}`);
+  return [parts.baseVideoPrompt, ...labeledParts].filter(Boolean).join("\n");
+}
+
+function sanitizeSingleEpisodeAiPerShotVideoPrompt(prompt) {
+  const text = String(prompt ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  return text;
+}
+
+function normalizeSingleEpisodeAiPerShotTimeRange(timeRange, durationSec) {
+  const duration = Number(durationSec ?? 0);
+  if (Number.isFinite(duration) && duration > 0) {
+    return `0-${Math.min(duration, 15)}秒`;
+  }
+  const parsed = parseSingleEpisodeAiTimeRange(timeRange);
+  if (!parsed) {
+    return String(timeRange ?? "");
+  }
+  const durationFromRange = Math.round((parsed.end - parsed.start) * 100) / 100;
+  return durationFromRange > 0 ? `0-${Math.min(durationFromRange, 15)}秒` : String(timeRange ?? "");
+}
+
+function hasSingleEpisodeAiOutOfBoundsTimeline(value) {
+  return findSingleEpisodeAiTimeRanges(value).some((range) => range.end > 15 || range.end - range.start > 15);
+}
+
+function parseSingleEpisodeAiTimeRange(value) {
+  return findSingleEpisodeAiTimeRanges(value)[0] ?? null;
+}
+
+function findSingleEpisodeAiTimeRanges(value) {
+  const ranges = [];
+  const pattern = /(\d+(?:\.\d+)?)\s*(?:秒|s)?\s*[-~～—–至到]\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?/gi;
+  let match;
+  while ((match = pattern.exec(String(value ?? "")))) {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      ranges.push({ start, end });
+    }
+  }
+  return ranges;
+}
+
+const AI_LIVE_TABLE_TITLES = {
+  scenes: "场景",
+  characters: "角色",
+  props: "道具",
+  storyboards: "分镜",
+};
+
+function createEmptySingleEpisodeLookSelection() {
+  return { genre: [], emotion: [] };
+}
+
+function normalizeSingleEpisodeLookType(value) {
+  return ["genre", "emotion"].includes(value) ? value : "";
+}
+
+function hasStoryboardPromptPackagesForType(workbench, type) {
+  return Array.isArray(workbench.ui.storyboardPromptPackages) &&
+    workbench.ui.storyboardPromptPackages.some((item) => {
+      const packageType = String(item?.package_type ?? item?.packageType ?? "");
+      const status = String(item?.status ?? "enabled");
+      return packageType === type && status !== "disabled";
+    });
+}
+
+function resolveSingleEpisodeSelectedPromptPackageId(workbench, type) {
+  const normalizedType = normalizeSingleEpisodeLookType(type);
+  if (!normalizedType) {
+    return "";
+  }
+  const selected = workbench.ui.selectedSingleEpisodeLookPackageIds?.[normalizedType] ?? [];
+  const selectedId = Array.isArray(selected) ? String(selected[0] ?? "") : "";
+  if (selectedId) {
+    return selectedId;
+  }
+  const fallback = (workbench.ui.storyboardPromptPackages ?? []).find((item) => {
+    const packageType = String(item?.package_type ?? item?.packageType ?? "");
+    const status = String(item?.status ?? "enabled");
+    return packageType === normalizedType && status !== "disabled";
+  });
+  return fallback?.id ? String(fallback.id) : "";
+}
+
+function toggleSingleEpisodeLookPackage(workbench, input = {}) {
+  const type = normalizeSingleEpisodeLookType(input.type);
+  if (!type) {
+    return;
+  }
+  const packageId = String(input.packageId ?? "").trim();
+  if (!packageId) {
+    return;
+  }
+  const current = {
+    ...createEmptySingleEpisodeLookSelection(),
+    ...(workbench.ui.selectedSingleEpisodeLookPackageIds ?? {}),
+  };
+  const selected = Array.isArray(current[type]) ? current[type].map(String) : [];
+  if (packageId === "auto") {
+    current[type] = [];
+    workbench.ui.selectedSingleEpisodeLookPackageIds = current;
+    workbench.ui.singleEpisodeLookPanel = type;
+    return;
+  }
+  current[type] = selected.includes(packageId) ? [] : [packageId];
+  workbench.ui.selectedSingleEpisodeLookPackageIds = current;
+  workbench.ui.singleEpisodeLookPanel = type;
 }
 
 async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
@@ -6579,10 +7572,13 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       workbench.ui.episodeWorkbenchContext?.project?.projectId ??
       workbench.ui.episodeWorkbenchContext?.episode?.projectId ??
       null;
-    window.location.hash =
+    const nextHash =
       projectId && resolvedEpisodeId && resolvedEpisodeId !== "episode-primary"
         ? `projects/${encodeURIComponent(projectId)}/episodes/${encodeURIComponent(resolvedEpisodeId)}`
         : "episode-workbench";
+    if (globalThis.window?.location) {
+      globalThis.window.location.hash = nextHash;
+    }
   }
   if (options.shouldRender !== false) {
     render(workbench);
@@ -6919,33 +7915,48 @@ function applySelectedModelGenerationDefaults(workbench, mediaKind = "") {
   const quality = firstGenerationValue(defaults.quality, defaults.resolution, qualities[0]);
   const count = Number(defaults.count);
 
+  workbench.ui.generationParameterValues = {
+    ...(workbench.ui.generationParameterValues ?? {}),
+    ...defaults,
+  };
+
   if (aspectRatio) {
     workbench.ui.imageAspectRatio = aspectRatio;
+    workbench.ui.generationParameterValues.imageAspectRatio = aspectRatio;
+    workbench.ui.generationParameterValues.aspectRatio = aspectRatio;
   }
   if (resolvedMediaKind === "video") {
     const duration = firstGenerationValue(defaults.durationSec, durations[0]);
     if (quality) {
       workbench.ui.videoResolution = quality;
+      workbench.ui.generationParameterValues.videoResolution = quality;
+      workbench.ui.generationParameterValues.resolution = quality;
     }
     if (duration) {
       workbench.ui.videoDurationSec = duration;
+      workbench.ui.generationParameterValues.videoDurationSec = duration;
+      workbench.ui.generationParameterValues.durationSec = duration;
     }
     if (Number.isFinite(count) && count > 0) {
       workbench.ui.videoCount = Math.floor(count);
+      workbench.ui.generationParameterValues.count = Math.floor(count);
     }
     return;
   }
   if (quality) {
     workbench.ui.imageResolution = quality;
+    workbench.ui.generationParameterValues.imageResolution = quality;
+    workbench.ui.generationParameterValues.quality = quality;
   }
   if (Number.isFinite(count) && count > 0) {
     workbench.ui.imageCount = Math.floor(count);
+    workbench.ui.generationParameterValues.count = Math.floor(count);
   }
 }
 
 function modelSupportsGenerationMode(model, mode) {
   const supportedModes = Array.isArray(model?.supportedModes)
-    ? model.supportedModes.map((item) => String(item ?? "").trim()).filter(Boolean)
+    ? model.supportedModes.map((item) => normalizeGenerationModeToken(item)).filter(Boolean)
     : [];
   if (!supportedModes.length) {
     return false;
@@ -6955,41 +7966,64 @@ function modelSupportsGenerationMode(model, mode) {
 }
 
 function generationModeAliases(mode) {
-  const normalized = String(mode ?? "").trim();
-  const aliases = new Set([normalized, normalized.replaceAll("-", "_")]);
+  const normalized = normalizeGenerationModeToken(mode);
+  const aliases = new Set([normalized]);
   if (normalized === "first-frame") {
     aliases.add("first_frame");
     aliases.add("image-to-video");
     aliases.add("image_to_video");
+    aliases.add("video_image_to_video");
+    aliases.add("video_text_to_video");
     aliases.add("video");
+    aliases.add("video_generate");
   } else if (normalized === "image-to-video") {
     aliases.add("first-frame");
     aliases.add("first_frame");
     aliases.add("image_to_video");
+    aliases.add("video_image_to_video");
+    aliases.add("video_text_to_video");
     aliases.add("video");
+    aliases.add("video_generate");
   } else if (normalized === "reference-video") {
     aliases.add("reference_video");
     aliases.add("image-to-video");
     aliases.add("image_to_video");
+    aliases.add("video_reference_generate");
+    aliases.add("video_reference_video");
+    aliases.add("video_image_to_video");
     aliases.add("video");
+    aliases.add("video_generate");
   } else if (normalized === "first-last-frame") {
     aliases.add("first_last_frame");
+    aliases.add("video_first_last_frame");
+    aliases.add("video_image_to_video");
     aliases.add("video");
+    aliases.add("video_generate");
   } else if (normalized === "edit-video") {
     aliases.add("edit_video");
+    aliases.add("video_edit_video");
     aliases.add("video");
+    aliases.add("video_edit");
   } else if (normalized === "single-image") {
     aliases.add("single_image");
     aliases.add("text_to_image");
     aliases.add("image_to_image");
+    aliases.add("image_generate");
+    aliases.add("image_edit");
     aliases.add("image");
   } else if (normalized === "multi-image") {
     aliases.add("multi_image");
     aliases.add("multi_reference");
     aliases.add("image_to_image");
+    aliases.add("image_reference_generate");
+    aliases.add("image_edit");
     aliases.add("image");
   }
   return aliases;
+}
+
+function normalizeGenerationModeToken(mode) {
+  return String(mode ?? "").trim().replaceAll(".", "_");
 }
 
 function getEpisodeUploadLimits(workbench) {
@@ -7375,6 +8409,45 @@ function collectEpisodeWorkbenchEvent(workbench, eventType, payload = {}) {
 }
 
 function applyGenerationFieldChange(workbench, field, value) {
+  workbench.ui.generationParameterValues = {
+    ...(workbench.ui.generationParameterValues ?? {}),
+    [field]: value,
+  };
+  if (field === "aspectRatio") {
+    workbench.ui.imageAspectRatio = value || "16:9";
+    workbench.ui.generationParameterValues.imageAspectRatio = workbench.ui.imageAspectRatio;
+    return;
+  }
+  if (field === "quality") {
+    workbench.ui.imageResolution = value || "2K";
+    workbench.ui.generationParameterValues.imageResolution = workbench.ui.imageResolution;
+    return;
+  }
+  if (field === "resolution") {
+    if ((workbench.ui.episodeMediaMode ?? "image") === "video") {
+      workbench.ui.videoResolution = value || "1080p";
+      workbench.ui.generationParameterValues.videoResolution = workbench.ui.videoResolution;
+    } else {
+      workbench.ui.imageResolution = value || "2K";
+      workbench.ui.generationParameterValues.imageResolution = workbench.ui.imageResolution;
+    }
+    return;
+  }
+  if (field === "count") {
+    const count = clampCount(value, 1, 4);
+    if ((workbench.ui.episodeMediaMode ?? "image") === "video") {
+      workbench.ui.videoCount = count;
+    } else {
+      workbench.ui.imageCount = count;
+    }
+    workbench.ui.generationParameterValues.count = count;
+    return;
+  }
+  if (field === "durationSec") {
+    workbench.ui.videoDurationSec = value || "5";
+    workbench.ui.generationParameterValues.videoDurationSec = workbench.ui.videoDurationSec;
+    return;
+  }
   if (field === "videoDurationSec") {
     workbench.ui.videoDurationSec = value || "5";
     return;
@@ -7396,24 +8469,48 @@ function isAssetScope(workbench) {
   return (workbench.ui.museScopeMode ?? "storyboard") === "assets";
 }
 
-function getCurrentScopePrompt(workbench) {
+function getCurrentScopePrompt(workbench, options = {}) {
+  const allowPromptFallback = options.allowPromptFallback !== false;
   if (isAssetScope(workbench)) {
-    return String(workbench.ui.assetPromptDraft?.prompt ?? workbench.ui.prompt ?? "");
+    const draft = workbench.ui.assetPromptDraft ?? null;
+    const selectedAssetId = String(
+      workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? "",
+    ).trim();
+    const draftAssetId = String(draft?.selectionContext?.selectedAssetId ?? "").trim();
+    if (draftAssetId && selectedAssetId && draftAssetId !== selectedAssetId) {
+      return allowPromptFallback ? String(workbench.ui.prompt ?? "") : "";
+    }
+    if (allowPromptFallback && String(workbench.ui.prompt ?? "").trim()) {
+      return String(workbench.ui.prompt ?? "");
+    }
+    return String(draft?.prompt ?? (allowPromptFallback ? workbench.ui.prompt : "") ?? "");
+  }
+  if (allowPromptFallback && String(workbench.ui.prompt ?? "").trim()) {
+    return String(workbench.ui.prompt ?? "");
   }
   const selectedStoryboard = getSelectedStoryboard(
     getActiveStoryboards(workbench),
     workbench.ui.selectedStoryboardId,
   );
-  return String(selectedStoryboard?.generationState?.prompt ?? workbench.ui.prompt ?? "");
+  return String(
+    resolveStoryboardPromptForMode(selectedStoryboard, workbench.ui.episodeMediaMode ?? "image") ??
+      (allowPromptFallback ? workbench.ui.prompt : "") ??
+      "",
+  );
 }
 
 function setCurrentScopePrompt(workbench, value) {
   const nextValue = String(value ?? "");
   if (isAssetScope(workbench)) {
+    const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
     workbench.ui.assetPromptDraft = {
       ...(workbench.ui.assetPromptDraft ?? {}),
       scopeMode: "assets",
       prompt: nextValue,
+      selectionContext: {
+        ...(workbench.ui.assetPromptDraft?.selectionContext ?? {}),
+        ...selectionContext,
+      },
     };
     workbench.ui.prompt = nextValue;
     return;
@@ -7423,13 +8520,52 @@ function setCurrentScopePrompt(workbench, value) {
     updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
       ...generationState,
       prompt: nextValue,
+      ...(workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync"
+        ? { videoPrompt: nextValue }
+        : workbench.ui.episodeMediaMode === "image"
+          ? { imagePrompt: nextValue }
+          : {}),
     }));
   }
   workbench.ui.prompt = nextValue;
 }
 
+function syncPromptInputFromDom(workbench) {
+  const input = workbench?.root?.querySelector?.("#video-prompt-input");
+  if (!input) {
+    return;
+  }
+  setCurrentScopePrompt(workbench, input.value ?? "");
+}
+
 function syncPromptFromCurrentScope(workbench) {
-  workbench.ui.prompt = getCurrentScopePrompt(workbench);
+  workbench.ui.prompt = getCurrentScopePrompt(workbench, { allowPromptFallback: false });
+}
+
+function clearAssetPromptDraftForCurrentSelection(workbench) {
+  if (!isAssetScope(workbench)) {
+    return;
+  }
+  const draft = workbench.ui.assetPromptDraft ?? null;
+  if (!draft) {
+    return;
+  }
+  const selectedAssetId = String(
+    workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? "",
+  ).trim();
+  const draftAssetId = String(draft?.selectionContext?.selectedAssetId ?? "").trim();
+  if (!selectedAssetId || draftAssetId === selectedAssetId) {
+    return;
+  }
+  workbench.ui.assetPromptDraft = {
+    scopeMode: "assets",
+    prompt: "",
+    quickReferenceItems: [],
+    mentionReferences: [],
+    selectionContext: {
+      ...resolveEpisodeAssetSelectionContext(workbench),
+    },
+  };
 }
 
 function normalizeStoryboardComposerState(workbench, storyboardId) {
@@ -7948,15 +9084,21 @@ export function buildImageGenerationPayload(workbench) {
     workbench.ui.imageGenerationMode,
     workbench.ui.selectedModelId ?? "gpt-image-2-cn",
   );
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
+  const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
+  const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     promptOverride: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
     model,
     parameters: {
+      ...configuredParameters,
       mode: workbench.ui.imageGenerationMode,
-      count: clampCount(workbench.ui.imageCount ?? 1, 1, 4),
-      resolution: workbench.ui.imageResolution ?? "2K",
-      aspectRatio: workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
+      count: clampCount(configuredParameters.count ?? workbench.ui.imageCount ?? 1, 1, 4),
+      ...(qualityVisible ? { quality: configuredParameters.quality ?? workbench.ui.imageResolution ?? "2K" } : {}),
+      ...(resolutionVisible ? { resolution: configuredParameters.resolution ?? workbench.ui.imageResolution ?? "2K" } : {}),
+      ...(aspectRatioVisible ? { aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16" } : {}),
       strategy: workbench.ui.multiImageStrategy ?? "spatial-multi-view",
       references: selectedStoryboard?.references ?? [],
       quickReferences: generationState.quickReferenceItems ?? [],
@@ -7966,6 +9108,121 @@ export function buildImageGenerationPayload(workbench) {
       selectionContext,
     },
   };
+}
+
+function configuredGenerationParametersForModel(workbench, modelCode) {
+  const model = findConfiguredGenerationModel(workbench, modelCode);
+  const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
+    ? model.parameterSchema
+    : {};
+  const values = workbench.ui.generationParameterValues && typeof workbench.ui.generationParameterValues === "object"
+    ? workbench.ui.generationParameterValues
+    : {};
+  const parameters = {};
+  for (const key of Object.keys(schema)) {
+    if (schema[key]?.visible === false) {
+      continue;
+    }
+    if (["prompt", "negativePrompt", "referenceImages", "editInstruction"].includes(key)) {
+      continue;
+    }
+    const value = resolveConfiguredGenerationParameterValue(
+      schema[key],
+      firstGenerationParameterCandidate(values[key], uiGenerationParameterFallback(workbench, key)),
+      model?.defaultParams?.[key],
+    );
+    if (value !== undefined && value !== null && value !== "") {
+      parameters[key] = value;
+    }
+  }
+  return parameters;
+}
+
+function isConfiguredGenerationParameterVisible(workbench, modelCode, key) {
+  const model = findConfiguredGenerationModel(workbench, modelCode);
+  const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
+    ? model.parameterSchema
+    : {};
+  const parameter = schema[key];
+  return !parameter || typeof parameter !== "object" || Array.isArray(parameter) || parameter.visible !== false;
+}
+
+function firstGenerationParameterCandidate(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "") {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function uiGenerationParameterFallback(workbench, key) {
+  if (key === "aspectRatio") {
+    return workbench.ui.imageAspectRatio;
+  }
+  if (key === "quality") {
+    return workbench.ui.imageResolution;
+  }
+  if (key === "resolution") {
+    return (workbench.ui.episodeMediaMode ?? "image") === "video"
+      ? workbench.ui.videoResolution
+      : workbench.ui.imageResolution;
+  }
+  if (key === "count") {
+    return (workbench.ui.episodeMediaMode ?? "image") === "video"
+      ? workbench.ui.videoCount
+      : workbench.ui.imageCount;
+  }
+  if (key === "durationSec") {
+    return workbench.ui.videoDurationSec;
+  }
+  return undefined;
+}
+
+function resolveConfiguredGenerationParameterValue(parameter, selectedValue, defaultValue) {
+  const options = generationParameterOptionValues(parameter);
+  if (!options.length) {
+    return selectedValue !== undefined && selectedValue !== null && selectedValue !== "" ? selectedValue : defaultValue;
+  }
+  const candidates = [selectedValue, defaultValue, options[0]];
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "" && options.includes(String(candidate))) {
+      return candidate;
+    }
+  }
+  return options[0];
+}
+
+function generationParameterOptionValues(parameter) {
+  if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
+    return [];
+  }
+  const rawOptions = Array.isArray(parameter.options)
+    ? parameter.options
+    : Array.isArray(parameter.enum)
+      ? parameter.enum
+      : [];
+  const options = rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        return String(item.value ?? item.providerValue ?? item.label ?? "").trim();
+      }
+      return String(item ?? "").trim();
+    })
+    .filter(Boolean);
+  if (options.length || String(parameter.type ?? "") !== "integer") {
+    return options;
+  }
+  const minimum = Number(parameter.minimum ?? parameter.min ?? 1);
+  const maximum = Number(parameter.maximum ?? parameter.max ?? minimum);
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum < minimum || maximum - minimum > 12) {
+    return [];
+  }
+  const values = [];
+  for (let value = Math.ceil(minimum); value <= Math.floor(maximum); value += 1) {
+    values.push(String(value));
+  }
+  return values;
 }
 
 export function buildVideoGenerationPayload(workbench) {
@@ -8140,7 +9397,19 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
   }
   const references = buildSelectedStoryboardQuickReference(workbench, selectedStoryboard, promptText);
   if (!references?.length) {
-    return { ok: false, reason: "missing-storyboard-media" };
+    const textReference = buildSelectedStoryboardTextQuickReference(selectedStoryboard, promptText);
+    updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+      ...generationState,
+      quickReferenceItems: dedupeQuickReferenceItems([
+        ...(generationState.quickReferenceItems ?? []),
+        textReference,
+      ]),
+    }));
+    const currentPrompt = String(getCurrentScopePrompt(workbench) ?? "").trim();
+    setCurrentScopePrompt(workbench, appendPromptLineOnce(currentPrompt, promptText));
+    appendStoryboardMentionAudioAttachments(workbench, promptText);
+    workbench.ui.musePromptMenu = null;
+    return { ok: true, prompt: workbench.ui.prompt, reference: textReference, references: [textReference] };
   }
   updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
     ...generationState,
@@ -8162,6 +9431,22 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
   syncStoryboardQuickReferencesToVideoGenerationState(workbench, selectedStoryboard.id, references);
   workbench.ui.musePromptMenu = null;
   return { ok: true, prompt: workbench.ui.prompt, reference: references[0], references };
+}
+
+function buildSelectedStoryboardTextQuickReference(storyboard, description) {
+  return {
+    id: `quick-ref:storyboard-text:${storyboard.id}`,
+    assetId: storyboard.id,
+    sourceStoryboardId: storyboard.id,
+    kind: "text",
+    name: `${resolveStoryboardReferenceLabel(storyboard)} 文本`,
+    description,
+    preview: null,
+    url: null,
+    voiceId: null,
+    voiceName: "",
+    voiceSource: null,
+  };
 }
 
 function appendPromptLineOnce(currentPrompt, promptLine) {
@@ -8788,9 +10073,14 @@ function resolveGenerationTaskIdForConversation(entry) {
   ).trim();
 }
 
-function resolveStoryboardConversationApiId(storyboardId) {
+function resolveStoryboardConversationApiId(workbench, storyboardId) {
   const normalized = String(storyboardId ?? "").trim();
-  if (normalized.startsWith("storyboard-")) {
+  const storyboard = getActiveStoryboards(workbench).find((item) => item.id === normalized) ?? null;
+  const linkedShotId = String(storyboard?.linkedShotId ?? storyboard?.shotId ?? "").trim();
+  if (isUuidLike(linkedShotId)) {
+    return linkedShotId;
+  }
+  if (normalized.startsWith("storyboard-") && isUuidLike(normalized.slice("storyboard-".length))) {
     return normalized.slice("storyboard-".length);
   }
   return normalized;
@@ -8852,7 +10142,7 @@ async function deleteStoryboardConversationTurn(workbench, storyboardId, taskId,
     ) {
       const response = await workbench.api.deleteStoryboardConversationTurn(
         workbench.ui.selectedEpisodeId,
-        resolveStoryboardConversationApiId(storyboardId),
+        resolveStoryboardConversationApiId(workbench, storyboardId),
         taskId,
         mediaKind,
       );
@@ -8989,7 +10279,7 @@ async function persistStoryboardConversationEntry(workbench, entry, { includeUse
   }
   const response = await workbench.api.saveStoryboardConversationMessages(
     workbench.ui.selectedEpisodeId,
-    resolveStoryboardConversationApiId(storyboardId),
+    resolveStoryboardConversationApiId(workbench, storyboardId),
     {
       mediaMode: mediaKind,
       messages: buildStoryboardConversationMessages(entry, { includeUserRequest }),
@@ -9021,7 +10311,7 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
   try {
     const response = await workbench.api.getStoryboardConversationHistory(
       workbench.ui.selectedEpisodeId,
-      resolveStoryboardConversationApiId(storyboardId),
+      resolveStoryboardConversationApiId(workbench, storyboardId),
       mediaKind,
     );
     const entries = Array.isArray(response?.entries) ? response.entries : [];
@@ -9351,6 +10641,7 @@ export async function generateAssetImages(workbench) {
   const submission = createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, "image");
   if (typeof workbench.api?.createImageTask === "function") {
     stopGenerationPolling(workbench);
+    workbench.ui.generationPollingActive = true;
     workbench.ui.imageGenerationResult = {
       ...(workbench.ui.imageGenerationResult ?? {}),
       ...submission,
@@ -9361,9 +10652,22 @@ export async function generateAssetImages(workbench) {
     };
     render(workbench);
 
+    const payload = buildImageGenerationPayload(workbench);
+    collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
+      mediaKind: "image",
+      payload: {
+        ...payload,
+        targetType: "asset",
+        targetId: asset.id,
+        assetId: asset.id,
+        assetType: assetKind,
+        prompt: submission.promptPreview,
+      },
+      submission,
+    });
     const result = normalizeEpisodeTaskForLegacyResult(
       await workbench.api.createImageTask(workbench.ui.selectedEpisodeId, {
-        ...buildImageGenerationPayload(workbench),
+        ...payload,
         targetType: "asset",
         targetId: asset.id,
         assetId: asset.id,
@@ -9400,7 +10704,11 @@ export async function generateAssetImages(workbench) {
     if (Number.isFinite(Number(result?.creditBalance))) {
       workbench.ui.creditBalance = Number(result.creditBalance);
     }
-    scheduleSelectedAssetGenerationPolling(workbench, "image", { immediate: true });
+    if (isGenerationTaskTerminalStatus(resolveWorkflowStatus(workbench.ui.imageGenerationResult.status))) {
+      workbench.ui.generationPollingActive = false;
+    } else {
+      scheduleSelectedAssetGenerationPolling(workbench, "image", { immediate: true });
+    }
     render(workbench);
     try {
       await persistAssetConversationEntry(workbench, workbench.ui.imageGenerationResult, { includeUserRequest: true });
@@ -9650,6 +10958,7 @@ function scheduleSelectedAssetGenerationPolling(workbench, mediaKind = "image", 
       const latestStatus = resolveWorkflowStatus(latestTask?.status);
       if (isGenerationTaskTerminalStatus(latestStatus)) {
         stopAssetGenerationPolling(workbench);
+        workbench.ui.generationPollingActive = false;
         render(workbench);
         return;
       }
@@ -10412,6 +11721,29 @@ function syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes
   }
 
   return nextMap;
+}
+
+function removeLocalPrimaryEpisode(workbench) {
+  workbench.ui.storyboards = [];
+  workbench.state = {
+    ...(workbench.state ?? {}),
+    shots: (workbench.state?.shots ?? []).filter((shot) => shot?.episodeId),
+    projectDetail: workbench.state?.projectDetail
+      ? {
+          ...workbench.state.projectDetail,
+          shots: (workbench.state.projectDetail.shots ?? []).filter((shot) => shot?.episodeId),
+          episodes: (workbench.state.projectDetail.episodes ?? []).filter(
+            (episode) => episode?.id !== "episode-primary",
+          ),
+        }
+      : workbench.state?.projectDetail,
+  };
+  workbench.ui.projectDetail = workbench.state.projectDetail ?? workbench.ui.projectDetail;
+  workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
+  workbench.ui.episodeStoryboardMap = {
+    ...(workbench.ui.episodeStoryboardMap ?? {}),
+  };
+  delete workbench.ui.episodeStoryboardMap["episode-primary"];
 }
 
 function getActiveStoryboards(workbench, primaryStoryboards = workbench.ui.storyboards) {
@@ -12800,6 +14132,10 @@ function isUuidLike(value) {
   );
 }
 
+function firstUuidLikeValue(...values) {
+  return values.map((value) => String(value ?? "").trim()).find((value) => isUuidLike(value)) ?? null;
+}
+
 function isMockImageUrl(value) {
   return /mock-image-[^?]+\.(?:avif|png|webp)(?:\?|$)/i.test(String(value ?? "").trim());
 }
@@ -13804,7 +15140,11 @@ function normalizeProjectDetailContract(detail) {
 }
 
 function mapEpisodeStoryboardContract(storyboard) {
+  const apiStoryboardId =
+    firstUuidLikeValue(storyboard?.storyboardId, storyboard?.shotId, storyboard?.linkedShotId, storyboard?.id) ??
+    null;
   const storyboardId =
+    apiStoryboardId ??
     storyboard?.id ??
     storyboard?.storyboardId ??
     storyboard?.shotId ??
@@ -13826,9 +15166,13 @@ function mapEpisodeStoryboardContract(storyboard) {
     storyboard?.currentVideoThumbnailUrl ??
     storyboard?.currentVideo?.thumbnailUrl ??
     null;
+  const generationDrafts = normalizeEpisodeStoryboardGenerationDrafts(storyboard?.generationDrafts);
+  const videoDraft = generationDrafts.find((draft) => draft.mode === "video") ?? null;
+  const imageDraft = generationDrafts.find((draft) => draft.mode === "image") ?? null;
+  const activeDraft = videoDraft ?? imageDraft;
   return {
     id: storyboardId,
-    linkedShotId: storyboard?.linkedShotId ?? storyboard?.shotId ?? storyboard?.storyboardId ?? storyboardId,
+    linkedShotId: apiStoryboardId ?? storyboard?.linkedShotId ?? storyboard?.shotId ?? storyboard?.storyboardId ?? storyboardId,
     episodeId: storyboard?.episodeId ?? null,
     index: Number(storyboard?.index ?? storyboard?.indexNo ?? storyboard?.sortOrder ?? 1),
     title: storyboard?.title ?? String(storyboard?.indexNo ?? storyboard?.sortOrder ?? 1),
@@ -13854,8 +15198,36 @@ function mapEpisodeStoryboardContract(storyboard) {
           status: "ready",
         }]
       : [],
-    generationState: createEmptyGenerationState(),
+    generationDrafts,
+    imagePromptDraft: imageDraft,
+    videoPromptDraft: videoDraft,
+    generationState: {
+      ...createEmptyGenerationState(),
+      prompt: activeDraft?.prompt ?? "",
+      imagePrompt: imageDraft?.prompt ?? "",
+      videoPrompt: videoDraft?.prompt ?? "",
+    },
   };
+}
+
+function normalizeEpisodeStoryboardGenerationDrafts(drafts) {
+  if (!Array.isArray(drafts)) {
+    return [];
+  }
+  return drafts
+    .map((draft) => {
+      const mode = String(draft?.mode ?? "").trim();
+      if (mode !== "image" && mode !== "video" && mode !== "lip_sync") {
+        return null;
+      }
+      return {
+        mode,
+        prompt: String(draft?.prompt ?? ""),
+        payload: draft?.payload && typeof draft.payload === "object" ? draft.payload : {},
+        updatedAt: draft?.updatedAt ?? null,
+      };
+    })
+    .filter(Boolean);
 }
 
 function mapEpisodeAssetContracts(assets = [], kind) {
@@ -13874,7 +15246,7 @@ function mapEpisodeAssetContracts(assets = [], kind) {
       name: asset?.name ?? asset?.label ?? "未命名资产",
       preview: resolvedPreview,
       previewUrl: resolvedPreview,
-      description: asset?.description ?? "",
+      description: resolveEpisodeAssetDescription(asset),
       kind,
       source: "episode",
       assetSource: "episode",
@@ -13888,6 +15260,17 @@ function mapEpisodeAssetContracts(assets = [], kind) {
       fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
     };
   });
+}
+
+function resolveEpisodeAssetDescription(asset) {
+  return normalizeEpisodeAssetDescriptionText(
+    asset?.description ??
+      asset?.latestVersion?.metadata?.description ??
+      asset?.metadata?.description ??
+      asset?.promptPreview ??
+      asset?.prompt ??
+      "",
+  );
 }
 
 function mapProjectDetailAssets(assetsByType = {}) {
@@ -13907,7 +15290,7 @@ function mapProjectDetailAssetRecords(assets = [], kind) {
     id: asset.id,
     name: asset.label ?? asset.assetKey ?? "未命名资产",
     preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-    description: asset.latestVersion?.metadata?.description ?? asset.assetKey ?? "",
+    description: normalizeEpisodeAssetDescriptionText(asset.latestVersion?.metadata?.description ?? asset.assetKey ?? ""),
     kind,
     isMain: Boolean(asset.latestVersion?.metadata?.isMain),
     assetSource: asset.latestVersion?.metadata?.source ?? "import",
@@ -13915,6 +15298,41 @@ function mapProjectDetailAssetRecords(assets = [], kind) {
     latestVersion: asset.latestVersion ?? null,
     source: asset.latestVersion?.metadata?.source ?? "import",
   }));
+}
+
+function normalizeEpisodeAssetDescriptionText(value) {
+  const lines = String(value ?? "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const values = [];
+  for (const line of lines) {
+    if (containsComparableEpisodeAssetText(values, line)) {
+      continue;
+    }
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      if (includesComparableEpisodeAssetText(line, values[index])) {
+        values.splice(index, 1);
+      }
+    }
+    values.push(line);
+  }
+  return values.join("\n");
+}
+
+function containsComparableEpisodeAssetText(values, candidate) {
+  return values.some((value) => includesComparableEpisodeAssetText(value, candidate));
+}
+
+function includesComparableEpisodeAssetText(container, candidate) {
+  const normalizedContainer = normalizeComparableEpisodeAssetText(container);
+  const normalizedCandidate = normalizeComparableEpisodeAssetText(candidate);
+  return Boolean(normalizedCandidate && normalizedContainer.includes(normalizedCandidate));
+}
+
+function normalizeComparableEpisodeAssetText(value) {
+  return String(value ?? "").replace(/\s+/g, "");
 }
 
 function seedImportedEpisodeAssets(workbench, assetKind, importedAssets = []) {
@@ -14146,6 +15564,14 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
 function shouldFetchAssetLibrary(workbench) {
   const scope = workbench.ui.libraryTeamAssetScope ?? "official";
   return scope !== "personal" && isApiBackedLibraryCategory(workbench.ui.libraryCategory);
+}
+
+function shouldPrefetchReusableAssetLibrary(workbench) {
+  return (
+    workbench.ui.activeNavTab === "library" &&
+    (workbench.ui.libraryTeamRoute ?? "assets") === "assets" &&
+    shouldFetchAssetLibrary(workbench)
+  );
 }
 
 function isApiBackedLibraryCategory(category) {
@@ -14590,4 +16016,8 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   persistWorkbenchState(workbench);
   workbench.ui.toast = `已移除 ${video.fileName || "分镜视频"}。`;
   render(workbench);
+}
+
+export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
+  return mapEpisodeAssetContracts(assets, kind);
 }
