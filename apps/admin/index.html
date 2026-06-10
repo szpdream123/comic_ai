@@ -1885,12 +1885,68 @@
         return `${(Number(value || 0) * 100).toFixed(1)}%`;
       }
 
+      const VIDEO_MODEL_CATEGORIES = [
+        { value: "first_frame", label: "首帧视频", taskModes: ["video.image_to_video"] },
+        { value: "first_last_frame", label: "首尾帧", taskModes: ["video.first_last_frame_to_video"] },
+        { value: "reference", label: "全能参考", taskModes: ["video.reference_image_to_video"] },
+        { value: "video_edit", label: "AI改视频", taskModes: ["video.video_to_video", "video.image_video_to_video"] },
+      ];
+
+      function videoCategoryByValue(value) {
+        return VIDEO_MODEL_CATEGORIES.find((item) => item.value === value) || VIDEO_MODEL_CATEGORIES[0];
+      }
+
+      function inferVideoCategory(modelOrTaskModes = {}) {
+        const taskModes = Array.isArray(modelOrTaskModes)
+          ? modelOrTaskModes
+          : Array.isArray(modelOrTaskModes?.taskModes)
+            ? modelOrTaskModes.taskModes
+            : [];
+        const configured = !Array.isArray(modelOrTaskModes) && modelOrTaskModes?.uiConfig?.videoCategory;
+        if (configured && VIDEO_MODEL_CATEGORIES.some((item) => item.value === configured)) return configured;
+        if (taskModes.includes("video.first_last_frame_to_video")) return "first_last_frame";
+        if (taskModes.includes("video.reference_image_to_video")) return "reference";
+        if (taskModes.includes("video.video_to_video") || taskModes.includes("video.image_video_to_video")) return "video_edit";
+        return "first_frame";
+      }
+
+      function videoCategoryLabel(modelOrTaskModes = {}) {
+        return videoCategoryByValue(inferVideoCategory(modelOrTaskModes)).label;
+      }
+
+      function videoCategoryOptions(selectedValue) {
+        return VIDEO_MODEL_CATEGORIES
+          .map((item) => `<option value="${item.value}" ${item.value === selectedValue ? "selected" : ""}>${item.label}</option>`)
+          .join("");
+      }
+
+      function modelMediaLabel(model) {
+        if (model.mediaType !== "video") return escapeHtml(model.mediaType || "");
+        return `<span class="tag blue">${videoCategoryLabel(model)}</span>`;
+      }
+
+      function applyVideoCategoryToModelEditor(categoryValue) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const category = videoCategoryByValue(categoryValue);
+        form.elements.taskModes.value = category.taskModes.join(", ");
+        try {
+          const uiConfig = parseJsonTextarea(new FormData(form), "uiConfig");
+          uiConfig.videoCategory = category.value;
+          uiConfig.videoCategoryLabel = category.label;
+          form.elements.uiConfig.value = JSON.stringify(uiConfig, null, 2);
+        } catch (err) {
+          document.getElementById("model-editor-error").textContent = err.message || "视频分类写入展示配置失败";
+        }
+      }
+
       function modelsPage() {
         const rows = state.models.length
           ? state.models.map((model) => modelRow(model)).join("")
           : `<tr><td colspan="9">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
-        return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码 / 供应商" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
-          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>供应商</th><th>媒体</th><th>任务模式</th><th>价格摘要</th><th>调度</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
+        const videoCategoryOptionsHtml = VIDEO_MODEL_CATEGORIES.map((item) => `<option>${item.label}</option>`).join("");
+        return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码 / 供应商" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option>${videoCategoryOptionsHtml}</select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>供应商</th><th>媒体 / 视频分类</th><th>任务模式</th><th>价格摘要</th><th>调度</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
           ${rows}
         </tbody></table></div>`;
       }
@@ -1907,7 +1963,7 @@
         const statusLabel = model.status === "active" ? "启用" : model.status === "disabled" ? "禁用" : "归档";
         const nextStatus = model.status === "active" ? "disabled" : "active";
         const nextStatusTitle = model.status === "active" ? "禁用" : "启用";
-        return `<tr><td>${model.modelCode}</td><td>${model.displayName}</td><td>${model.providerName}</td><td>${model.mediaType}</td><td>${model.taskModes.join(" / ")}</td><td>${price}</td><td>${dispatch}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看" onclick="selectModel('${model.id}')">查</button><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
+        return `<tr><td>${model.modelCode}</td><td>${model.displayName}</td><td>${model.providerName}</td><td>${modelMediaLabel(model)}</td><td>${model.taskModes.join(" / ")}</td><td>${price}</td><td>${dispatch}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看" onclick="selectModel('${model.id}')">查</button><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
       }
 
       function priceSummary(pricing = {}) {
@@ -3872,7 +3928,7 @@
             providerProtocol: "volcengine_ark_video",
             invocationMode: "async_polling",
             mediaType: "video",
-            taskModes: ["video.text_to_video", "video.image_to_video"],
+            taskModes: ["video.image_to_video"],
             status: "disabled",
             sortOrder: 100,
             remark: "",
@@ -3896,7 +3952,7 @@
             },
             pricing: { unit: "video", baseCredits: 120 },
             limits: {},
-            uiConfig: {},
+            uiConfig: { videoCategory: "first_frame", videoCategoryLabel: "首帧视频" },
             dispatchPolicy: {
               submitQueueName: "generation-submit-video",
               pollQueueName: "generation-poll-video",
@@ -4003,6 +4059,7 @@
         form.elements.invocationMode.value = template.invocationMode;
         form.elements.mediaType.value = template.mediaType;
         form.elements.taskModes.value = template.taskModes.join(", ");
+        if (form.elements.videoCategory) form.elements.videoCategory.value = inferVideoCategory(template);
         form.elements.parameterSchema.value = JSON.stringify(template.parameterSchema, null, 2);
         form.elements.defaultParams.value = JSON.stringify(template.defaultParams, null, 2);
         form.elements.pricing.value = JSON.stringify(template.pricing, null, 2);
@@ -4061,7 +4118,7 @@
           providerProtocol: "volcengine_ark_video",
           invocationMode: "async_polling",
           mediaType: "video",
-          taskModes: ["video.text_to_video", "video.image_to_video"],
+          taskModes: ["video.image_to_video"],
           status: "disabled",
           sortOrder: 100,
           remark: "",
@@ -4085,7 +4142,7 @@
           },
           pricing: { unit: "video", baseCredits: 120 },
           limits: {},
-          uiConfig: {},
+          uiConfig: { videoCategory: "first_frame", videoCategoryLabel: "首帧视频" },
           dispatchPolicy: {
             submitQueueName: "generation-submit-video",
             pollQueueName: "generation-poll-video",
@@ -4099,6 +4156,7 @@
         if (!model) Object.assign(defaults, modelEditorTemplateDefaults("image"));
         const selectedApiKeyEnv = defaults.providerConfig?.apiKeyEnv || "";
         const selectedApiKey = defaults.providerConfig?.apiKey || "";
+        const selectedVideoCategory = inferVideoCategory(defaults);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
@@ -4124,6 +4182,7 @@
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
               <label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(defaults.sortOrder || 100)}" /></label>
+              <label class="field" id="video-category-field"><span>视频分类</span><select name="videoCategory">${videoCategoryOptions(selectedVideoCategory)}</select></label>
               <label class="field"><span>任务模式</span><input name="taskModes" value="${escapeAttribute((defaults.taskModes || []).join(", "))}" required /></label>
             </div>
             <section class="card" id="model-parameter-builder" style="box-shadow:none;border:1px solid var(--border);">
@@ -4183,11 +4242,21 @@
             document.getElementById("model-editor-error").textContent = err.message || "API 密钥写入供应商配置失败";
           }
         });
+        const syncVideoCategoryVisibility = () => {
+          const field = document.getElementById("video-category-field");
+          if (field) field.style.display = modelEditorForm.elements.mediaType.value === "video" ? "" : "none";
+        };
+        modelEditorForm.elements.videoCategory.addEventListener("change", (event) => {
+          applyVideoCategoryToModelEditor(event.target.value);
+        });
+        modelEditorForm.elements.mediaType.addEventListener("change", syncVideoCategoryVisibility);
+        syncVideoCategoryVisibility();
         if (!isEdit) {
           document.getElementById("image-model-template-btn")?.addEventListener("click", () => applyModelEditorTemplate("image"));
           document.getElementById("video-model-template-btn")?.addEventListener("click", () => applyModelEditorTemplate("video"));
           modelEditorForm.elements.mediaType.addEventListener("change", (event) => {
             applyModelEditorTemplate(event.target.value === "video" ? "video" : "image");
+            syncVideoCategoryVisibility();
           });
         }
         document.getElementById("manual-parameter-add-btn").addEventListener("click", () => {
@@ -4543,10 +4612,18 @@
       }
 
       function modelPayloadFromForm(form) {
+        const mediaType = String(form.get("mediaType") || "image");
+        const selectedVideoCategory = String(form.get("videoCategory") || "");
+        const videoCategory = mediaType === "video" ? videoCategoryByValue(selectedVideoCategory) : null;
         const taskModes = String(form.get("taskModes") || "")
           .split(",")
           .map((item) => item.trim())
           .filter(Boolean);
+        const uiConfig = parseJsonTextarea(form, "uiConfig");
+        if (videoCategory) {
+          uiConfig.videoCategory = videoCategory.value;
+          uiConfig.videoCategoryLabel = videoCategory.label;
+        }
         return {
           modelCode: String(form.get("modelCode") || "").trim(),
           displayName: String(form.get("displayName") || "").trim(),
@@ -4554,7 +4631,7 @@
           providerModel: String(form.get("providerModel") || "").trim(),
           providerProtocol: String(form.get("providerProtocol") || "custom_http"),
           invocationMode: String(form.get("invocationMode") || "sync"),
-          mediaType: String(form.get("mediaType") || "image"),
+          mediaType,
           taskModes,
           status: String(form.get("status") || "disabled"),
           sortOrder: Number(form.get("sortOrder") || 100),
@@ -4563,7 +4640,7 @@
           pricing: parseJsonTextarea(form, "pricing"),
           providerConfig: parseJsonTextarea(form, "providerConfig"),
           limits: parseJsonTextarea(form, "limits"),
-          uiConfig: parseJsonTextarea(form, "uiConfig"),
+          uiConfig,
           dispatchPolicy: {
             submitQueueName: String(form.get("submitQueueName") || "").trim(),
             pollQueueName: String(form.get("pollQueueName") || "").trim() || null,

@@ -33,6 +33,10 @@ interface ScriptRow {
   id: string;
   organization_id: string;
   project_id: string;
+  title: string | null;
+  cover_image_url: string | null;
+  cover_storage_object_id: string | null;
+  deleted_at: Date | string | null;
   status: ScriptStatus;
   input_text: string;
   created_by_user_id: string;
@@ -144,6 +148,7 @@ export class SqlProjectStore implements ProjectStore {
         FROM scripts
         WHERE organization_id = $1
           AND project_id = $2
+          AND deleted_at IS NULL
         ORDER BY created_at
         LIMIT 1
       `,
@@ -189,7 +194,7 @@ export class SqlProjectStore implements ProjectStore {
   async findScript(scriptId: string): Promise<ScriptRecord | undefined> {
     const row = await queryOne<ScriptRow>(
       this.db,
-      "SELECT * FROM scripts WHERE id = $1",
+      "SELECT * FROM scripts WHERE id = $1 AND deleted_at IS NULL",
       [scriptId],
     );
 
@@ -207,6 +212,7 @@ export class SqlProjectStore implements ProjectStore {
         FROM scripts
         WHERE organization_id = $1
           AND id = $2
+          AND deleted_at IS NULL
       `,
       [input.organizationId, input.scriptId],
     );
@@ -305,6 +311,10 @@ function scriptFromRow(row: ScriptRow): ScriptRecord {
     id: row.id,
     organizationId: row.organization_id,
     projectId: row.project_id,
+    title: row.title,
+    coverImageUrl: row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
+    deletedAt: row.deleted_at ? new Date(row.deleted_at) : null,
     status: row.status,
     inputText: row.input_text,
     createdByUserId: row.created_by_user_id,

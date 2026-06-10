@@ -83,6 +83,14 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
   }
 
+  if ((await tableExists(db, "scripts")) && !(await columnExists(db, "scripts", "deleted_at"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0023_script_card_metadata.sql" });
+  }
+
+  if (!(await tableExists(db, "script_reader_sections"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0022_script_reader_sections.sql" });
+  }
+
   if (!(await tableExists(db, "episode_generation_drafts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
   } else if (
@@ -125,6 +133,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
       await applySqlMigrations(db, process.cwd(), { fromName: "0021_aliyun_bailian_happyhorse_video_model.sql" });
     }
+    await ensureHappyHorseResolutionConfig(db);
+    await ensureVideoModelCategories(db);
   }
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
@@ -546,6 +556,74 @@ async function seedanceModelConfigsCurrent(db: SqlDatabase) {
   );
 
   return result.rows[0]?.count === 3;
+}
+
+async function ensureVideoModelCategories(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return;
+  }
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["Doubao-Seedance-2.0-fast", "doubao-seedance-1-0-pro-250528"], "first_frame", "首帧视频"]);
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["Doubao-Seedance-2.0"], "first_last_frame", "首尾帧"]);
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["happyhorse-1.0-r2v"], "reference", "全能参考"]);
+}
+
+async function ensureHappyHorseResolutionConfig(db: SqlDatabase) {
+  await db.query(`
+    UPDATE ai_model_configs
+    SET parameter_schema_json = jsonb_set(
+          COALESCE(parameter_schema_json, '{}'::jsonb),
+          '{resolution,options}',
+          '["720P"]'::jsonb,
+          true
+        ),
+        default_params_json = jsonb_set(
+          COALESCE(default_params_json, '{}'::jsonb),
+          '{resolution}',
+          to_jsonb('720P'::text),
+          true
+        ),
+        limits_json = jsonb_set(
+          COALESCE(limits_json, '{}'::jsonb),
+          '{supportedResolutions}',
+          '["720P"]'::jsonb,
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = 'happyhorse-1.0-r2v'
+  `);
 }
 
 async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {

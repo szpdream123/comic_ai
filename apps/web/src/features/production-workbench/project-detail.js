@@ -1,5 +1,5 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js";
+import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1";
 import { renderExportPanel } from "./export-panel.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
@@ -370,7 +370,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         imageGenerationResult: ui.imageGenerationResult ?? null,
         videoGenerationResult: ui.videoGenerationResult ?? null,
         mediaMode: ui.episodeMediaMode ?? "image",
-        videoMode: ui.videoGenerationMode ?? "first-frame",
+        videoMode: ui.videoGenerationMode ?? "reference-video",
         imageMode: ui.imageGenerationMode ?? "single-image",
         generationControls: {
           videoDurationSec: ui.videoDurationSec,
@@ -393,7 +393,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
           activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
           isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
-          videoGenerationMode: ui.videoGenerationMode ?? "first-frame",
+          videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
           museBoardMode: ui.museBoardMode ?? "operation",
           museScopeMode: ui.museScopeMode ?? "storyboard",
           musePromptMenu: ui.musePromptMenu ?? null,
@@ -3008,7 +3008,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
       projectDetail: ui.projectDetail ?? null,
       mediaMode: ui.episodeMediaMode ?? "image",
-      videoMode: ui.videoGenerationMode ?? "first-frame",
+      videoMode: ui.videoGenerationMode ?? "reference-video",
       imageMode: ui.imageGenerationMode ?? "single-image",
       generationControls: {
         videoDurationSec: ui.videoDurationSec,
@@ -3030,7 +3030,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
         activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
         isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
-        videoGenerationMode: ui.videoGenerationMode ?? "first-frame",
+        videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
         promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
         promptMentionQuery: ui.promptMentionQuery ?? "",
         promptMentionSuggestions: ui.promptMentionSuggestions ?? [],
@@ -3115,7 +3115,7 @@ function renderToolsPanel({ state, ui }) {
         </div>
         <div class="asset-library-empty">
           <h3>当前链路按真实规则运行</h3>
-          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 ${pollSeconds} 秒轮询一次，超过 15 分钟标记失败。</p>
+          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 ${pollSeconds} 秒轮询一次，图片超过 15 分钟标记失败，视频最长等待 3 小时并由后台尝试取消供应商任务。</p>
           <ul class="project-empty-points">
             <li>图片默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultImageModelCode ?? "nano_banana_2")}</li>
             <li>视频默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultVideoModelCode ?? "video_mock_1")}</li>
@@ -3329,17 +3329,9 @@ function renderGlobalStatusbar(session, options = {}) {
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
         <div class="statusbar-wondershare">
-          <span class="wondershare-w" aria-hidden="true">W</span>
+          <span class="statusbar-n-mark" aria-hidden="true">灵</span>
           <div>
-            <strong>Wondershare</strong>
-            <small>万兴科技</small>
-          </div>
-        </div>
-        <span class="statusbar-divider" aria-hidden="true"></span>
-        <div class="statusbar-wondershare">
-          <span class="statusbar-n-mark" aria-hidden="true">N</span>
-          <div>
-            <strong>万兴剧厂</strong>
+            <strong>灵曦剧场</strong>
           </div>
         </div>
       </div>
@@ -3390,8 +3382,8 @@ function renderHomeHero({ detailState }) {
       <div class="hero-overlay"></div>
       <div class="hero-content">
         <div class="hero-brand-lockup">
-          <div class="hero-brand-mark" aria-hidden="true">N</div>
-          <div class="hero-brand-text">万兴剧厂</div>
+          <div class="hero-brand-mark" aria-hidden="true">灵</div>
+          <div class="hero-brand-text">灵曦剧场</div>
         </div>
         <h1 class="hero-title">您的专属 AI 电影工作室</h1>
         <div class="hero-value-row" aria-label="核心卖点">

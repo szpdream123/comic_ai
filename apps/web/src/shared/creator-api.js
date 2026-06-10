@@ -725,6 +725,43 @@ export const creatorApi = {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/episodes`);
   },
 
+  getScriptReaderSections(projectId) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`);
+  },
+
+  createScriptReaderSection(projectId, input) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`,
+      input,
+    );
+  },
+
+  updateScriptReaderSection(projectId, sectionId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+      input,
+    );
+  },
+
+  deleteScriptReaderSection(projectId, sectionId) {
+    return deleteJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+    );
+  },
+
+  updateScriptCard(projectId, scriptId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+      input,
+    );
+  },
+
+  deleteScriptCard(projectId, scriptId) {
+    return deleteJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+    );
+  },
+
   getProjectMembers(projectId) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/members`);
   },

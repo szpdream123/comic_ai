@@ -97,6 +97,8 @@ function generationTaskModeAliases(mode: string): Set<string> {
     aliases.add("reference_video");
   } else if (normalized === "first-last-frame") {
     aliases.add("video.first_last_frame");
+    aliases.add("video.first_last_frame_to_video");
+    aliases.add("first_last_frame_to_video");
     aliases.add("video");
   } else if (normalized === "edit-video") {
     aliases.add("video.video_to_video");

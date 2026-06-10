@@ -14,7 +14,7 @@ WITH seedance_configs AS (
         '{"aspectRatio":"adaptive","resolution":"720p","durationSec":5,"cameraFixed":false,"generateAudio":true,"returnLastFrame":false,"watermark":false}'::jsonb,
         '{"unit":"video","baseCredits":110,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"480p":0.8,"720p":1}}'::jsonb,
         '{"maxPromptLength":2000,"maxReferences":1,"supportsFirstFrame":true,"supportsAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["480p","720p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/bmp","image/tiff","image/gif","image/heic","image/heif"]}'::jsonb,
-        '{"label":"Seedance 2.0 Fast","group":"火山引擎 Seedance","recommended":true,"visible":true,"pipeline":"video","supportedModes":["text_to_video","image_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+        '{"label":"Seedance 2.0 Fast","group":"火山引擎 Seedance","recommended":true,"visible":true,"pipeline":"video","videoCategory":"first_frame","videoCategoryLabel":"首帧视频","supportedModes":["text_to_video","image_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
         20,
         '火山 Ark 视频生成 fast 模型。配置按官方 CreateContentsGenerationsTasks 文档，fast 不配置 1080p。'
       ),
@@ -29,7 +29,7 @@ WITH seedance_configs AS (
         '{"aspectRatio":"adaptive","resolution":"720p","durationSec":5,"cameraFixed":false,"generateAudio":true,"returnLastFrame":false,"watermark":false}'::jsonb,
         '{"unit":"video","baseCredits":140,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"480p":0.8,"720p":1,"1080p":1.35}}'::jsonb,
         '{"maxPromptLength":2000,"maxReferences":4,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsSourceVideo":true,"supportsReferenceAudio":true,"supportsAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["480p","720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/bmp","image/tiff","image/gif","image/heic","image/heif","video/mp4","audio/mpeg","audio/wav"]}'::jsonb,
-        '{"label":"Seedance 2.0","group":"火山引擎 Seedance","recommended":false,"visible":true,"pipeline":"video","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video","video_to_video","image_video_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+        '{"label":"Seedance 2.0","group":"火山引擎 Seedance","recommended":false,"visible":true,"pipeline":"video","videoCategory":"first_last_frame","videoCategoryLabel":"首尾帧","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video","video_to_video","image_video_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
         21,
         '火山 Ark 视频生成标准模型。支持多模态参考内容，后端会按 role 发送 first_frame、last_frame、reference_image、reference_video、reference_audio。'
       ),
@@ -44,7 +44,7 @@ WITH seedance_configs AS (
         '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"cameraFixed":false,"watermark":false}'::jsonb,
         '{"unit":"video","baseCredits":180,"durationMultipliers":{"5":1,"10":1.8},"resolutionMultipliers":{"720p":1,"1080p":1.35}}'::jsonb,
         '{"maxPromptLength":2000,"maxReferences":1,"supportsFirstFrame":true,"minDurationSec":5,"maxDurationSec":10,"supportedRatios":["16:9","9:16","1:1"],"supportedResolutions":["720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/bmp","image/tiff","image/gif"]}'::jsonb,
-        '{"label":"Seedance 1.0 Pro","group":"火山引擎 Seedance","recommended":false,"visible":true,"pipeline":"video","supportedModes":["text_to_video","image_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+        '{"label":"Seedance 1.0 Pro","group":"火山引擎 Seedance","recommended":false,"visible":true,"pipeline":"video","videoCategory":"first_frame","videoCategoryLabel":"首帧视频","supportedModes":["text_to_video","image_to_video"],"providerDocUrl":"https://www.volcengine.com/docs/82379/1520757?lang=zh","parameterDisplayLanguage":"zh-CN"}'::jsonb,
         22,
         '保留旧版 Seedance 1.0 Pro。按文档示例配置 Ark 内容生成任务接口。'
       )

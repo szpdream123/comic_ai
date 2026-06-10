@@ -231,6 +231,40 @@ describe("createDevDb", () => {
     }
   });
 
+  it("repairs existing local databases missing script reader sections table", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      await db.query("DROP TABLE IF EXISTS script_reader_sections CASCADE");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const table = await repairedDb.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'script_reader_sections'
+          ) AS exists
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(table.rows[0]?.exists, true);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 function restoreEnv(key: string, value: string | undefined) {

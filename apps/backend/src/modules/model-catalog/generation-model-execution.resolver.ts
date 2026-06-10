@@ -158,7 +158,7 @@ function taskModeFromParameters(kind: "image" | "video", parameters: Record<stri
     return "video.reference_guided_video";
   }
   if (mode === "first-last-frame") {
-    return "video.first_last_frame";
+    return "video.first_last_frame_to_video";
   }
   if (mode === "edit-video") {
     return "video.video_to_video";

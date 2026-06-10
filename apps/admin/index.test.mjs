@@ -189,6 +189,29 @@ test("model editor defaults new configs to an identifiable image model template"
   assert.match(script, /String\(form\.get\("invocationMode"\) \|\| "sync"\)/);
 });
 
+test("admin video models expose the four backend management categories", () => {
+  for (const categoryLabel of ["首帧视频", "首尾帧", "全能参考", "AI改视频"]) {
+    assert.match(script, new RegExp(categoryLabel));
+  }
+
+  for (const taskMode of [
+    "video.image_to_video",
+    "video.first_last_frame_to_video",
+    "video.reference_image_to_video",
+    "video.video_to_video",
+    "video.image_video_to_video",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(taskMode)));
+  }
+
+  assert.match(script, /VIDEO_MODEL_CATEGORIES/);
+  assert.match(script, /inferVideoCategory/);
+  assert.match(script, /modelMediaLabel\(model\)/);
+  assert.match(script, /name="videoCategory"/);
+  assert.match(script, /applyVideoCategoryToModelEditor/);
+  assert.match(script, /uiConfig\.videoCategory/);
+});
+
 test("model editor lets admins choose a secret reference for providerConfig apiKeyEnv", () => {
   assert.match(script, /modelSecretReferenceOptions/);
   assert.match(script, /modelApiKeyEnv/);

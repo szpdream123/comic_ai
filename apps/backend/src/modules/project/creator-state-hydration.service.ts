@@ -159,6 +159,10 @@ export async function loadProjectBundleFromSql(
     id: string;
     organization_id: string;
     project_id: string;
+    title: string | null;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    deleted_at: Date | string | null;
     status: "draft" | "ready" | "parsed" | "failed";
     input_text: string;
     created_by_user_id: string | null;
@@ -170,6 +174,7 @@ export async function loadProjectBundleFromSql(
       FROM scripts
       WHERE project_id = $1
         AND ($2::uuid IS NULL OR id = $2::uuid)
+        AND deleted_at IS NULL
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
@@ -197,6 +202,10 @@ export async function loadProjectBundleFromSql(
           id: script.id,
           organizationId: script.organization_id,
           projectId: script.project_id,
+          title: script.title,
+          coverImageUrl: script.cover_image_url,
+          coverStorageObjectId: script.cover_storage_object_id,
+          deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
           status: script.status,
           inputText: script.input_text,
           createdByUserId: script.created_by_user_id,

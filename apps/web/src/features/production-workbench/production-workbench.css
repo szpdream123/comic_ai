@@ -1863,6 +1863,162 @@
   gap: 1rem;
 }
 
+.script-cover-tabs {
+  display: grid;
+  gap: 1.15rem;
+}
+
+.script-cover-tablist {
+  display: flex;
+  gap: clamp(1rem, 1.6vw, 1.45rem);
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.1rem 0 0.55rem;
+  scrollbar-width: thin;
+}
+
+.script-project-card {
+  position: relative;
+  display: grid;
+  flex: 0 0 clamp(8.55rem, 10.7vw, 10.17rem);
+  overflow: hidden;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 8px;
+  background: linear-gradient(180deg, oklch(16% 0.02 270 / 0.95), oklch(18% 0.03 285 / 0.78));
+  color: var(--text-primary);
+  box-shadow: 0 1rem 2.2rem oklch(0% 0 0 / 0.16);
+  cursor: pointer;
+}
+
+.script-project-card.active,
+.script-project-card:hover {
+  border-color: oklch(78% 0.13 236 / 0.58);
+  box-shadow:
+    inset 0 0 0 1px oklch(100% 0 0 / 0.08),
+    0 1.1rem 2.45rem oklch(0% 0 0 / 0.22);
+}
+
+.script-project-poster {
+  position: relative;
+  display: grid;
+  height: 10.875rem;
+  min-height: 10.875rem;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 28% 18%, oklch(72% 0.14 250 / 0.16), transparent 7rem),
+    linear-gradient(135deg, oklch(22% 0.04 250), oklch(28% 0.07 285));
+}
+
+.script-project-cover {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.script-project-poster.needs-cover .script-project-cover,
+.script-project-poster.has-cover .script-project-cover-placeholder {
+  display: none;
+}
+
+.script-project-cover-placeholder {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.62rem;
+  place-items: center;
+  min-width: min(10.4rem, calc(100% - 2.1rem));
+  min-height: 5.925rem;
+  border: 1px dashed oklch(72% 0.2 292 / 0.86);
+  border-radius: 8px;
+  background: oklch(100% 0 0 / 0.1);
+  color: oklch(100% 0 0 / 0.88);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.04);
+}
+
+.script-project-cover-placeholder:hover {
+  border-color: oklch(78% 0.22 292);
+  background: oklch(100% 0 0 / 0.14);
+}
+
+.script-project-cover-placeholder .project-cover-placeholder-icon {
+  width: 3.15rem;
+  height: 3.15rem;
+  background: linear-gradient(180deg, oklch(75% 0.23 296), oklch(62% 0.25 276));
+  font-size: 1.72rem;
+}
+
+.script-project-cover-placeholder strong {
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.script-project-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 3.75rem;
+  padding: 0.72rem 0.68rem;
+}
+
+.script-project-copy {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.script-project-copy h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.script-project-actions {
+  width: auto;
+  min-width: 0;
+}
+
+.script-project-menu-button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.45rem;
+  height: 2.05rem;
+  padding: 0 0.65rem;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 9999px;
+  background: oklch(100% 0 0 / 0.06);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.script-project-menu-button:hover {
+  background: oklch(100% 0 0 / 0.1);
+}
+
+.script-project-menu {
+  bottom: calc(100% + 0.6rem);
+  right: -0.25rem;
+  border-radius: 8px;
+}
+
 .script-record-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1965,6 +2121,343 @@
   justify-content: flex-end;
   gap: 0.6rem;
   flex-wrap: wrap;
+}
+
+.script-reader-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  min-height: calc(100dvh - 2.4rem);
+  padding: 1rem;
+  color: var(--text-primary);
+}
+
+.script-reader-topbar {
+  display: flex;
+  align-items: center;
+  min-height: 2.6rem;
+}
+
+.script-reader-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+  min-height: 2.6rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: oklch(100% 0 0 / 0.9);
+  padding: 0 0.35rem;
+  line-height: 1;
+  text-align: left;
+}
+
+.script-reader-back span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.7rem;
+}
+
+.script-reader-back strong {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.script-reader-back:hover {
+  background: oklch(100% 0 0 / 0.04);
+}
+
+.script-reader-layout {
+  display: grid;
+  grid-template-columns: minmax(13rem, 15rem) minmax(0, 1fr);
+  gap: 0.45rem;
+  min-height: 0;
+}
+
+.script-reader-sidebar,
+.script-reader-content {
+  min-height: 0;
+  border: 1px solid oklch(100% 0 0 / 0.04);
+  border-radius: 8px;
+  background: oklch(16% 0.012 270 / 0.96);
+}
+
+.script-reader-sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 0.85rem;
+  overflow: hidden;
+}
+
+.script-reader-sidebar-head,
+.script-reader-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2rem;
+}
+
+.script-reader-add,
+.script-reader-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #7b45ff 0%, #b55cf2 48%, #10c8f5 100%);
+  color: #fff;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.script-reader-add {
+  min-width: 4.25rem;
+  height: 1.9rem;
+  padding: 0 1rem;
+  font-size: 0.82rem;
+}
+
+.script-reader-save {
+  min-width: 5.4rem;
+  height: 2.35rem;
+  padding: 0 1.25rem;
+  box-shadow: 0 12px 26px rgb(77 57 255 / 0.22);
+  font-size: 0.95rem;
+}
+
+.script-reader-section-list {
+  display: grid;
+  align-content: start;
+  gap: 0.2rem;
+  overflow: auto;
+  padding-top: 0.55rem;
+}
+
+.script-reader-section-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.75rem;
+  align-items: center;
+  gap: 0;
+  border-radius: 8px;
+}
+
+.script-reader-section-row.active,
+.script-reader-section-row:hover {
+  background: oklch(100% 0 0 / 0.08);
+}
+
+.script-reader-section {
+  display: grid;
+  grid-template-columns: 1.35rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 2.65rem;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 0.55rem;
+  background: transparent;
+  color: oklch(90% 0.01 270 / 0.84);
+  font-weight: 800;
+  text-align: left;
+}
+
+.script-reader-section span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-reader-section.editing {
+  background: oklch(100% 0 0 / 0.08);
+}
+
+.script-reader-title-input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: oklch(100% 0 0 / 0.96);
+  font: inherit;
+  font-weight: 900;
+}
+
+.script-reader-section.active,
+.script-reader-section:hover {
+  background: transparent;
+  color: oklch(100% 0 0 / 0.96);
+}
+
+.script-reader-section-icon {
+  color: oklch(100% 0 0 / 0.72);
+}
+
+.script-reader-delete {
+  display: inline-grid;
+  align-self: center;
+  justify-self: end;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-right: 2px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: oklch(82% 0.02 270 / 0.76);
+  font-size: 0.95rem;
+  line-height: 0;
+  padding: 0;
+}
+
+.script-reader-delete:hover {
+  background: transparent;
+  color: oklch(70% 0.22 25);
+}
+
+.script-reader-content {
+  display: grid;
+  grid-template-rows: 3.25rem minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.script-reader-content-head {
+  gap: 1rem;
+  padding: 0 1.15rem;
+  border-bottom: 1px solid oklch(100% 0 0 / 0.03);
+  background: oklch(18% 0.012 270 / 0.92);
+}
+
+.script-reader-editor {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 1.35rem 1.35rem 2rem;
+  color: oklch(96% 0.005 270 / 0.92);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.75;
+}
+
+.script-reader-editor::selection,
+.script-reader-title-input::selection {
+  background: oklch(77% 0.14 305 / 0.35);
+}
+
+.script-reader-delete-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.58);
+  backdrop-filter: blur(14px);
+}
+
+.script-reader-delete-dialog {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "mark copy"
+    ". actions";
+  gap: 1.3rem 1.25rem;
+  width: min(52rem, calc(100vw - 2rem));
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 22px;
+  padding: 2.15rem 2.5rem;
+  background: oklch(15% 0.012 270 / 0.98);
+  box-shadow: 0 24px 90px rgb(0 0 0 / 0.5);
+}
+
+.script-reader-delete-close {
+  position: absolute;
+  top: 1.3rem;
+  right: 1.5rem;
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: oklch(100% 0 0 / 0.9);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.script-reader-delete-mark {
+  grid-area: mark;
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: 9999px;
+  background: #ff4352;
+  color: white;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.script-reader-delete-copy {
+  grid-area: copy;
+  padding-right: 2.75rem;
+}
+
+.script-reader-delete-copy h2 {
+  margin: 0 0 0.7rem;
+  color: oklch(98% 0 0);
+  font-size: 1.6rem;
+  font-weight: 900;
+}
+
+.script-reader-delete-copy p {
+  margin: 0;
+  color: oklch(78% 0.015 270);
+  font-weight: 700;
+}
+
+.script-reader-delete-actions {
+  grid-area: actions;
+  display: flex;
+  justify-content: end;
+  gap: 0.85rem;
+}
+
+.script-reader-delete-cancel,
+.script-reader-delete-confirm {
+  display: inline-flex;
+  min-width: 8rem;
+  height: 3.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.script-reader-delete-cancel {
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  background: transparent;
+  color: oklch(92% 0.01 270);
+}
+
+.script-reader-delete-confirm {
+  border: 0;
+  background: #ff4352;
+  color: #fff;
 }
 
 .script-credit-note {
@@ -18030,3 +18523,106 @@
   }
 }
 /* End halve storyboard attachment column width */
+
+/* Final storyboard video frame slots and quick lane layout */
+.episode-replica-layout.storyboard-mode .episode-replica-ref-strip.first-last-frame-slots {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 7.5rem) minmax(7.5rem, 7.5rem) auto;
+  align-items: stretch;
+  gap: 0.56rem;
+  width: 100%;
+  min-height: 3.2rem;
+  max-height: 3.2rem;
+  overflow: visible;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-slot {
+  position: relative;
+  display: block;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 3.2rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.82rem;
+  background: #252529;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-slot .episode-replica-ref-art {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: #2f3034;
+  overflow: hidden;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-slot .episode-replica-ref-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 0.18rem;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 900;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-placeholder b {
+  font-size: 0.88rem;
+  line-height: 1;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-placeholder em {
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-frame-quick-all {
+  align-self: stretch;
+  width: 4.7rem;
+  min-width: 4.7rem;
+  padding: 0 0.62rem;
+  border: 0;
+  border-radius: 0.82rem;
+  background: linear-gradient(180deg, #333438, #242529);
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset {
+  aspect-ratio: 1 / 1;
+  min-height: auto;
+}
+
+.episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset .thumb {
+  aspect-ratio: 1 / 1;
+  height: auto;
+}
+
+@media (min-width: 961px) and (max-height: 820px) {
+  .episode-replica-layout.storyboard-mode .episode-replica-ref-strip.first-last-frame-slots {
+    min-height: 3.2rem;
+    max-height: 3.2rem;
+  }
+
+  .episode-replica-layout.storyboard-mode .episode-replica-frame-slot {
+    min-height: 3.2rem;
+  }
+}
+/* End final storyboard video frame slots and quick lane layout */

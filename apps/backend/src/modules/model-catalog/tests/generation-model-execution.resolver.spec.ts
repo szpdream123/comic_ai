@@ -74,6 +74,28 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("maps first-last-frame generation to the provider first-last-frame task mode", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "seedance-2-0",
+      modelConfig: videoModelConfig({
+        modelCode: "seedance-2-0",
+        taskModes: ["video.first_last_frame_to_video"],
+        uiConfig: {
+          supportedModes: ["first_last_frame_to_video"],
+        },
+      }),
+      dispatchPolicy: undefined,
+      parameters: {
+        mode: "first-last-frame",
+        resolution: "720p",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.taskMode, "video.first_last_frame_to_video");
+  });
+
   it("resolves configured Aliyun Bailian video models to the video provider executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

@@ -26,6 +26,7 @@ import {
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
+  markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
   submitProviderRequest,
@@ -58,6 +59,10 @@ interface SeedancePollAdapter {
   poll(input: { externalRequestId: string }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
     videoUrl?: string;
+    redactedResponse: Record<string, unknown>;
+  }>;
+  cancel?(input: { externalRequestId: string }): Promise<{
+    status: "canceled" | "not_cancelable" | "failed";
     redactedResponse: Record<string, unknown>;
   }>;
 }
@@ -361,6 +366,8 @@ export async function expireSeedanceVideoPollJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
     now: Date;
   },
 ): Promise<{ status: "failed"; failureCode: "provider_poll_timeout" }> {
@@ -369,18 +376,27 @@ export async function expireSeedanceVideoPollJob(
     return { status: "failed", failureCode: "provider_poll_timeout" };
   }
 
-  const timeoutStatus = {
-    provider: "seedance",
-    externalRequestId: row.external_request_id,
-    failureCode: "provider_poll_timeout",
-  };
+  const timeoutStatus = await cancelSeedanceProviderTaskAfterPollTimeout(db, {
+    row,
+    env: input.env ?? process.env,
+    fetchImpl: input.fetchImpl,
+  });
   if (row.provider_request_id) {
-    await markProviderRequestFailed(db, {
-      providerRequestId: row.provider_request_id,
-      failureCode: "provider_poll_timeout",
-      redactedResponse: timeoutStatus,
-      now: input.now,
-    });
+    if (timeoutStatus.cancelStatus === "canceled") {
+      await markProviderRequestCanceled(db, {
+        providerRequestId: row.provider_request_id,
+        failureCode: "provider_poll_timeout",
+        redactedResponse: timeoutStatus,
+        now: input.now,
+      });
+    } else {
+      await markProviderRequestFailed(db, {
+        providerRequestId: row.provider_request_id,
+        failureCode: "provider_poll_timeout",
+        redactedResponse: timeoutStatus,
+        now: input.now,
+      });
+    }
   }
   await markSeedanceTaskResultUnknown(db, {
     row,
@@ -406,6 +422,59 @@ export async function expireSeedanceVideoPollJob(
   });
 
   return { status: "failed", failureCode: "provider_poll_timeout" };
+}
+
+async function cancelSeedanceProviderTaskAfterPollTimeout(
+  db: SqlDatabase,
+  input: {
+    row: SeedanceTaskRow;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+  },
+): Promise<Record<string, unknown> & { cancelStatus?: string }> {
+  const timeoutStatus = {
+    provider: "seedance",
+    externalRequestId: input.row.external_request_id,
+    failureCode: "provider_poll_timeout",
+  };
+
+  if (!input.row.external_request_id) {
+    return { ...timeoutStatus, cancelStatus: "skipped", cancelReason: "external_request_id_missing" };
+  }
+
+  try {
+    const snapshot = parseSnapshot(input.row.input_snapshot_json);
+    const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
+    const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+    const adapter = createProviderAdapterFromModelConfig(
+      modelConfig
+        ? {
+            providerProtocol: modelConfig.providerProtocol,
+            providerModel: modelConfig.providerModel,
+            providerConfig: modelConfig.providerConfig,
+          }
+        : fallbackSeedanceModelConfig(input.env),
+      input.env,
+      input.fetchImpl,
+    ) as unknown as SeedancePollAdapter;
+
+    if (typeof adapter.cancel !== "function") {
+      return { ...timeoutStatus, cancelStatus: "skipped", cancelReason: "provider_cancel_not_supported" };
+    }
+
+    const canceled = await adapter.cancel({ externalRequestId: input.row.external_request_id });
+    return {
+      ...timeoutStatus,
+      cancelStatus: canceled.status,
+      cancelResponse: canceled.redactedResponse,
+    };
+  } catch (error) {
+    return {
+      ...timeoutStatus,
+      cancelStatus: "failed",
+      cancelError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function finalizeSeedanceVideoArtifactJob(

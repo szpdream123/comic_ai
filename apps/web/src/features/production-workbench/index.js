@@ -14,7 +14,7 @@ import {
   EPISODE_WORKBENCH_FALLBACK_ASSET_IDS,
   renderPromptDock,
   renderStoryboardStageForPartialUpdate,
-} from "./episode-workbench-rebuilt.js";
+} from "./episode-workbench-rebuilt.js?video-category=1";
 import { resolveEpisodeWorkbenchPrompt, resolveStoryboardPromptForMode } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
@@ -582,7 +582,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       museBoardMode: "operation",
       museScopeMode: "storyboard",
       musePromptMenu: null,
-      videoGenerationMode: "first-frame",
+      videoGenerationMode: "reference-video",
       imageGenerationMode: "single-image",
       isSingleEpisodeModalOpen: false,
       singleEpisodeName: "",
@@ -609,6 +609,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       renameProjectName: "",
       renameProjectNotice: "",
       deleteProjectId: null,
+      scriptCardMenuId: null,
+      renameScriptId: null,
+      renameScriptProjectId: null,
+      renameScriptTitle: "",
+      renameScriptNotice: "",
+      deleteScriptId: null,
+      deleteScriptProjectId: null,
       selectedProjectCardId: null,
       isScriptModalOpen: false,
       isOriginalScriptModalOpen: false,
@@ -781,6 +788,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
+      actionTarget.matches?.('input[data-action="upload-script-cover"]') ||
       actionTarget.matches?.(".asset-import-file-input") ||
       actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
@@ -796,6 +804,47 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     });
+  });
+
+  root.addEventListener("dblclick", (event) => {
+    const eventTarget = resolveEventElement(event.target);
+    if (eventTarget?.matches?.('[data-role="script-reader-title-input"]')) {
+      return;
+    }
+    const sectionTarget = eventTarget?.closest?.('[data-role="script-reader-section-item"]');
+    if (!sectionTarget) {
+      return;
+    }
+    event.preventDefault();
+    const episodeId = sectionTarget.dataset.episodeId ?? "";
+    workbench.ui.selectedScriptEpisodeId = episodeId;
+    workbench.ui.editingScriptReaderSectionId = episodeId;
+    render(workbench);
+    queueMicrotask(() => {
+      const input = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-title-input"]') ?? [])]
+        .find((element) => element.dataset.episodeId === episodeId);
+      input?.focus?.();
+      input?.select?.();
+    });
+  });
+
+  root.addEventListener("keydown", (event) => {
+    const target = resolveEventElement(event.target);
+    if (!target?.matches?.('[data-role="script-reader-title-input"]')) {
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void commitScriptReaderTitle(workbench, target.dataset.episodeId ?? "", target.value);
+      workbench.ui.editingScriptReaderSectionId = "";
+      render(workbench);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      workbench.ui.editingScriptReaderSectionId = "";
+      render(workbench);
+    }
   });
 
   document.addEventListener("keydown", (event) => {
@@ -938,6 +987,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.('input[data-action="upload-script-cover"]')) {
+      const [file] = [...(target.files ?? [])];
+      if (!file) {
+        return;
+      }
+
+      const projectId = target.dataset.projectId ?? null;
+      const scriptId = target.dataset.scriptId ?? null;
+      target.value = "";
+      workbench.ui.scriptCardMenuId = null;
+      await runAction(workbench, "正在上传剧本封面...", async () => {
+        await uploadScriptCoverFile(workbench, file, { projectId, scriptId });
+      });
+      return;
+    }
+
     if (target?.matches?.('input[data-action="upload-project-cover"]')) {
       const [file] = [...(target.files ?? [])];
       console.log("[project-cover] input:change", {
@@ -1015,11 +1080,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (target?.matches?.(".episode-workbench-attachment-input")) {
       const files = [...(target.files ?? [])];
       const attachmentType = target.dataset.attachmentType ?? "image";
+      const frameTarget = target.dataset.frameTarget === "last" ? "last" : "first";
       target.value = "";
       if (!files.length) {
         return;
       }
-      handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files);
+      handleEpisodeWorkbenchAttachmentFiles(
+        workbench,
+        attachmentType,
+        isSingleFrameVideoInputMode(workbench) && attachmentType === "image" ? files.slice(0, 1) : files,
+        { frameTarget },
+      );
       return;
     }
 
@@ -1038,19 +1109,39 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
   });
 
+  root.addEventListener("dragstart", (event) => {
+    const target = resolveEventElement(event.target);
+    const assetButton = target?.closest?.("[data-drag-asset='episode-quick-asset']");
+    if (!assetButton) {
+      return;
+    }
+    const payload = JSON.stringify({
+      assetId: assetButton.dataset.assetId ?? "",
+      assetKind: assetButton.dataset.assetKind ?? "",
+    });
+    event.dataTransfer?.setData("application/x-comic-ai-asset", payload);
+    event.dataTransfer?.setData("text/plain", assetButton.dataset.assetId ?? "");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "copy";
+    }
+  });
+
   root.addEventListener("dragover", (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
     if (!zone) {
       return;
     }
     event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = zone.dataset.dropzone === "generation-frame" ? "copy" : "copy";
+    }
     zone.classList.add("is-dragging");
   });
 
   root.addEventListener("dragleave", (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
     if (!zone) {
       return;
     }
@@ -1063,12 +1154,30 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("drop", async (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
     if (!zone) {
       return;
     }
     event.preventDefault();
     zone.classList.remove("is-dragging");
+    if (zone.dataset.dropzone === "generation-frame") {
+      const handled = applyDraggedEpisodeAssetToGenerationFrame(workbench, event.dataTransfer, {
+        frameTarget: zone.dataset.frameTarget === "last" ? "last" : "first",
+      });
+      if (handled) {
+        renderEpisodeWorkbenchPromptDockOnly(workbench);
+      }
+      return;
+    }
+    if (zone.dataset.dropzone === "generation-image") {
+      const handled = applyDraggedEpisodeAssetToGenerationImage(workbench, event.dataTransfer, {
+        frameTarget: zone.dataset.frameTarget === "last" ? "last" : "first",
+      });
+      if (handled) {
+        renderEpisodeWorkbenchPromptDockOnly(workbench);
+      }
+      return;
+    }
     const files = [...(event.dataTransfer?.files ?? [])];
     if (!files.length) {
       return;
@@ -1154,6 +1263,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.("#script-input")) {
       workbench.ui.defaultScript = target.value;
+      return;
+    }
+
+    if (target?.matches?.('[data-role="script-reader-title-input"]')) {
+      const episodeId = target.dataset.episodeId ?? "";
+      workbench.ui.scriptReaderTitleDrafts = {
+        ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+        [episodeId]: target.value,
+      };
       return;
     }
 
@@ -1255,6 +1373,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#script-rename-title-input")) {
+      workbench.ui.renameScriptTitle = target.value;
+      if (workbench.ui.renameScriptNotice) {
+        workbench.ui.renameScriptNotice = "";
+      }
+      const counter = workbench.root.querySelector(".script-rename-count");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/50`;
+      }
+      const notice = workbench.root.querySelector(".rename-project-actions .modal-inline-status");
+      if (notice) {
+        notice.textContent = "";
+      }
+      return;
+    }
+
     if (target?.matches?.("#single-episode-script-input")) {
       workbench.ui.singleEpisodeScript = target.value;
       if (workbench.ui.singleEpisodeNotice) {
@@ -1320,6 +1454,44 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('[data-action="set-script-sort-order"]')) {
       workbench.ui.scriptSortOrder = target.value || "updated-desc";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-role="script-reader-editor"]')) {
+      const episodeId = target.dataset.episodeId ?? "";
+      workbench.ui.scriptReaderDrafts = {
+        ...(workbench.ui.scriptReaderDrafts ?? {}),
+        [episodeId]: target.value,
+      };
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="upload-script-cover"]')) {
+      return;
+    }
+
+    const scriptRecordTab = target?.closest?.('[data-action="select-script-record-tab"]');
+    if (scriptRecordTab) {
+      workbench.ui.selectedScriptId = scriptRecordTab.dataset.scriptId ?? "";
+      if (scriptRecordTab.dataset.openDetail === "true") {
+        workbench.ui.scriptDetailOpen = true;
+        workbench.ui.selectedScriptEpisodeId = "";
+      }
+      render(workbench);
+      return;
+    }
+
+    if (target?.closest?.('[data-action="close-script-detail"]')) {
+      workbench.ui.scriptDetailOpen = false;
+      workbench.ui.selectedScriptEpisodeId = "";
+      render(workbench);
+      return;
+    }
+
+    const scriptReaderSection = target?.closest?.('[data-action="select-script-reader-section"]');
+    if (scriptReaderSection) {
+      workbench.ui.selectedScriptEpisodeId = scriptReaderSection.dataset.episodeId ?? "";
       render(workbench);
       return;
     }
@@ -1527,6 +1699,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("focusout", async (event) => {
     const target = resolveEventElement(event.target);
+    if (target?.matches?.('[data-role="script-reader-title-input"]')) {
+      await commitScriptReaderTitle(workbench, target.dataset.episodeId ?? "", target.value);
+      workbench.ui.editingScriptReaderSectionId = "";
+      render(workbench);
+      return;
+    }
     if (target?.matches?.(".episode-replica-asset-desc-input")) {
       const assetId = target.dataset.assetId ?? "";
       const assetKind = target.dataset.assetKind ?? "character";
@@ -1863,6 +2041,7 @@ async function loadTeamSurface(workbench) {
 }
 
 function render(workbench, options = {}) {
+  const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -1878,6 +2057,7 @@ function render(workbench, options = {}) {
       selectedStoryboard,
     },
   });
+  restoreEpisodeWorkbenchScrollState(workbench.root, episodeScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
@@ -1887,6 +2067,37 @@ function render(workbench, options = {}) {
   }
   applyPostRenderEffects(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench);
+}
+
+function captureEpisodeWorkbenchScrollState(root) {
+  if (!root?.querySelector) {
+    return null;
+  }
+  return {
+    left: root.querySelector(".episode-replica-left")?.scrollTop ?? null,
+    stageBody: root.querySelector(".episode-replica-stage-body")?.scrollTop ?? null,
+    rightList: root.querySelector(".episode-replica-right-list")?.scrollTop ?? null,
+  };
+}
+
+function restoreEpisodeWorkbenchScrollState(root, scrollState) {
+  if (!root?.querySelector || !scrollState) {
+    return;
+  }
+  const pairs = [
+    [".episode-replica-left", scrollState.left],
+    [".episode-replica-stage-body", scrollState.stageBody],
+    [".episode-replica-right-list", scrollState.rightList],
+  ];
+  for (const [selector, scrollTop] of pairs) {
+    if (!Number.isFinite(Number(scrollTop))) {
+      continue;
+    }
+    const element = root.querySelector(selector);
+    if (element) {
+      element.scrollTop = Number(scrollTop);
+    }
+  }
 }
 
 function renderSingleEpisodeAiPreviewProgress(workbench) {
@@ -2060,6 +2271,7 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench) {
       lipSyncAudioItems: workbench.ui.lipSyncAudioItems ?? [],
     },
     mediaMode,
+    videoMode: workbench.ui.videoGenerationMode ?? "reference-video",
     attachments: workbench.ui.episodeWorkbenchAttachments ?? [],
     selectedAttachmentIds: workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [],
     generationPollingActive: Boolean(workbench.ui.generationPollingActive),
@@ -2155,8 +2367,128 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "set-episode-media-mode",
     "preview-export",
     "episode-fixed-result-action",
+    "select-script-record-tab",
+    "close-script-detail",
+    "select-script-reader-section",
+    "save-script-reader-section",
+    "add-script-reader-section",
+    "open-script-reader-delete",
+    "close-script-reader-delete",
+    "confirm-script-reader-delete",
   ]);
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
+    return;
+  }
+
+  if (action === "select-script-record-tab") {
+    workbench.ui.selectedScriptId = target.dataset.scriptId ?? "";
+    if (target.dataset.openDetail === "true") {
+      workbench.ui.scriptDetailOpen = true;
+      workbench.ui.selectedScriptEpisodeId = "";
+      await loadScriptReaderSections(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-script-detail") {
+    workbench.ui.scriptDetailOpen = false;
+    workbench.ui.selectedScriptEpisodeId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-script-reader-section") {
+    const episodeId = target.dataset.episodeId ?? "";
+    if (String(workbench.ui.selectedScriptEpisodeId ?? "") === String(episodeId)) {
+      return;
+    }
+    workbench.ui.selectedScriptEpisodeId = episodeId;
+    workbench.ui.editingScriptReaderSectionId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "add-script-reader-section") {
+    const currentSections = Array.isArray(workbench.ui.scriptReaderSections)
+      ? workbench.ui.scriptReaderSections
+      : [];
+    const nextIndex = currentSections.length + 1;
+    const draftSection = {
+      id: `script-reader-added-${Date.now()}-${nextIndex}`,
+      title: `新增剧情 ${nextIndex}`,
+      text: "请输入新的剧情文本。",
+    };
+    const projectId = resolveScriptReaderProjectId(workbench);
+    let nextSection = draftSection;
+    if (projectId && typeof workbench.api?.createScriptReaderSection === "function") {
+      const response = await workbench.api.createScriptReaderSection(projectId, {
+        title: draftSection.title,
+        body: draftSection.text,
+      });
+      nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
+    }
+    workbench.ui.scriptReaderSections = [...currentSections, nextSection];
+    workbench.ui.scriptReaderSectionsLoaded = true;
+    workbench.ui.scriptReaderDrafts = {
+      ...(workbench.ui.scriptReaderDrafts ?? {}),
+      [nextSection.id]: nextSection.text,
+    };
+    workbench.ui.scriptReaderTitleDrafts = {
+      ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+      [nextSection.id]: nextSection.title,
+    };
+    workbench.ui.selectedScriptEpisodeId = nextSection.id;
+    workbench.ui.editingScriptReaderSectionId = "";
+    render(workbench);
+    queueMicrotask(() => {
+      const editor = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-editor"]') ?? [])]
+        .find((element) => element.dataset.episodeId === nextSection.id);
+      editor?.focus?.();
+      editor?.select?.();
+    });
+    return;
+  }
+
+  if (action === "save-script-reader-section") {
+    const episodeId = target.dataset.episodeId ?? "";
+    const draftText = workbench.ui.scriptReaderDrafts?.[episodeId];
+    const editor = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-editor"]') ?? [])]
+      .find((element) => element.dataset.episodeId === episodeId);
+    const nextText = String(draftText ?? editor?.value ?? "");
+    saveScriptReaderDraftToState(workbench, episodeId, nextText);
+    workbench.ui.scriptReaderDrafts = {
+      ...(workbench.ui.scriptReaderDrafts ?? {}),
+      [episodeId]: nextText,
+    };
+    workbench.ui.toast = "剧本已保存。";
+    await persistScriptReaderSection(workbench, episodeId, { body: nextText });
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-script-reader-delete") {
+    workbench.ui.scriptReaderDeleteTargetId = target.dataset.episodeId ?? "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-script-reader-delete") {
+    workbench.ui.scriptReaderDeleteTargetId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-script-reader-delete") {
+    const sectionId = target.dataset.episodeId ?? workbench.ui.scriptReaderDeleteTargetId ?? "";
+    const projectId = resolveScriptReaderProjectId(workbench);
+    if (projectId && sectionId && typeof workbench.api?.deleteScriptReaderSection === "function") {
+      await workbench.api.deleteScriptReaderSection(projectId, sectionId);
+    }
+    removeScriptReaderSectionFromUi(workbench, sectionId);
+    workbench.ui.scriptReaderDeleteTargetId = "";
+    workbench.ui.toast = "已删除剧情。";
+    render(workbench);
     return;
   }
 
@@ -3666,7 +3998,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "quick-append-selected-asset") {
-    const result = appendSelectedEpisodeAssetToPrompt(workbench);
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, {
+      frameTarget: target.dataset.frameTarget ?? "",
+    });
     if (typeof window !== "undefined") {
       window.__lastQuickAppendDebug = {
         action,
@@ -4456,8 +4790,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-episode-workbench-attachment-picker") {
     const attachmentType = target.dataset.attachmentType ?? "image";
+    const frameTarget = target.dataset.frameTarget ?? "";
+    const frameTargetSelector = frameTarget
+      ? `[data-frame-target="${escapeAttributeSelector(frameTarget)}"]`
+      : "";
     const input = workbench.root.querySelector(
-      `.episode-workbench-attachment-input[data-attachment-type="${escapeAttributeSelector(attachmentType)}"]`,
+      `.episode-workbench-attachment-input[data-attachment-type="${escapeAttributeSelector(attachmentType)}"]${frameTargetSelector}`,
     );
     input?.click?.();
     return;
@@ -4515,14 +4853,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.videoMusicEnabled = false;
       workbench.ui.videoLipSyncEnabled = false;
     } else if (workbench.ui.episodeMediaMode === "video") {
-      workbench.ui.selectedModelId =
-        workbench.ui.videoGenerationMode === "reference-video"
-          ? resolveConfiguredVideoModelCode(workbench, "reference-video", "seedance-2-0-vip")
-          : workbench.ui.videoGenerationMode === "first-last-frame"
-            ? "hailuo-2-0"
-            : workbench.ui.videoGenerationMode === "edit-video"
-              ? "happy-horse"
-              : resolveConfiguredVideoModelCode(workbench, "first-frame", "seedance-i2v-pro");
+      workbench.ui.videoGenerationMode = workbench.ui.videoGenerationMode ?? "reference-video";
+      workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(
+        workbench,
+        workbench.ui.videoGenerationMode,
+        fallbackVideoModelCodeForMode(workbench.ui.videoGenerationMode),
+      );
+      applySelectedModelGenerationDefaults(workbench, "video");
     } else if (workbench.ui.episodeMediaMode === "lip-sync") {
       workbench.ui.selectedModelId = "vidu-q3-pro";
     }
@@ -4543,9 +4880,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-video-generation-mode") {
     workbench.ui.episodeMediaMode = "video";
-    workbench.ui.videoGenerationMode = target.dataset.mode ?? "first-frame";
+    workbench.ui.videoGenerationMode = target.dataset.mode ?? "reference-video";
     if (workbench.ui.videoGenerationMode === "first-last-frame") {
-      workbench.ui.selectedModelId = "hailuo-2-0";
+      workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "first-last-frame", "hailuo-2-0");
       workbench.ui.videoDurationSec = "6";
       workbench.ui.videoResolution = "1080p";
     } else if (workbench.ui.videoGenerationMode === "reference-video") {
@@ -4555,7 +4892,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "first-frame", "seedance-i2v-pro");
       applySelectedModelGenerationDefaults(workbench, "video");
     } else if (workbench.ui.videoGenerationMode === "edit-video") {
-      workbench.ui.selectedModelId = "happy-horse";
+      workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "edit-video", "happy-horse");
       workbench.ui.videoResolution = "1080p";
     }
     workbench.ui.isVideoModelMenuOpen = false;
@@ -5607,12 +5944,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-script-card-menu") {
+    const scriptId = target.dataset.scriptId ?? null;
+    workbench.ui.scriptCardMenuId =
+      workbench.ui.scriptCardMenuId === scriptId ? null : scriptId;
+    workbench.ui.projectCardMenuId = null;
+    workbench.ui.assetCardMenuId = null;
+    render(workbench);
+    return;
+  }
+
   if (action === "pick-project-cover") {
     if (target.tagName === "LABEL") {
       return;
     }
     const projectId = target.dataset.projectId ?? null;
     findProjectCoverInput(workbench.root, projectId)?.click();
+    return;
+  }
+
+  if (action === "pick-script-cover") {
+    if (target.tagName === "LABEL") {
+      return;
+    }
+    const scriptId = target.dataset.scriptId ?? null;
+    findScriptCoverInput(workbench.root, scriptId)?.click();
     return;
   }
 
@@ -6158,6 +6514,82 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "download-storyboard-image") {
     downloadStoryboardImage(workbench, target.dataset.storyboardId ?? "", target.dataset.imageId ?? "");
     render(workbench);
+    return;
+  }
+
+  if (action === "rename-script-card") {
+    const scriptId = target.dataset.scriptId ?? null;
+    const projectId = target.dataset.projectId ?? null;
+    const currentScript = findCurrentScriptCard(workbench, scriptId);
+    workbench.ui.renameScriptId = scriptId;
+    workbench.ui.renameScriptProjectId = projectId;
+    workbench.ui.renameScriptTitle =
+      currentScript?.title ??
+      workbench.state?.projectDetail?.project?.name ??
+      workbench.ui.projectDetail?.project?.name ??
+      "";
+    workbench.ui.renameScriptNotice = "";
+    workbench.ui.scriptCardMenuId = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-rename-script-modal") {
+    workbench.ui.renameScriptId = null;
+    workbench.ui.renameScriptProjectId = null;
+    workbench.ui.renameScriptTitle = "";
+    workbench.ui.renameScriptNotice = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-rename-script-card") {
+    const projectId = workbench.ui.renameScriptProjectId;
+    const scriptId = workbench.ui.renameScriptId;
+    const nextTitle = String(workbench.ui.renameScriptTitle ?? "").trim();
+    if (!nextTitle) {
+      workbench.ui.renameScriptNotice = "请输入剧本名称。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在重命名剧本...", async () => {
+      const result = await workbench.api.updateScriptCard(projectId, scriptId, {
+        title: nextTitle,
+      });
+      mergeScriptCardUpdate(workbench, result?.script);
+      workbench.ui.renameScriptId = null;
+      workbench.ui.renameScriptProjectId = null;
+      workbench.ui.renameScriptTitle = "";
+      workbench.ui.renameScriptNotice = "";
+    });
+    return;
+  }
+
+  if (action === "delete-script-card") {
+    workbench.ui.deleteScriptId = target.dataset.scriptId ?? null;
+    workbench.ui.deleteScriptProjectId = target.dataset.projectId ?? null;
+    workbench.ui.scriptCardMenuId = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-delete-script-modal") {
+    workbench.ui.deleteScriptId = null;
+    workbench.ui.deleteScriptProjectId = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-delete-script-card") {
+    const projectId = workbench.ui.deleteScriptProjectId;
+    const scriptId = workbench.ui.deleteScriptId;
+    await runAction(workbench, "正在删除剧本...", async () => {
+      await workbench.api.deleteScriptCard(projectId, scriptId);
+      clearDeletedScriptCard(workbench, scriptId);
+      workbench.ui.deleteScriptId = null;
+      workbench.ui.deleteScriptProjectId = null;
+      workbench.ui.scriptDetailOpen = false;
+    });
     return;
   }
 
@@ -6723,6 +7155,212 @@ function canUseRealEpisodeGenerationTask(workbench, mediaKind) {
     return typeof workbench.api?.createVideoTask === "function";
   }
   return false;
+}
+
+function isFirstFrameVideoMode(workbench) {
+  return (
+    (workbench.ui?.museScopeMode ?? "storyboard") === "storyboard" &&
+    workbench.ui?.episodeMediaMode === "video" &&
+    (workbench.ui?.videoGenerationMode ?? "reference-video") === "first-frame"
+  );
+}
+
+function isFirstLastFrameVideoMode(workbench) {
+  return (
+    (workbench.ui?.museScopeMode ?? "storyboard") === "storyboard" &&
+    workbench.ui?.episodeMediaMode === "video" &&
+    (workbench.ui?.videoGenerationMode ?? "reference-video") === "first-last-frame"
+  );
+}
+
+function isSingleFrameVideoInputMode(workbench) {
+  return isFirstFrameVideoMode(workbench) || isFirstLastFrameVideoMode(workbench);
+}
+
+function normalizeFirstFrameReference(item, fallbackId = "first-frame") {
+  if (!item) {
+    return null;
+  }
+  return {
+    id: item.id ?? fallbackId,
+    name: item.name ?? item.fileName ?? "首帧图片",
+    kind: "image",
+    type: "image",
+    fromQuickReference: Boolean(item.fromQuickReference),
+    url: item.url ?? item.src ?? item.preview ?? "",
+    src: item.src ?? item.url ?? item.preview ?? "",
+    preview: item.preview ?? item.url ?? item.src ?? "",
+    summary: item.summary ?? item.description ?? "已设置首帧图片",
+    uploadSessionId: item.uploadSessionId ?? null,
+    storageObjectId: item.storageObjectId ?? null,
+    assetVersionId: item.assetVersionId ?? null,
+    storageObjectKey: item.storageObjectKey ?? null,
+    mimeType: item.mimeType ?? null,
+  };
+}
+
+function setSingleFrameReference(workbench, item, { frameTarget = "first", toast = "" } = {}) {
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  const normalizedTarget = frameTarget === "last" ? "last" : "first";
+  const frame = normalizeFirstFrameReference(
+    item,
+    normalizedTarget === "last" ? "last-frame" : "first-frame",
+  );
+  if (!selectedStoryboard || !frame?.url) {
+    return false;
+  }
+  updateStoryboardGenerationState(workbench, selectedStoryboard.id, (state) => ({
+    ...state,
+    firstFrame: normalizedTarget === "first" ? frame : (state.firstFrame ?? null),
+    lastFrame: normalizedTarget === "last" ? frame : (state.lastFrame ?? null),
+    imageReference: null,
+    referenceUploads: [],
+    quickReferenceItems: [],
+  }));
+  workbench.ui.episodeWorkbenchAttachments = [];
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = [];
+  if (toast) {
+    workbench.ui.toast = toast;
+  }
+  return true;
+}
+
+function setSingleFirstFrameReference(workbench, item, options = {}) {
+  return setSingleFrameReference(workbench, item, { ...options, frameTarget: "first" });
+}
+
+function applyDraggedEpisodeAssetToGenerationFrame(workbench, dataTransfer, { frameTarget = "first" } = {}) {
+  const payload = readDraggedEpisodeAssetPayload(dataTransfer);
+  if (!payload?.assetId) {
+    return false;
+  }
+  const assetKind = payload.assetKind || findEpisodeAssetKindById(workbench, payload.assetId) || "character";
+  const asset = findEpisodeAssetById(workbench, assetKind, payload.assetId);
+  const preview = resolveEpisodeAssetPreviewUrl(asset);
+  if (!asset || !preview) {
+    workbench.ui.toast = "当前素材没有可用图片，无法作为帧图。";
+    return true;
+  }
+  setSingleFrameReference(workbench, {
+    id: `drag-ref:${frameTarget}:${asset.id ?? payload.assetId}`,
+    assetId: asset.id ?? payload.assetId,
+    kind: "image",
+    type: "image",
+    name: asset.name ?? (frameTarget === "last" ? "尾帧图" : "首帧图"),
+    description: asset.description ?? "",
+    summary: asset.description ?? (frameTarget === "last" ? "已拖入尾帧图" : "已拖入首帧图"),
+    preview,
+    url: preview,
+    src: preview,
+    fromQuickReference: true,
+  }, {
+    frameTarget,
+    toast: frameTarget === "last" ? "已拖入尾帧图。" : "已拖入首帧图。",
+  });
+  workbench.ui.activeGenerationFrameMenu = null;
+  return true;
+}
+
+function applyDraggedEpisodeAssetToGenerationImage(workbench, dataTransfer, { frameTarget = "first" } = {}) {
+  const payload = readDraggedEpisodeAssetPayload(dataTransfer);
+  if (!payload?.assetId) {
+    return false;
+  }
+  const assetKind = payload.assetKind || findEpisodeAssetKindById(workbench, payload.assetId) || "character";
+  const asset = findEpisodeAssetById(workbench, assetKind, payload.assetId);
+  const preview = resolveEpisodeAssetPreviewUrl(asset);
+  if (!asset || !preview) {
+    workbench.ui.toast = "当前素材没有可用图片，无法拖入。";
+    return true;
+  }
+  if (isSingleFrameVideoInputMode(workbench)) {
+    return applyDraggedEpisodeAssetToGenerationFrame(workbench, dataTransfer, { frameTarget });
+  }
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  if (!selectedStoryboard?.id) {
+    workbench.ui.toast = "请先选择分镜后再拖入参考图。";
+    return true;
+  }
+  const reference = {
+    id: `drag-ref:reference:${asset.id ?? payload.assetId}`,
+    assetId: asset.id ?? payload.assetId,
+    kind: "image",
+    type: "image",
+    name: asset.name ?? "参考图",
+    description: asset.description ?? "",
+    summary: asset.description ?? "已拖入参考图",
+    preview,
+    url: preview,
+    src: preview,
+    fromQuickReference: false,
+  };
+  updateStoryboardGenerationState(workbench, selectedStoryboard.id, (state) => {
+    const currentReferenceUploads = Array.isArray(state?.referenceUploads) ? state.referenceUploads : [];
+    const nextReferenceUploads = currentReferenceUploads.some((item) =>
+      item?.id === reference.id || item?.assetId === reference.assetId || item?.url === reference.url
+    )
+      ? currentReferenceUploads
+      : [reference, ...currentReferenceUploads];
+    return {
+      ...state,
+      referenceUploads: nextReferenceUploads,
+      imageReference: state?.imageReference ?? reference,
+    };
+  });
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = [
+    reference.id,
+    ...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter((id) => id !== reference.id),
+  ];
+  workbench.ui.toast = "已拖入参考图。";
+  return true;
+}
+
+function readDraggedEpisodeAssetPayload(dataTransfer) {
+  const raw = dataTransfer?.getData?.("application/x-comic-ai-asset") || "";
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          assetId: String(parsed.assetId ?? "").trim(),
+          assetKind: String(parsed.assetKind ?? "").trim(),
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+  const text = dataTransfer?.getData?.("text/plain") || "";
+  return text.trim() ? { assetId: text.trim(), assetKind: "" } : null;
+}
+
+function findEpisodeAssetKindById(workbench, assetId) {
+  const groups = resolvePromptMentionAssetBuckets(workbench);
+  for (const kind of ["character", "scene", "prop"]) {
+    if ((groups?.[kind] ?? []).some((item) => item.id === assetId || item.assetId === assetId)) {
+      return kind;
+    }
+  }
+  return "";
+}
+
+function resolveEpisodeAssetPreviewUrl(asset) {
+  return (
+    asset?.previewUrl ??
+    asset?.preview ??
+    asset?.fixedImageUrl ??
+    asset?.sourceUrl ??
+    asset?.publicUrl ??
+    asset?.url ??
+    asset?.src ??
+    null
+  );
 }
 
 function canProceedWithStoryboardGeneration(workbench) {
@@ -7827,7 +8465,7 @@ async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
 
 function resolveConfiguredVideoModelCode(workbench, mode, fallback) {
   const config = workbench.ui.episodeGenerationConfig ?? {};
-  const normalizedMode = mode === "first-frame" ? "image-to-video" : mode;
+  const normalizedMode = mode || "reference-video";
   const selectedModelCode = String(workbench.ui.selectedModelId ?? "").trim();
   const configuredDefault =
     typeof config.defaultVideoModelCode === "string" && config.defaultVideoModelCode.trim()
@@ -7847,6 +8485,13 @@ function resolveConfiguredVideoModelCode(workbench, mode, fallback) {
   }
   const configuredModel = models.find((model) => modelSupportsGenerationMode(model, normalizedMode));
   return configuredModel?.modelCode ?? fallback;
+}
+
+function fallbackVideoModelCodeForMode(mode) {
+  if (mode === "first-last-frame") return "hailuo-2-0";
+  if (mode === "edit-video") return "happy-horse";
+  if (mode === "first-frame") return "seedance-i2v-pro";
+  return "seedance-2-0-vip";
 }
 
 function resolveConfiguredImageModelCode(workbench, mode, fallback) {
@@ -7955,6 +8600,10 @@ function applySelectedModelGenerationDefaults(workbench, mediaKind = "") {
 }
 
 function modelSupportsGenerationMode(model, mode) {
+  const videoCategory = String(model?.videoCategory ?? "").trim();
+  if (videoCategory) {
+    return videoCategoryMatchesGenerationMode(videoCategory, mode);
+  }
   const supportedModes = Array.isArray(model?.supportedModes)
     ? model.supportedModes.map((item) => normalizeGenerationModeToken(item)).filter(Boolean)
     : [];
@@ -7965,45 +8614,53 @@ function modelSupportsGenerationMode(model, mode) {
   return supportedModes.some((supportedMode) => aliases.has(supportedMode));
 }
 
+function videoCategoryMatchesGenerationMode(videoCategory, mode) {
+  const category = normalizeGenerationModeToken(videoCategory);
+  const normalizedMode = normalizeGenerationModeToken(mode);
+  if (normalizedMode === "reference_video") return category === "reference";
+  if (normalizedMode === "first_frame" || normalizedMode === "image_to_video") return category === "first_frame";
+  if (normalizedMode === "first_last_frame") return category === "first_last_frame";
+  if (normalizedMode === "edit_video") return category === "video_edit";
+  return false;
+}
+
 function generationModeAliases(mode) {
   const normalized = normalizeGenerationModeToken(mode);
   const aliases = new Set([normalized]);
-  if (normalized === "first-frame") {
+  if (normalized === "first_frame") {
     aliases.add("first_frame");
     aliases.add("image-to-video");
     aliases.add("image_to_video");
     aliases.add("video_image_to_video");
-    aliases.add("video_text_to_video");
-    aliases.add("video");
-    aliases.add("video_generate");
-  } else if (normalized === "image-to-video") {
+    aliases.add("video_image");
+  } else if (normalized === "image_to_video") {
     aliases.add("first-frame");
     aliases.add("first_frame");
     aliases.add("image_to_video");
     aliases.add("video_image_to_video");
-    aliases.add("video_text_to_video");
-    aliases.add("video");
-    aliases.add("video_generate");
-  } else if (normalized === "reference-video") {
+    aliases.add("video_image");
+  } else if (normalized === "reference_video") {
     aliases.add("reference_video");
-    aliases.add("image-to-video");
-    aliases.add("image_to_video");
+    aliases.add("reference-image-to-video");
+    aliases.add("reference_image_to_video");
+    aliases.add("video_reference_image_to_video");
     aliases.add("video_reference_generate");
     aliases.add("video_reference_video");
-    aliases.add("video_image_to_video");
-    aliases.add("video");
-    aliases.add("video_generate");
-  } else if (normalized === "first-last-frame") {
+    aliases.add("video_reference");
+  } else if (normalized === "first_last_frame") {
     aliases.add("first_last_frame");
+    aliases.add("first-last-frame-to-video");
+    aliases.add("first_last_frame_to_video");
     aliases.add("video_first_last_frame");
-    aliases.add("video_image_to_video");
-    aliases.add("video");
-    aliases.add("video_generate");
-  } else if (normalized === "edit-video") {
+    aliases.add("video_first_last_frame_to_video");
+  } else if (normalized === "edit_video") {
     aliases.add("edit_video");
+    aliases.add("video-to-video");
+    aliases.add("video_to_video");
     aliases.add("video_edit_video");
-    aliases.add("video");
     aliases.add("video_edit");
+    aliases.add("video_video_to_video");
+    aliases.add("video_image_video_to_video");
   } else if (normalized === "single-image") {
     aliases.add("single_image");
     aliases.add("text_to_image");
@@ -8023,7 +8680,7 @@ function generationModeAliases(mode) {
 }
 
 function normalizeGenerationModeToken(mode) {
-  return String(mode ?? "").trim().replaceAll(".", "_");
+  return String(mode ?? "").trim().replace(/[.-]/g, "_");
 }
 
 function getEpisodeUploadLimits(workbench) {
@@ -8322,6 +8979,19 @@ export async function uploadProjectCoverFile(workbench, file, projectId) {
   return result;
 }
 
+export async function uploadScriptCoverFile(workbench, file, { projectId, scriptId }) {
+  const upload = await uploadLocalFile(workbench, file, "script-covers", {
+    projectId,
+    uploadLimits: getProjectCoverUploadLimits(),
+  });
+  const result = await workbench.api.updateScriptCard(projectId, scriptId, {
+    uploadSessionId: upload.uploadSessionId,
+    storageObjectId: upload.storageObjectId,
+  });
+  mergeScriptCardUpdate(workbench, result?.script);
+  return result;
+}
+
 function mergeProjectCoverUpdate(workbench, project) {
   if (!project?.id) {
     return;
@@ -8347,6 +9017,60 @@ function mergeProjectCoverUpdate(workbench, project) {
         project.coverStorageObjectId ?? workbench.state.project.coverStorageObjectId ?? null,
       updatedAt: project.updatedAt ?? workbench.state.project.updatedAt,
     };
+  }
+}
+
+function findCurrentScriptCard(workbench, scriptId) {
+  const candidates = [
+    workbench.state?.projectDetail?.script,
+    workbench.ui?.projectDetail?.script,
+    workbench.state?.script,
+  ];
+  return candidates.find((script) => script && String(script.id) === String(scriptId)) ?? null;
+}
+
+function mergeScriptCardUpdate(workbench, script) {
+  if (!script?.id) {
+    return;
+  }
+  const mergeIntoDetail = (detail) => {
+    if (!detail?.script || String(detail.script.id) !== String(script.id)) {
+      return detail;
+    }
+    return {
+      ...detail,
+      script: {
+        ...detail.script,
+        ...script,
+      },
+    };
+  };
+
+  workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
+  workbench.ui.projectDetail = mergeIntoDetail(workbench.ui.projectDetail);
+  if (workbench.state?.script && String(workbench.state.script.id) === String(script.id)) {
+    workbench.state.script = {
+      ...workbench.state.script,
+      ...script,
+    };
+  }
+}
+
+function clearDeletedScriptCard(workbench, scriptId) {
+  const clearDetail = (detail) => {
+    if (!detail?.script || String(detail.script.id) !== String(scriptId)) {
+      return detail;
+    }
+    return {
+      ...detail,
+      script: null,
+    };
+  };
+
+  workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
+  workbench.ui.projectDetail = clearDetail(workbench.ui.projectDetail);
+  if (workbench.state?.script && String(workbench.state.script.id) === String(scriptId)) {
+    workbench.state.script = null;
   }
 }
 
@@ -9231,18 +9955,24 @@ export function buildVideoGenerationPayload(workbench) {
     workbench.ui.selectedStoryboardId,
   );
   const generationState = selectedStoryboard?.generationState ?? createEmptyGenerationState();
-  const videoMode = workbench.ui.episodeMediaMode === "lip-sync" ? "lip-sync" : workbench.ui.videoGenerationMode;
-  const model = resolveConfiguredVideoModelCode(workbench, videoMode, workbench.ui.selectedModelId ?? "seedance-i2v-pro");
+  const videoMode = workbench.ui.episodeMediaMode === "lip-sync" ? "lip-sync" : (workbench.ui.videoGenerationMode ?? "reference-video");
+  const model = resolveConfiguredVideoModelCode(
+    workbench,
+    videoMode,
+    workbench.ui.selectedModelId ?? fallbackVideoModelCodeForMode(videoMode),
+  );
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     motionPrompt: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
     model,
     parameters: {
+      ...configuredParameters,
       mode: videoMode,
-      count: clampCount(workbench.ui.videoCount ?? 1, 1, 4),
-      resolution: workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p",
-      durationSec: Number(workbench.ui.videoDurationSec ?? 5),
-      aspectRatio: workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
+      count: clampCount(configuredParameters.count ?? workbench.ui.videoCount ?? 1, 1, 4),
+      resolution: configuredParameters.resolution ?? workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p",
+      durationSec: Number(configuredParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5),
+      aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
       references: selectedStoryboard?.references ?? [],
       quickReferences: generationState.quickReferenceItems ?? [],
       mentionReferences: generationState.mentionReferences ?? [],
@@ -9303,6 +10033,46 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
     getActiveStoryboards(workbench),
     workbench.ui.selectedStoryboardId,
   );
+  if (selectedStoryboard && isSingleFrameVideoInputMode(workbench)) {
+    if (!selectedAssetPreview) {
+      return { ok: false, reason: "missing-asset-preview", toast: "当前素材没有可用图片，无法作为帧图。" };
+    }
+    const generationState = selectedStoryboard.generationState ?? createEmptyGenerationState();
+    let frameTarget = "first";
+    if (isFirstLastFrameVideoMode(workbench)) {
+      if (options?.frameTarget === "last") {
+        frameTarget = "last";
+      } else if (options?.frameTarget === "first") {
+        frameTarget = "first";
+      } else if (generationState.firstFrame?.url && !generationState.lastFrame?.url) {
+        frameTarget = "last";
+      }
+    }
+    const firstFrameReference = {
+      id: `quick-ref:${frameTarget}-frame:${selectedAssetId ?? Date.now()}`,
+      assetId: selectedAssetId,
+      kind: "image",
+      type: "image",
+      name: selectedAssetName ?? (frameTarget === "last" ? "尾帧图" : "首帧图"),
+      description: nextPrompt,
+      summary: nextPrompt,
+      preview: selectedAssetPreview,
+      url: selectedAssetPreview,
+      src: selectedAssetPreview,
+      fromQuickReference: true,
+      previewMarkup: domSelectionContext?.selectedAssetPreviewMarkup ?? null,
+    };
+    setSingleFrameReference(workbench, firstFrameReference, {
+      frameTarget,
+      toast: frameTarget === "last" ? "已替换尾帧图。" : "已替换首帧图。",
+    });
+    workbench.ui.musePromptMenu = null;
+    return {
+      ok: true,
+      prompt: workbench.ui.prompt,
+      reference: firstFrameReference,
+    };
+  }
   const nextReference = {
     id: `quick-ref:${currentAssetKind}:${selectedAssetId ?? Date.now()}`,
     assetId: selectedAssetId,
@@ -9895,6 +10665,10 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     promptPreview: scopePrompt || storyboard?.description || "",
     quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
     attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
+    firstFrame: generationState.firstFrame ?? null,
+    lastFrame: generationState.lastFrame ?? null,
+    imageReference: generationState.imageReference ?? null,
+    referenceUploads: Array.isArray(generationState.referenceUploads) ? [...generationState.referenceUploads] : [],
     selectionContext: resolveEpisodeAssetSelectionContext(workbench),
     selectedModelId: resolveGenerationSubmissionModelCode(workbench, mediaKind),
     resolution: isVideo
@@ -10232,6 +11006,46 @@ function extractConversationEditImageItems(result) {
     .map((item, index) => normalizeConversationDraftAttachment(item, index, "image"));
 }
 
+function normalizeConversationEditFrameImage(item, target) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const url = item.url ?? item.src ?? item.previewUrl ?? item.preview ?? null;
+  if (!url) {
+    return null;
+  }
+  const label = target === "lastFrame" ? "尾帧图" : "首帧图";
+  return {
+    ...item,
+    id: item.id ?? item.assetId ?? item.fileId ?? item.storageObjectId ?? `edit-${target}:${url}`,
+    type: "image",
+    kind: "image",
+    name: item.name ?? item.label ?? label,
+    preview: item.preview ?? item.previewUrl ?? item.src ?? item.url ?? url,
+    previewUrl: item.previewUrl ?? item.preview ?? item.src ?? item.url ?? url,
+    url,
+    src: item.src ?? item.url ?? item.previewUrl ?? item.preview ?? url,
+  };
+}
+
+function extractConversationEditFrameImage(result, target) {
+  const candidates = [
+    result?.[target],
+    result?.generationState?.[target],
+    result?.generationState?.lastSubmission?.[target],
+    result?.parameters?.[target],
+    result?.payload?.parameters?.[target],
+    result?.result?.parameters?.[target],
+  ];
+  for (const candidate of candidates) {
+    const frame = normalizeConversationEditFrameImage(candidate, target);
+    if (frame) {
+      return frame;
+    }
+  }
+  return null;
+}
+
 function applyStoryboardConversationEditDraft(workbench, result, selectedStoryboard = null) {
   if (!result) {
     return;
@@ -10241,6 +11055,8 @@ function applyStoryboardConversationEditDraft(workbench, result, selectedStorybo
   setCurrentScopePrompt(workbench, prompt);
   const audioItems = extractConversationEditAudioItems(result);
   const imageItems = dedupeQuickReferenceItems(extractConversationEditImageItems(result));
+  const firstFrame = extractConversationEditFrameImage(result, "firstFrame");
+  const lastFrame = extractConversationEditFrameImage(result, "lastFrame");
   workbench.ui.episodeWorkbenchAttachments = audioItems;
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = audioItems.map((item) => item.id).filter(Boolean);
   if (storyboardId) {
@@ -10248,6 +11064,8 @@ function applyStoryboardConversationEditDraft(workbench, result, selectedStorybo
       ...generationState,
       prompt,
       quickReferenceItems: imageItems,
+      firstFrame: firstFrame ?? generationState.firstFrame ?? null,
+      lastFrame: lastFrame ?? generationState.lastFrame ?? null,
     }));
   }
 }
@@ -10886,15 +11704,21 @@ async function persistLipSyncStoryboardDraft(workbench, options = {}) {
 }
 
 const GENERATION_POLL_INTERVAL_MS = 25000;
+const IMAGE_GENERATION_CLIENT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
+const VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 function scheduleGenerationPolling(workbench, storyboardId, mediaKind, options = {}) {
   stopGenerationPolling(workbench);
   workbench.generationPollStartedAt = workbench.generationPollStartedAt ?? Date.now();
   const delayMs = options.immediate ? 0 : GENERATION_POLL_INTERVAL_MS;
+  const maxPollMs =
+    mediaKind === "video"
+      ? VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS
+      : IMAGE_GENERATION_CLIENT_POLL_TIMEOUT_MS;
   workbench.generationPollTimer = window.setTimeout(async () => {
     workbench.generationPollTimer = null;
     try {
-      if (Date.now() - workbench.generationPollStartedAt > 15 * 60 * 1000) {
+      if (Date.now() - workbench.generationPollStartedAt > maxPollMs) {
         workbench.ui.generationPollingActive = false;
         const targetKey = mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
         workbench.ui[targetKey] = {
@@ -10902,7 +11726,10 @@ function scheduleGenerationPolling(workbench, storyboardId, mediaKind, options =
           status: "failed",
           failureCode: "client_poll_timeout",
         };
-        workbench.ui.toast = "生成任务超过 15 分钟未完成，已标记为失败。";
+        workbench.ui.toast =
+          mediaKind === "video"
+            ? "视频生成已等待 3 小时，后台会尝试取消供应商任务并刷新最终状态。"
+            : "生成任务超过 15 分钟未完成，已标记为失败。";
         render(workbench);
         return;
       }
@@ -11852,6 +12679,187 @@ function removeDeletedShotFromState(workbench, shotId) {
   workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
 }
 
+function resolveScriptReaderProjectId(workbench) {
+  return (
+    workbench.state?.projectDetail?.project?.id ??
+    workbench.state?.project?.id ??
+    workbench.ui?.selectedProjectCardId ??
+    ""
+  );
+}
+
+function normalizeScriptReaderSection(section, fallback = {}) {
+  return {
+    ...fallback,
+    ...section,
+    id: String(section?.id ?? fallback.id ?? ""),
+    title: String(section?.title ?? fallback.title ?? "新增剧情"),
+    text: String(section?.body ?? section?.text ?? fallback.text ?? ""),
+  };
+}
+
+async function loadScriptReaderSections(workbench) {
+  const projectId = resolveScriptReaderProjectId(workbench);
+  if (!projectId || typeof workbench.api?.getScriptReaderSections !== "function") {
+    return;
+  }
+  const response = await workbench.api.getScriptReaderSections(projectId);
+  const sections = Array.isArray(response?.sections) ? response.sections : [];
+  workbench.ui.scriptReaderSections = sections.map((section) => normalizeScriptReaderSection(section));
+  workbench.ui.scriptReaderSectionsLoaded = true;
+  workbench.ui.scriptReaderDrafts = {
+    ...(workbench.ui.scriptReaderDrafts ?? {}),
+    ...Object.fromEntries(workbench.ui.scriptReaderSections.map((section) => [section.id, section.text])),
+  };
+  workbench.ui.scriptReaderTitleDrafts = {
+    ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+    ...Object.fromEntries(workbench.ui.scriptReaderSections.map((section) => [section.id, section.title])),
+  };
+  if (
+    workbench.ui.scriptReaderSections.length &&
+    !workbench.ui.scriptReaderSections.some((section) => section.id === workbench.ui.selectedScriptEpisodeId)
+  ) {
+    workbench.ui.selectedScriptEpisodeId = workbench.ui.scriptReaderSections[0].id;
+  }
+}
+
+async function persistScriptReaderSection(workbench, sectionId, patch) {
+  const projectId = resolveScriptReaderProjectId(workbench);
+  if (!projectId || !sectionId || typeof workbench.api?.updateScriptReaderSection !== "function") {
+    return null;
+  }
+  const response = await workbench.api.updateScriptReaderSection(projectId, sectionId, patch);
+  const section = response?.section ? normalizeScriptReaderSection(response.section) : null;
+  if (!section || !Array.isArray(workbench.ui.scriptReaderSections)) {
+    return section;
+  }
+  workbench.ui.scriptReaderSections = workbench.ui.scriptReaderSections.map((current) =>
+    current.id === section.id ? { ...current, ...section } : current,
+  );
+  return section;
+}
+
+function removeScriptReaderSectionFromUi(workbench, sectionId) {
+  const sections = Array.isArray(workbench.ui.scriptReaderSections)
+    ? workbench.ui.scriptReaderSections
+    : [];
+  const removedIndex = sections.findIndex((section) => section.id === sectionId);
+  const nextSections = sections.filter((section) => section.id !== sectionId);
+  workbench.ui.scriptReaderSections = nextSections;
+  workbench.ui.scriptReaderSectionsLoaded = true;
+  if (workbench.ui.selectedScriptEpisodeId === sectionId) {
+    workbench.ui.selectedScriptEpisodeId =
+      nextSections[Math.min(Math.max(removedIndex, 0), nextSections.length - 1)]?.id ?? "";
+  }
+  if (workbench.ui.scriptReaderDrafts && typeof workbench.ui.scriptReaderDrafts === "object") {
+    delete workbench.ui.scriptReaderDrafts[sectionId];
+  }
+  if (workbench.ui.scriptReaderTitleDrafts && typeof workbench.ui.scriptReaderTitleDrafts === "object") {
+    delete workbench.ui.scriptReaderTitleDrafts[sectionId];
+  }
+}
+
+function saveScriptReaderDraftToState(workbench, episodeId, nextText) {
+  if (!workbench?.state) {
+    return;
+  }
+
+  if (Array.isArray(workbench.ui.scriptReaderSections)) {
+    workbench.ui.scriptReaderSections = workbench.ui.scriptReaderSections.map((section) =>
+      section?.id === episodeId
+        ? {
+            ...section,
+            text: nextText,
+          }
+        : section,
+    );
+  }
+
+  const normalizeEpisode = (episode) =>
+    episode?.id === episodeId
+      ? {
+          ...episode,
+          scriptText: nextText,
+        }
+      : episode;
+  const projectDetail = workbench.state.projectDetail ?? null;
+  const nextProjectDetail = projectDetail
+    ? {
+        ...projectDetail,
+        script:
+          !Array.isArray(projectDetail.episodes) || !projectDetail.episodes.some((episode) => episode?.id === episodeId)
+            ? {
+                ...(projectDetail.script ?? {}),
+                inputText: nextText,
+              }
+            : projectDetail.script,
+        episodes: Array.isArray(projectDetail.episodes)
+          ? projectDetail.episodes.map(normalizeEpisode)
+          : projectDetail.episodes,
+      }
+    : projectDetail;
+
+  workbench.state = {
+    ...workbench.state,
+    script:
+      !Array.isArray(workbench.state.projectDetail?.episodes) ||
+      !workbench.state.projectDetail.episodes.some((episode) => episode?.id === episodeId)
+        ? {
+            ...(workbench.state.script ?? {}),
+            inputText: nextText,
+          }
+        : workbench.state.script,
+    projectDetail: nextProjectDetail,
+  };
+  workbench.ui.projectDetail = nextProjectDetail ?? workbench.ui.projectDetail;
+  workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
+}
+
+async function commitScriptReaderTitle(workbench, episodeId, nextTitle) {
+  const title = String(nextTitle ?? "").trim() || "未命名剧情";
+  workbench.ui.scriptReaderTitleDrafts = {
+    ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+    [episodeId]: title,
+  };
+
+  if (Array.isArray(workbench.ui.scriptReaderSections)) {
+    workbench.ui.scriptReaderSections = workbench.ui.scriptReaderSections.map((section) =>
+      section?.id === episodeId
+        ? {
+            ...section,
+            title,
+          }
+        : section,
+    );
+  }
+
+  const projectDetail = workbench.state?.projectDetail ?? null;
+  if (!projectDetail || !Array.isArray(projectDetail.episodes)) {
+    await persistScriptReaderSection(workbench, episodeId, { title });
+    return;
+  }
+
+  const nextProjectDetail = {
+    ...projectDetail,
+    episodes: projectDetail.episodes.map((episode) =>
+      episode?.id === episodeId
+        ? {
+            ...episode,
+            title,
+            name: title,
+          }
+        : episode,
+    ),
+  };
+  workbench.state = {
+    ...(workbench.state ?? {}),
+    projectDetail: nextProjectDetail,
+  };
+  workbench.ui.projectDetail = nextProjectDetail;
+  workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);
+  await persistScriptReaderSection(workbench, episodeId, { title });
+}
+
 async function deleteStoryboardCard(workbench, storyboardId) {
   if (!storyboardId) {
     return;
@@ -12004,6 +13012,9 @@ function syncWorkbenchRouteState(workbench, hash) {
   }
   if (token === "home" || token === "script" || token === "library" || token === "tools") {
     workbench.ui.activeNavTab = token;
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.selectedEpisodeId = null;
+    workbench.ui.episodeWorkbenchContext = null;
     if (token === "library") {
       workbench.ui.libraryTeamRoute = "assets";
     }
@@ -12011,6 +13022,9 @@ function syncWorkbenchRouteState(workbench, hash) {
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
     workbench.ui.activeNavTab = "team";
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.selectedEpisodeId = null;
+    workbench.ui.episodeWorkbenchContext = null;
     workbench.ui.libraryTeamRoute = token.startsWith("team-dashboard") ? "team-dashboard" : "team";
     workbench.ui.teamDashboardTab = deriveInitialTeamDashboardTab(token);
     return;
@@ -13560,13 +14574,14 @@ async function saveStoryboardDescriptionInline(workbench, storyboardId, value) {
   render(workbench);
 }
 
-function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files) {
+function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files, options = {}) {
   void runAction(
     workbench,
     `正在上传${attachmentType === "audio" ? "音频" : "图片"}附件...`,
     async () => {
       const nextItems = [];
-      for (const [index, file] of files.entries()) {
+      const uploadFiles = isSingleFrameVideoInputMode(workbench) && attachmentType === "image" ? files.slice(0, 1) : files;
+      for (const [index, file] of uploadFiles.entries()) {
         const upload = await uploadLocalFile(workbench, file, `episode-attachments/${attachmentType}`);
         const bound = attachmentType === "audio"
           ? null
@@ -13591,6 +14606,15 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files)
           storageObjectKey: upload.storageObjectKey ?? null,
           mimeType: upload.mimeType ?? file.type ?? null,
         });
+      }
+      if (isSingleFrameVideoInputMode(workbench) && attachmentType === "image") {
+        const firstImage = nextItems.find((item) => item.type === "image");
+        const frameTarget = isFirstLastFrameVideoMode(workbench) && options.frameTarget === "last" ? "last" : "first";
+        setSingleFrameReference(workbench, firstImage, {
+          frameTarget,
+          toast: frameTarget === "last" ? "已替换尾帧图。" : "已替换首帧图。",
+        });
+        return;
       }
       workbench.ui.episodeWorkbenchAttachments = [
         ...nextItems,
@@ -14915,6 +15939,15 @@ export function findProjectCoverInput(root, projectId) {
   );
 }
 
+export function findScriptCoverInput(root, scriptId) {
+  if (!scriptId) {
+    return null;
+  }
+  return root.querySelector(
+    `input[data-action="upload-script-cover"][data-script-id="${scriptId}"]`,
+  );
+}
+
 function getInputValue(root, selector, fallback) {
   const value = root.querySelector(selector)?.value?.trim();
   return value || fallback;
@@ -15833,7 +16866,7 @@ function applyStoryboardVideoToolAction(workbench, action, storyboardId, videoId
 
   workbench.ui.episodeMediaMode = "video";
   workbench.ui.videoGenerationMode = "edit-video";
-  workbench.ui.selectedModelId = "happy-horse";
+  workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "edit-video", "happy-horse");
   if (action === "storyboard-video-upscale") {
     workbench.ui.videoResolution = "2K";
     workbench.ui.toast = "已切换到高清视频处理配置。";

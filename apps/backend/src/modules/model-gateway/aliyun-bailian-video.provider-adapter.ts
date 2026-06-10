@@ -155,25 +155,28 @@ function buildCreateTaskPayload(
     payload.parameters && typeof payload.parameters === "object"
       ? (payload.parameters as Record<string, unknown>)
       : {};
-  const media = [
+  const media = dedupeStrings([
     readString(payload.firstFrameUrl),
     readString(payload.imageUrl),
     readString(payload.referenceImageUrl),
     ...readMediaUrlArray(payload.referenceImages),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
-  ].filter((item): item is string => Boolean(item));
+  ].filter((item): item is string => Boolean(item)));
 
   return {
     model: model ?? defaultModel,
     input: {
       prompt: readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "",
-      media,
+      media: media.map((url) => ({
+        type: "reference_image",
+        url,
+      })),
     },
     parameters: {
       ...optionalPayloadField("ratio", readString(parameters.aspectRatio)),
       ...optionalPayloadField("duration", readInteger(parameters.durationSec)),
-      ...optionalPayloadField("resolution", readString(parameters.resolution)),
+      ...optionalPayloadField("resolution", normalizeResolution(parameters.resolution)),
       ...optionalPayloadField("seed", readInteger(parameters.seed)),
       ...optionalPayloadField("watermark", readBoolean(parameters.watermark)),
     },
@@ -262,6 +265,22 @@ function readInteger(value: unknown) {
 
 function readBoolean(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function dedupeStrings(values: string[]) {
+  return [...new Set(values)];
+}
+
+function normalizeResolution(value: unknown) {
+  const resolution = readString(value);
+  if (!resolution) {
+    return undefined;
+  }
+  const normalized = resolution.toUpperCase();
+  if (normalized === "720P" || normalized === "1080P") {
+    return normalized;
+  }
+  return resolution;
 }
 
 async function readProviderError(response: Response) {

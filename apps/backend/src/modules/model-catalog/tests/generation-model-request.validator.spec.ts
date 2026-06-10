@@ -164,6 +164,29 @@ describe("generation model request validator", () => {
       });
     });
   });
+
+  it("accepts first-last-frame mode when the configured task mode uses provider to-video naming", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "seedance-2-0",
+        modelConfig: videoModelConfig({
+          taskModes: ["video.first_last_frame_to_video"],
+          uiConfig: {
+            supportedModes: ["first_last_frame_to_video"],
+          },
+        }),
+        parameters: {
+          mode: "first-last-frame",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+          count: 1,
+        },
+        prompt: "animate from first frame to last frame",
+      });
+    });
+  });
 });
 
 function assertValidationError(callback: () => void, code: string) {

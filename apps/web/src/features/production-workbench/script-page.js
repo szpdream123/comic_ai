@@ -1,33 +1,24 @@
+import { resolveApiUrl } from "../../shared/creator-api.js";
 import { disabled, escapeHtml } from "./markup.js";
 
-const SCRIPT_ENTRY_CARDS = [
+const SCRIPT_ENTRY_GROUPS = [
   {
     group: "小说改编剧本",
-    title: "从分析开始改编小说",
-    body: "上传或粘贴小说后，先分析世界观、角色与章节结构，再进入剧本规划。",
-    action: "open-script-modal",
+    body: "专家级编剧知识库，精细化改编全程可控，最高支持120万字",
     tone: "warm",
-  },
-  {
-    group: "小说改编剧本",
-    title: "直接开始改编小说",
-    body: "跳过预分析，从已有小说文本直接进入剧本改编草稿。",
-    action: "open-script-modal",
-    tone: "warm",
+    actions: [
+      { title: "从分析开始改编小说", action: "open-script-modal" },
+      { title: "直接开始改编小说", action: "open-script-modal" },
+    ],
   },
   {
     group: "AI 创作剧本",
-    title: "从故事灵感创作剧本",
-    body: "填写受众、题材、集数与灵感，让系统生成规划方案。",
-    action: "open-original-script-modal",
+    body: "AI原创剧本限时特惠，从灵感到成稿全程可控，百元完成百集长剧本。",
     tone: "violet",
-  },
-  {
-    group: "AI 创作剧本",
-    title: "从剧本创作衍生剧本",
-    body: "基于既有剧本延展番外、续集或不同平台版本。",
-    action: "open-original-script-modal",
-    tone: "violet",
+    actions: [
+      { title: "从故事灵感创作剧本", action: "open-original-script-modal", badge: true },
+      { title: "从剧本创作衍生剧本", action: "open-original-script-modal", badge: true },
+    ],
   },
 ];
 
@@ -58,11 +49,25 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
     filterScriptCards(scriptCards, { searchQuery, typeFilter }),
     sortOrder,
   );
+  const selectedScriptId = String(ui.selectedScriptId ?? "");
+  const selectedCard =
+    filteredCards.find((card) => String(card.id) === selectedScriptId) ?? filteredCards[0] ?? null;
+
+  if (ui.scriptDetailOpen && selectedCard) {
+    return renderScriptReaderPage({
+      card: selectedCard,
+      projectRecord,
+      scriptRecord,
+      episodes,
+      ui,
+      selectedEpisodeId: ui.selectedScriptEpisodeId,
+    });
+  }
 
   return `
     <section class="script-management-page" aria-label="剧本管理">
       <section class="script-entry-grid" aria-label="剧本创建入口">
-        ${SCRIPT_ENTRY_CARDS.map(renderScriptEntryCard).join("")}
+        ${SCRIPT_ENTRY_GROUPS.map(renderScriptEntryGroup).join("")}
       </section>
 
       <section class="script-library-panel" aria-label="我的剧本">
@@ -97,9 +102,7 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
         </header>
         ${
           filteredCards.length
-            ? `<div class="script-record-list" aria-label="剧本记录列表">
-                ${filteredCards.map(renderScriptRecordCard).join("")}
-              </div>`
+            ? renderScriptRecordTabs(filteredCards, selectedCard, ui)
             : `<div class="script-empty-state">
                 <strong>${searchQuery || typeFilter !== "all" ? "未找到匹配剧本" : "暂无剧本"}</strong>
                 <span>${
@@ -111,36 +114,368 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
         }
       </section>
 
-      <aside class="script-credit-note" aria-label="积分详情">
-        <strong>积分详情</strong>
-        <span>原创规划预计消耗 14 积分；真实生成接入后会按集数和后续任务动态计算。</span>
-      </aside>
+      ${renderScriptRenameModal(ui)}
+      ${renderScriptDeleteModal({ ui, cards: scriptCards })}
       <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已进入剧本管理。")}</p>
     </section>
   `;
 }
 
 function buildScriptCards({ projectRecord, scriptRecord, episodes, shots }) {
-  if (!projectRecord && !scriptRecord) {
+  if (!scriptRecord || scriptRecord.deletedAt) {
     return [];
   }
 
   const typeKey = inferScriptType(scriptRecord?.inputText);
+  const status = normalizeScriptStatus(scriptRecord?.status, projectRecord?.phase, shots.length);
   return [{
-    id: scriptRecord?.id ?? projectRecord?.id ?? "script-primary",
-    projectId: projectRecord?.id ?? projectRecord?.projectId ?? null,
-    title: projectRecord?.name ?? "未命名剧本",
+    id: scriptRecord?.id ?? "script-primary",
+    projectId: projectRecord?.id ?? scriptRecord?.projectId ?? null,
+    title: scriptRecord?.title ?? projectRecord?.name ?? "未命名剧本",
     typeKey,
     typeLabel: scriptTypeLabel(typeKey),
-    status: normalizeScriptStatus(scriptRecord?.status, projectRecord?.phase, shots.length),
+    status,
     episodeCount: episodes.length,
     shotCount: shots.length,
-    updatedLabel: formatScriptTimestamp(scriptRecord?.updatedAt ?? projectRecord?.updatedAt ?? null),
+    coverImageUrl: resolveScriptCoverImage(scriptRecord),
     updatedAtValue: toTimestamp(scriptRecord?.updatedAt ?? projectRecord?.updatedAt ?? null),
     summary: summarizeScript(scriptRecord?.inputText),
-    canParse: Boolean(projectRecord?.id && scriptRecord?.inputText && shots.length === 0),
-    canOpenWorkspace: Boolean(projectRecord?.id),
+    rawText: scriptRecord?.inputText ?? "",
   }];
+}
+
+function renderScriptEntryGroup(group) {
+  return `
+    <article class="script-entry-card ${group.tone}">
+      <div class="script-entry-copy">
+        <h2>${escapeHtml(group.group)}</h2>
+        <p>${escapeHtml(group.body)}</p>
+      </div>
+      <div class="script-entry-actions">
+        ${group.actions.map(renderScriptEntryAction).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderScriptEntryAction(card) {
+  return `
+    <button type="button" data-action="${escapeHtml(card.action)}">
+      ${escapeHtml(card.title)}
+      ${card.badge ? '<b class="script-entry-badge">全新功能，限时特惠</b>' : ""}
+    </button>
+  `;
+}
+
+function renderScriptRecordTabs(cards, selectedCard, ui = {}) {
+  const selectedId = String(selectedCard?.id ?? cards[0]?.id ?? "");
+  return `
+    <div class="script-cover-tabs" aria-label="剧本选项卡">
+      <div class="script-cover-tablist" role="tablist" aria-label="我的剧本">
+        ${cards.map((card) => renderScriptRecordTab(card, selectedId, ui)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderScriptRecordTab(card, selectedId, ui = {}) {
+  const cardId = String(card.id ?? "");
+  const projectId = String(card.projectId ?? "");
+  const scriptId = String(card.id ?? "");
+  const selected = cardId === selectedId;
+  const coverInputId = `script-cover-input-${escapeHtml(scriptId || cardId)}`;
+  const menuOpen = ui.scriptCardMenuId === scriptId;
+  return `
+    <article
+      id="script-tab-${escapeHtml(cardId)}"
+      class="script-project-card ${selected ? "active" : ""}"
+      data-action="select-script-record-tab"
+      data-script-id="${escapeHtml(cardId)}"
+      data-open-detail="true"
+      data-project-id="${escapeHtml(projectId)}"
+      aria-selected="${selected ? "true" : "false"}"
+    >
+      <div
+        class="script-project-poster ${card.coverImageUrl ? "has-cover" : "needs-cover"}"
+        data-action="pick-script-cover"
+        data-project-id="${escapeHtml(projectId)}"
+        data-script-id="${escapeHtml(scriptId)}"
+      >
+        <div class="script-project-cover-placeholder">
+          <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
+          <strong>上传封面</strong>
+        </div>
+        <img class="script-project-cover" src="${escapeHtml(resolveScriptProjectCoverSrc(card))}" alt="${escapeHtml(card.title)} 封面" loading="lazy" />
+      </div>
+      <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}" />
+      <div class="script-project-meta">
+        <div class="script-project-copy">
+          <h2 title="${escapeHtml(card.title)}">${escapeHtml(truncateScriptCardTitle(card.title))}</h2>
+        </div>
+        <div class="project-card-actions script-project-actions">
+          <button
+            class="script-project-menu-button"
+            type="button"
+            data-action="toggle-script-card-menu"
+            data-project-id="${escapeHtml(projectId)}"
+            data-script-id="${escapeHtml(scriptId)}"
+            aria-label="打开剧本操作"
+            aria-expanded="${menuOpen ? "true" : "false"}"
+          >
+            <span aria-hidden="true">编辑</span>
+          </button>
+          ${menuOpen ? renderScriptProjectCardMenu({ projectId, scriptId }) : ""}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function truncateScriptCardTitle(title) {
+  const chars = [...String(title ?? "").trim()];
+  return chars.length > 5 ? `${chars.slice(0, 5).join("")}...` : chars.join("");
+}
+
+function renderScriptProjectCardMenu({ projectId, scriptId }) {
+  const menuCoverInputId = `script-cover-menu-input-${escapeHtml(scriptId || projectId)}`;
+  return `
+    <div class="project-card-menu script-project-menu" role="menu" aria-label="剧本操作">
+      <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}" />
+      <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">上传封面</label>
+      <button class="project-card-menu-item" type="button" data-action="rename-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">重命名</button>
+      <button class="project-card-menu-item danger" type="button" data-action="delete-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">删除</button>
+    </div>
+  `;
+}
+
+function renderScriptRenameModal(ui = {}) {
+  if (!ui.renameScriptId) {
+    return "";
+  }
+  const value = String(ui.renameScriptTitle ?? "");
+  return `
+    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名剧本">
+      <div class="rename-project-modal">
+        <div class="rename-project-head">
+          <h2>重命名</h2>
+          <button class="modal-close" type="button" data-action="close-rename-script-modal" aria-label="关闭">×</button>
+        </div>
+        <label class="rename-project-field">
+          <input
+            id="script-rename-title-input"
+            type="text"
+            maxlength="50"
+            value="${escapeHtml(value)}"
+            placeholder="请输入剧本名称"
+          />
+          <span class="rename-project-count script-rename-count">${[...value].length}/50</span>
+        </label>
+        <div class="rename-project-actions">
+          <p class="modal-inline-status">${escapeHtml(ui.renameScriptNotice ?? "")}</p>
+          <div class="rename-project-button-row">
+            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-script-modal">取消</button>
+            <button class="primary-action rename-save-button" type="button" data-action="confirm-rename-script-card">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderScriptDeleteModal({ ui = {}, cards = [] } = {}) {
+  if (!ui.deleteScriptId) {
+    return "";
+  }
+  const script = cards.find((card) => String(card.id) === String(ui.deleteScriptId));
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除剧本">
+      <div class="delete-project-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>所选剧本将被删除，确定删除${script?.title ? `“${escapeHtml(script.title)}”` : ""}吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-script-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-script-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-delete-script-card">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderScriptReaderPage({ card, projectRecord, scriptRecord, episodes = [], ui = {}, selectedEpisodeId = "" }) {
+  const sections = buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes, ui });
+  const selectedSection =
+    sections.find((section) => String(section.id) === String(selectedEpisodeId)) ?? sections[0];
+  const selectedText = selectedSection?.text ?? card.summary;
+  return `
+    <section class="script-reader-page" aria-label="剧本详情">
+      <header class="script-reader-topbar">
+        <button class="script-reader-back" type="button" data-action="close-script-detail" aria-label="返回">
+          <span aria-hidden="true">&lsaquo;</span>
+          <strong>${escapeHtml(card.title)}</strong>
+        </button>
+      </header>
+      <section class="script-reader-layout">
+        <aside class="script-reader-sidebar" aria-label="剧本目录">
+          <div class="script-reader-sidebar-head">
+            <button class="script-reader-add" type="button" data-action="add-script-reader-section">新增</button>
+            <span aria-hidden="true">☰</span>
+          </div>
+          <div class="script-reader-section-list">
+            ${sections.map((section) => renderScriptReaderSectionItem(section, selectedSection?.id, ui)).join("")}
+          </div>
+        </aside>
+        <article class="script-reader-content">
+          <header class="script-reader-content-head">
+            <strong>${escapeHtml(selectedSection?.title ?? "剧本试读")}</strong>
+            <button
+              class="script-reader-save"
+              type="button"
+              data-action="save-script-reader-section"
+              data-episode-id="${escapeHtml(selectedSection?.id ?? "")}"
+            >保存</button>
+          </header>
+          <textarea
+            class="script-reader-editor"
+            data-role="script-reader-editor"
+            data-episode-id="${escapeHtml(selectedSection?.id ?? "")}"
+            aria-label="剧本正文"
+            spellcheck="false"
+          >${escapeHtml(selectedText)}</textarea>
+        </article>
+      </section>
+      ${renderScriptReaderDeleteDialog(sections, ui)}
+    </section>
+  `;
+}
+
+function buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes, ui = {} }) {
+  const draftMap = ui.scriptReaderDrafts && typeof ui.scriptReaderDrafts === "object" ? ui.scriptReaderDrafts : {};
+  const titleMap =
+    ui.scriptReaderTitleDrafts && typeof ui.scriptReaderTitleDrafts === "object"
+      ? ui.scriptReaderTitleDrafts
+      : {};
+  const applyDraft = (section) => {
+    const draft = draftMap[String(section.id)];
+    const titleDraft = titleMap[String(section.id)];
+    return {
+      ...section,
+      title: typeof titleDraft === "string" ? titleDraft : section.title,
+      text: typeof draft === "string" ? draft : section.text,
+    };
+  };
+  const sourceEpisodes = Array.isArray(episodes) ? episodes : [];
+  const customSections = Array.isArray(ui.scriptReaderSections)
+    ? ui.scriptReaderSections.map((section, index) => applyDraft({
+        id: section.id ?? `script-reader-added-${index + 1}`,
+        title: section.title ?? `新增剧情 ${index + 1}`,
+        shortTitle: section.shortTitle ?? `新增${index + 1}`,
+        text: section.text ?? section.body ?? "请输入新的剧情文本。",
+        index,
+        custom: true,
+      }))
+    : [];
+  if (ui.scriptReaderSectionsLoaded) {
+    return customSections;
+  }
+  const baseSections = sourceEpisodes.length
+    ? sourceEpisodes.map((episode, index) => applyDraft({
+      id: episode.id ?? `episode-${index + 1}`,
+      title: episode.title ?? episode.name ?? `第${index + 1}集`,
+      shortTitle: `第${index + 1}集`,
+      text: episode.scriptText ?? episode.summary ?? episode.description ?? scriptRecord?.inputText ?? card.summary,
+      index,
+    }))
+    : [applyDraft({
+        id: scriptRecord?.id ?? projectRecord?.id ?? "script-reader-primary",
+        title: card.title || "第1卡：剧本试读",
+        shortTitle: "第1集",
+        text: scriptRecord?.inputText ?? card.summary,
+        index: 0,
+      })];
+  return [
+    ...baseSections,
+    ...customSections.map((section, index) => ({
+      ...section,
+      index: baseSections.length + index,
+    })),
+  ];
+}
+
+function renderScriptReaderSectionItem(section, selectedId, ui = {}) {
+  const selected = String(section.id) === String(selectedId);
+  const editing = String(ui.editingScriptReaderSectionId ?? "") === String(section.id);
+  if (editing) {
+    return `
+      <div
+        class="script-reader-section editing ${selected ? "active" : ""}"
+        data-role="script-reader-section-item"
+        data-episode-id="${escapeHtml(section.id)}"
+      >
+        <span class="script-reader-section-icon" aria-hidden="true">▤</span>
+        <input
+          class="script-reader-title-input"
+          type="text"
+          value="${escapeHtml(section.title)}"
+          data-role="script-reader-title-input"
+          data-episode-id="${escapeHtml(section.id)}"
+          aria-label="编辑剧情标题"
+        />
+      </div>
+    `;
+  }
+  return `
+    <div class="script-reader-section-row ${selected ? "active" : ""}">
+      <button
+        class="script-reader-section ${selected ? "active" : ""}"
+        type="button"
+        data-action="select-script-reader-section"
+        data-role="script-reader-section-item"
+        data-episode-id="${escapeHtml(section.id)}"
+      >
+        <span class="script-reader-section-icon" aria-hidden="true">▤</span>
+        <span data-role="script-reader-section-title" data-episode-id="${escapeHtml(section.id)}">${escapeHtml(section.title)}</span>
+      </button>
+      <button
+        class="script-reader-delete"
+        type="button"
+        data-action="open-script-reader-delete"
+        data-episode-id="${escapeHtml(section.id)}"
+        aria-label="删除 ${escapeHtml(section.title)}"
+        title="删除"
+      >🗑</button>
+    </div>
+  `;
+}
+
+function renderScriptReaderDeleteDialog(sections, ui = {}) {
+  const targetId = String(ui.scriptReaderDeleteTargetId ?? "");
+  if (!targetId) {
+    return "";
+  }
+  const target = sections.find((section) => String(section.id) === targetId);
+  const title = target?.title ?? "所选剧情";
+  return `
+    <div class="script-reader-delete-overlay" role="presentation">
+      <section class="script-reader-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="script-reader-delete-title">
+        <button class="script-reader-delete-close" type="button" data-action="close-script-reader-delete" aria-label="关闭">×</button>
+        <div class="script-reader-delete-mark" aria-hidden="true">×</div>
+        <div class="script-reader-delete-copy">
+          <h2 id="script-reader-delete-title">确认删除</h2>
+          <p>所选内容将被删除，确定删除 “${escapeHtml(title)}” 吗?</p>
+        </div>
+        <div class="script-reader-delete-actions">
+          <button class="script-reader-delete-cancel" type="button" data-action="close-script-reader-delete">取消</button>
+          <button class="script-reader-delete-confirm" type="button" data-action="confirm-script-reader-delete" data-episode-id="${escapeHtml(targetId)}">确定</button>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function filterScriptCards(cards, { searchQuery = "", typeFilter = "all" } = {}) {
@@ -176,44 +511,6 @@ function sortScriptCards(cards, sortOrder = "updated-desc") {
     );
   });
   return ranked;
-}
-
-function renderScriptEntryCard(card) {
-  return `
-    <article class="script-entry-card ${card.tone}">
-      <span>${escapeHtml(card.group)}</span>
-      <h2>${escapeHtml(card.title)}</h2>
-      <p>${escapeHtml(card.body)}</p>
-      <button type="button" data-action="${escapeHtml(card.action)}">${escapeHtml(card.title)}</button>
-    </article>
-  `;
-}
-
-function renderScriptRecordCard(card) {
-  return `
-    <article class="script-record-card" data-script-id="${escapeHtml(card.id)}">
-      <div class="script-record-main">
-        <div class="script-record-head">
-          <div>
-            <strong>${escapeHtml(card.title)}</strong>
-            <span>${escapeHtml(card.typeLabel)}</span>
-          </div>
-          <b class="script-record-status ${escapeHtml(card.status.tone)}">${escapeHtml(card.status.label)}</b>
-        </div>
-        <p class="script-record-summary">${escapeHtml(card.summary)}</p>
-        <dl class="script-record-meta">
-          <div><dt>集数</dt><dd>${card.episodeCount}</dd></div>
-          <div><dt>分镜</dt><dd>${card.shotCount}</dd></div>
-          <div><dt>更新</dt><dd>${escapeHtml(card.updatedLabel)}</dd></div>
-        </dl>
-      </div>
-      <div class="script-record-actions">
-        <button class="secondary-action compact" type="button" data-action="open-script-modal">重新上传</button>
-        <button class="secondary-action compact" type="button" data-action="parse-script" ${disabled(!card.canParse)}>AI 拆分镜</button>
-        <button class="primary-action compact" type="button" data-action="open-project-workspace" data-project-id="${escapeHtml(card.projectId ?? "")}" ${disabled(!card.canOpenWorkspace)}>进入剧集工作台</button>
-      </div>
-    </article>
-  `;
 }
 
 function inferScriptType(inputText) {
@@ -259,17 +556,14 @@ function normalizeScriptStatus(scriptStatus, projectPhase, shotCount) {
   return { label: "草稿", tone: "draft" };
 }
 
-function formatScriptTimestamp(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) {
-    return "刚刚";
-  }
+function resolveScriptCoverImage(scriptRecord) {
+  return [scriptRecord?.coverImageUrl, scriptRecord?.previewUrl]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)[0] ?? "";
+}
 
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  const hour = `${date.getHours()}`.padStart(2, "0");
-  const minute = `${date.getMinutes()}`.padStart(2, "0");
-  return `${month}-${day} ${hour}:${minute}`;
+function resolveScriptProjectCoverSrc(card) {
+  return card.coverImageUrl ? resolveApiUrl(card.coverImageUrl) : "";
 }
 
 function toTimestamp(value) {
@@ -320,43 +614,43 @@ export function renderOriginalScriptModal({ show = false, draft = {}, busy = fal
           <label class="control-field">
             <span>剧本受众</span>
             <select id="original-script-audience">
-              ${renderOption("女频", audience)}
-              ${renderOption("男频", audience)}
-              ${renderOption("全年龄", audience)}
+              ${renderSelectOption("女频", audience)}
+              ${renderSelectOption("男频", audience)}
+              ${renderSelectOption("全年龄", audience)}
             </select>
           </label>
           <label class="control-field">
             <span>题材看点</span>
             <select id="original-script-genre">
-              ${renderOption("都市奇幻", genre)}
-              ${renderOption("逆袭爽感", genre)}
-              ${renderOption("悬疑反转", genre)}
-              ${renderOption("情感治愈", genre)}
+              ${renderSelectOption("都市奇幻", genre)}
+              ${renderSelectOption("逆袭爽感", genre)}
+              ${renderSelectOption("悬疑反转", genre)}
+              ${renderSelectOption("情感治愈", genre)}
             </select>
           </label>
           <label class="control-field">
             <span>拆分集数 <em>*</em></span>
             <select id="original-script-episode-count">
               <option value="">请选择拆分集数</option>
-              ${renderOption("40集", episodeCount)}
-              ${renderOption("50集", episodeCount)}
-              ${renderOption("60集", episodeCount)}
-              ${renderOption("自定义分集（1-100）", episodeCount)}
+              ${renderSelectOption("40集", episodeCount)}
+              ${renderSelectOption("50集", episodeCount)}
+              ${renderSelectOption("60集", episodeCount)}
+              ${renderSelectOption("自定义分集（1-100）", episodeCount)}
             </select>
           </label>
           <label class="control-field">
             <span>分卡设置</span>
             <select id="original-script-card-setting">
-              ${renderOption("标准分卡", cardSetting)}
-              ${renderOption("按剧情节点分卡", cardSetting)}
+              ${renderSelectOption("标准分卡", cardSetting)}
+              ${renderSelectOption("按剧情节点分卡", cardSetting)}
             </select>
           </label>
           <label class="control-field">
             <span>每集长度</span>
             <select id="original-script-episode-length">
-              ${renderOption("约 1 分钟", episodeLength)}
-              ${renderOption("约 2 分钟", episodeLength)}
-              ${renderOption("约 3 分钟", episodeLength)}
+              ${renderSelectOption("约 1 分钟", episodeLength)}
+              ${renderSelectOption("约 2 分钟", episodeLength)}
+              ${renderSelectOption("约 3 分钟", episodeLength)}
             </select>
           </label>
           <label class="control-field original-script-inspiration">
@@ -376,6 +670,6 @@ export function renderOriginalScriptModal({ show = false, draft = {}, busy = fal
   `;
 }
 
-function renderOption(value, selectedValue) {
+function renderSelectOption(value, selectedValue) {
   return `<option value="${escapeHtml(value)}" ${value === selectedValue ? "selected" : ""}>${escapeHtml(value)}</option>`;
 }

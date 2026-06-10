@@ -121,12 +121,18 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
       videoUrl: findFirstString(payload, [
         ["video_url"],
         ["videoUrl"],
+        ["content", "video_url"],
+        ["content", "videoUrl"],
         ["data", "video_url"],
         ["data", "videoUrl"],
+        ["data", "content", "video_url"],
+        ["data", "content", "videoUrl"],
         ["data", "result", "video_url"],
         ["data", "result", "videoUrl"],
         ["result", "video_url"],
         ["result", "videoUrl"],
+        ["result", "content", "video_url"],
+        ["result", "content", "videoUrl"],
       ]),
       redactedResponse: {
         providerStatus,
@@ -146,6 +152,51 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
             ["result", "message"],
             ["result", "error", "message"],
           ]) ?? null,
+      },
+    };
+  }
+
+  async cancel(input: { externalRequestId: string }): Promise<{
+    status: "canceled" | "not_cancelable" | "failed";
+    redactedResponse: Record<string, unknown>;
+  }> {
+    if (!this.config.queryTaskEndpoint) {
+      throw new Error("seedance_video_query_endpoint_required");
+    }
+
+    const fetchImpl = this.config.fetchImpl ?? fetch;
+    const response = await fetchImpl(
+      this.config.queryTaskEndpoint.replace(
+        "{taskId}",
+        encodeURIComponent(input.externalRequestId),
+      ),
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+        },
+      },
+    );
+    if (response.ok) {
+      return {
+        status: "canceled",
+        redactedResponse: {
+          providerStatus: "canceled",
+          taskId: input.externalRequestId,
+        },
+      };
+    }
+
+    const error = await readProviderError(response);
+    const status = response.status === 404 || response.status === 409 ? "not_cancelable" : "failed";
+    return {
+      status,
+      redactedResponse: {
+        providerStatus: status,
+        taskId: input.externalRequestId,
+        providerHttpStatus: response.status,
+        providerErrorCode: error.providerErrorCode,
+        providerMessage: error.providerMessage,
       },
     };
   }

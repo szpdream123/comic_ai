@@ -66,12 +66,17 @@ describe("aliyun bailian video provider adapter", () => {
       model: "happyhorse-1.0-r2v",
       input: {
         prompt: "a joyful character runs through a market",
-        media: ["https://cdn.example.com/role.png"],
+        media: [
+          {
+            type: "reference_image",
+            url: "https://cdn.example.com/role.png",
+          },
+        ],
       },
       parameters: {
         ratio: "16:9",
         duration: 5,
-        resolution: "720p",
+        resolution: "720P",
         seed: 11,
         watermark: false,
       },
@@ -118,6 +123,57 @@ describe("aliyun bailian video provider adapter", () => {
       providerErrorCode: null,
       providerMessage: null,
     });
+  });
+
+  it("deduplicates reference media and serializes every item as a MediaItem", async () => {
+    let capturedBody = "";
+    const adapter = new AliyunBailianVideoProviderAdapter({
+      apiKey: "bailian-key",
+      model: "happyhorse-1.0-r2v",
+      createTaskEndpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ output: { task_id: "bailian-task-media" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-media",
+      providerName: "aliyun-bailian",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-media:task-media",
+      payloadRef: "creator://payload-media",
+      payloadHash: "hash-media",
+      redactedPayload: {
+        prompt: "keep the character consistent",
+        firstFrameUrl: "https://cdn.example.com/ref-a.png",
+        parameters: {
+          referenceUploads: [
+            { url: "https://cdn.example.com/ref-a.png" },
+            { url: "https://cdn.example.com/ref-b.png" },
+          ],
+          resolution: "1080p",
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody).input.media, [
+      {
+        type: "reference_image",
+        url: "https://cdn.example.com/ref-a.png",
+      },
+      {
+        type: "reference_image",
+        url: "https://cdn.example.com/ref-b.png",
+      },
+    ]);
+    assert.equal(JSON.parse(capturedBody).parameters.resolution, "1080P");
   });
 
   it("builds the Bailian video adapter from model config", async () => {

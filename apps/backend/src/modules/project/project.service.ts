@@ -31,6 +31,10 @@ export interface ScriptRecord {
   id: string;
   organizationId: string;
   projectId: string;
+  title?: string | null;
+  coverImageUrl?: string | null;
+  coverStorageObjectId?: string | null;
+  deletedAt?: Date | null;
   status: ScriptStatus;
   inputText: string;
   createdByUserId: string;

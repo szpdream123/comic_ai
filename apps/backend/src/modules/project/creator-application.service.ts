@@ -77,6 +77,17 @@ import {
   replaceEpisodesForProject,
   updateEpisodeForProject,
 } from "./episode-record.service.ts";
+import {
+  createScriptReaderSection,
+  deleteScriptReaderSection,
+  ensureScriptReaderSectionsForProject,
+  listScriptReaderSectionsForProject,
+  updateScriptReaderSection,
+} from "./script-reader-section-record.service.ts";
+import {
+  deleteScriptCardRecord,
+  updateScriptCardRecord,
+} from "./script-card-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "./episode-generation-draft.service.ts";
 import {
   createCreatorExportArtifact,
@@ -1269,6 +1280,190 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         now: input.now,
       });
       return { status: 200, body: { episodes: detail.episodes } };
+    },
+
+    async listScriptReaderSections(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const bundle = await loadProjectBundleFromSql(deps.db, {
+        projectId: input.projectId,
+        scriptId: null,
+      });
+      const sections = await ensureScriptReaderSectionsForProject(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        scriptId: bundle?.script?.id ?? null,
+        createdByUserId: actor.actorId,
+        now: input.now,
+      });
+      return { status: 200, body: { sections } };
+    },
+
+    async createScriptReaderSection(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      body: { title?: string | null; body?: string | null };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const bundle = await loadProjectBundleFromSql(deps.db, {
+        projectId: input.projectId,
+        scriptId: null,
+      });
+      const section = await createScriptReaderSection(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        scriptId: bundle?.script?.id ?? null,
+        title: input.body.title?.trim() || "新增剧情",
+        body: input.body.body ?? "",
+        createdByUserId: actor.actorId,
+        now: input.now,
+      });
+      return { status: 200, body: { section } };
+    },
+
+    async updateScriptReaderSection(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      sectionId: string;
+      body: {
+        title?: string | null;
+        body?: string | null;
+        status?: "draft" | "ready" | "archived" | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const section = await updateScriptReaderSection(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        sectionId: input.sectionId,
+        title: input.body.title,
+        body: input.body.body,
+        status: input.body.status,
+        now: input.now,
+      });
+      if (!section) {
+        return { status: 404, body: { error: "script_reader_section_not_found" } };
+      }
+      return { status: 200, body: { section } };
+    },
+
+    async deleteScriptReaderSection(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      sectionId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const deleted = await deleteScriptReaderSection(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        sectionId: input.sectionId,
+      });
+      if (!deleted) {
+        return { status: 404, body: { error: "script_reader_section_not_found" } };
+      }
+      return { status: 200, body: { deleted: true } };
+    },
+
+    async updateScriptCard(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      scriptId: string;
+      body: {
+        title?: string | null;
+        coverImageUrl?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const hasCoverUpdate =
+        input.body.coverImageUrl !== undefined ||
+        Boolean(input.body.uploadSessionId) ||
+        Boolean(input.body.storageObjectId);
+      const resolvedCoverUpload =
+        !hasCoverUpdate
+          ? null
+          : await resolveImportedStorageObject(
+              input.user,
+              {
+                projectId: input.projectId,
+                uploadSessionId: input.body.uploadSessionId,
+                storageObjectId: input.body.storageObjectId,
+              },
+              input.now,
+            );
+      const script = await updateScriptCardRecord(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        scriptId: input.scriptId,
+        title: input.body.title,
+        coverImageUrl: resolvedCoverUpload ? null : input.body.coverImageUrl,
+        coverStorageObjectId: resolvedCoverUpload?.id ?? null,
+        now: input.now,
+      });
+      if (!script) {
+        return { status: 404, body: { error: "script_not_found" } };
+      }
+      const hydratedScript = deps.storageRuntime
+        ? await hydrateScriptCoverUrl(deps.db, {
+            script,
+            sessionToken: input.user.sessionToken,
+            runtime: deps.storageRuntime,
+            now: input.now,
+            signedUrlExpiresInSeconds,
+          })
+        : script;
+      return { status: 200, body: { script: hydratedScript } };
+    },
+
+    async deleteScriptCard(input: {
+      user: AuthenticatedCreatorUser;
+      projectId: string;
+      scriptId: string;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        projectId: input.projectId,
+        now: input.now,
+      });
+      const script = await deleteScriptCardRecord(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+        scriptId: input.scriptId,
+        now: input.now,
+      });
+      if (!script) {
+        return { status: 404, body: { error: "script_not_found" } };
+      }
+      return { status: 200, body: { deleted: true, script } };
     },
 
     async listProjectMembers(input: {
@@ -4719,10 +4914,20 @@ async function buildProjectDetail(
         signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
       })
     : projectBundle.project;
+  const signedScript =
+    runtime && projectBundle.script
+      ? await hydrateScriptCoverUrl(db, {
+          script: projectBundle.script,
+          sessionToken: input.sessionToken,
+          runtime,
+          now: input.now,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        })
+      : projectBundle.script;
 
   return {
     project: signedProject,
-    script: projectBundle.script,
+    script: signedScript,
     assetSummary: buildAssetSummary(groupAssetsByUiType(signedAssets)),
     assetsByType: groupAssetsByUiType(signedAssets),
     episodes: projectEpisodes.map((episode) => {
@@ -5138,6 +5343,36 @@ async function hydrateProjectCoverUrl(
     };
   } catch {
     return input.project;
+  }
+}
+
+async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string | null; coverImageUrl?: string | null }>(
+  db: SqlDatabase,
+  input: {
+    script: T;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    now: Date;
+    signedUrlExpiresInSeconds: number;
+  },
+): Promise<T> {
+  if (!input.script?.coverStorageObjectId) {
+    return input.script;
+  }
+  try {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.script.coverStorageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    return {
+      ...input.script,
+      coverImageUrl: urls.previewUrl,
+    };
+  } catch {
+    return input.script;
   }
 }
 
@@ -5860,6 +6095,10 @@ async function loadProjectBundleFromSql(
     id: string;
     organization_id: string;
     project_id: string;
+    title: string | null;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    deleted_at: Date | string | null;
     status: "draft" | "ready" | "parsed" | "failed";
     input_text: string;
     created_by_user_id: string | null;
@@ -5871,6 +6110,7 @@ async function loadProjectBundleFromSql(
       FROM scripts
       WHERE project_id = $1
         AND ($2::uuid IS NULL OR id = $2::uuid)
+        AND deleted_at IS NULL
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
@@ -5898,6 +6138,10 @@ async function loadProjectBundleFromSql(
           id: script.id,
           organizationId: script.organization_id,
           projectId: script.project_id,
+          title: script.title,
+          coverImageUrl: script.cover_image_url,
+          coverStorageObjectId: script.cover_storage_object_id,
+          deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
           status: script.status,
           inputText: script.input_text,
           createdByUserId: script.created_by_user_id,

@@ -84,6 +84,7 @@ const processors = {
   async expireSeedanceVideo({ taskId, now }) {
     return expireSeedanceVideoPollJob(db, {
       taskId,
+      env: process.env,
       now,
     });
   },

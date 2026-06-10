@@ -172,7 +172,8 @@ const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
 const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const devInitialCreditBalance = 10000;
-const generationTaskTimeoutMs = 15 * 60 * 1000;
+const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
+const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",
@@ -195,7 +196,7 @@ const episodeUploadLimits = {
   video: {
     label: "视频",
     maxBytes: 500 * 1024 * 1024,
-    recommendedMaxDurationSeconds: 15 * 60,
+    recommendedMaxDurationSeconds: 3 * 60 * 60,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
@@ -1567,6 +1568,7 @@ function generationCostFromModelConfig(
 
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
+  const videoCategory = readString(modelConfig.uiConfig.videoCategory) || inferVideoModelCategory(modelConfig.taskModes);
   const schemaRatios = readEnumValues(modelConfig.parameterSchema.aspectRatio);
   const defaultRatios = readStringArray(modelConfig.defaultParams.aspectRatio);
   const schemaQuality =
@@ -1579,6 +1581,8 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
     mediaType: modelConfig.mediaType,
+    videoCategory,
+    videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
     providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
     pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
@@ -1590,6 +1594,22 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     displayBaseCost: generationCostFromModelConfig(0, modelConfig),
     disabled: modelConfig.status !== "active",
   };
+}
+
+function inferVideoModelCategory(taskModes: string[]) {
+  if (!taskModes.some((taskMode) => taskMode.startsWith("video."))) return "";
+  if (taskModes.includes("video.reference_image_to_video")) return "reference";
+  if (taskModes.includes("video.first_last_frame_to_video")) return "first_last_frame";
+  if (taskModes.includes("video.video_to_video") || taskModes.includes("video.image_video_to_video")) return "video_edit";
+  return "first_frame";
+}
+
+function videoCategoryLabel(videoCategory: string) {
+  if (videoCategory === "reference") return "全能参考";
+  if (videoCategory === "first_last_frame") return "首尾帧";
+  if (videoCategory === "video_edit") return "AI改视频";
+  if (videoCategory === "first_frame") return "首帧视频";
+  return "";
 }
 
 function readString(value: unknown): string {
@@ -2470,14 +2490,7 @@ function generationProviderMessageForClient(value: string | null | undefined): s
   if (!message) {
     return null;
   }
-  const translated = generationProviderFailureDisplayMessage(message);
-  if (translated) {
-    return translated;
-  }
-  if (/[\u4e00-\u9fff]/.test(message)) {
-    return message;
-  }
-  return "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\u3002";
+  return message;
 }
 
 function generationProviderFailureDisplayMessage(value: string): string {
@@ -2877,8 +2890,12 @@ async function settleTimedOutEpisodeGenerationTask(
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
   const timeoutAt = snapshot.timeoutAt ? new Date(String(snapshot.timeoutAt)) : null;
+  const fallbackTimeoutMs =
+    readString(snapshot.kind) === "video"
+      ? videoGenerationTaskTimeoutMs
+      : imageGenerationTaskTimeoutMs;
   const createdAtTimeout = snapshot.requestedAt
-    ? new Date(new Date(String(snapshot.requestedAt)).getTime() + generationTaskTimeoutMs)
+    ? new Date(new Date(String(snapshot.requestedAt)).getTime() + fallbackTimeoutMs)
     : null;
   const effectiveTimeoutAt = timeoutAt && !Number.isNaN(timeoutAt.getTime()) ? timeoutAt : createdAtTimeout;
   if (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime()) {
@@ -2954,12 +2971,30 @@ async function repairTimedOutEpisodeGenerationTasks(
           OR (
             input_snapshot_json->>'timeoutAt' IS NULL
             AND input_snapshot_json->>'requestedAt' IS NOT NULL
-            AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '15 minutes')
+            AND (
+              (
+                input_snapshot_json->>'kind' = 'video'
+                AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '3 hours')
+              )
+              OR (
+                COALESCE(input_snapshot_json->>'kind', '') <> 'video'
+                AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '15 minutes')
+              )
+            )
           )
           OR (
             input_snapshot_json->>'timeoutAt' IS NULL
             AND input_snapshot_json->>'requestedAt' IS NULL
-            AND created_at < ($1::timestamptz - interval '15 minutes')
+            AND (
+              (
+                task_type = 'episode_generate_video'
+                AND created_at < ($1::timestamptz - interval '3 hours')
+              )
+              OR (
+                task_type <> 'episode_generate_video'
+                AND created_at < ($1::timestamptz - interval '15 minutes')
+              )
+            )
           )
         )
       ORDER BY created_at ASC, id ASC
@@ -3429,7 +3464,8 @@ async function createEpisodeGenerationTask(
     targetEntityType === "shot" && isUuid(requestSnapshot.targetId)
       ? requestSnapshot.targetId
       : input.episodeId;
-  const timeoutAt = new Date(input.now.getTime() + generationTaskTimeoutMs);
+  const timeoutMs = input.kind === "video" ? videoGenerationTaskTimeoutMs : imageGenerationTaskTimeoutMs;
+  const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
     organizationId: context.actor.organizationId,
     workspaceId: context.actor.workspaceId!,
@@ -10252,6 +10288,10 @@ export function createPhoneAuthDevServer(
                   disabled: false,
                 },
               ];
+          const defaultVideoModel =
+            videoModels.find((model) => model.videoCategory === "reference") ??
+            videoModels[0] ??
+            null;
           return writeJson(
             response,
             enveloped(200, {
@@ -10262,7 +10302,7 @@ export function createPhoneAuthDevServer(
               presets: [],
               uploadLimits: episodeUploadLimits,
               defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
-              defaultVideoModelCode: videoModels[0]?.modelCode ?? "video_mock_1",
+              defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
               creditBalance: context.creditBalance,
             }),
           );
@@ -10945,6 +10985,139 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        const scriptReaderSectionsMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/script-reader-sections(?:\/([^/]+))?$/);
+        if (scriptReaderSectionsMatch) {
+          const projectId = decodeURIComponent(scriptReaderSectionsMatch[1] ?? "");
+          const sectionId = scriptReaderSectionsMatch[2]
+            ? decodeURIComponent(scriptReaderSectionsMatch[2])
+            : "";
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+
+          if (request.method === "GET" && !sectionId) {
+            return writeJson(
+              response,
+              await creatorApplication.listScriptReaderSections({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "POST" && !sectionId) {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              body?: string | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.createScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (!isUuid(sectionId)) {
+            return writeJson(response, envelopedError(400, "invalid_section_id", "section id is invalid"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              body?: string | null;
+              status?: "draft" | "ready" | "archived" | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.updateScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                sectionId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "DELETE") {
+            return writeJson(
+              response,
+              await creatorApplication.deleteScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                sectionId,
+                now: new Date(),
+              }),
+            );
+          }
+        }
+
+        const scriptCardMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/scripts\/([^/]+)$/);
+        if (scriptCardMatch) {
+          const projectId = decodeURIComponent(scriptCardMatch[1] ?? "");
+          const scriptId = decodeURIComponent(scriptCardMatch[2] ?? "");
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          if (!isUuid(scriptId)) {
+            return writeJson(response, envelopedError(400, "invalid_script_id", "script id is invalid"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              coverImageUrl?: string | null;
+              uploadSessionId?: string | null;
+              storageObjectId?: string | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.updateScriptCard({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                scriptId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "DELETE") {
+            return writeJson(
+              response,
+              await creatorApplication.deleteScriptCard({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                scriptId,
+                now: new Date(),
+              }),
+            );
+          }
         }
 
         if (request.method === "POST" && pathname === "/api/creator/project/select") {

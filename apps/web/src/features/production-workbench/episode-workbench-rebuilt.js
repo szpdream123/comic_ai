@@ -11,7 +11,6 @@ const STORYBOARD_MEDIA_TABS = [
   { id: "first-frame", label: "首帧生视频", action: "set-video-generation-mode", mode: "first-frame" },
   { id: "first-last-frame", label: "首尾帧生视频", action: "set-video-generation-mode", mode: "first-last-frame" },
   { id: "reference-video", label: "全能参考", action: "set-video-generation-mode", mode: "reference-video" },
-  { id: "lip-sync", label: "对口型", action: "set-episode-media-mode", mode: "lip-sync" },
 ];
 
 const ASSET_TABS = [
@@ -218,13 +217,14 @@ export function renderEpisodeWorkbench({
     scopeMode === "assets"
       ? "image"
       : mediaMode === "image"
+        || mediaMode === "lip-sync"
         ? "video"
         : mediaMode;
   const visibleMediaTabs =
     scopeMode === "assets"
       ? MEDIA_TABS.filter((tab) => tab.id === "image")
       : storyboardVisibleMediaTabs;
-  const activeVideoGenerationMode = generationUiState.videoGenerationMode ?? "first-frame";
+  const activeVideoGenerationMode = generationUiState.videoGenerationMode ?? "reference-video";
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
     scopeMode === "assets" && effectiveMediaMode === "image"
@@ -383,6 +383,7 @@ export function renderEpisodeWorkbench({
             episodeGenerationConfig,
             generationUiState,
             mediaMode: effectiveMediaMode,
+            videoMode: activeVideoGenerationMode,
             attachments: episodeWorkbenchAttachments,
             selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
             generationPollingActive,
@@ -1082,7 +1083,16 @@ function renderQuickAsset(asset, active) {
   const kind = asset.kind || inferKind(name);
   const preview = resolveReferencePreview(asset);
   return `
-    <button class="episode-replica-quick-asset ${active ? "active" : ""}" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset.id ?? "")}" data-asset-kind="${escapeAttr(kind)}" title="${escapeAttr(name)}">
+    <button
+      class="episode-replica-quick-asset ${active ? "active" : ""}"
+      type="button"
+      draggable="true"
+      data-action="set-episode-asset"
+      data-drag-asset="episode-quick-asset"
+      data-asset-id="${escapeAttr(asset.id ?? "")}"
+      data-asset-kind="${escapeAttr(kind)}"
+      title="${escapeAttr(name)}"
+    >
       <span class="thumb">
         ${
           preview
@@ -1594,11 +1604,17 @@ function renderUserReferenceItem(item) {
 }
 
 function resolveGenerationFailureMessage(status, failureCode) {
-  if (status !== "failed" && status !== "canceled") {
+  if (!["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)) {
     return "";
   }
   if (failureCode === "client_poll_timeout" || failureCode === "task_timeout") {
     return "任务超过 15 分钟未完成，已按失败处理，积分应由后端返还。";
+  }
+  if (failureCode === "provider_poll_timeout") {
+    return "视频生成已等待 3 小时仍未返回结果，后台已尝试取消供应商任务，请在后台复核。";
+  }
+  if (status === "result_unknown") {
+    return "供应商结果状态不明确，请在后台复核。";
   }
   if (failureCode === "permission_denied") {
     return "当前账号没有权限处理该生成结果，请联系项目管理员。";
@@ -1748,6 +1764,7 @@ export function renderPromptDock({
   episodeGenerationConfig = null,
   generationUiState,
   mediaMode,
+  videoMode = null,
   attachments = [],
   selectedAttachmentIds = [],
   generationPollingActive = false,
@@ -1783,16 +1800,39 @@ export function renderPromptDock({
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
-  const configuredModels = buildConfiguredPromptDockModels(episodeGenerationConfig, isVideoMode ? "video" : "image");
-  const models = configuredModels.length ? configuredModels : (isVideoMode ? VIDEO_MODELS : IMAGE_MODELS);
-  const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0];
+  const activeVideoGenerationMode = videoMode ?? generationUiState.videoGenerationMode ?? "reference-video";
+  const isFirstFrameVideoMode = isVideoMode && activeVideoGenerationMode === "first-frame";
+  const isFirstLastFrameVideoMode = isVideoMode && activeVideoGenerationMode === "first-last-frame";
+  const isSingleFrameInputMode = isFirstFrameVideoMode || isFirstLastFrameVideoMode;
+  const configuredModels = buildConfiguredPromptDockModels(
+    episodeGenerationConfig,
+    isVideoMode ? "video" : "image",
+    isVideoMode ? activeVideoGenerationMode : null,
+  );
+  const hasConfiguredModelList = Array.isArray(episodeGenerationConfig?.models);
+  const fallbackModels = isVideoMode ? VIDEO_MODELS : IMAGE_MODELS;
+  const models = hasConfiguredModelList ? configuredModels : (configuredModels.length ? configuredModels : fallbackModels);
+  const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0] ?? {
+    id: "",
+    label: "暂无可用模型",
+    credits: 0,
+  };
   const parameterControls = buildModelParameterControls({
     selectedModel,
     isVideoMode,
     generationControls,
     openGenerationSelectMenu,
   });
-  const attachmentCards = [...generationAttachmentCards, ...(attachments ?? [])].map((item, index) =>
+  const visibleGenerationAttachmentCards = isSingleFrameInputMode
+    ? generationAttachmentCards.filter((item) => {
+        if (isFirstFrameVideoMode) return item.id === "first-frame" || item.fromQuickReference === true;
+        return item.id === "first-frame" || item.id === "last-frame";
+      }).slice(0, isFirstLastFrameVideoMode ? 2 : 1)
+    : generationAttachmentCards;
+  const visibleAttachments = isSingleFrameInputMode
+    ? []
+    : (attachments ?? []);
+  const attachmentCards = [...visibleGenerationAttachmentCards, ...visibleAttachments].map((item, index) =>
     renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
   );
   const audioAttachmentCards = attachmentCards.filter((card) => card.includes('episode-replica-ref-card attachment audio'));
@@ -1813,26 +1853,36 @@ export function renderPromptDock({
   return `
     <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
       ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
-      <div class="episode-replica-ref-strip">
-        ${audioAttachmentCards.join("")}
+      <div class="episode-replica-ref-strip ${isFirstLastFrameVideoMode ? "first-last-frame-slots" : ""}">
+        ${isSingleFrameInputMode ? "" : audioAttachmentCards.join("")}
         ${
-          supportsAudioUpload
+          supportsAudioUpload && !isSingleFrameInputMode
             ? '<button class="episode-replica-ref-card voice uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="audio"><span>+</span><strong>音频</strong></button>'
             : ""
         }
-        ${quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
-        ${nonAudioAttachmentCards.join("")}
-        <button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image">
-          <span>+</span><strong>图片</strong>
-        </button>
-        <input class="episode-workbench-attachment-input" data-attachment-type="image" type="file" accept="image/*" hidden />
-        ${supportsAudioUpload ? '<input class="episode-workbench-attachment-input" data-attachment-type="audio" type="file" accept="audio/*" hidden />' : ""}
+        ${isSingleFrameInputMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
+        ${
+          isFirstLastFrameVideoMode
+            ? `${renderFrameImageSlot("first", "首帧图", generationState.firstFrame)}${renderFrameImageSlot("last", "尾帧图", generationState.lastFrame)}
+              <button class="episode-replica-frame-quick-all" type="button" data-action="quick-append-selected-asset">快捷引用</button>`
+            : nonAudioAttachmentCards.join("")
+        }
+        ${
+          isFirstLastFrameVideoMode
+            ? ""
+            : `<button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image" data-dropzone="generation-image" data-frame-target="first">
+                <span>+</span><strong>图片</strong>
+              </button>`
+        }
+        <input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="first" type="file" accept="image/*" hidden />
+        ${isFirstLastFrameVideoMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="last" type="file" accept="image/*" hidden />' : ""}
+        ${supportsAudioUpload && !isSingleFrameInputMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="audio" type="file" accept="audio/*" hidden />' : ""}
       </div>
-      ${renderUploadLimitHint(uploadLimits, supportsAudioUpload)}
+      ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       <div class="episode-replica-prompt-tools">
-        ${renderMiniMenu("references", "多参考图", activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
-        ${renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
-        <button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>
+        ${isSingleFrameInputMode ? "" : renderMiniMenu("references", "多参考图", activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
+        ${isSingleFrameInputMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
+        ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
       </div>
       <label class="episode-replica-textarea">
         <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
@@ -1944,7 +1994,7 @@ function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
 
 function buildGenerationAttachmentCards(generationState = {}) {
   const cards = [];
-  if (generationState?.firstFrame && generationState.firstFrame.fromQuickReference !== true) {
+  if (generationState?.firstFrame) {
     cards.push({
       ...generationState.firstFrame,
       id: "first-frame",
@@ -2206,13 +2256,52 @@ function renderAttachment(item, index, selected) {
       : previewUrl
         ? mediaType === "video"
           ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
-          : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "attachment")}" />`
+          : `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
         : renderQuickPlaceholder(mediaType, item.name ?? "图片");
   return `
     <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(mediaType)}">${preview}</span>
-      <strong>${escapeHtml(title)}</strong>
+      ${mediaType === "audio" ? `<strong>${escapeHtml(title)}</strong>` : ""}
+    </article>
+  `;
+}
+
+function renderFrameImageSlot(frameTarget, label, item) {
+  const frame = item
+    ? {
+        ...item,
+        id: frameTarget === "last" ? "last-frame" : "first-frame",
+        name: item.name ?? label,
+        type: "image",
+        kind: "image",
+      }
+    : null;
+  return `
+    <article
+      class="episode-replica-frame-slot ${frame ? "selected" : "empty"}"
+      data-dropzone="generation-frame"
+      data-frame-target="${escapeAttr(frameTarget)}"
+    >
+      ${
+        frame
+          ? `<button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(frame.id)}">×</button>`
+          : ""
+      }
+      <button
+        class="episode-replica-ref-art image"
+        type="button"
+        data-action="open-episode-workbench-attachment-picker"
+        data-attachment-type="image"
+        data-frame-target="${escapeAttr(frameTarget)}"
+        aria-label="${escapeAttr(`上传${label}`)}"
+      >
+        ${
+          frame
+            ? `<img src="${escapeAttr(resolveReferencePreview(frame) ?? "")}" alt="${escapeAttr(label)}" />`
+            : `<span class="episode-replica-frame-placeholder"><b>+</b><em>${escapeHtml(label)}</em></span>`
+        }
+      </button>
     </article>
   `;
 }
@@ -2535,15 +2624,17 @@ function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel =
   return Number(generationControls.imageCreditCost ?? 90);
 }
 
-function buildConfiguredPromptDockModels(config, mediaType) {
+function buildConfiguredPromptDockModels(config, mediaType, generationMode = null) {
   const models = Array.isArray(config?.models) ? config.models : [];
   return models
     .filter((model) => {
       const configuredMediaType = String(model?.mediaType ?? "").trim();
       if (configuredMediaType) {
-        return configuredMediaType === mediaType;
+        if (configuredMediaType !== mediaType) return false;
+      } else if (!modelMatchesPromptDockMediaType(model, mediaType)) {
+        return false;
       }
-      return modelMatchesPromptDockMediaType(model, mediaType);
+      return !generationMode || modelMatchesPromptDockGenerationMode(model, generationMode);
     })
     .map((model) => {
       const id = String(model?.modelCode ?? model?.id ?? "").trim();
@@ -2559,9 +2650,68 @@ function buildConfiguredPromptDockModels(config, mediaType) {
         supportedDurations: normalizeOptionValues(model?.supportedDurations),
         parameterSchema: normalizeParameterSchema(model?.parameterSchema),
         defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {},
+        supportedModes: normalizeOptionValues(model?.supportedModes),
+        videoCategory: String(model?.videoCategory ?? "").trim(),
+        videoCategoryLabel: String(model?.videoCategoryLabel ?? "").trim(),
       };
     })
     .filter(Boolean);
+}
+
+function modelMatchesPromptDockGenerationMode(model, generationMode) {
+  const videoCategory = String(model?.videoCategory ?? "").trim();
+  if (videoCategory) {
+    return promptDockVideoCategoryMatchesMode(videoCategory, generationMode);
+  }
+  const supportedModes = Array.isArray(model?.supportedModes)
+    ? model.supportedModes.map((item) => normalizePromptDockModeToken(item)).filter(Boolean)
+    : [];
+  if (!supportedModes.length) {
+    return false;
+  }
+  const aliases = promptDockGenerationModeAliases(generationMode);
+  return supportedModes.some((mode) => aliases.has(mode));
+}
+
+function promptDockVideoCategoryMatchesMode(videoCategory, generationMode) {
+  const category = normalizePromptDockModeToken(videoCategory);
+  const mode = normalizePromptDockModeToken(generationMode);
+  if (mode === "reference_video") return category === "reference";
+  if (mode === "first_frame" || mode === "image_to_video") return category === "first_frame";
+  if (mode === "first_last_frame") return category === "first_last_frame";
+  if (mode === "edit_video") return category === "video_edit";
+  return false;
+}
+
+function promptDockGenerationModeAliases(mode) {
+  const normalized = normalizePromptDockModeToken(mode);
+  const aliases = new Set([normalized]);
+  if (normalized === "first_frame" || normalized === "image_to_video") {
+    aliases.add("first_frame");
+    aliases.add("image_to_video");
+    aliases.add("video_image_to_video");
+    aliases.add("video_image");
+  } else if (normalized === "reference_video") {
+    aliases.add("reference_video");
+    aliases.add("reference_image_to_video");
+    aliases.add("video_reference_image_to_video");
+    aliases.add("video_reference_generate");
+    aliases.add("video_reference_video");
+    aliases.add("video_reference");
+  } else if (normalized === "first_last_frame") {
+    aliases.add("first_last_frame");
+    aliases.add("first_last_frame_to_video");
+    aliases.add("video_first_last_frame");
+    aliases.add("video_first_last_frame_to_video");
+  } else if (normalized === "edit_video") {
+    aliases.add("edit_video");
+    aliases.add("video_to_video");
+    aliases.add("video_edit_video");
+    aliases.add("video_edit");
+    aliases.add("video_video_to_video");
+    aliases.add("video_image_video_to_video");
+  }
+  return aliases;
 }
 
 function normalizeParameterSchema(schema) {
@@ -3042,8 +3192,11 @@ function resolveWorkflowStatusLabel(status) {
   if (status === "completed" || status === "succeeded") {
     return "已完成";
   }
-  if (status === "failed") {
+  if (status === "failed" || status === "canceled") {
     return "失败";
+  }
+  if (status === "manual_review_required" || status === "result_unknown") {
+    return "待复核";
   }
   if (status === "queued") {
     return "排队中";

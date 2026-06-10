@@ -173,6 +173,68 @@ describe("seedance video provider adapter", () => {
     assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-260128");
   });
 
+  it("cancels Seedance tasks through the configured query endpoint", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedHeaders: HeadersInit | undefined;
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      queryTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks/{taskId}",
+      fetchImpl: (async (url, init) => {
+        capturedUrl = String(url);
+        capturedMethod = String(init?.method ?? "GET");
+        capturedHeaders = init?.headers;
+        return new Response(JSON.stringify({ data: { deleted: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    const result = await adapter.cancel({ externalRequestId: "seedance task/123" });
+
+    assert.equal(
+      capturedUrl,
+      "https://ark.example.com/api/v3/contents/generations/tasks/seedance%20task%2F123",
+    );
+    assert.equal(capturedMethod, "DELETE");
+    assert.deepEqual(capturedHeaders, {
+      authorization: "Bearer seedance-key",
+    });
+    assert.deepEqual(result, {
+      status: "canceled",
+      redactedResponse: {
+        providerStatus: "canceled",
+        taskId: "seedance task/123",
+      },
+    });
+  });
+
+  it("reads succeeded video URLs from the official content.video_url response", async () => {
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      queryTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks/{taskId}",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            id: "seedance-content-task",
+            status: "succeeded",
+            content: {
+              video_url: "https://ark-content.example.test/generated.mp4",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    const result = await adapter.poll({ externalRequestId: "seedance-content-task" });
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.videoUrl, "https://ark-content.example.test/generated.mp4");
+  });
+
   it("maps Seedance frame and reference media to Volcengine content roles", async () => {
     let capturedBody = "";
     const adapter = new SeedanceVideoProviderAdapter({
@@ -241,6 +303,75 @@ describe("seedance video provider adapter", () => {
         role: "reference_audio",
       },
     ]);
+  });
+
+  it("submits first-last-frame tasks with the official Volcengine content structure", async () => {
+    let capturedBody = "";
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      model: "doubao-seedance-1-5-pro-251215",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-first-last-task" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-first-last",
+      providerName: "volcengine",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-first-last:task-first-last",
+      payloadRef: "creator://payload-first-last",
+      payloadHash: "hash-first-last",
+      redactedPayload: {
+        prompt: "图中女孩对着镜头说“茄子”，360度环绕运镜",
+        firstFrameUrl: "https://ark-project.tos-cn-beijing.volces.com/doc_image/seepro_first_frame.jpeg",
+        parameters: {
+          lastFrame: {
+            url: "https://ark-project.tos-cn-beijing.volces.com/doc_image/seepro_last_frame.jpeg",
+          },
+          aspectRatio: "adaptive",
+          durationSec: 5,
+          generateAudio: true,
+          watermark: false,
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "doubao-seedance-1-5-pro-251215",
+      content: [
+        {
+          type: "text",
+          text: "图中女孩对着镜头说“茄子”，360度环绕运镜",
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://ark-project.tos-cn-beijing.volces.com/doc_image/seepro_first_frame.jpeg",
+          },
+          role: "first_frame",
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://ark-project.tos-cn-beijing.volces.com/doc_image/seepro_last_frame.jpeg",
+          },
+          role: "last_frame",
+        },
+      ],
+      ratio: "adaptive",
+      duration: 5,
+      generate_audio: true,
+      watermark: false,
+    });
   });
 
   it("includes provider response details when Seedance rejects a submission", async () => {

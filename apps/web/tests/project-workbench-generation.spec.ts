@@ -601,6 +601,32 @@ describe("episode workbench asset list layout", () => {
     assert.match(halveBlock, /@media\s*\(min-width:\s*1680px\)\s*\{[\s\S]*?\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-card-body\s*\{[\s\S]*?grid-template-columns:\s*minmax\(8\.5rem,\s*0\.7fr\) minmax\(25rem,\s*2\.2fr\) minmax\(7rem,\s*0\.5fr\)/);
   });
 
+  it("keeps storyboard quick-lane asset thumbnails square", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(css, /\.episode-replica-layout\.storyboard-mode \.episode-replica-right-list \.episode-replica-quick-asset\s*\{[\s\S]*?aspect-ratio:\s*1\s*\/\s*1/);
+    assert.match(css, /\.episode-replica-layout\.storyboard-mode \.episode-replica-right-list \.episode-replica-quick-asset \.thumb\s*\{[\s\S]*?aspect-ratio:\s*1\s*\/\s*1/);
+  });
+
+  it("keeps first-last video frame slots in two stable columns with a compact quick button", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const block = css.match(
+      /\/\* Final storyboard video frame slots and quick lane layout \*\/(?<body>[\s\S]*?)\/\* End final storyboard video frame slots and quick lane layout \*\//,
+    )?.groups?.body ?? "";
+
+    assert.match(block, /\.episode-replica-layout\.storyboard-mode \.episode-replica-ref-strip\.first-last-frame-slots\s*\{[\s\S]*?display:\s*grid/);
+    assert.match(block, /\.episode-replica-layout\.storyboard-mode \.episode-replica-ref-strip\.first-last-frame-slots\s*\{[\s\S]*?grid-template-columns:\s*minmax\(7\.5rem,\s*7\.5rem\) minmax\(7\.5rem,\s*7\.5rem\) auto/);
+    assert.match(block, /\.episode-replica-layout\.storyboard-mode \.episode-replica-frame-slot\s*\{[\s\S]*?min-height:\s*3\.2rem/);
+    assert.match(block, /\.episode-replica-layout\.storyboard-mode \.episode-replica-frame-quick-all\s*\{[\s\S]*?width:\s*4\.7rem/);
+    assert.match(block, /\.episode-replica-layout\.storyboard-mode \.episode-replica-frame-slot \.episode-replica-ref-art img\s*\{[\s\S]*?object-fit:\s*cover/);
+  });
+
   it("selects storyboard cards from the card surface without hijacking form controls", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
@@ -747,7 +773,11 @@ describe("episode workbench asset list layout", () => {
     assert.match(finalLayoutBlock, /min-height:\s*0/);
     assert.match(finalLayoutBlock, /box-sizing:\s*border-box/);
     assert.match(finalLayoutBlock, /--storyboard-video-composer-height:\s*24rem/);
-    assert.match(finalLayoutBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode[\s\S]*?grid-template-rows:\s*auto minmax\(0,\s*auto\) var\(--storyboard-video-composer-height,\s*24rem\)/);
+    assert.match(finalLayoutBlock, /--storyboard-video-stage-height:\s*calc\(100% - var\(--storyboard-video-composer-height,\s*24rem\) - 1px\)/);
+    assert.match(finalLayoutBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode[\s\S]*?grid-template-rows:\s*auto minmax\(0,\s*1fr\) var\(--storyboard-video-composer-height,\s*24rem\)/);
+    assert.match(finalLayoutBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode \.episode-replica-prompt\.video-mode[\s\S]*?grid-row:\s*3/);
+    assert.match(finalLayoutBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode \.episode-replica-stage-body[\s\S]*?align-items:\s*end/);
+    assert.match(finalLayoutBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode \.episode-replica-system-message,\s*\.episode-replica-layout\.storyboard-mode \.episode-replica-center\.video-mode \.episode-replica-result-panel[\s\S]*?max-width:\s*none/);
     assert.match(finalLayoutBlock, /position:\s*relative/);
     assert.match(finalLayoutBlock, /z-index:\s*4/);
     assert.match(finalLayoutBlock, /pointer-events:\s*auto/);
@@ -4397,7 +4427,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.doesNotMatch(html, />编辑角色</);
   });
 
-  it("hides image mode in storyboard scope while keeping dedicated video mode and lip-sync buttons", () => {
+  it("hides image and lip-sync modes in storyboard scope while keeping dedicated video mode buttons", () => {
     const state = {
       project: {
         id: "project-1",
@@ -4433,13 +4463,13 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, /data-action="set-video-generation-mode" data-mode="first-frame"/);
     assert.match(html, /data-action="set-video-generation-mode" data-mode="first-last-frame"/);
     assert.match(html, /data-action="set-video-generation-mode" data-mode="reference-video"/);
-    assert.match(html, /data-action="set-episode-media-mode" data-mode="lip-sync"/);
+    assert.doesNotMatch(html, /data-action="set-episode-media-mode" data-mode="lip-sync"/);
     assert.doesNotMatch(html, />做图片</);
     assert.doesNotMatch(html, />做视频</);
     assert.match(html, />首帧生视频</);
     assert.match(html, />首尾帧生视频</);
     assert.match(html, />全能参考</);
-    assert.match(html, />对口型</);
+    assert.doesNotMatch(html, />对口型</);
     assert.match(
       html,
       /class="episode-replica-stage-tab active" type="button" data-action="set-video-generation-mode" data-mode="first-last-frame">首尾帧生视频<\/button>/,
@@ -4986,6 +5016,111 @@ describe("production workbench project tab", () => {
 
     assert.match(openHtml, /data-model-id="seedance-i2v-fast"/);
     assert.match(openHtml, /data-model-id="seedance-i2v-pro"/);
+  });
+
+  it("filters storyboard video model menu by the active video generation page", () => {
+    const state = buildProjectState();
+    const storyboards = addStoryboard([]).map((storyboard) => ({
+      ...storyboard,
+      id: "storyboard-video-category-filter-1",
+      linkedShotId: "shot-video-category-filter-1",
+      generationState: {
+        firstFrame: {
+          id: "first-frame-1",
+          kind: "image",
+          name: "首帧",
+          url: "/uploads/first-frame.png",
+        },
+      },
+    }));
+    const baseUi = buildProjectUi({
+      projectPanelMode: "episode-workbench",
+      projectInteriorSection: "episodes",
+      episodeMediaMode: "video",
+      museScopeMode: "storyboard",
+      selectedEpisodeId: "episode-new",
+      selectedStoryboardId: storyboards[0].id,
+      selectedStoryboard: storyboards[0],
+      storyboards,
+      episodeStoryboardMap: {
+        "episode-new": storyboards,
+      },
+      isVideoModelMenuOpen: true,
+      episodeGenerationConfig: {
+        defaultVideoModelCode: "happyhorse-1.0-r2v",
+        models: [
+          {
+            modelCode: "seedance-first-frame",
+            modelLabel: "首帧后台模型",
+            mediaType: "video",
+            videoCategory: "first_frame",
+            supportedModes: ["video.image_to_video", "video.reference_image_to_video"],
+          },
+          {
+            modelCode: "seedance-first-last",
+            modelLabel: "首尾帧后台模型",
+            mediaType: "video",
+            videoCategory: "first_last_frame",
+            supportedModes: ["video.first_last_frame_to_video"],
+          },
+          {
+            modelCode: "happyhorse-1.0-r2v",
+            modelLabel: "全能参考后台模型",
+            mediaType: "video",
+            videoCategory: "reference",
+            supportedModes: ["video.reference_image_to_video"],
+          },
+          {
+            modelCode: "video-edit-model",
+            modelLabel: "AI改视频后台模型",
+            mediaType: "video",
+            videoCategory: "video_edit",
+            supportedModes: ["video.video_to_video"],
+          },
+        ],
+      },
+    });
+
+    const referenceHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...baseUi,
+        videoGenerationMode: "reference-video",
+        selectedModelId: "happyhorse-1.0-r2v",
+      },
+    });
+    assert.match(referenceHtml, /data-model-id="happyhorse-1\.0-r2v"/);
+    assert.match(referenceHtml, /全能参考后台模型/);
+    assert.doesNotMatch(referenceHtml, /data-model-id="seedance-first-frame"/);
+    assert.doesNotMatch(referenceHtml, /data-model-id="seedance-first-last"/);
+    assert.doesNotMatch(referenceHtml, /data-model-id="video-edit-model"/);
+
+    const firstFrameHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...baseUi,
+        videoGenerationMode: "first-frame",
+        selectedModelId: "seedance-first-frame",
+      },
+    });
+    assert.match(firstFrameHtml, /data-model-id="seedance-first-frame"/);
+    assert.match(firstFrameHtml, /首帧后台模型/);
+    assert.doesNotMatch(firstFrameHtml, /data-model-id="happyhorse-1\.0-r2v"/);
+
+    const firstLastHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...baseUi,
+        videoGenerationMode: "first-last-frame",
+        selectedModelId: "seedance-first-last",
+      },
+    });
+    assert.match(firstLastHtml, /data-model-id="seedance-first-last"/);
+    assert.match(firstLastHtml, /首尾帧后台模型/);
+    assert.doesNotMatch(firstLastHtml, /data-model-id="happyhorse-1\.0-r2v"/);
   });
 
   it("uses enabled image models from generation config in asset scope while storyboard scope keeps video models", () => {
@@ -9993,6 +10128,151 @@ describe("production workbench project tab", () => {
     assert.match(editHtml, /data-attachment-id="edit-source-video"/);
   });
 
+  it("keeps first-frame video composer to one image without audio or reference presets", () => {
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        id: "storyboard-first-frame-single-image",
+        generationState: {
+          firstFrame: {
+            id: "first-frame-current",
+            name: "only-first-frame.png",
+            kind: "image",
+            status: "ready",
+            url: "/uploads/only-first-frame.png",
+            fromQuickReference: true,
+          },
+          referenceUploads: [
+            {
+              id: "extra-reference-image",
+              name: "extra-reference.png",
+              kind: "image",
+              url: "/uploads/extra-reference.png",
+            },
+          ],
+          quickReferenceItems: [
+            {
+              id: "quick-ref-extra",
+              name: "快捷引用图",
+              kind: "image",
+              url: "/uploads/quick-ref-extra.png",
+            },
+          ],
+        },
+      },
+    ];
+
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          museScopeMode: "storyboard",
+          videoGenerationMode: "first-frame",
+          selectedEpisodeId: "episode-new",
+          selectedStoryboardId: storyboards[0].id,
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+          episodeWorkbenchAttachments: [
+            {
+              id: "extra-local-upload",
+              type: "image",
+              kind: "image",
+              name: "extra-local.png",
+              src: "/uploads/extra-local.png",
+            },
+          ],
+        }),
+      },
+    });
+
+    assert.match(html, /only-first-frame\.png/);
+    assert.doesNotMatch(html, /extra-reference\.png/);
+    assert.doesNotMatch(html, /quick-ref-extra\.png/);
+    assert.doesNotMatch(html, /extra-local\.png/);
+    assert.doesNotMatch(html, />音频</);
+    assert.doesNotMatch(html, />多参考图</);
+    assert.doesNotMatch(html, /预设：/);
+    assert.match(html, /data-action="quick-append-selected-asset"/);
+    assert.match(html, /data-attachment-type="image"/);
+    assert.doesNotMatch(html, /data-attachment-type="audio"/);
+  });
+
+  it("keeps first-last-frame video composer to one first image and one last image", () => {
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        id: "storyboard-first-last-single-images",
+        generationState: {
+          firstFrame: {
+            id: "first-frame-current",
+            name: "first-frame-slot.png",
+            kind: "image",
+            status: "ready",
+            url: "/uploads/first-frame-slot.png",
+            fromQuickReference: true,
+          },
+          lastFrame: {
+            id: "last-frame-current",
+            name: "last-frame-slot.png",
+            kind: "image",
+            status: "ready",
+            url: "/uploads/last-frame-slot.png",
+            fromQuickReference: true,
+          },
+          referenceUploads: [
+            {
+              id: "extra-reference-image",
+              name: "extra-reference.png",
+              kind: "image",
+              url: "/uploads/extra-reference.png",
+            },
+          ],
+        },
+      },
+    ];
+
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          museScopeMode: "storyboard",
+          videoGenerationMode: "first-last-frame",
+          selectedEpisodeId: "episode-new",
+          selectedStoryboardId: storyboards[0].id,
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /首帧图/);
+    assert.match(html, /尾帧图/);
+    assert.match(html, /first-frame-slot\.png/);
+    assert.match(html, /last-frame-slot\.png/);
+    assert.doesNotMatch(html, /extra-reference\.png/);
+    assert.doesNotMatch(html, />音频</);
+    assert.doesNotMatch(html, />多参考图</);
+    assert.doesNotMatch(html, /预设：/);
+    assert.match(html, /data-frame-target="first"/);
+    assert.match(html, /data-frame-target="last"/);
+    assert.equal((html.match(/data-action="quick-append-selected-asset"/g) ?? []).length, 1);
+    assert.doesNotMatch(html, /data-attachment-type="audio"/);
+  });
+
   it("removes storyboard generation references from the composer strip", async () => {
     const state = buildProjectState();
     const storyboards = [
@@ -10870,6 +11150,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /工具箱总览/);
     assert.match(html, /15 秒/);
     assert.match(html, /15 分钟/);
+    assert.match(html, /视频最长等待 3 小时/);
     assert.match(html, /直传云存储前的本地校验/);
     assert.match(html, /单任务最多 30 张参考图/);
     assert.match(html, /\.exe/);
@@ -12641,6 +12922,137 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(quickCard, /episode-replica-quick-copy/);
   });
 
+  it("marks episode quick-lane assets as draggable frame sources", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          selectedEpisodeId: "episode-new",
+          projectAssetTab: "character",
+          museScopeMode: "storyboard",
+          importedAssets: {
+            character: [
+              {
+                id: "character-drag-1",
+                name: "拖拽角色",
+                description: "可直接拖入帧图",
+                previewUrl: "https://example.com/drag-character.png",
+              },
+            ],
+            scene: [],
+            prop: [],
+          },
+        }),
+      },
+    });
+    const quickCard = html.slice(
+      html.indexOf('class="episode-replica-quick-asset'),
+      html.indexOf("</button>", html.indexOf('class="episode-replica-quick-asset')),
+    );
+
+    assert.match(quickCard, /draggable="true"/);
+    assert.match(quickCard, /data-drag-asset="episode-quick-asset"/);
+    assert.match(quickCard, /data-asset-id="character-drag-1"/);
+    assert.match(quickCard, /data-asset-kind="character"/);
+  });
+
+  it("renders drag targets for all storyboard video reference modes", () => {
+    const baseUi = {
+      projectPanelMode: "episode-workbench",
+      selectedEpisodeId: "episode-new",
+      projectAssetTab: "character",
+      museScopeMode: "storyboard",
+      episodeMediaMode: "video",
+      importedAssets: {
+        character: [
+          {
+            id: "character-drag-target-1",
+            name: "拖拽角色",
+            description: "可拖入视频图片栏",
+            previewUrl: "https://example.com/drag-target-character.png",
+          },
+        ],
+        scene: [],
+        prop: [],
+      },
+    };
+    const renderMode = (videoGenerationMode) => renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          ...baseUi,
+          videoGenerationMode,
+        }),
+      },
+    });
+
+    const firstFrameHtml = renderMode("first-frame");
+    assert.match(firstFrameHtml, /data-drag-asset="episode-quick-asset"/);
+    assert.match(firstFrameHtml, /data-dropzone="generation-image"[\s\S]*?data-frame-target="first"/);
+
+    const firstLastHtml = renderMode("first-last-frame");
+    assert.match(firstLastHtml, /data-drag-asset="episode-quick-asset"/);
+    assert.match(firstLastHtml, /data-dropzone="generation-frame"[\s\S]*?data-frame-target="first"/);
+    assert.match(firstLastHtml, /data-dropzone="generation-frame"[\s\S]*?data-frame-target="last"/);
+
+    const referenceHtml = renderMode("reference-video");
+    assert.match(referenceHtml, /data-drag-asset="episode-quick-asset"/);
+    assert.match(referenceHtml, /data-dropzone="generation-image"[\s\S]*?data-frame-target="first"/);
+  });
+
+  it("routes dragged quick-lane assets into the prompt image dropzone", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /\[data-dropzone="generation-image"\]/);
+    assert.match(source, /function applyDraggedEpisodeAssetToGenerationImage/);
+    assert.match(source, /referenceUploads:\s*nextReferenceUploads/);
+    assert.match(source, /isSingleFrameVideoInputMode\(workbench\)[\s\S]*?applyDraggedEpisodeAssetToGenerationFrame/);
+  });
+
+  it("hides image attachment names in the reference composer strip", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          selectedEpisodeId: "episode-new",
+          museScopeMode: "storyboard",
+          episodeMediaMode: "video",
+          videoGenerationMode: "reference-video",
+          episodeWorkbenchAttachments: [
+            {
+              id: "image-attachment-1",
+              type: "image",
+              kind: "image",
+              name: "upload:very-long-image-name-that-should-not-render.png",
+              preview: "https://example.com/reference.png",
+            },
+          ],
+        }),
+      },
+    });
+
+    assert.match(html, /episode-replica-ref-card attachment image/);
+    assert.match(html, /https:\/\/example\.com\/reference\.png/);
+    assert.doesNotMatch(html, /very-long-image-name-that-should-not-render/);
+  });
+
   it("renders asset mode with the Muse-like image model and 50-credit action", () => {
     const html = renderProductionWorkbench({
       state: {
@@ -13493,6 +13905,99 @@ describe("production workbench project tab", () => {
     assert.equal(updatedStoryboard.generationState.quickReferenceItems.length, 2);
     assert.equal(updatedStoryboard.generationState.quickReferenceItems[0].previewUrl, "https://example.com/ref-1.png");
     assert.equal(updatedStoryboard.generationState.quickReferenceItems[1].previewUrl, "https://example.com/ref-2.png");
+  });
+
+  it("prefills first and last frame slots when re-editing a first-last-frame video result", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-edit-first-last-1",
+      generationState: {
+        prompt: "",
+        quickReferenceItems: [],
+        firstFrame: null,
+        lastFrame: null,
+      },
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-primary",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-last-frame",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: {
+          "episode-primary": [storyboard],
+        },
+        prompt: "",
+        episodeWorkbenchAttachments: [],
+        episodeWorkbenchSelectedAttachmentIds: [],
+        storyboardConversationHistory: {
+          [`video:${storyboard.id}`]: [
+            {
+              storyboardId: storyboard.id,
+              mediaKind: "video",
+              taskId: "storyboard-edit-first-last-task-1",
+              promptPreview: "上一轮首尾帧视频文案，需要继续编辑。",
+              firstFrame: {
+                id: "first-frame-prior",
+                name: "上一轮首帧",
+                url: "https://example.com/prior-first-frame.png",
+              },
+              lastFrame: {
+                id: "last-frame-prior",
+                name: "上一轮尾帧",
+                url: "https://example.com/prior-last-frame.png",
+              },
+            },
+          ],
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "episode-primary",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 1,
+            },
+          ],
+          shots: [],
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "episode-result-action",
+        resultAction: "edit",
+        mediaKind: "video",
+        taskId: "storyboard-edit-first-last-task-1",
+      },
+    });
+
+    const updatedStoryboard = workbench.ui.storyboards[0];
+    assert.equal(updatedStoryboard.generationState.firstFrame?.url, "https://example.com/prior-first-frame.png");
+    assert.equal(updatedStoryboard.generationState.lastFrame?.url, "https://example.com/prior-last-frame.png");
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: workbench.ui,
+    });
+    assert.match(html, /episode-replica-ref-strip first-last-frame-slots/);
+    assert.match(html, /https:\/\/example\.com\/prior-first-frame\.png/);
+    assert.match(html, /https:\/\/example\.com\/prior-last-frame\.png/);
   });
 
   it("deletes only the selected storyboard conversation turn from history and backend", async () => {

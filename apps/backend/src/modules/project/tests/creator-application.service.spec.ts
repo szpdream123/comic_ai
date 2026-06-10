@@ -873,6 +873,98 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("stores script covers by storage object id and returns signed cover urls", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-script-cover-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Creator script cover storage",
+          scriptInput: "Episode 3: upload a script cover.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-script-cover-create",
+        now: new Date("2026-05-18T12:10:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const scriptId = (created.body as { script: { id: string } }).script.id;
+      const actor = {
+        actorId: userId,
+        organizationId,
+        workspaceId,
+        role: "creator" as const,
+        capabilities: [],
+      };
+
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        projectId,
+        purpose: "script-covers",
+        fileName: "script-cover.png",
+        contentType: "image/png",
+        sizeBytes: 128,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "creator-application-script-cover-upload",
+        now: new Date("2026-05-18T12:11:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 128,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-18T12:12:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      const updated = await creator.updateScriptCard({
+        user,
+        projectId,
+        scriptId,
+        body: {
+          uploadSessionId: prepared.uploadSessionId,
+          storageObjectId: prepared.storageObjectId,
+        },
+        now: new Date("2026-05-18T12:13:00.000Z"),
+      });
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T12:14:00.000Z"),
+      });
+
+      assert.equal(updated.status, 200);
+      assert.equal((updated.body as any).script.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((updated.body as any).script.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+      assert.equal((detail.body as any).script.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((detail.body as any).script.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects legacy import payloads when storage runtime is enabled", async () => {
     const db = await createMigratedTestDb();
 
