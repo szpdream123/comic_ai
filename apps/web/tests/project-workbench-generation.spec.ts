@@ -183,6 +183,36 @@ describe("production workbench home shell", () => {
     assert.equal(workbench.ui.episodeMediaMode, "video");
   });
 
+  it("opens separate novel adaptation modals for analysis and direct upload entries", async () => {
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: {
+        activeNavTab: "script",
+        scriptModalMode: "full",
+        scriptTab: "script-upload",
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-script-modal", scriptModalMode: "manual" },
+    });
+
+    assert.equal(workbench.ui.isScriptModalOpen, true);
+    assert.equal(workbench.ui.scriptModalMode, "manual");
+    assert.equal(workbench.ui.scriptTab, "script-library");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-script-modal", scriptModalMode: "upload" },
+    });
+
+    assert.equal(workbench.ui.isScriptModalOpen, true);
+    assert.equal(workbench.ui.scriptModalMode, "upload");
+    assert.equal(workbench.ui.scriptTab, "script-upload");
+  });
+
   it("renders the persistent left rail and home actions", () => {
     const storyboard = {
       id: "storyboard-dom-multi-image",
@@ -229,6 +259,9 @@ describe("production workbench home shell", () => {
     });
 
     assert.match(html, /data-action="set-nav-tab"/);
+    assert.ok(html.indexOf('<span class="rail-label">首页</span>') < html.indexOf('<span class="rail-label">画布</span>'));
+    assert.ok(html.indexOf('<span class="rail-label">画布</span>') < html.indexOf('<span class="rail-label">剧本</span>'));
+    assert.doesNotMatch(html, /<span class="rail-label">工具箱<\/span>/);
     assert.match(html, /data-action="open-create-modal"/);
     assert.match(html, /data-liquid-ether-root/);
     assert.match(html, /hero-avatar/);
@@ -355,6 +388,78 @@ describe("episode workbench asset list layout", () => {
     assert.match(buttonBlock, /max-height:\s*2\.25rem/);
     assert.doesNotMatch(activeBlock, /\b(?:height|min-height|max-height|padding|border|font-size|line-height)\s*:/);
   });
+
+  it("keeps X6 canvas nodes on native SVG interactions", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.doesNotMatch(css, /\.canvas-x6-node-card\s*\{/);
+    assert.doesNotMatch(css, /\.canvas-x6-node-delete\s*\{/);
+    assert.doesNotMatch(css, /\.canvas-x6-mount \.x6-node foreignObject/);
+  });
+
+  it("keeps the X6 grid layer from intercepting canvas node drags", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const gridBlock = css.match(
+      /\.canvas-x6-mount \.x6-graph-grid\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(gridBlock, /pointer-events:\s*none/);
+  });
+
+  it("keeps the X6 background layer from intercepting canvas node drags", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const backgroundBlock = css.match(
+      /\.canvas-x6-mount \.x6-graph-background\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(backgroundBlock, /pointer-events:\s*none/);
+  });
+
+  it("does not apply compact icon sizing to X6 graph SVGs", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const x6SvgBlock = css.match(
+      /\.canvas-x6-mount \.x6-graph-svg\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const iconRuleSelectors = [...css.matchAll(/(?<selector>[^{}]+)\{[^{}]*width:\s*1\.18rem[^{}]*height:\s*1\.18rem[^{}]*\}/g)]
+      .map((match) => match.groups?.selector ?? "")
+      .join("\n");
+
+    assert.match(x6SvgBlock, /width:\s*100%/);
+    assert.match(x6SvgBlock, /height:\s*100%/);
+    assert.match(iconRuleSelectors, /\.canvas-stage\s+svg:not\(\.x6-graph-svg\)/);
+    assert.doesNotMatch(iconRuleSelectors, /\.canvas-stage\s+svg\s*(?:,|$)/);
+  });
+
+  it("keeps Liblib canvas connection SVGs visible instead of icon-sized", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const edgeLayerBlock = css.match(
+      /\.canvas-stage svg\.canvas-lib-edge-layer\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const iconRuleIndex = css.indexOf(".canvas-stage svg:not(.x6-graph-svg)");
+    const edgeLayerIndex = css.indexOf(".canvas-stage svg.canvas-lib-edge-layer");
+
+    assert.match(edgeLayerBlock, /width:\s*2200px/);
+    assert.match(edgeLayerBlock, /height:\s*1600px/);
+    assert.match(edgeLayerBlock, /max-width:\s*none/);
+    assert.match(edgeLayerBlock, /overflow:\s*visible/);
+    assert.ok(edgeLayerIndex > iconRuleIndex);
+  });
+
 
   it("renders asset selection and hover tools as compact top-corner controls", () => {
     const css = readFileSync(
@@ -6150,7 +6255,7 @@ describe("production workbench project tab", () => {
       }),
       {
         name: "try",
-        scriptInput: "待上传剧本：try。请在项目详情中通过剧本上传、剧本库或分镜单上传补充正式素材。",
+        scriptInput: "待上传剧本：try。请在项目详情中通过剧本上传或剧本库补充正式素材。",
         aspectRatio: "9:16",
         resolution: "1080p",
         projectType: "anime",
@@ -7316,6 +7421,49 @@ describe("production workbench project tab", () => {
 
     assert.equal(workbench.ui.videoGenerationResult.status, "failed");
     assert.match(workbench.ui.toast, /First frame violates provider policy/);
+  });
+
+  it("keeps restored historical generation failures out of the global toast", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-restored-failed-1",
+      generationState: {
+        lastSubmission: {
+          status: "failed",
+        },
+      },
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        storyboards: [],
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        imageGenerationResult: {},
+        toast: "",
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        status: "failed",
+        taskId: "restored-gpt-image-failed-task",
+        kind: "image",
+        failureCode: "openai_images_503",
+        failure: {
+          displayMessage: "GPT Image 2 供应商返回 HTTP 503，任务没有拿到生成结果，积分已返还。",
+        },
+      },
+      storyboard.id,
+      "image",
+      { suppressFailureToast: true },
+    );
+
+    assert.equal(workbench.ui.imageGenerationResult.status, "failed");
+    assert.equal(workbench.ui.toast, "");
   });
 
   it("replaces queued storyboard conversation entries with provider rejection failures", () => {
@@ -9599,6 +9747,20 @@ describe("production workbench project tab", () => {
       },
     });
 
+    assert.deepEqual(calls, []);
+    assert.deepEqual(workbench.ui.generationResultDeleteTarget, {
+      scope: "asset",
+      mediaKind: "image",
+      taskId: "asset-image-character-1",
+      selectedAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "confirm-delete-generation-result",
+      },
+    });
+
     assert.deepEqual(calls, [
       {
         type: "file",
@@ -11091,7 +11253,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-result-action="set-character"[^>]*>设为场景图</);
   });
 
-  it("renders the tools tab as a real rules and diagnostics panel instead of an empty placeholder", () => {
+  it("renders the tools tab as a canvas project gallery before opening a project", () => {
     const html = renderProductionWorkbench({
       state: {
         project: {
@@ -11147,21 +11309,16 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /工具箱总览/);
-    assert.match(html, /15 秒/);
-    assert.match(html, /15 分钟/);
-    assert.match(html, /视频最长等待 3 小时/);
-    assert.match(html, /直传云存储前的本地校验/);
-    assert.match(html, /单任务最多 30 张参考图/);
-    assert.match(html, /\.exe/);
-    assert.match(html, /创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分/);
-    assert.match(html, /图片默认模型：nano_banana_2/);
-    assert.match(html, /视频默认模型：video_mock_1/);
-    assert.match(html, /导出直接导出原视频，不做额外画质限制/);
-    assert.doesNotMatch(html, /这里预留给批量任务、提示词模板、镜头校验和导出诊断/);
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /全部项目\(1\)/);
+    assert.match(html, /画布项目/);
+    assert.match(html, /请输入项目名称/);
+    assert.match(html, /data-action="open-canvas-project"/);
+    assert.doesNotMatch(html, /canvas-workspace/);
+    assert.doesNotMatch(html, /canvas-x6-mount/);
   });
 
-  it("renders generation queue health and failed job controls in the tools tab", () => {
+  it("renders an opened tools canvas project as an interactive AI canvas workflow surface", () => {
     const html = renderProductionWorkbench({
       state: {
         project: {
@@ -11175,6 +11332,146 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "tools",
+        canvasProjectView: "detail",
+        creditBalance: 720,
+        episodeGenerationConfig: {
+          defaultImageModelCode: "nano_banana_2",
+          defaultVideoModelCode: "video_mock_1",
+          uploadLimits: {
+            image: {
+              maxBytes: 20 * 1024 * 1024,
+              maxReferencesPerTask: 30,
+              extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
+            },
+            video: {
+              maxBytes: 500 * 1024 * 1024,
+              recommendedMaxDurationSeconds: 15 * 60,
+              extensions: [".mp4", ".webm", ".mov"],
+            },
+            audio: {
+              maxBytes: 100 * 1024 * 1024,
+              extensions: [".mp3", ".wav", ".m4a"],
+            },
+            blockedExtensions: [".exe", ".zip", ".ps1"],
+          },
+        },
+      },
+    });
+
+    assert.match(html, /canvas-workspace/);
+    assert.match(html, /canvas-sidebar/);
+    assert.match(html, /canvas-x6-mount/);
+    assert.match(html, /canvas-flow/);
+    assert.match(html, /canvas-lib-node canvas-text-node/);
+    assert.match(html, /canvas-lib-node canvas-generation-node image/);
+    assert.match(html, /剧本源/);
+    assert.match(html, /图片生成/);
+    assert.match(html, /输入提示词生成图片/);
+    assert.match(html, /共 3 节点/);
+    assert.match(html, /data-action="back-to-canvas-projects"/);
+    assert.match(html, /100%/);
+    assert.match(html, /data-action="add-canvas-template"/);
+    assert.doesNotMatch(html, /canvas-node-editor/);
+    assert.doesNotMatch(html, /工具箱总览/);
+    assert.doesNotMatch(html, /直传云存储前的本地校验/);
+    assert.doesNotMatch(html, /BullMQ 队列/);
+  });
+
+  it("renders canvas templates and asset mode for Liblib-like workflow building", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasSidebarMode: "assets",
+        canvasAssets: [
+          {
+            id: "asset-hero",
+            title: "主角正面设定",
+            kind: "character",
+            meta: "角色资产",
+            status: "ready",
+          },
+        ],
+        episodeGenerationConfig: {
+          models: [
+            { modelCode: "image-live", modelLabel: "项目生图模型", supportedModes: ["single-image"] },
+            { modelCode: "video-live", modelLabel: "项目视频模型", supportedModes: ["first-frame"] },
+          ],
+        },
+      }),
+    });
+
+    assert.match(html, /data-canvas-sidebar-mode="assets"/);
+    assert.match(html, /主角正面设定/);
+    assert.match(html, /角色资产/);
+    assert.match(html, /节点模板/);
+    assert.match(html, /文生图发送/);
+    assert.match(html, /导演台/);
+    assert.match(html, /data-action="add-canvas-template"/);
+    assert.match(html, /data-action="set-canvas-sidebar-mode"/);
+  });
+
+  it("updates canvas sidebar mode and viewport controls without leaving the tools tab", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-canvas-sidebar-mode",
+        canvasSidebarMode: "assets",
+      },
+    });
+
+    assert.equal(workbench.ui.canvasSidebarMode, "assets");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-canvas-viewport",
+        viewportPatch: "zoom-in",
+      },
+    });
+
+    assert.equal(workbench.ui.activeNavTab, "tools");
+    assert.equal(workbench.ui.canvasDocument.viewport.zoom, 1.1);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-canvas-viewport",
+        viewportPatch: "toggle-grid",
+      },
+    });
+
+    assert.equal(workbench.ui.canvasDocument.viewport.gridVisible, false);
+  });
+
+  it("keeps generation queue health hidden from the canvas tab", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        project: {
+          id: "project-1",
+          name: "Comic AI Studio",
+          phase: "asset_review",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
         creditBalance: 720,
         generationQueueHealth: {
           status: "degraded",
@@ -11207,22 +11504,15 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /BullMQ 队列/);
-    assert.match(html, /comic-ai-prod/);
-    assert.match(html, /generation-submit-video/);
-    assert.match(html, /等待 12/);
-    assert.match(html, /延迟 3/);
-    assert.match(html, /执行 4/);
-    assert.match(html, /失败 1/);
-    assert.match(html, /provider timeout/);
-    assert.match(html, /data-action="operate-generation-queue-job"/);
-    assert.match(html, /data-queue-name="generation-submit-video"/);
-    assert.match(html, /data-job-id="generation\.video\.submit:task-1"/);
-    assert.match(html, /data-job-action="retry"/);
-    assert.match(html, /data-job-action="remove"/);
+    assert.match(html, /canvas-workspace/);
+    assert.doesNotMatch(html, /BullMQ 队列/);
+    assert.doesNotMatch(html, /comic-ai-prod/);
+    assert.doesNotMatch(html, /generation-submit-video/);
+    assert.doesNotMatch(html, /provider timeout/);
+    assert.doesNotMatch(html, /data-action="operate-generation-queue-job"/);
   });
 
-  it("renders staged retry buttons for matching generation finalize failures", () => {
+  it("keeps staged retry buttons hidden from the canvas tab", () => {
     const html = renderProductionWorkbench({
       state: {
         project: {
@@ -11236,6 +11526,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "tools",
+        canvasProjectView: "detail",
         creditBalance: 720,
         generationQueueHealth: {
           status: "degraded",
@@ -11265,13 +11556,14 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /data-action="operate-generation-staged-retry"/);
-    assert.match(html, /data-task-id="task-1"/);
-    assert.match(html, /data-staged-action="retry_persist_asset"/);
+    assert.match(html, /canvas-workspace/);
+    assert.doesNotMatch(html, /data-action="operate-generation-staged-retry"/);
+    assert.doesNotMatch(html, /data-task-id="task-1"/);
+    assert.doesNotMatch(html, /data-staged-action="retry_persist_asset"/);
     assert.doesNotMatch(html, /data-staged-action="retry_finalize"/);
   });
 
-  it("renders a generation queue refresh entry before the first health snapshot loads", () => {
+  it("does not render a generation queue refresh entry on the canvas tab", () => {
     const html = renderProductionWorkbench({
       state: {
         project: {
@@ -11285,15 +11577,17 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "tools",
+        canvasProjectView: "detail",
         creditBalance: 720,
         generationQueueHealth: null,
       },
     });
 
-    assert.match(html, /BullMQ 队列/);
-    assert.match(html, /生成队列健康/);
-    assert.match(html, /尚未加载队列状态/);
-    assert.match(html, /data-action="refresh-generation-queues"/);
+    assert.match(html, /canvas-workspace/);
+    assert.doesNotMatch(html, /BullMQ 队列/);
+    assert.doesNotMatch(html, /生成队列健康/);
+    assert.doesNotMatch(html, /尚未加载队列状态/);
+    assert.doesNotMatch(html, /data-action="refresh-generation-queues"/);
   });
 
   it("refreshes generation queue health from the tools tab", async () => {
@@ -11341,6 +11635,274 @@ describe("production workbench project tab", () => {
     assert.equal(refreshCalls, 1);
     assert.deepEqual(workbench.ui.generationQueueHealth, snapshot);
     assert.equal(workbench.ui.toast, "队列状态已刷新。");
+  });
+
+  it("updates canvas nodes through independent canvas actions without changing the workbench model", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedModelId: "global-video-model",
+        episodeGenerationConfig: {
+          models: [
+            { modelCode: "image-live", modelLabel: "项目生图模型", supportedModes: ["single-image"] },
+            { modelCode: "video-live", modelLabel: "项目视频模型", supportedModes: ["first-frame"] },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "add-canvas-node",
+        nodeKind: "video",
+      },
+    });
+    const addedNode = workbench.ui.canvasDocument.nodes.at(-1);
+
+    assert.equal(addedNode.type, "video");
+    assert.equal(workbench.ui.selectedCanvasNodeId, addedNode.id);
+    assert.equal(workbench.ui.selectedModelId, "global-video-model");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "run-canvas-node",
+        nodeId: "send-flow",
+      },
+    });
+
+    assert.equal(workbench.ui.canvasRunPreview.ok, true);
+    assert.equal(workbench.ui.canvasRunPreview.modelCode, "gpt-image-2-cn");
+    assert.equal(workbench.ui.selectedModelId, "global-video-model");
+  });
+
+  it("renders inspector controls for editing the selected canvas node independently", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedModelId: "global-video-model",
+        selectedCanvasNodeId: "script-source",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 1,
+          projectId: "project-1",
+          episodeId: "episode-1",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            {
+              id: "script-source",
+              type: "script",
+              position: { x: 80, y: 120 },
+              size: { width: 390, height: 280 },
+              data: {
+                title: "导演节点备注",
+                status: "ready",
+                text: "新的剧本片段内容",
+                ports: { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "文本" }] },
+              },
+            },
+            {
+              id: "send-flow",
+              type: "send",
+              position: { x: 580, y: 104 },
+              size: { width: 464, height: 328 },
+              data: {
+                title: "发送流",
+                status: "ready",
+                mediaKind: "image",
+                modelCode: "gpt-image-2-cn",
+                prompt: "生成第一幕",
+                ports: {
+                  inputs: [{ id: "in_text", kind: "text", label: "文本" }],
+                  outputs: [{ id: "out_image", kind: "image", label: "图片" }],
+                },
+              },
+            },
+          ],
+          edges: [],
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-node-editor text-editor/);
+    assert.match(html, /data-canvas-text-input/);
+    assert.match(html, /data-node-id="script-source"/);
+    assert.match(html, /导演节点备注/);
+    assert.match(html, /新的剧本片段内容/);
+    assert.match(html, /GVLM 3\.1/);
+    assert.match(html, /data-action="run-canvas-node"/);
+    assert.doesNotMatch(html, /canvas-inspector/);
+    assert.doesNotMatch(html, /data-action="delete-canvas-node"/);
+    assert.doesNotMatch(html, /data-action="generate-image"/);
+  });
+
+  it("submits canvas image runs as independent canvas tasks and writes task state back to the graph", async () => {
+    const createImageTaskCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createImageTask(episodeId, payload) {
+          createImageTaskCalls.push({ episodeId, payload });
+          return { platform: { tasks: [{ taskId: "task-canvas-image-1" }] } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000001",
+        selectedModelId: "global-video-model",
+        episodeGenerationConfig: {
+          models: [
+            { modelCode: "image-live", modelLabel: "项目生图模型", supportedModes: ["single-image"] },
+            { modelCode: "video-live", modelLabel: "项目视频模型", supportedModes: ["first-frame"] },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "run-canvas-node",
+        nodeId: "send-flow",
+      },
+    });
+
+    const sendNode = workbench.ui.canvasDocument.nodes.find((node) => node.id === "send-flow");
+    const resultNode = workbench.ui.canvasDocument.nodes.find((node) => node.id === "image-result");
+
+    assert.equal(createImageTaskCalls.length, 1);
+    assert.equal(createImageTaskCalls[0].episodeId, "10000000-0000-4000-8000-000000000001");
+    assert.equal(createImageTaskCalls[0].payload.targetType, "canvas");
+    assert.equal(createImageTaskCalls[0].payload.targetId, "send-flow");
+    assert.equal(createImageTaskCalls[0].payload.model, "gpt-image-2-cn");
+    assert.deepEqual(createImageTaskCalls[0].payload.canvasContext.upstreamNodeIds, ["script-source"]);
+    assert.equal(workbench.ui.selectedModelId, "global-video-model");
+    assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-image-1");
+    assert.equal(sendNode.data.status, "queued");
+    assert.equal(sendNode.data.lastTaskId, "task-canvas-image-1");
+    assert.equal(resultNode.data.status, "queued");
+    assert.equal(resultNode.data.taskId, "task-canvas-image-1");
+  });
+
+  it("submits canvas runs from the tools tab using the canvas episode context", async () => {
+    const createImageTaskCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createImageTask(episodeId, payload) {
+          createImageTaskCalls.push({ episodeId, payload });
+          return { platform: { tasks: [{ taskId: "task-canvas-tools-1" }] } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedEpisodeId: null,
+        selectedCanvasNodeId: "send-flow",
+        canvasDocument: {
+          version: 1,
+          projectId: "project-1",
+          episodeId: "10000000-0000-4000-8000-000000000002",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            {
+              id: "script-source",
+              type: "script",
+              position: { x: 80, y: 120 },
+              size: { width: 390, height: 280 },
+              data: {
+                title: "Script",
+                status: "ready",
+                text: "Episode source text",
+                ports: { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "Text" }] },
+              },
+            },
+            {
+              id: "send-flow",
+              type: "send",
+              position: { x: 580, y: 104 },
+              size: { width: 464, height: 328 },
+              data: {
+                title: "Send",
+                status: "ready",
+                mediaKind: "image",
+                modelCode: "gpt-image-2-cn",
+                prompt: "Generate the first scene",
+                ports: {
+                  inputs: [{ id: "in_text", kind: "text", label: "Text" }],
+                  outputs: [{ id: "out_image", kind: "image", label: "Image" }],
+                },
+              },
+            },
+            {
+              id: "image-result",
+              type: "image",
+              position: { x: 1072, y: 432 },
+              size: { width: 400, height: 336 },
+              data: {
+                title: "Image Result",
+                status: "empty",
+                ports: {
+                  inputs: [{ id: "in_image", kind: "image", label: "Image" }],
+                  outputs: [{ id: "out_image", kind: "image", label: "Image" }],
+                },
+              },
+            },
+          ],
+          edges: [
+            {
+              id: "edge-script-send",
+              sourceNodeId: "script-source",
+              sourcePortId: "out_text",
+              targetNodeId: "send-flow",
+              targetPortId: "in_text",
+              data: { kind: "text", status: "idle" },
+            },
+            {
+              id: "edge-send-image",
+              sourceNodeId: "send-flow",
+              sourcePortId: "out_image",
+              targetNodeId: "image-result",
+              targetPortId: "in_image",
+              data: { kind: "image", status: "idle" },
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "run-canvas-node",
+        nodeId: "send-flow",
+      },
+    });
+
+    assert.equal(createImageTaskCalls.length, 1);
+    assert.equal(createImageTaskCalls[0].episodeId, "10000000-0000-4000-8000-000000000002");
+    assert.equal(createImageTaskCalls[0].payload.targetType, "canvas");
+    assert.equal(createImageTaskCalls[0].payload.targetId, "send-flow");
+    assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-tools-1");
   });
 
   it("operates a failed generation queue job and refreshes queue health", async () => {
@@ -14074,6 +14636,20 @@ describe("production workbench project tab", () => {
       },
     });
 
+    assert.deepEqual(calls, []);
+    assert.deepEqual(workbench.ui.generationResultDeleteTarget, {
+      scope: "storyboard",
+      mediaKind: "video",
+      storyboardId: "storyboard-10000000-0000-4000-8000-000000000777",
+      taskId: "storyboard-video-task-delete",
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "confirm-delete-generation-result",
+      },
+    });
+
     assert.deepEqual(calls, [
       {
         episodeId: "10000000-0000-4000-8000-000000000001",
@@ -15153,6 +15729,385 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(singleEpisodeHtml, />水平</);
     assert.doesNotMatch(singleEpisodeHtml, />垂直</);
     assert.doesNotMatch(singleEpisodeHtml, />自定义</);
+  });
+
+  it("renders manual script analysis package selectors under the script box", () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          storyboards: [],
+          selectedStoryboard: null,
+          projectDetail: state.projectDetail ?? null,
+          isScriptModalOpen: true,
+          scriptModalMode: "manual",
+          scriptTab: "script-library",
+          scriptSubmitAction: "confirm-single-episode",
+          scriptSubmitLabel: "开始分析",
+          scriptManualDraft: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+            { id: "taboo-1", name: "通用禁忌", package_type: "taboo", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /id="manual-script-input"/);
+    assert.match(html, /script-manual-look-controls/);
+    assert.match(html, /题材包/);
+    assert.match(html, /情绪包/);
+    assert.match(html, /玄幻修仙/);
+    assert.match(html, /男频热血/);
+    assert.doesNotMatch(html, /通用禁忌/);
+    assert.match(html, /data-action="confirm-single-episode"/);
+  });
+
+  it("starts DeepSeek analysis from manual script text and selected packages", async () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const previewCalls = [];
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiScriptAnalysisStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          yield { event: "script_delta", data: { text: "分析后的剧本" } };
+          yield { event: "script_done", data: { text: "分析后的剧本", rawText: "分析后的剧本" } };
+          yield { event: "complete", data: {
+            scriptText: "分析后的剧本",
+            displayTables: {
+              script: { title: "剧本", columns: ["内容"], rows: [{ content: "分析后的剧本" }] },
+              scenes: { title: "场景", columns: [], rows: [] },
+              characters: { title: "角色", columns: [], rows: [] },
+              props: { title: "道具", columns: [], rows: [] },
+              storyboards: { title: "分镜", columns: [], rows: [] },
+            },
+          } };
+        },
+        createAiStoryboardPreviewStream: async function* () {
+          throw new Error("manual_analysis_must_not_use_storyboard_preview");
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isScriptModalOpen: true,
+          scriptModalMode: "manual",
+          scriptTab: "script-library",
+          scriptSubmitAction: "confirm-single-episode",
+          scriptSubmitLabel: "开始分析",
+          scriptManualDraft: "框内原始文案",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === "#manual-script-input") {
+            return { value: "框内最新文案" };
+          }
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].projectId, "project-1");
+    assert.equal(previewCalls[0].input.scriptText, "框内最新文案");
+    assert.deepEqual(previewCalls[0].input.packages, {
+      genrePackageId: "genre-1",
+      emotionPackageId: "emotion-1",
+    });
+    assert.equal(workbench.ui.isScriptModalOpen, false);
+    assert.equal(workbench.ui.scriptManualDraft, "框内最新文案");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.source, "manual-script-analysis");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.sourceScript, "框内最新文案");
+    const html = renderProductionWorkbench(workbench);
+    assert.match(html, /manual-script-analysis-overlay/);
+    assert.match(html, /DeepSeek 剧本分析结果/);
+    assert.match(html, /分析后的剧本/);
+    assert.match(html, /data-action="save-manual-script-analysis"/);
+    assert.match(html, /保存剧本/);
+    assert.match(html, /data-action="regenerate-manual-script-analysis"/);
+    assert.match(html, /重新生成/);
+    assert.doesNotMatch(html, /AI智能分镜/);
+  });
+
+  it("renders manual DeepSeek analysis overlay while staying on the script page", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "script",
+        selectedProjectCardId: "project-1",
+        singleEpisodeAiPreview: {
+          status: "loading",
+          source: "manual-script-analysis",
+          sourceScript: "剧本页框内文案",
+          projectId: "project-1",
+          packages: {
+            genrePackageId: "genre-1",
+            emotionPackageId: "emotion-1",
+          },
+          data: { displayTables: {} },
+          error: "",
+          scriptText: "DeepSeek 正在返回第一段",
+          scriptRawText: "DeepSeek 正在返回第一段",
+          activeStage: "script",
+          assetPromptSteps: [],
+        },
+      }),
+    });
+
+    assert.match(html, /manual-script-analysis-overlay/);
+    assert.match(html, /DeepSeek 正在分析剧本/);
+    assert.match(html, /DeepSeek 正在返回第一段/);
+    assert.match(html, /data-action="save-manual-script-analysis"/);
+    assert.match(html, /data-action="regenerate-manual-script-analysis"/);
+  });
+
+  it("saves manual DeepSeek script analysis into the script reader", async () => {
+    let createIndex = 0;
+    const createdSections = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(projectId, input) {
+          createdSections.push({ projectId, input });
+          createIndex += 1;
+          return {
+            script: {
+              id: "script-deepseek-1",
+              projectId: "project-1",
+              title: "DeepSeek 分析剧本",
+              status: "ready",
+              inputText: "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。",
+            },
+            section: {
+              id: `script-section-deepseek-${createIndex}`,
+              title: input.title,
+              body: input.body,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "DeepSeek 分析剧本",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          source: "manual-script-analysis",
+          projectId: "project-1",
+          scriptText: "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。",
+          scriptRawText: "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。",
+          data: null,
+          error: "",
+        },
+        scriptReaderSections: [],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "save-manual-script-analysis" },
+    });
+
+    assert.deepEqual(createdSections, [
+      {
+        projectId: "project-1",
+        input: {
+          title: "第一集",
+          body: "第一集\n任小野进城。",
+          scriptInputText: "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。",
+          scriptId: null,
+          createNewScript: true,
+        },
+      },
+      {
+        projectId: "project-1",
+        input: {
+          title: "第2集",
+          body: "第2集\n任小野遇见闵婶。",
+          scriptInputText: "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。",
+          scriptId: "script-deepseek-1",
+          createNewScript: false,
+        },
+      },
+    ]);
+    assert.equal(workbench.ui.scriptReaderSections.length, 2);
+    assert.equal(workbench.ui.scriptReaderDrafts["script-section-deepseek-1"], "第一集\n任小野进城。");
+    assert.equal(workbench.ui.scriptReaderDrafts["script-section-deepseek-2"], "第2集\n任小野遇见闵婶。");
+    assert.equal(workbench.state.projectDetail.script.id, "script-deepseek-1");
+    assert.equal(workbench.state.projectDetail.script.inputText, "第一集\n任小野进城。\n\n第2集\n任小野遇见闵婶。");
+    assert.equal(workbench.state.projectDetail.scripts[0].id, "script-deepseek-1");
+    assert.equal(workbench.ui.selectedScriptId, "script-deepseek-1");
+    assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-1");
+    assert.equal(workbench.ui.activeNavTab, "script");
+    assert.equal(workbench.ui.scriptDetailOpen, true);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+    assert.equal(workbench.ui.toast, "已保存 2 集剧本。");
+  });
+
+  it("saves a new manual DeepSeek script without episode headings as episode one", async () => {
+    const createdSections = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [
+            { id: "episode-existing-1", title: "第 1 集", sequence: 1 },
+          ],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(projectId, input) {
+          createdSections.push({ projectId, input });
+          return {
+            script: {
+              id: "script-deepseek-new",
+              projectId: "project-1",
+              title: input.title,
+              status: "ready",
+              inputText: input.scriptInputText,
+            },
+            section: {
+              id: "script-section-deepseek-new-1",
+              title: input.title,
+              body: input.body,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        selectedProjectCardId: "project-1",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          source: "manual-script-analysis",
+          projectId: "project-1",
+          scriptText: "第1场 外 城门口 黄昏\n画面/动作：任小草望向天边。\n\n第2场 外 街道 黄昏\n画面/动作：任小野拉着任小草穿过人群。",
+          scriptRawText: "第1场 外 城门口 黄昏\n画面/动作：任小草望向天边。\n\n第2场 外 街道 黄昏\n画面/动作：任小野拉着任小草穿过人群。",
+          data: null,
+          error: "",
+        },
+        scriptReaderSections: [],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "save-manual-script-analysis" },
+    });
+
+    assert.equal(createdSections.length, 1);
+    assert.equal(createdSections[0].input.title, "第 1 集");
+    assert.equal(workbench.ui.scriptReaderSections[0].title, "第 1 集");
+    assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-new-1");
+  });
+
+  it("regenerates manual DeepSeek script analysis with the previous text and packages", async () => {
+    const previewCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiScriptAnalysisStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          yield { event: "script_delta", data: { text: "重新生成后的剧本" } };
+          yield { event: "script_done", data: { text: "重新生成后的剧本", rawText: "重新生成后的剧本" } };
+          yield { event: "complete", data: { scriptText: "重新生成后的剧本", displayTables: {} } };
+        },
+        createAiStoryboardPreviewStream: async function* () {
+          throw new Error("manual_regenerate_must_not_use_storyboard_preview");
+        },
+      },
+      ui: buildProjectUi({
+        selectedProjectCardId: "project-1",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          source: "manual-script-analysis",
+          projectId: "project-1",
+          sourceScript: "上一次框内文案",
+          packages: {
+            genrePackageId: "genre-1",
+            emotionPackageId: "emotion-1",
+          },
+          scriptText: "旧剧本",
+          scriptRawText: "旧剧本",
+          data: null,
+          error: "",
+        },
+        storyboardPromptPackages: [
+          { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+          { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+        ],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === "#manual-script-input") {
+            return { value: "上一次框内文案" };
+          }
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-manual-script-analysis" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].input.scriptText, "上一次框内文案");
+    assert.deepEqual(previewCalls[0].input.packages, {
+      genrePackageId: "genre-1",
+      emotionPackageId: "emotion-1",
+    });
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.scriptText, "重新生成后的剧本");
   });
 
   it("requests an AI storyboard preview instead of directly creating an episode", async () => {

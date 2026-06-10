@@ -7,8 +7,8 @@ const SCRIPT_ENTRY_GROUPS = [
     body: "专家级编剧知识库，精细化改编全程可控，最高支持120万字",
     tone: "warm",
     actions: [
-      { title: "从分析开始改编小说", action: "open-script-modal" },
-      { title: "直接开始改编小说", action: "open-script-modal" },
+      { title: "从分析开始改编小说", action: "open-script-modal", modalMode: "manual" },
+      { title: "直接开始改编小说", action: "open-script-modal", modalMode: "upload" },
     ],
   },
   {
@@ -38,26 +38,32 @@ const SCRIPT_SORT_OPTIONS = [
 
 export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
   const scriptRecord = state.projectDetail?.script ?? state.script ?? null;
+  const detailScripts = Array.isArray(state.projectDetail?.scripts) ? state.projectDetail.scripts : [];
+  const libraryScripts = Array.isArray(ui.scriptLibraryRecords) ? ui.scriptLibraryRecords : [];
+  const scriptRecords = libraryScripts.length
+    ? libraryScripts
+    : detailScripts.length
+      ? detailScripts
+      : scriptRecord
+        ? [scriptRecord]
+        : [];
   const projectRecord = state.projectDetail?.project ?? state.project ?? null;
   const episodes = Array.isArray(state.projectDetail?.episodes) ? state.projectDetail.episodes : [];
   const shots = Array.isArray(state.projectDetail?.shots) ? state.projectDetail.shots : [];
-  const scriptCards = buildScriptCards({ projectRecord, scriptRecord, episodes, shots });
-  const searchQuery = String(ui.scriptSearchQuery ?? "");
-  const typeFilter = String(ui.scriptTypeFilter ?? "all");
+  const scriptCards = buildScriptCards({ projectRecord, scriptRecords, episodes, shots });
   const sortOrder = String(ui.scriptSortOrder ?? "updated-desc");
-  const filteredCards = sortScriptCards(
-    filterScriptCards(scriptCards, { searchQuery, typeFilter }),
-    sortOrder,
-  );
+  const filteredCards = sortScriptCards(scriptCards, sortOrder);
   const selectedScriptId = String(ui.selectedScriptId ?? "");
   const selectedCard =
     filteredCards.find((card) => String(card.id) === selectedScriptId) ?? filteredCards[0] ?? null;
+  const selectedScriptIds = normalizeSelectedScriptIds(ui.selectedScriptIds);
+  const selectedCount = filteredCards.filter((card) => selectedScriptIds.has(String(card.id ?? ""))).length;
 
   if (ui.scriptDetailOpen && selectedCard) {
     return renderScriptReaderPage({
       card: selectedCard,
       projectRecord,
-      scriptRecord,
+      scriptRecord: selectedCard.scriptRecord ?? scriptRecord,
       episodes,
       ui,
       selectedEpisodeId: ui.selectedScriptEpisodeId,
@@ -71,77 +77,89 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
       </section>
 
       <section class="script-library-panel" aria-label="我的剧本">
-        <header class="script-library-head">
-          <div>
-            <h1>我的剧本</h1>
-            <p>共 ${filteredCards.length} 个剧本。剧本会在生成规划、项目上传或资产提取后沉淀到这里。</p>
-          </div>
-          <div class="script-library-tools">
-            <label class="script-search">
-              <span aria-hidden="true">⌕</span>
-              <input
-                type="search"
-                placeholder="搜索剧本名称"
-                value="${escapeHtml(searchQuery)}"
-                data-action="search-scripts"
-              />
-            </label>
-            <label class="script-filter-select">
-              <span class="sr-only">类型筛选</span>
-              <select data-action="set-script-type-filter" aria-label="类型筛选">
-                ${renderOptionList(SCRIPT_TYPE_OPTIONS, typeFilter)}
-              </select>
-            </label>
-            <label class="script-filter-select">
-              <span class="sr-only">排序</span>
-              <select data-action="set-script-sort-order" aria-label="排序">
-                ${renderOptionList(SCRIPT_SORT_OPTIONS, sortOrder)}
-              </select>
-            </label>
-          </div>
-        </header>
+        ${renderScriptBulkToolbar({ totalCount: filteredCards.length, selectedCount })}
         ${
           filteredCards.length
             ? renderScriptRecordTabs(filteredCards, selectedCard, ui)
             : `<div class="script-empty-state">
-                <strong>${searchQuery || typeFilter !== "all" ? "未找到匹配剧本" : "暂无剧本"}</strong>
-                <span>${
-                  searchQuery || typeFilter !== "all"
-                    ? "试试切换关键词，或者清空筛选查看全部剧本。"
-                    : "从上方选择小说改编或 AI 原创模式，完成设定后会生成规划方案。"
-                }</span>
+                <strong>暂无剧本</strong>
+                <span>从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。</span>
               </div>`
         }
       </section>
 
       ${renderScriptRenameModal(ui)}
       ${renderScriptDeleteModal({ ui, cards: scriptCards })}
-      <p id="workspace-status" class="workbench-toast" role="status">${escapeHtml(ui.toast ?? "已进入剧本管理。")}</p>
+      ${renderScriptStatusToast(ui.toast)}
     </section>
   `;
 }
 
-function buildScriptCards({ projectRecord, scriptRecord, episodes, shots }) {
-  if (!scriptRecord || scriptRecord.deletedAt) {
+function renderScriptStatusToast(message) {
+  const normalizedMessage = String(message ?? "").trim();
+  if (!normalizedMessage) {
+    return "";
+  }
+  const tone = resolveScriptToastTone(normalizedMessage);
+  const title = tone === "error" ? "操作失败" : "操作成功";
+  return `
+    <div id="workspace-status" class="workbench-toast global-workbench-toast ${tone}" role="status" aria-live="polite">
+      <strong>${title}</strong>
+      <span>${escapeHtml(normalizedMessage)}</span>
+    </div>
+  `;
+}
+
+function resolveScriptToastTone(message) {
+  const normalizedMessage = String(message ?? "").toLowerCase();
+  const errorMarkers = [
+    "失败",
+    "错误",
+    "未找到",
+    "不可",
+    "不能",
+    "无法",
+    "缺少",
+    "请先",
+    "请输入",
+    "请选择",
+    "failed",
+    "failure",
+    "error",
+    "denied",
+  ];
+  return errorMarkers.some((marker) => normalizedMessage.includes(marker)) ? "error" : "success";
+}
+
+function buildScriptCards({ projectRecord, scriptRecords, episodes, shots }) {
+  const records = Array.isArray(scriptRecords)
+    ? scriptRecords.filter((scriptRecord) => scriptRecord && !scriptRecord.deletedAt)
+    : [];
+  if (!records.length) {
     return [];
   }
 
+  return records.map((scriptRecord) => {
   const typeKey = inferScriptType(scriptRecord?.inputText);
-  const status = normalizeScriptStatus(scriptRecord?.status, projectRecord?.phase, shots.length);
-  return [{
+  const projectPhase = scriptRecord?.projectPhase ?? scriptRecord?.project?.phase ?? projectRecord?.phase;
+  const status = normalizeScriptStatus(scriptRecord?.status, projectPhase, shots.length);
+  const sectionCount = Number(scriptRecord?.sectionCount ?? NaN);
+  return {
     id: scriptRecord?.id ?? "script-primary",
-    projectId: projectRecord?.id ?? scriptRecord?.projectId ?? null,
-    title: scriptRecord?.title ?? projectRecord?.name ?? "未命名剧本",
+    projectId: scriptRecord?.projectId ?? scriptRecord?.project?.id ?? projectRecord?.id ?? null,
+    scriptRecord,
+    title: scriptRecord?.title ?? scriptRecord?.projectName ?? scriptRecord?.project?.name ?? projectRecord?.name ?? "未命名剧本",
     typeKey,
     typeLabel: scriptTypeLabel(typeKey),
     status,
-    episodeCount: episodes.length,
+    episodeCount: Number.isFinite(sectionCount) && sectionCount > 0 ? sectionCount : episodes.length,
     shotCount: shots.length,
     coverImageUrl: resolveScriptCoverImage(scriptRecord),
-    updatedAtValue: toTimestamp(scriptRecord?.updatedAt ?? projectRecord?.updatedAt ?? null),
+    updatedAtValue: toTimestamp(scriptRecord?.updatedAt ?? scriptRecord?.projectUpdatedAt ?? projectRecord?.updatedAt ?? null),
     summary: summarizeScript(scriptRecord?.inputText),
     rawText: scriptRecord?.inputText ?? "",
-  }];
+  };
+  });
 }
 
 function renderScriptEntryGroup(group) {
@@ -159,8 +177,9 @@ function renderScriptEntryGroup(group) {
 }
 
 function renderScriptEntryAction(card) {
+  const modalModeAttr = card.modalMode ? ` data-script-modal-mode="${escapeHtml(card.modalMode)}"` : "";
   return `
-    <button type="button" data-action="${escapeHtml(card.action)}">
+    <button type="button" data-action="${escapeHtml(card.action)}"${modalModeAttr}>
       ${escapeHtml(card.title)}
       ${card.badge ? '<b class="script-entry-badge">全新功能，限时特惠</b>' : ""}
     </button>
@@ -178,23 +197,69 @@ function renderScriptRecordTabs(cards, selectedCard, ui = {}) {
   `;
 }
 
+function normalizeSelectedScriptIds(value) {
+  if (!Array.isArray(value)) {
+    return new Set();
+  }
+  return new Set(value.map((item) => String(item ?? "")).filter(Boolean));
+}
+
+function renderScriptBulkToolbar({ totalCount = 0, selectedCount = 0 } = {}) {
+  const count = Number(totalCount) || 0;
+  const selected = Number(selectedCount) || 0;
+  const hasCards = count > 0;
+  const allSelected = hasCards && selected === count;
+  return `
+    <div class="script-bulk-toolbar" aria-label="剧本批量操作">
+      <div class="script-bulk-summary">
+        <strong>我的剧本</strong>
+        <span>共 ${count} 个</span>
+        <span class="${selected ? "is-active" : ""}">已选 ${selected} 个</span>
+      </div>
+      <div class="script-bulk-actions">
+        <button class="script-bulk-button" type="button" data-action="toggle-all-script-selection" ${hasCards ? "" : "disabled"}>
+          ${allSelected ? "取消全选" : "全选"}
+        </button>
+        <button class="script-bulk-button ghost" type="button" data-action="clear-script-selection" ${selected ? "" : "disabled"}>
+          取消选择
+        </button>
+        <button class="script-bulk-button danger" type="button" data-action="delete-selected-scripts" ${selected ? "" : "disabled"}>
+          删除所选
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function renderScriptRecordTab(card, selectedId, ui = {}) {
   const cardId = String(card.id ?? "");
   const projectId = String(card.projectId ?? "");
   const scriptId = String(card.id ?? "");
   const selected = cardId === selectedId;
+  const checked = normalizeSelectedScriptIds(ui.selectedScriptIds).has(scriptId);
   const coverInputId = `script-cover-input-${escapeHtml(scriptId || cardId)}`;
   const menuOpen = ui.scriptCardMenuId === scriptId;
   return `
     <article
       id="script-tab-${escapeHtml(cardId)}"
-      class="script-project-card ${selected ? "active" : ""}"
+      class="script-project-card ${selected ? "active" : ""} ${checked ? "is-selected" : ""}"
       data-action="select-script-record-tab"
       data-script-id="${escapeHtml(cardId)}"
       data-open-detail="true"
       data-project-id="${escapeHtml(projectId)}"
       aria-selected="${selected ? "true" : "false"}"
     >
+      <button
+        class="script-card-select ${checked ? "checked" : ""}"
+        type="button"
+        data-action="toggle-script-selection"
+        data-script-id="${escapeHtml(scriptId)}"
+        data-project-id="${escapeHtml(projectId)}"
+        aria-pressed="${checked ? "true" : "false"}"
+        aria-label="${checked ? "取消选择剧本" : "选择剧本"}"
+      >
+        <span aria-hidden="true"></span>
+      </button>
       <div
         class="script-project-poster ${card.coverImageUrl ? "has-cover" : "needs-cover"}"
         data-action="pick-script-cover"
@@ -286,7 +351,14 @@ function renderScriptDeleteModal({ ui = {}, cards = [] } = {}) {
   if (!ui.deleteScriptId) {
     return "";
   }
+  const deleteMode = ui.deleteScriptMode === "bulk" ? "bulk" : "single";
+  const deleteIds = Array.isArray(ui.deleteScriptIds) ? ui.deleteScriptIds.map((id) => String(id)) : [];
+  const deleteCount = deleteMode === "bulk" ? deleteIds.length : 1;
   const script = cards.find((card) => String(card.id) === String(ui.deleteScriptId));
+  const message =
+    deleteMode === "bulk"
+      ? `所选 ${deleteCount} 个剧本将被删除，确定删除吗？`
+      : `所选剧本将被删除，确定删除${script?.title ? `“${escapeHtml(script.title)}”` : ""}吗？`;
   return `
     <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除剧本">
       <div class="delete-project-modal">
@@ -294,7 +366,7 @@ function renderScriptDeleteModal({ ui = {}, cards = [] } = {}) {
           <div class="delete-project-icon">×</div>
           <div>
             <h2>确认删除</h2>
-            <p>所选剧本将被删除，确定删除${script?.title ? `“${escapeHtml(script.title)}”` : ""}吗？</p>
+            <p>${message}</p>
           </div>
           <button class="modal-close" type="button" data-action="close-delete-script-modal" aria-label="关闭">×</button>
         </div>

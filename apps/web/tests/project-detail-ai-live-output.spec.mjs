@@ -42,6 +42,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
           },
         },
       },
+      toast: options.toast ?? "",
     },
   });
 }
@@ -79,6 +80,19 @@ test("loading AI storyboard preview shows the active asset stage response", () =
     assert.doesNotMatch(html, item.hiddenJsonKey);
     assert.doesNotMatch(html, /DeepSeek 剧本实时返回/);
   }
+});
+
+test("project workspace renders action feedback as global status toast", () => {
+  const successHtml = renderLoadingPreview("character", "{}", { toast: "已重命名为 新角色。" });
+  const errorHtml = renderLoadingPreview("character", "{}", { toast: "删除失败：权限不足" });
+
+  assert.match(successHtml, /id="workspace-status"/);
+  assert.match(successHtml, /global-workbench-toast success/);
+  assert.match(successHtml, /操作成功/);
+  assert.match(successHtml, /已重命名为 新角色。/);
+  assert.match(errorHtml, /global-workbench-toast error/);
+  assert.match(errorHtml, /操作失败/);
+  assert.match(errorHtml, /删除失败：权限不足/);
 });
 
 test("loading AI storyboard preview bounds live text and table rows", () => {

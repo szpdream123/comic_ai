@@ -19,6 +19,20 @@ import { resolveEpisodeWorkbenchPrompt, resolveStoryboardPromptForMode } from ".
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
+import { mountCanvasWorkflowIfPresent, refreshCanvasWorkflowGraph, refreshCanvasWorkflowNode } from "./canvas/canvas-x6-graph.js";
+import { createDefaultCanvasDocument } from "./canvas/canvas-default-document.js";
+import {
+  addCanvasNode,
+  applyCanvasRunResult,
+  buildCanvasRunPreview,
+  connectCanvasNodes,
+  disconnectCanvasNodes,
+  resolveCanvasNodeTemplates,
+  removeCanvasNode,
+  updateCanvasViewport,
+  updateCanvasNodeData,
+  updateCanvasNodePosition,
+} from "./canvas/canvas-state.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
 
@@ -27,6 +41,20 @@ const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
 const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
+const ENABLE_EPISODE_EVENT_TRACKING = false;
+const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
+  document: {
+    label: "剧本文档",
+    maxBytes: 30 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/octet-stream",
+    ],
+    extensions: [".txt", ".docx"],
+  },
+  blockedExtensions: defaultUploadLimits.blockedExtensions.filter((extension) => ![".txt", ".docx"].includes(extension)),
+};
 export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
 }
@@ -486,6 +514,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       projectStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
+      scriptLibraryRecords: [],
       projectSearchQuery: "",
       projectLibraryPage: 1,
       projectStatusMenuOpen: false,
@@ -616,8 +645,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       renameScriptNotice: "",
       deleteScriptId: null,
       deleteScriptProjectId: null,
+      deleteScriptMode: "single",
+      deleteScriptIds: [],
       selectedProjectCardId: null,
+      canvasProjectView: deriveInitialCanvasProjectView(window.location.hash),
       isScriptModalOpen: false,
+      scriptModalMode: "full",
       isOriginalScriptModalOpen: false,
       originalScriptDraft: {
         fileName: "",
@@ -629,11 +662,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         inspiration: "",
       },
       scriptTab: "script-upload",
+      scriptManualDraft: "",
+      scriptUploadFile: null,
+      scriptUploadFileName: "",
       scriptSearchQuery: "",
       scriptTypeFilter: "all",
       scriptSortOrder: "updated-desc",
-      scriptSubmitAction: "create-project",
-      scriptSubmitLabel: "创建项目",
+      selectedScriptIds: [],
+      scriptSubmitAction: "import-script-document",
+      scriptSubmitLabel: "创建剧本",
       uploadNotice: "",
       selectedModelId: "gpt-image-2-cn",
       prompt: "",
@@ -663,6 +700,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       storyboardDeleteId: null,
       storyboardImageDeleteTarget: null,
       storyboardVideoDeleteTarget: null,
+      generationResultDeleteTarget: null,
       assetInspector: null,
       referenceAssetPickerKind: null,
       referenceAssetPickerMediaType: "image",
@@ -706,9 +744,58 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       teamTemporaryPassword: "",
     },
   };
+  workbench.onCanvasNodeSelected = () => {
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    render(workbench);
+  };
   installEpisodeWorkbenchTestHooks(workbench);
-  root.addEventListener("mousedown", (event) => {
+  root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.target);
+    const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
+    if (canvasEdgeTarget) {
+      workbench.canvasPointerHandledAt = Date.now();
+      startCanvasEdgeDisconnectDrag(workbench, event, canvasEdgeTarget);
+      return;
+    }
+    const nearestCanvasEdge = findNearestCanvasEdgeFromEvent(eventTarget, event);
+    if (nearestCanvasEdge) {
+      workbench.canvasPointerHandledAt = Date.now();
+      startCanvasEdgeDisconnectDrag(workbench, event, nearestCanvasEdge);
+      return;
+    }
+    const canvasPortTarget = eventTarget?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
+    if (canvasPortTarget) {
+      workbench.canvasPointerHandledAt = Date.now();
+      startCanvasConnectionDrag(workbench, event, canvasPortTarget);
+      return;
+    }
+  });
+  root.addEventListener("mousedown", (event) => {
+    if (Date.now() - Number(workbench.canvasPointerHandledAt ?? 0) < 450) {
+      return;
+    }
+    const eventTarget = resolveEventElement(event.target);
+    const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
+    if (canvasEdgeTarget) {
+      startCanvasEdgeDisconnectDrag(workbench, event, canvasEdgeTarget);
+      return;
+    }
+    const nearestCanvasEdge = findNearestCanvasEdgeFromEvent(eventTarget, event);
+    if (nearestCanvasEdge) {
+      startCanvasEdgeDisconnectDrag(workbench, event, nearestCanvasEdge);
+      return;
+    }
+    const canvasPortTarget = eventTarget?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
+    if (canvasPortTarget) {
+      startCanvasConnectionDrag(workbench, event, canvasPortTarget);
+      return;
+    }
+    const canvasNodeTarget = eventTarget?.closest?.(".canvas-lib-node[data-canvas-node-id]");
+    if (canvasNodeTarget && !eventTarget?.closest?.("button, input, textarea, select, option, a")) {
+      startCanvasNodeDrag(workbench, event, canvasNodeTarget);
+      return;
+    }
     const mouseSelectTarget = eventTarget?.closest?.(
       '.episode-replica-asset-card [data-action="set-episode-asset"], .episode-replica-asset-card [data-action="toggle-episode-asset-selection"]',
     );
@@ -722,6 +809,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     const eventTarget = resolveEventElement(event.target);
     const actionTarget = eventTarget?.closest?.("[data-action]");
     if (!actionTarget) {
+      if (eventTarget?.closest?.(".canvas-stage")) {
+        const canvasInteractiveTarget = eventTarget?.closest?.(
+          ".canvas-node-editor, .canvas-lib-node, .canvas-context-menu, .canvas-add-menu, .canvas-zoom-tools, .canvas-bottom-tools",
+        );
+        if (canvasInteractiveTarget) {
+          return;
+        }
+        workbench.ui.canvasAddMenuOpen = false;
+        workbench.ui.canvasContextMenu = null;
+        workbench.ui.selectedCanvasNodeId = null;
+        workbench.ui.canvasEditorOpen = false;
+        workbench.ui.canvasRunPreview = null;
+        workbench.ui.toast = "";
+        render(workbench);
+        return;
+      }
       if (workbench.ui.promptMentionMenuOpen || workbench.ui.promptMentionPreviewOpen) {
         clearPromptMentionUi(workbench);
         render(workbench);
@@ -784,11 +887,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         workbench.ui.singleEpisodeLookPanel = "";
         render(workbench);
       }
+      if (workbench.ui.canvasAddMenuOpen) {
+        workbench.ui.canvasAddMenuOpen = false;
+        render(workbench);
+      }
+      if (workbench.ui.canvasContextMenu) {
+        workbench.ui.canvasContextMenu = null;
+        render(workbench);
+      }
       return;
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
       actionTarget.matches?.('input[data-action="upload-script-cover"]') ||
+      actionTarget.matches?.('input[data-action="select-script-upload-file"]') ||
       actionTarget.matches?.(".asset-import-file-input") ||
       actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
@@ -804,6 +916,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     });
+  });
+
+  root.addEventListener("contextmenu", (event) => {
+    const eventTarget = resolveEventElement(event.target);
+    const stage = eventTarget?.closest?.(".canvas-stage");
+    if (!stage) {
+      return;
+    }
+    event.preventDefault();
+    const rect = stage.getBoundingClientRect?.();
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = {
+      x: Math.round(event.clientX - (rect?.left ?? 0)),
+      y: Math.round(event.clientY - (rect?.top ?? 0)),
+    };
+    render(workbench);
   });
 
   root.addEventListener("dblclick", (event) => {
@@ -894,6 +1022,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.target);
 
+    if (target?.matches?.("[data-canvas-model-select]")) {
+      const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+      const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "send-flow";
+      workbench.ui.canvasDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+        modelCode: target.value,
+      });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.canvasRunPreview = null;
+      workbench.ui.toast = "";
+      render(workbench);
+      return;
+    }
+
     if (
       target?.matches?.("#team-member-role-input") ||
       target?.matches?.("#team-edit-member-role-input")
@@ -973,6 +1114,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       }
       workbench.ui.projectStatusFilters = [...next];
       workbench.ui.projectLibraryPage = 1;
+      workbench.ui.toast = "";
       render(workbench);
       return;
     }
@@ -983,6 +1125,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         businessRole: target.value,
       };
       workbench.ui.teamMemberCreateNotice = "";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="select-script-upload-file"]')) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (!file) {
+        return;
+      }
+      setScriptUploadFile(workbench, file);
       render(workbench);
       return;
     }
@@ -1128,7 +1281,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("dragover", (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
     }
@@ -1141,7 +1294,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("dragleave", (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
     }
@@ -1154,7 +1307,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("drop", async (event) => {
     const eventTarget = resolveEventElement(event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
     }
@@ -1180,6 +1333,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     const files = [...(event.dataTransfer?.files ?? [])];
     if (!files.length) {
+      return;
+    }
+    if (zone.dataset.dropzone === "script-upload") {
+      const [file] = files;
+      if (!file) {
+        return;
+      }
+      setScriptUploadFile(workbench, file);
+      render(workbench);
       return;
     }
     if (zone.dataset.dropzone === "storyboard-image") {
@@ -1213,8 +1375,51 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     scheduleAssetLibrarySearch(workbench);
   });
 
-  root.addEventListener("input", (event) => {
+  root.addEventListener("input", async (event) => {
     const target = resolveEventElement(event.target);
+
+    if (target?.matches?.("[data-canvas-prompt-input]")) {
+      const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+      const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "send-flow";
+      workbench.ui.canvasDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+        prompt: target.value,
+      });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.canvasRunPreview = null;
+      refreshCanvasGraphFromDocument(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-canvas-title-input]")) {
+      const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+      const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+      if (!nodeId) {
+        return;
+      }
+      workbench.ui.canvasDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+        title: target.value,
+      });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.canvasRunPreview = null;
+      refreshCanvasGraphFromDocument(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-canvas-text-input]")) {
+      const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+      const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+      const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+      if (!nodeId || !node) {
+        return;
+      }
+      workbench.ui.canvasDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+        [node.type === "send" ? "prompt" : "text"]: target.value,
+      });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.canvasRunPreview = null;
+      refreshCanvasGraphFromDocument(workbench);
+      return;
+    }
 
     if (
       target?.matches?.("#team-member-phone-input") ||
@@ -1405,6 +1610,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#manual-script-input")) {
+      workbench.ui.scriptManualDraft = target.value;
+      if (workbench.ui.uploadNotice) {
+        workbench.ui.uploadNotice = "";
+      }
+      const counter = workbench.root.querySelector(".script-manual-count");
+      if (counter) {
+        counter.textContent = `${[...target.value].length}/5000`;
+      }
+      const notice = workbench.root.querySelector(".upload-modal-actions .modal-inline-status");
+      if (notice) {
+        notice.textContent = "";
+      }
+      return;
+    }
+
     if (target?.matches?.("#episode-rename-name-input")) {
       workbench.ui.renameEpisodeName = target.value;
       if (workbench.ui.renameEpisodeNotice) {
@@ -1474,9 +1695,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     const scriptRecordTab = target?.closest?.('[data-action="select-script-record-tab"]');
     if (scriptRecordTab) {
       workbench.ui.selectedScriptId = scriptRecordTab.dataset.scriptId ?? "";
+      workbench.ui.selectedProjectCardId = scriptRecordTab.dataset.projectId ?? workbench.ui.selectedProjectCardId;
       if (scriptRecordTab.dataset.openDetail === "true") {
         workbench.ui.scriptDetailOpen = true;
         workbench.ui.selectedScriptEpisodeId = "";
+        workbench.ui.scriptReaderSections = [];
+        workbench.ui.scriptReaderSectionsLoaded = false;
+        await loadScriptReaderSections(workbench);
       }
       render(workbench);
       return;
@@ -1780,6 +2005,7 @@ async function refresh(workbench) {
     }
   }
   await syncProjectLibraryFromApi(workbench);
+  await syncScriptLibraryFromApi(workbench);
   await syncProjectStyles(workbench);
   await syncStoryboardPromptPackages(workbench);
   workbench.ui.exportHistory = workbench.state.project
@@ -1829,6 +2055,7 @@ async function refresh(workbench) {
       });
     }
   }
+  syncCanvasRouteState(workbench, window.location.hash);
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
   if (workbench.ui.activeNavTab === "team") {
     await loadTeamSurface(workbench);
@@ -2042,6 +2269,7 @@ async function loadTeamSurface(workbench) {
 
 function render(workbench, options = {}) {
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
+  const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(
     activeStoryboards,
@@ -2058,6 +2286,7 @@ function render(workbench, options = {}) {
     },
   });
   restoreEpisodeWorkbenchScrollState(workbench.root, episodeScrollState);
+  restoreWorkbenchSurfaceScrollState(workbench.root, surfaceScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
@@ -2067,6 +2296,40 @@ function render(workbench, options = {}) {
   }
   applyPostRenderEffects(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench);
+  mountCanvasWorkflowIfPresent(workbench);
+  updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
+}
+
+function captureWorkbenchSurfaceScrollState(root) {
+  if (!root?.querySelectorAll) {
+    return null;
+  }
+  return Array.from(root.querySelectorAll("[data-scroll-surface]")).map((surface) => ({
+    name: surface.dataset.scrollSurface ?? "",
+    top: Number(surface.scrollTop ?? 0),
+    left: Number(surface.scrollLeft ?? 0),
+  }));
+}
+
+function restoreWorkbenchSurfaceScrollState(root, scrollState) {
+  if (!root?.querySelector || !Array.isArray(scrollState)) {
+    return;
+  }
+  for (const state of scrollState) {
+    if (!state?.name || !Number.isFinite(state.top)) {
+      continue;
+    }
+    const surface = root.querySelector(
+      `[data-scroll-surface="${CSS.escape(String(state.name))}"]`,
+    );
+    if (!surface) {
+      continue;
+    }
+    surface.scrollTop = state.top;
+    if (Number.isFinite(state.left)) {
+      surface.scrollLeft = state.left;
+    }
+  }
 }
 
 function captureEpisodeWorkbenchScrollState(root) {
@@ -2135,7 +2398,9 @@ function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench) {
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
     return;
   }
-  const liveOutput = workbench.root.querySelector?.(".single-episode-ai-live-output pre");
+  const liveOutput = workbench.root.querySelector?.(
+    ".manual-script-analysis-output pre, .single-episode-ai-live-output pre",
+  );
   if (!liveOutput) {
     return;
   }
@@ -2368,6 +2633,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "preview-export",
     "episode-fixed-result-action",
     "select-script-record-tab",
+    "toggle-script-selection",
+    "toggle-all-script-selection",
+    "clear-script-selection",
+    "delete-selected-scripts",
     "close-script-detail",
     "select-script-reader-section",
     "save-script-reader-section",
@@ -2375,18 +2644,228 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "open-script-reader-delete",
     "close-script-reader-delete",
     "confirm-script-reader-delete",
+    "save-manual-script-analysis",
+    "regenerate-manual-script-analysis",
+    "toggle-canvas-add-menu",
+    "add-canvas-node",
+    "add-canvas-template",
+    "delete-canvas-node",
+    "select-canvas-node",
+    "set-canvas-sidebar-mode",
+    "set-canvas-viewport",
+    "run-canvas-node",
+    "open-canvas-project",
+    "back-to-canvas-projects",
   ]);
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
     return;
   }
 
+  if (action === "toggle-canvas-add-menu") {
+    workbench.ui.canvasAddMenuOpen = !workbench.ui.canvasAddMenuOpen;
+    workbench.ui.canvasContextMenu = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-sidebar-mode") {
+    workbench.ui.canvasSidebarMode = target.dataset.canvasSidebarMode === "assets" ? "assets" : "nodes";
+    workbench.ui.canvasAddMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-viewport") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const viewport = canvasDocument.viewport ?? {};
+    const patchName = target.dataset.viewportPatch ?? "";
+    const patch = resolveCanvasViewportPatch(viewport, patchName);
+    workbench.ui.canvasDocument = updateCanvasViewport(canvasDocument, patch);
+    applyCanvasGraphViewport(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "add-canvas-node") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeKind = target.dataset.nodeKind ?? "send";
+    const offset = canvasDocument.nodes.length * 36;
+    workbench.ui.canvasDocument = addCanvasNode(canvasDocument, {
+      type: nodeKind,
+      position: { x: 220 + offset, y: 180 + offset },
+    });
+    workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.toast = "已添加画布节点。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "add-canvas-template") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const templates = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig);
+    const template =
+      templates.find((item) => item.id === target.dataset.templateId) ??
+      templates.find((item) => item.type === (target.dataset.nodeKind ?? "")) ??
+      templates.find((item) => item.type === "send");
+    const offset = canvasDocument.nodes.length * 36;
+    const assetId = target.dataset.assetId ?? "";
+    workbench.ui.canvasDocument = addCanvasNode(canvasDocument, {
+      type: template?.type ?? target.dataset.nodeKind ?? "send",
+      position: { x: 220 + offset, y: 180 + offset },
+      template: {
+        ...template,
+        defaultData: {
+          ...(template?.defaultData ?? {}),
+          ...(assetId ? { assetId, source: "project_asset", title: target.textContent?.trim?.() || template?.title } : {}),
+        },
+      },
+    });
+    workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.canvasSidebarMode = "nodes";
+    workbench.ui.toast = assetId ? "已把素材放入画布。" : "已添加画布模板节点。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-canvas-node") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId =
+      target.dataset.nodeId ??
+      canvasDocument.nodes.find((node) => node.type === (target.dataset.nodeKind ?? ""))?.id ??
+      canvasDocument.nodes[0]?.id ??
+      null;
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.canvasContextMenu = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "delete-canvas-node") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+    if (!nodeId) {
+      workbench.ui.toast = "请选择要删除的画布节点。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasDocument = removeCanvasNode(canvasDocument, nodeId);
+    workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes[0]?.id ?? null;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.toast = "已删除画布节点。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "run-canvas-node") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "send-flow";
+    const preview = buildCanvasRunPreview(canvasDocument, nodeId);
+    workbench.ui.canvasRunPreview = preview;
+    if (preview.ok) {
+      workbench.ui.canvasDocument = updateCanvasNodeData(canvasDocument, nodeId, { status: "running" });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      const task = await submitCanvasRunIfAvailable(workbench, preview);
+      workbench.ui.canvasDocument = applyCanvasRunResult(workbench.ui.canvasDocument, preview, task);
+      if (task) {
+        workbench.ui.canvasRunPreview = {
+          ...preview,
+          taskId: task?.platform?.tasks?.[0]?.taskId ?? task?.taskId ?? task?.id ?? null,
+          task,
+        };
+        workbench.ui.toast = "画布节点已提交生成任务。";
+      } else {
+        workbench.ui.toast = "画布节点已通过本地校验，准备接入生成任务。";
+      }
+    } else {
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.toast = canvasRunReasonLabel(preview.reason);
+    }
+    render(workbench);
+    return;
+  }
+
   if (action === "select-script-record-tab") {
     workbench.ui.selectedScriptId = target.dataset.scriptId ?? "";
+    workbench.ui.selectedProjectCardId = target.dataset.projectId ?? workbench.ui.selectedProjectCardId;
+    workbench.ui.toast = "";
     if (target.dataset.openDetail === "true") {
       workbench.ui.scriptDetailOpen = true;
       workbench.ui.selectedScriptEpisodeId = "";
+      workbench.ui.scriptReaderSections = [];
+      workbench.ui.scriptReaderSectionsLoaded = false;
       await loadScriptReaderSections(workbench);
     }
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-script-selection") {
+    const scriptId = String(target.dataset.scriptId ?? "");
+    const current = new Set(
+      Array.isArray(workbench.ui.selectedScriptIds) ? workbench.ui.selectedScriptIds.map((id) => String(id)) : [],
+    );
+    if (current.has(scriptId)) {
+      current.delete(scriptId);
+    } else if (scriptId) {
+      current.add(scriptId);
+    }
+    workbench.ui.selectedScriptIds = [...current];
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-all-script-selection") {
+    const scripts = getSelectableScriptRecords(workbench);
+    const ids = scripts
+      .filter((script) => script && !script.deletedAt)
+      .map((script) => String(script.id ?? ""))
+      .filter(Boolean);
+    const current = new Set(
+      Array.isArray(workbench.ui.selectedScriptIds) ? workbench.ui.selectedScriptIds.map((id) => String(id)) : [],
+    );
+    const allSelected = ids.length > 0 && ids.every((id) => current.has(id));
+    workbench.ui.selectedScriptIds = allSelected ? [] : ids;
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "clear-script-selection") {
+    workbench.ui.selectedScriptIds = [];
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "delete-selected-scripts") {
+    const selectedIds = new Set(
+      Array.isArray(workbench.ui.selectedScriptIds) ? workbench.ui.selectedScriptIds.map((id) => String(id)) : [],
+    );
+    const scripts = getSelectableScriptRecords(workbench).filter(
+      (script) => selectedIds.has(String(script?.id ?? "")),
+    );
+    if (!scripts.length) {
+      workbench.ui.toast = "请先选择要删除的剧本。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.deleteScriptMode = "bulk";
+    workbench.ui.deleteScriptIds = scripts.map((script) => String(script.id ?? "")).filter(Boolean);
+    workbench.ui.deleteScriptId = workbench.ui.deleteScriptIds[0] ?? null;
+    workbench.ui.deleteScriptProjectId = null;
+    workbench.ui.scriptCardMenuId = null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -2394,6 +2873,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-script-detail") {
     workbench.ui.scriptDetailOpen = false;
     workbench.ui.selectedScriptEpisodeId = "";
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -2405,6 +2885,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.selectedScriptEpisodeId = episodeId;
     workbench.ui.editingScriptReaderSectionId = "";
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -2425,6 +2906,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const response = await workbench.api.createScriptReaderSection(projectId, {
         title: draftSection.title,
         body: draftSection.text,
+        scriptId: workbench.ui.selectedScriptId ?? null,
       });
       nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
     }
@@ -2668,7 +3150,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, "character");
-    workbench.ui.toast = "已进入项目资产页，可直接上传角色素材。";
+    workbench.ui.toast = "";
     window.location.hash = "project-workspace";
     render(workbench);
     return;
@@ -2682,7 +3164,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorModal = "character";
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
-    workbench.ui.toast = "已进入项目资产页，可直接生成角色资产。";
+    workbench.ui.toast = "";
     window.location.hash = "project-workspace";
     render(workbench);
     return;
@@ -2706,7 +3188,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
-    workbench.ui.toast = `已切换到${libraryAssetScopeLabel(workbench.ui.libraryTeamAssetScope)}资产库。`;
+    workbench.ui.toast = "";
     window.location.hash = "library";
     render(workbench);
     await syncAssetLibraryFromApi(workbench);
@@ -3097,7 +3579,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.createMemberModal = null;
     workbench.ui.editMemberModal = null;
     workbench.ui.selectedDashboardMemberId = workbench.ui.projectMembers?.[0]?.id ?? null;
-    workbench.ui.toast = "已进入团队概览。";
+    workbench.ui.toast = "";
     window.location.hash = "team-dashboard";
     render(workbench);
     return;
@@ -3107,7 +3589,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team-dashboard";
     workbench.ui.teamDashboardTab = normalizeTeamDashboardTab(target.dataset.dashboardTab);
-    workbench.ui.toast = "已切换团队数据看板。";
+    workbench.ui.toast = "";
     window.location.hash = teamDashboardHash(workbench.ui.teamDashboardTab);
     render(workbench, { preserveLibraryScroll: true });
     return;
@@ -3130,7 +3612,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.teamDashboardTab = "member-consumption";
     workbench.ui.teamDashboardDateRange = "today";
     await loadTeamSurface(workbench);
-    workbench.ui.toast = "已返回团队管理。";
+    workbench.ui.toast = "";
     window.location.hash = "team";
     render(workbench);
     return;
@@ -3203,12 +3685,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.teamDashboardTab = "member-consumption";
       workbench.ui.teamDashboardDateRange = "today";
     }
+    if (workbench.ui.activeNavTab === "tools") {
+      workbench.ui.canvasProjectView = "list";
+      workbench.ui.selectedCanvasNodeId = null;
+      workbench.ui.canvasEditorOpen = false;
+      workbench.ui.canvasAddMenuOpen = false;
+      workbench.ui.canvasContextMenu = null;
+      const episodeId = workbench.ui.selectedEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench);
+      if (episodeId && episodeId !== "episode-primary") {
+        await loadEpisodeGenerationConfig(workbench, episodeId);
+      }
+    }
     if (workbench.ui.activeNavTab === "library") {
       workbench.ui.libraryTeamRoute = "assets";
       workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     }
     workbench.ui.projectInteriorStatusMenuOpen = false;
-    workbench.ui.toast = `已切换到${navTabLabel(workbench.ui.activeNavTab)}。`;
+    workbench.ui.toast = "";
     window.location.hash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
     if (workbench.ui.activeNavTab === "project") {
       await syncProjectLibraryFromApi(workbench);
@@ -3219,6 +3712,28 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (workbench.ui.activeNavTab === "team") {
       await loadTeamSurface(workbench);
     }
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-canvas-project") {
+    workbench.ui.canvasProjectView = "detail";
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.toast = "";
+    window.location.hash = "tools-canvas";
+    render(workbench);
+    return;
+  }
+
+  if (action === "back-to-canvas-projects") {
+    workbench.ui.canvasProjectView = "list";
+    workbench.ui.selectedCanvasNodeId = null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.toast = "";
+    window.location.hash = "tools";
     render(workbench);
     return;
   }
@@ -3258,24 +3773,47 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-script-modal") {
+    const scriptModalMode =
+      target.dataset.scriptModalMode === "manual"
+        ? "manual"
+        : target.dataset.scriptModalMode === "upload"
+          ? "upload"
+          : "full";
     workbench.ui.isScriptModalOpen = true;
-    workbench.ui.scriptTab = "script-upload";
-    workbench.ui.scriptSubmitAction = "create-project";
-    workbench.ui.scriptSubmitLabel = "创建项目";
+    workbench.ui.scriptModalMode = scriptModalMode;
+    workbench.ui.scriptTab = scriptModalMode === "manual" ? "script-library" : "script-upload";
+    workbench.ui.scriptSubmitAction = scriptModalMode === "manual" ? "confirm-single-episode" : "import-script-document";
+    workbench.ui.scriptSubmitLabel = scriptModalMode === "manual" ? "开始分析" : "创建剧本";
     workbench.ui.uploadNotice = "";
+    workbench.ui.toast = "";
+    if (
+      scriptModalMode === "manual" &&
+      (!hasStoryboardPromptPackagesForType(workbench, "genre") ||
+        !hasStoryboardPromptPackagesForType(workbench, "emotion"))
+    ) {
+      await syncStoryboardPromptPackages(workbench);
+    }
     render(workbench);
+    return;
+  }
+
+  if (action === "pick-script-upload-file") {
+    const input = target.querySelector?.('input[data-action="select-script-upload-file"]')
+      ?? workbench.root?.querySelector?.('input[data-action="select-script-upload-file"]');
+    input?.click?.();
     return;
   }
 
   if (action === "open-original-script-modal") {
     workbench.ui.isOriginalScriptModalOpen = true;
-    workbench.ui.toast = "已打开 AI 原创剧本设定。";
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
 
   if (action === "close-original-script-modal") {
     workbench.ui.isOriginalScriptModalOpen = false;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -3338,15 +3876,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-script-modal") {
     workbench.ui.isScriptModalOpen = false;
-    workbench.ui.scriptSubmitAction = "create-project";
-    workbench.ui.scriptSubmitLabel = "创建项目";
+    workbench.ui.scriptModalMode = "full";
+    workbench.ui.scriptSubmitAction = "import-script-document";
+    workbench.ui.scriptSubmitLabel = "创建剧本";
     workbench.ui.uploadNotice = "";
+    workbench.ui.toast = "";
+    workbench.ui.singleEpisodeLookPanel = "";
     render(workbench);
     return;
   }
 
   if (action === "switch-script-tab") {
-    workbench.ui.scriptTab = target.dataset.tab ?? "script-upload";
+    workbench.ui.scriptTab =
+      target.dataset.tab === "script-library" ? "script-library" : "script-upload";
     workbench.ui.uploadNotice = "";
     render(workbench);
     return;
@@ -3880,6 +4422,32 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "close-generation-result-delete-modal") {
+    workbench.ui.generationResultDeleteTarget = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-delete-generation-result") {
+    const draft = workbench.ui.generationResultDeleteTarget;
+    workbench.ui.generationResultDeleteTarget = null;
+    if (!draft?.scope) {
+      render(workbench);
+      return;
+    }
+    if (draft.scope === "asset") {
+      await deleteAssetGenerationResult(workbench, draft);
+      return;
+    }
+    await deleteStoryboardConversationTurn(
+      workbench,
+      draft.storyboardId ?? workbench.ui.selectedStoryboardId ?? "",
+      draft.taskId ?? "",
+      draft.mediaKind ?? "image",
+    );
+    return;
+  }
+
   if (action === "delete-sidebar-storyboard") {
     await deleteStoryboardCard(workbench, target.dataset.storyboardId ?? "");
     return;
@@ -4076,59 +4644,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "delete") {
-      const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
-      const selectedAssetId =
+      workbench.ui.generationResultDeleteTarget = {
+        scope: "asset",
+        mediaKind: "image",
+        taskId: imageResult?.taskId ?? taskId ?? "",
+        selectedAssetId:
         imageResult?.selectionContext?.selectedAssetId ??
         workbench.ui.selectedEpisodeAssetId ??
         workbench.ui.selectedEpisodeCardId ??
-        null;
-      try {
-        workbench.ui.busy = true;
-        render(workbench);
-        if (
-          isRealEpisodeWorkbench(workbench) &&
-          typeof workbench.api.deleteFileResource === "function" &&
-          isUuidLike(firstImage?.storageObjectId ?? null)
-        ) {
-          await workbench.api.deleteFileResource(workbench.ui.selectedEpisodeId, firstImage.storageObjectId, {
-            assetVersionId: firstImage.id ?? null,
-            storageObjectId: firstImage.storageObjectId,
-          });
-        }
-        if (
-          isRealEpisodeWorkbench(workbench) &&
-          typeof workbench.api.deleteAssetConversationTurn === "function" &&
-          selectedAssetId &&
-          String(imageResult?.taskId ?? "").trim()
-        ) {
-          const response = await workbench.api.deleteAssetConversationTurn(
-            workbench.ui.selectedEpisodeId,
-            selectedAssetId,
-            imageResult.taskId,
-            "image",
-          );
-          applyAssetConversationHistoryAfterDelete(
-            workbench,
-            selectedAssetId,
-            imageResult.taskId,
-            "image",
-            Array.isArray(response?.entries) ? response.entries : null,
-          );
-        } else {
-          applyAssetConversationHistoryAfterDelete(
-            workbench,
-            selectedAssetId,
-            imageResult?.taskId ?? null,
-            "image",
-          );
-        }
-        workbench.ui.toast = "已删除当前结果。";
-      } catch (error) {
-        workbench.ui.toast = `删除失败：${friendlyError(error)}`;
-      } finally {
-        workbench.ui.busy = false;
-        render(workbench);
-      }
+        null,
+      };
+      render(workbench);
       return;
     }
 
@@ -4156,7 +4682,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "text-to-image") {
-      workbench.ui.toast = "已切换到文字改图模式。";
+      workbench.ui.toast = "";
       render(workbench);
       return;
     }
@@ -4481,12 +5007,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
     if (resultAction === "delete") {
       const normalizedMediaKind = mediaKind === "video" || mediaKind === "lip-sync" ? "video" : "image";
-      await deleteStoryboardConversationTurn(
-        workbench,
-        selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId ?? "",
-        target.dataset.taskId ?? "",
-        normalizedMediaKind,
-      );
+      workbench.ui.generationResultDeleteTarget = {
+        scope: "storyboard",
+        mediaKind: normalizedMediaKind,
+        storyboardId: selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId ?? "",
+        taskId: target.dataset.taskId ?? "",
+      };
+      render(workbench);
       return;
     }
 
@@ -4930,7 +5457,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.projectInteriorSection = "overview";
     workbench.ui.assetGeneratorModal = null;
-    workbench.ui.toast = "正在打开项目工作台...";
+    workbench.ui.toast = "";
     window.location.hash = "project-workspace";
     render(workbench);
     try {
@@ -4950,7 +5477,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
       await syncProjectInteriorSupplementary(workbench);
       await syncProjectLibraryFromApi(workbench);
-      workbench.ui.toast = "已进入项目工作台。";
+      workbench.ui.toast = "";
     } catch (error) {
       workbench.ui.projectPanelMode = "library";
       workbench.ui.toast = `打开项目失败：${friendlyError(error)}`;
@@ -4962,7 +5489,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-episode-workbench") {
     const episodeId = target.dataset.episodeId ?? "episode-primary";
     await enterEpisodeWorkbench(workbench, episodeId, {
-      toast: "已进入剧集工作台。",
+      toast: "",
     });
     return;
   }
@@ -4973,7 +5500,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectPanelMode = "workspace";
     workbench.ui.projectInteriorSection = "episodes";
     workbench.ui.episodeCardMenuId = null;
-    workbench.ui.toast = "已返回剧集列表。";
+    workbench.ui.toast = "";
     window.location.hash = "project-workspace";
     render(workbench);
     return;
@@ -4981,12 +5508,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-project-status-menu") {
     workbench.ui.projectStatusMenuOpen = !workbench.ui.projectStatusMenuOpen;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
 
   if (action === "toggle-project-interior-status-menu") {
     workbench.ui.projectInteriorStatusMenuOpen = !workbench.ui.projectInteriorStatusMenuOpen;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -4995,6 +5524,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorSection = target.dataset.section ?? "overview";
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.assetGeneratorModal = null;
+    workbench.ui.toast = "";
     if (workbench.ui.selectedProjectCardId) {
       await syncProjectInteriorSupplementary(workbench);
     }
@@ -5014,7 +5544,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isScriptModalOpen = true;
     workbench.ui.scriptTab = "script-upload";
     workbench.ui.scriptSubmitAction = "confirm-batch-episode";
-    workbench.ui.scriptSubmitLabel = "确认上传";
+    workbench.ui.scriptSubmitLabel = "开始分析";
     workbench.ui.uploadNotice = "";
     render(workbench);
     return;
@@ -5040,6 +5570,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "commit-ai-storyboard-preview") {
     await commitAiStoryboardPreviewAndEnterWorkbench(workbench);
+    return;
+  }
+
+  if (action === "save-manual-script-analysis") {
+    await saveManualScriptAnalysisToReader(workbench);
+    return;
+  }
+
+  if (action === "regenerate-manual-script-analysis") {
+    const preview = workbench.ui.singleEpisodeAiPreview ?? {};
+    const packages = preview.packages ?? {};
+    workbench.ui.isScriptModalOpen = true;
+    workbench.ui.scriptModalMode = "manual";
+    workbench.ui.scriptManualDraft = String(preview.sourceScript ?? workbench.ui.singleEpisodeScript ?? "");
+    workbench.ui.selectedSingleEpisodeLookPackageIds = {
+      genre: packages.genrePackageId ? [String(packages.genrePackageId)] : [],
+      emotion: packages.emotionPackageId ? [String(packages.emotionPackageId)] : [],
+    };
+    await handleAction(workbench, { dataset: { action: "confirm-single-episode" } });
     return;
   }
 
@@ -5073,9 +5622,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "confirm-single-episode") {
-    const nextScript = workbench.ui.singleEpisodeScript.trim();
+    const isManualScriptAnalysis =
+      workbench.ui.isScriptModalOpen &&
+      workbench.ui.scriptModalMode === "manual";
+    const manualInputValue = isManualScriptAnalysis
+      ? String(workbench.root?.querySelector?.("#manual-script-input")?.value ?? workbench.ui.scriptManualDraft ?? "")
+      : "";
+    const nextScript = (isManualScriptAnalysis ? manualInputValue : workbench.ui.singleEpisodeScript).trim();
     if (!nextScript) {
-      workbench.ui.singleEpisodeNotice = "请先填写单集内容后再创建。";
+      if (isManualScriptAnalysis) {
+        workbench.ui.uploadNotice = "请先在文本框内填写需要分析的剧本文案。";
+      } else {
+        workbench.ui.singleEpisodeNotice = "请先填写单集内容后再创建。";
+      }
       render(workbench);
       return;
     }
@@ -5085,14 +5644,30 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       emotionPackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "emotion"),
     };
     if (!projectId || !packages.genrePackageId || !packages.emotionPackageId) {
-      workbench.ui.singleEpisodeNotice = "请先选择题材、情绪看点后再生成。";
+      if (isManualScriptAnalysis) {
+        workbench.ui.uploadNotice = !projectId
+          ? "请先选择或进入一个项目后再开始分析。"
+          : "请先选择题材包和情绪包后再开始分析。";
+      } else {
+        workbench.ui.singleEpisodeNotice = "请先选择题材、情绪看点后再生成。";
+      }
       render(workbench);
       return;
     }
     workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(nextScript, getDetailEpisodes(workbench.state));
     workbench.ui.singleEpisodeNotice = "";
+    workbench.ui.uploadNotice = "";
+    workbench.ui.singleEpisodeScript = nextScript;
+    if (isManualScriptAnalysis) {
+      workbench.ui.isScriptModalOpen = false;
+      workbench.ui.scriptManualDraft = nextScript;
+    }
     workbench.ui.singleEpisodeAiPreview = {
       status: "loading",
+      source: isManualScriptAnalysis ? "manual-script-analysis" : "single-episode-storyboard",
+      sourceScript: nextScript,
+      packages,
+      projectId,
       data: { displayTables: createSingleEpisodeAiLiveDisplayTables() },
       error: "",
       scriptText: "",
@@ -5110,8 +5685,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         packages,
       };
       let preview = null;
-      if (typeof workbench.api.createAiStoryboardPreviewStream === "function") {
-        for await (const event of workbench.api.createAiStoryboardPreviewStream(projectId, previewInput)) {
+      const previewStream =
+        isManualScriptAnalysis && typeof workbench.api.createAiScriptAnalysisStream === "function"
+          ? workbench.api.createAiScriptAnalysisStream
+          : workbench.api.createAiStoryboardPreviewStream;
+      if (typeof previewStream === "function") {
+        for await (const event of previewStream(projectId, previewInput)) {
           const eventName = event?.event ?? "";
           const data = event?.data ?? {};
           if (eventName === "script_prompt") {
@@ -5136,6 +5715,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             workbench.ui.singleEpisodeAiPreview.scriptRawText = String(data.rawText ?? workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "");
             syncSingleEpisodeAiScriptTable(workbench);
             workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+          } else if (isManualScriptAnalysis && eventName.startsWith("asset_")) {
+            // Manual script analysis intentionally ends after the script response.
           } else if (eventName === "prompt_prompt") {
             workbench.ui.singleEpisodeAiPreview.promptPromptText = String(data.text ?? "");
           } else if (eventName === "prompt_start") {
@@ -5178,12 +5759,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           }
           renderSingleEpisodeAiPreviewProgress(workbench);
         }
-      } else {
+      } else if (!isManualScriptAnalysis) {
         preview = await workbench.api.createAiStoryboardPreview(projectId, previewInput);
+      } else {
+        throw new Error("ai_script_analysis_stream_api_missing");
       }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
       workbench.ui.singleEpisodeAiPreview = {
         status: "ready",
+        source: workbench.ui.singleEpisodeAiPreview.source,
+        sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
+        packages: workbench.ui.singleEpisodeAiPreview.packages,
+        projectId: workbench.ui.singleEpisodeAiPreview.projectId,
         data: preview,
         error: "",
         scriptText: workbench.ui.singleEpisodeAiPreview.scriptText || preview?.scriptText || "",
@@ -5199,6 +5786,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
       workbench.ui.singleEpisodeAiPreview = {
         status: "error",
+        source: workbench.ui.singleEpisodeAiPreview.source,
+        sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
+        packages: workbench.ui.singleEpisodeAiPreview.packages,
+        projectId: workbench.ui.singleEpisodeAiPreview.projectId,
         data: null,
         error: friendlyError(error),
         scriptText: workbench.ui.singleEpisodeAiPreview.scriptText ?? "",
@@ -5931,6 +6522,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const totalProjects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary.length : 0;
     const totalPages = Math.max(1, Math.ceil(totalProjects / 12));
     workbench.ui.projectLibraryPage = Math.min(totalPages, Math.max(1, nextPage));
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -5940,6 +6532,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectCardMenuId =
       workbench.ui.projectCardMenuId === projectId ? null : projectId;
     workbench.ui.assetCardMenuId = null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -5950,6 +6543,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.scriptCardMenuId === scriptId ? null : scriptId;
     workbench.ui.projectCardMenuId = null;
     workbench.ui.assetCardMenuId = null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -5968,6 +6562,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     const scriptId = target.dataset.scriptId ?? null;
+    workbench.ui.toast = "";
     findScriptCoverInput(workbench.root, scriptId)?.click();
     return;
   }
@@ -6530,6 +7125,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       "";
     workbench.ui.renameScriptNotice = "";
     workbench.ui.scriptCardMenuId = null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -6568,7 +7164,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "delete-script-card") {
     workbench.ui.deleteScriptId = target.dataset.scriptId ?? null;
     workbench.ui.deleteScriptProjectId = target.dataset.projectId ?? null;
+    workbench.ui.deleteScriptMode = "single";
+    workbench.ui.deleteScriptIds = [];
     workbench.ui.scriptCardMenuId = null;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -6576,18 +7175,61 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-delete-script-modal") {
     workbench.ui.deleteScriptId = null;
     workbench.ui.deleteScriptProjectId = null;
+    workbench.ui.deleteScriptMode = "single";
+    workbench.ui.deleteScriptIds = [];
     render(workbench);
     return;
   }
 
   if (action === "confirm-delete-script-card") {
-    const projectId = workbench.ui.deleteScriptProjectId;
+    if (workbench.ui.deleteScriptMode === "bulk") {
+      const selectedIds = new Set(
+        Array.isArray(workbench.ui.deleteScriptIds) ? workbench.ui.deleteScriptIds.map((id) => String(id)) : [],
+      );
+      const scripts = getSelectableScriptRecords(workbench).filter(
+        (script) => selectedIds.has(String(script?.id ?? "")),
+      );
+      if (!scripts.length) {
+        workbench.ui.toast = "未找到要删除的剧本，请刷新后重试。";
+        render(workbench);
+        return;
+      }
+      await runAction(workbench, `正在删除 ${scripts.length} 个剧本...`, async () => {
+        for (const script of scripts) {
+          const projectId = resolveScriptRecordProjectId(script);
+          if (!projectId || !script?.id) {
+            throw new Error("缺少剧本所属项目，无法删除。");
+          }
+          await workbench.api.deleteScriptCard(projectId, script.id);
+          clearDeletedScriptCard(workbench, script.id);
+        }
+        await refreshScriptLibraryIfAvailable(workbench);
+        workbench.ui.selectedScriptIds = [];
+        workbench.ui.scriptCardMenuId = null;
+        workbench.ui.deleteScriptId = null;
+        workbench.ui.deleteScriptProjectId = null;
+        workbench.ui.deleteScriptMode = "single";
+        workbench.ui.deleteScriptIds = [];
+        workbench.ui.scriptDetailOpen = false;
+      }, {
+        successToast: `已删除 ${scripts.length} 个剧本。`,
+      });
+      return;
+    }
     const scriptId = workbench.ui.deleteScriptId;
+    const script = findCurrentScriptCard(workbench, scriptId);
+    const projectId = workbench.ui.deleteScriptProjectId ?? resolveScriptRecordProjectId(script);
     await runAction(workbench, "正在删除剧本...", async () => {
+      if (!projectId || !scriptId) {
+        throw new Error("缺少剧本信息，无法删除。");
+      }
       await workbench.api.deleteScriptCard(projectId, scriptId);
       clearDeletedScriptCard(workbench, scriptId);
+      await refreshScriptLibraryIfAvailable(workbench);
       workbench.ui.deleteScriptId = null;
       workbench.ui.deleteScriptProjectId = null;
+      workbench.ui.deleteScriptMode = "single";
+      workbench.ui.deleteScriptIds = [];
       workbench.ui.scriptDetailOpen = false;
     });
     return;
@@ -6760,10 +7402,101 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "import-script-document") {
+    const scriptUploadFile = workbench.ui.scriptUploadFile ?? null;
+    if (!scriptUploadFile) {
+      workbench.ui.uploadNotice = "请先上传 docx/txt 剧本文档。";
+      render(workbench);
+      return;
+    }
+    const title = stripScriptDocumentExtension(scriptUploadFile.name) || "导入剧本";
+
+    await runAction(workbench, statusForAction(action), async () => {
+      const scriptUpload = await uploadLocalFile(workbench, scriptUploadFile, "script-documents", {
+        projectId: null,
+        uploadLimits: SCRIPT_DOCUMENT_UPLOAD_LIMITS,
+      });
+      const imported = await workbench.api.importScriptDocument({
+        title,
+        scriptUploadSessionId: scriptUpload?.uploadSessionId ?? null,
+        scriptStorageObjectId: scriptUpload?.storageObjectId ?? null,
+        scriptFileName: scriptUploadFile.name,
+        scriptContentType: scriptUpload?.mimeType ?? scriptUploadFile.type ?? null,
+      });
+      const detail =
+        imported?.state?.projectDetail ??
+        imported?.body?.state?.projectDetail ??
+        null;
+      if (detail?.project) {
+        applyProjectDetail(workbench, detail);
+        const nextCard = mapProjectRecordToCard(detail.project);
+        const projects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [];
+        workbench.ui.projectLibrary = [
+          nextCard,
+          ...projects.filter((project) => project.id !== nextCard.id),
+        ];
+        workbench.ui.selectedProjectCardId = nextCard.id;
+      }
+      const script = imported?.script ?? imported?.body?.script ?? detail?.script ?? null;
+      const sections = imported?.sections ?? imported?.body?.sections ?? [];
+      if (script?.id) {
+        applySavedManualScript(workbench, script, script.inputText ?? "");
+        workbench.ui.selectedScriptId = script.id;
+      }
+      await refreshScriptLibraryIfAvailable(workbench);
+      workbench.ui.scriptReaderSections = Array.isArray(sections)
+        ? sections.map((section) => normalizeScriptReaderSection(section))
+        : [];
+      workbench.ui.scriptReaderSectionsLoaded = true;
+      workbench.ui.scriptReaderDrafts = {
+        ...(workbench.ui.scriptReaderDrafts ?? {}),
+        ...Object.fromEntries(workbench.ui.scriptReaderSections.map((section) => [section.id, section.text])),
+      };
+      workbench.ui.scriptReaderTitleDrafts = {
+        ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+        ...Object.fromEntries(workbench.ui.scriptReaderSections.map((section) => [section.id, section.title])),
+      };
+      workbench.ui.selectedScriptEpisodeId = workbench.ui.scriptReaderSections[0]?.id ?? "";
+      workbench.ui.activeNavTab = "script";
+      workbench.ui.projectPanelMode = "library";
+      workbench.ui.scriptDetailOpen = true;
+      workbench.ui.isScriptModalOpen = false;
+      workbench.ui.uploadNotice = "";
+      workbench.ui.scriptUploadFile = null;
+      workbench.ui.scriptUploadFileName = "";
+      workbench.ui.toast = workbench.ui.scriptReaderSections.length
+        ? `已创建剧本，并拆分为 ${workbench.ui.scriptReaderSections.length} 集。`
+        : "已创建剧本。";
+      window.location.hash = "script";
+    }, {
+      successToast: null,
+    });
+    render(workbench);
+    return;
+  }
+
   if (action === "create-project") {
-    const name = getInputValue(workbench.root, "#project-create-name-input", "").trim();
+    const isScriptUploadCreate = Boolean(
+      workbench.ui.isScriptModalOpen &&
+      workbench.ui.scriptTab === "script-upload" &&
+      workbench.ui.scriptSubmitAction === "create-project",
+    );
+    const scriptUploadFile = isScriptUploadCreate ? workbench.ui.scriptUploadFile : null;
+    const fallbackScriptProjectName = scriptUploadFile
+      ? stripScriptDocumentExtension(scriptUploadFile.name)
+      : "";
+    const name = getInputValue(workbench.root, "#project-create-name-input", fallbackScriptProjectName).trim();
     if (!name) {
-      workbench.ui.createProjectNotice = "请输入项目名称。";
+      if (isScriptUploadCreate) {
+        workbench.ui.uploadNotice = "请先上传 docx/txt 剧本文档。";
+      } else {
+        workbench.ui.createProjectNotice = "请输入项目名称。";
+      }
+      render(workbench);
+      return;
+    }
+    if (isScriptUploadCreate && !scriptUploadFile) {
+      workbench.ui.uploadNotice = "请先上传 docx/txt 剧本文档。";
       render(workbench);
       return;
     }
@@ -6782,10 +7515,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     await runAction(workbench, statusForAction(action), async () => {
+      const scriptUpload = scriptUploadFile
+        ? await uploadLocalFile(workbench, scriptUploadFile, "script-documents", {
+            projectId: null,
+            uploadLimits: SCRIPT_DOCUMENT_UPLOAD_LIMITS,
+          })
+        : null;
       const created = await workbench.api.createProject(buildProjectCreateRequest({
         name,
         aspectRatio,
         projectType,
+        scriptUploadSessionId: scriptUpload?.uploadSessionId ?? null,
+        scriptStorageObjectId: scriptUpload?.storageObjectId ?? null,
+        scriptFileName: scriptUploadFile?.name ?? null,
+        scriptContentType: scriptUpload?.mimeType ?? scriptUploadFile?.type ?? null,
       }));
       const createdProject =
         created?.project ??
@@ -6813,6 +7556,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.createProjectType = projectType;
       workbench.ui.isScriptModalOpen = false;
       workbench.ui.uploadNotice = "";
+      workbench.ui.scriptUploadFile = null;
+      workbench.ui.scriptUploadFileName = "";
       window.location.hash = "project";
     });
     return;
@@ -7037,6 +7782,543 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 }
 
 const handleAction = handleProductionWorkbenchAction;
+
+function ensureWorkbenchCanvasDocument(workbench) {
+  if (!workbench.ui.canvasDocument) {
+    workbench.ui.canvasDocument = createDefaultCanvasDocument({
+      projectId: workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? "",
+      episodeId: workbench.ui.selectedEpisodeId ?? "",
+    });
+  }
+  return workbench.ui.canvasDocument;
+}
+
+function refreshCanvasGraphFromDocument(workbench) {
+  return refreshCanvasWorkflowGraph(workbench);
+}
+
+function startCanvasNodeDrag(workbench, event, nodeElement) {
+  const nodeId = nodeElement?.dataset?.canvasNodeId ?? "";
+  if (!nodeId || event.button !== 0) {
+    return;
+  }
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+  if (!node) {
+    return;
+  }
+  event.preventDefault();
+  workbench.ui.canvasContextMenu = null;
+  const startClient = { x: event.clientX, y: event.clientY };
+  const startPosition = {
+    x: Number(node.position?.x ?? 0),
+    y: Number(node.position?.y ?? 0),
+  };
+  let latestPosition = { ...startPosition };
+  let moved = false;
+  const ownerDocument = nodeElement.ownerDocument ?? document;
+  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
+  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
+  const stage = nodeElement.closest?.(".canvas-stage");
+  const editor = stage?.querySelector?.(".canvas-node-editor");
+  nodeElement.classList.add("is-dragging");
+
+  const syncEditorPosition = () => {
+    if (!editor || editor.dataset.nodeId && editor.dataset.nodeId !== nodeId) {
+      return;
+    }
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const stageRect = stage?.getBoundingClientRect?.();
+    const editorWidth = editor.getBoundingClientRect().width || Number.parseFloat(getComputedStyle(editor).getPropertyValue("--editor-width")) || 600;
+    if (!stageRect) {
+      return;
+    }
+    const nextLeft = Math.max(8, latestPosition.x + (nodeRect.width / 2) - (editorWidth / 2));
+    const nextTop = latestPosition.y + nodeRect.height + 2;
+    editor.style.left = `${Math.round(nextLeft)}px`;
+    editor.style.top = `${Math.round(nextTop)}px`;
+  };
+
+  const onPointerMove = (moveEvent) => {
+    const dx = moveEvent.clientX - startClient.x;
+    const dy = moveEvent.clientY - startClient.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) {
+      moved = true;
+    }
+    latestPosition = {
+      x: Math.max(8, Math.round(startPosition.x + dx)),
+      y: Math.max(8, Math.round(startPosition.y + dy)),
+    };
+    nodeElement.style.left = `${latestPosition.x}px`;
+    nodeElement.style.top = `${latestPosition.y}px`;
+    syncEditorPosition();
+    updateVisibleCanvasEdges(stage);
+  };
+
+  const onPointerUp = () => {
+    ownerDocument.removeEventListener(moveEventName, onPointerMove);
+    ownerDocument.removeEventListener(upEventName, onPointerUp);
+    nodeElement.classList.remove("is-dragging");
+    if (!moved) {
+      return;
+    }
+    workbench.ui.canvasDocument = updateCanvasNodePosition(ensureWorkbenchCanvasDocument(workbench), nodeId, latestPosition);
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    refreshCanvasGraphFromDocument(workbench);
+    render(workbench);
+  };
+
+  ownerDocument.addEventListener(moveEventName, onPointerMove);
+  ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function startCanvasEdgeDisconnectDrag(workbench, event, edgeElement) {
+  const edgeId = edgeElement?.dataset?.canvasEdgeId ?? "";
+  if (!edgeId || event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const ownerDocument = edgeElement.ownerDocument ?? document;
+  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
+  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
+  const stage = edgeElement.closest?.(".canvas-stage");
+  const edgeLayer = stage?.querySelector?.(".canvas-lib-edge-layer");
+  const startClient = { x: event.clientX, y: event.clientY };
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const edge = canvasDocument.edges?.find?.((item) => item.id === edgeId);
+  const anchorPort = edge && stage
+    ? stage.querySelector(
+      `.canvas-node-connect[data-node-id="${cssEscape(edge.targetNodeId ?? "")}"][data-port-id="${cssEscape(edge.targetPortId ?? "")}"][data-port-direction="in"]`,
+    )
+    : null;
+  const sourcePort = edge && stage
+    ? stage.querySelector(
+      `.canvas-node-connect[data-node-id="${cssEscape(edge.sourceNodeId ?? "")}"][data-port-id="${cssEscape(edge.sourcePortId ?? "")}"][data-port-direction="out"]`,
+    )
+    : null;
+  if (!stage || !edgeLayer || !edge || !anchorPort || !sourcePort) {
+    return;
+  }
+  const anchor = canvasPortPointFromElement(stage, anchorPort);
+  const previewPath = ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+  previewPath.setAttribute("class", "canvas-flow-edge-preview canvas-flow-edge-disconnect-preview");
+  edgeLayer.appendChild(previewPath);
+  let moved = false;
+  edgeElement.classList.add("is-disconnecting");
+
+  const updatePreview = (clientX, clientY) => {
+    const stageRect = stage.getBoundingClientRect();
+    const end = {
+      x: Math.round(clientX - stageRect.left),
+      y: Math.round(clientY - stageRect.top),
+    };
+    previewPath.setAttribute("d", canvasReverseEdgePath(anchor, end));
+  };
+
+  const onPointerMove = (moveEvent) => {
+    const distance = Math.abs(moveEvent.clientX - startClient.x) + Math.abs(moveEvent.clientY - startClient.y);
+    if (distance > 6) {
+      moved = true;
+    }
+    updatePreview(moveEvent.clientX, moveEvent.clientY);
+  };
+
+  const onPointerUp = (upEvent) => {
+    ownerDocument.removeEventListener(moveEventName, onPointerMove);
+    ownerDocument.removeEventListener(upEventName, onPointerUp);
+    edgeElement.classList.remove("is-disconnecting");
+    previewPath.remove();
+    if (!moved) {
+      return;
+    }
+    const releasePort = findCanvasPortFromPoint(stage, ownerDocument, upEvent.clientX, upEvent.clientY);
+    const isReleaseOnSourceOutput =
+      releasePort &&
+      (releasePort.dataset.portDirection ?? "") === "out" &&
+      (releasePort.dataset.nodeId ?? "") === (edge.sourceNodeId ?? "") &&
+      (releasePort.dataset.portId ?? "") === (edge.sourcePortId ?? "");
+    if (!isReleaseOnSourceOutput) {
+      return;
+    }
+    const result = disconnectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
+      sourceNodeId: edge.sourceNodeId,
+      sourcePortId: edge.sourcePortId,
+      targetNodeId: edge.targetNodeId,
+      targetPortId: edge.targetPortId,
+    });
+    if (!result.ok) {
+      workbench.ui.toast = "这条连接已经不存在。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasDocument = result.document;
+    workbench.ui.selectedCanvasNodeId = edge.targetNodeId ?? null;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.toast = "已取消流程连接。";
+    refreshCanvasGraphFromDocument(workbench);
+    render(workbench);
+  };
+
+  updatePreview(event.clientX, event.clientY);
+  ownerDocument.addEventListener(moveEventName, onPointerMove);
+  ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function findNearestCanvasEdgeFromEvent(eventTarget, event) {
+  if (!eventTarget || !event || event.button !== 0) {
+    return null;
+  }
+  const blockedTarget = eventTarget.closest?.(
+    ".canvas-node-connect, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-add-menu, .canvas-zoom-tools, .canvas-bottom-tools, button, input, textarea, select, option, a",
+  );
+  if (blockedTarget) {
+    return null;
+  }
+  const stage = eventTarget.closest?.(".canvas-stage");
+  if (!stage) {
+    return null;
+  }
+  return findNearestCanvasEdge(stage, event.clientX, event.clientY);
+}
+
+function findNearestCanvasEdge(stage, clientX, clientY) {
+  const stageRect = stage.getBoundingClientRect();
+  const pointer = {
+    x: clientX - stageRect.left,
+    y: clientY - stageRect.top,
+  };
+  let nearest = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  stage.querySelectorAll(".canvas-flow-edge[data-canvas-edge-id]").forEach((edge) => {
+    const hitPath = edge.querySelector(".canvas-flow-edge-hit, .canvas-flow-edge-line");
+    if (!hitPath) {
+      return;
+    }
+    const points = sampleCanvasEdgePath(hitPath);
+    if (!points.length) {
+      return;
+    }
+    points.forEach((point) => {
+      const distance = Math.hypot(point.x - pointer.x, point.y - pointer.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = edge;
+      }
+    });
+  });
+  return nearestDistance <= 18 ? nearest : null;
+}
+
+function sampleCanvasEdgePath(pathElement) {
+  if (typeof pathElement.getTotalLength === "function" && typeof pathElement.getPointAtLength === "function") {
+    const length = pathElement.getTotalLength();
+    if (Number.isFinite(length) && length > 0) {
+      const sampleCount = Math.max(16, Math.ceil(length / 28));
+      return Array.from({ length: sampleCount + 1 }, (_, index) => pathElement.getPointAtLength((length * index) / sampleCount));
+    }
+  }
+  const cubic = parseCanvasCubicPath(pathElement.getAttribute("d") ?? "");
+  if (!cubic) {
+    return [];
+  }
+  return Array.from({ length: 33 }, (_, index) => {
+    const t = index / 32;
+    const inverse = 1 - t;
+    return {
+      x:
+        (inverse ** 3 * cubic.start.x) +
+        (3 * inverse ** 2 * t * cubic.controlA.x) +
+        (3 * inverse * t ** 2 * cubic.controlB.x) +
+        (t ** 3 * cubic.end.x),
+      y:
+        (inverse ** 3 * cubic.start.y) +
+        (3 * inverse ** 2 * t * cubic.controlA.y) +
+        (3 * inverse * t ** 2 * cubic.controlB.y) +
+        (t ** 3 * cubic.end.y),
+    };
+  });
+}
+
+function parseCanvasCubicPath(pathData) {
+  const match = String(pathData).match(
+    /^\s*M\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+C\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?),?\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?),?\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*$/i,
+  );
+  if (!match) {
+    return null;
+  }
+  const values = match.slice(1).map(Number);
+  if (values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+  return {
+    start: { x: values[0], y: values[1] },
+    controlA: { x: values[2], y: values[3] },
+    controlB: { x: values[4], y: values[5] },
+    end: { x: values[6], y: values[7] },
+  };
+}
+
+function startCanvasConnectionDrag(workbench, event, portElement) {
+  const sourceNodeId = portElement?.dataset?.nodeId ?? "";
+  const sourcePortId = portElement?.dataset?.portId ?? "";
+  const sourceDirection = portElement?.dataset?.portDirection ?? "";
+  if (!sourceNodeId || !sourcePortId || event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const stage = portElement.closest?.(".canvas-stage");
+  const edgeLayer = stage?.querySelector?.(".canvas-lib-edge-layer");
+  if (!stage || !edgeLayer) {
+    return;
+  }
+  workbench.ui.canvasContextMenu = null;
+  portElement.classList.add("is-linking");
+  const ownerDocument = portElement.ownerDocument ?? document;
+  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
+  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
+  const start = canvasPortPointFromElement(stage, portElement);
+  const previewPath = ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+  previewPath.setAttribute("class", "canvas-flow-edge-preview");
+  edgeLayer.appendChild(previewPath);
+
+  const updatePreview = (clientX, clientY) => {
+    const stageRect = stage.getBoundingClientRect();
+    const end = {
+      x: Math.round(clientX - stageRect.left),
+      y: Math.round(clientY - stageRect.top),
+    };
+    previewPath.setAttribute("d", canvasEdgePath(start, end));
+  };
+
+  const onPointerMove = (moveEvent) => {
+    updatePreview(moveEvent.clientX, moveEvent.clientY);
+  };
+
+  const onPointerUp = (upEvent) => {
+    ownerDocument.removeEventListener(moveEventName, onPointerMove);
+    ownerDocument.removeEventListener(upEventName, onPointerUp);
+    portElement.classList.remove("is-linking");
+    previewPath.remove();
+    const targetPort = findCanvasPortFromPoint(stage, ownerDocument, upEvent.clientX, upEvent.clientY);
+    if (!targetPort || targetPort === portElement) {
+      return;
+    }
+    const targetDirection = targetPort.dataset.portDirection ?? "";
+    if (sourceDirection === "in" && targetDirection === "out") {
+      const result = disconnectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
+        sourceNodeId: targetPort.dataset.nodeId ?? "",
+        sourcePortId: targetPort.dataset.portId ?? "",
+        targetNodeId: portElement.dataset.nodeId ?? "",
+        targetPortId: portElement.dataset.portId ?? "",
+      });
+      if (!result.ok) {
+        workbench.ui.toast = "这两个端口之间没有可取消的连接。";
+        render(workbench);
+        return;
+      }
+      workbench.ui.canvasDocument = result.document;
+      workbench.ui.selectedCanvasNodeId = portElement.dataset.nodeId ?? null;
+      workbench.ui.canvasEditorOpen = true;
+      workbench.ui.canvasRunPreview = null;
+      workbench.ui.toast = "已取消流程连接。";
+      refreshCanvasGraphFromDocument(workbench);
+      render(workbench);
+      return;
+    }
+    const outputPort = sourceDirection === "out" ? portElement : targetPort;
+    const inputPort = sourceDirection === "out" ? targetPort : portElement;
+    if ((outputPort.dataset.portDirection ?? "") !== "out" || (inputPort.dataset.portDirection ?? "") !== "in" || targetDirection === sourceDirection) {
+      workbench.ui.toast = "请从输出端口连接到输入端口。";
+      render(workbench);
+      return;
+    }
+    const result = connectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
+      sourceNodeId: outputPort.dataset.nodeId ?? "",
+      sourcePortId: outputPort.dataset.portId ?? "",
+      targetNodeId: inputPort.dataset.nodeId ?? "",
+      targetPortId: inputPort.dataset.portId ?? "",
+    });
+    if (!result.ok) {
+      workbench.ui.toast = canvasConnectionReasonLabel(result.reason);
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasDocument = result.document;
+    workbench.ui.selectedCanvasNodeId = inputPort.dataset.nodeId ?? null;
+    workbench.ui.canvasEditorOpen = true;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.toast = "已连接流程节点。";
+    refreshCanvasGraphFromDocument(workbench);
+    render(workbench);
+  };
+
+  updatePreview(event.clientX, event.clientY);
+  ownerDocument.addEventListener(moveEventName, onPointerMove);
+  ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function findCanvasPortFromPoint(stage, ownerDocument, clientX, clientY) {
+  const directPort = ownerDocument
+    .elementFromPoint(clientX, clientY)
+    ?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
+  if (directPort) {
+    return directPort;
+  }
+  let nearestPort = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  stage.querySelectorAll(".canvas-node-connect[data-node-id][data-port-id]").forEach((port) => {
+    const rect = port.getBoundingClientRect();
+    const centerX = rect.left + (rect.width / 2);
+    const centerY = rect.top + (rect.height / 2);
+    const distance = Math.hypot(centerX - clientX, centerY - clientY);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestPort = port;
+    }
+  });
+  return nearestDistance <= 28 ? nearestPort : null;
+}
+
+function updateVisibleCanvasEdges(stage) {
+  if (!stage) {
+    return;
+  }
+  const edgeLayer = stage.querySelector?.(".canvas-lib-edge-layer");
+  if (!edgeLayer) {
+    return;
+  }
+  edgeLayer.querySelectorAll(".canvas-flow-edge").forEach((edge) => {
+    const sourcePort = stage.querySelector(
+      `.canvas-node-connect[data-node-id="${cssEscape(edge.dataset.sourceNodeId ?? "")}"][data-port-id="${cssEscape(edge.dataset.sourcePortId ?? "")}"][data-port-direction="out"]`,
+    );
+    const targetPort = stage.querySelector(
+      `.canvas-node-connect[data-node-id="${cssEscape(edge.dataset.targetNodeId ?? "")}"][data-port-id="${cssEscape(edge.dataset.targetPortId ?? "")}"][data-port-direction="in"]`,
+    );
+    if (!sourcePort || !targetPort) {
+      return;
+    }
+    const start = canvasPortPointFromElement(stage, sourcePort);
+    const end = canvasPortPointFromElement(stage, targetPort);
+    const path = canvasEdgePath(start, end);
+    edge.querySelectorAll("path").forEach((pathElement) => pathElement.setAttribute("d", path));
+  });
+}
+
+function canvasPortPointFromElement(stage, portElement) {
+  const stageRect = stage.getBoundingClientRect();
+  const portRect = portElement.getBoundingClientRect();
+  return {
+    x: Math.round(portRect.left + (portRect.width / 2) - stageRect.left),
+    y: Math.round(portRect.top + (portRect.height / 2) - stageRect.top),
+  };
+}
+
+function canvasEdgePath(start, end) {
+  const delta = Math.max(110, Math.abs(end.x - start.x) * 0.48);
+  return `M ${start.x} ${start.y} C ${start.x + delta} ${start.y}, ${end.x - delta} ${end.y}, ${end.x} ${end.y}`;
+}
+
+function canvasReverseEdgePath(start, end) {
+  const delta = Math.max(110, Math.abs(end.x - start.x) * 0.48);
+  return `M ${start.x} ${start.y} C ${start.x - delta} ${start.y}, ${end.x + delta} ${end.y}, ${end.x} ${end.y}`;
+}
+
+function cssEscape(value) {
+  if (globalThis.CSS?.escape) {
+    return globalThis.CSS.escape(value);
+  }
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function resolveCanvasViewportPatch(viewport = {}, patchName = "") {
+  const zoom = Number(viewport.zoom ?? 1);
+  if (patchName === "zoom-in") {
+    return { zoom: Math.round((zoom + 0.1) * 100) / 100 };
+  }
+  if (patchName === "zoom-out") {
+    return { zoom: Math.round((zoom - 0.1) * 100) / 100 };
+  }
+  if (patchName === "toggle-grid") {
+    return { gridVisible: !(viewport.gridVisible ?? true) };
+  }
+  if (patchName === "toggle-snap") {
+    return { snapEnabled: !(viewport.snapEnabled ?? true) };
+  }
+  if (patchName === "reset") {
+    return { x: 0, y: 0, zoom: 1, gridVisible: true, snapEnabled: true };
+  }
+  return {};
+}
+
+function applyCanvasGraphViewport(workbench) {
+  const graph = workbench?.canvasGraph;
+  const viewport = workbench?.ui?.canvasDocument?.viewport;
+  if (!graph || !viewport) {
+    return false;
+  }
+  if (typeof graph.zoomTo === "function") {
+    graph.zoomTo(Number(viewport.zoom ?? 1));
+  }
+  if (typeof graph.translate === "function") {
+    graph.translate(Number(viewport.x ?? 0), Number(viewport.y ?? 0));
+  }
+  if (graph.options?.grid) {
+    graph.options.grid.visible = viewport.gridVisible !== false;
+  }
+  return true;
+}
+
+async function submitCanvasRunIfAvailable(workbench, preview) {
+  const episodeId =
+    String(workbench?.ui?.selectedEpisodeId ?? "").trim() ||
+    String(workbench?.ui?.canvasDocument?.episodeId ?? "").trim();
+  if (!episodeId || episodeId === "episode-primary") {
+    return null;
+  }
+  const payload = {
+    targetType: "canvas",
+    targetId: preview.nodeId,
+    prompt: preview.prompt,
+    model: preview.modelCode,
+    canvasContext: {
+      upstreamNodeIds: preview.upstreamNodeIds,
+      documentVersion: workbench.ui.canvasDocument?.version ?? 1,
+    },
+  };
+  if (preview.mediaKind === "video" && typeof workbench.api?.createVideoTask === "function") {
+    return workbench.api.createVideoTask(episodeId, {
+      ...payload,
+      motionPrompt: preview.prompt,
+    });
+  }
+  if (typeof workbench.api?.createImageTask === "function") {
+    return workbench.api.createImageTask(episodeId, payload);
+  }
+  return null;
+}
+
+function canvasRunReasonLabel(reason) {
+  return {
+    canvas_run_node_missing: "当前画布节点不存在。",
+    canvas_run_send_node_required: "请选择发送流节点后再运行。",
+    canvas_run_prompt_required: "请先填写画布节点提示词。",
+    canvas_run_model_required: "请先选择画布节点模型。",
+  }[reason] ?? "画布节点暂时无法运行。";
+}
+
+function canvasConnectionReasonLabel(reason) {
+  return {
+    canvas_connection_port_missing: "请选择有效的连接端口。",
+    canvas_connection_direction_invalid: "请从输出端口连接到输入端口。",
+    canvas_connection_kind_mismatch: "两个端口的数据类型不匹配。",
+    canvas_connection_self_link: "不能把节点连接到自己。",
+  }[reason] ?? "节点连接失败。";
+}
 
 async function refreshGenerationQueues(workbench) {
   if (typeof workbench.api?.getGenerationQueueHealth !== "function") {
@@ -7393,7 +8675,9 @@ async function runAction(workbench, message, action, options = {}) {
 
   try {
     await action();
-    workbench.ui.toast = successToast;
+    if (successToast !== null) {
+      workbench.ui.toast = successToast;
+    }
   } catch (error) {
     workbench.ui.toast = `操作失败：${friendlyError(error)}`;
   } finally {
@@ -7453,7 +8737,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
-      toast: "已进入剧集工作台。",
+      toast: "",
       shouldRender: false,
     });
   };
@@ -7516,6 +8800,147 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     });
   }, {
     successToast: "已创建章节并进入分镜工作台。",
+  });
+}
+
+async function saveManualScriptAnalysisToReader(workbench) {
+  const preview = workbench.ui.singleEpisodeAiPreview ?? {};
+  const scriptText = String(
+    preview.scriptRawText ||
+    preview.scriptText ||
+    preview.data?.scriptText ||
+    "",
+  ).trim();
+  const projectId = preview.projectId ?? resolveScriptReaderProjectId(workbench);
+  if (!projectId) {
+    workbench.ui.singleEpisodeNotice = "请先选择项目后再保存剧本。";
+    render(workbench);
+    return;
+  }
+  if (!scriptText) {
+    workbench.ui.singleEpisodeNotice = "当前还没有可保存的剧本文字。";
+    render(workbench);
+    return;
+  }
+  if (typeof workbench.api?.createScriptReaderSection !== "function") {
+    workbench.ui.singleEpisodeNotice = "当前接口不支持保存剧本，请刷新后重试。";
+    render(workbench);
+    return;
+  }
+
+  await runAction(workbench, "正在保存剧本...", async () => {
+    const sectionsToSave = splitManualScriptTextIntoEpisodeSections(scriptText, []);
+    const savedSections = [];
+    let savedScript = null;
+    for (const [index, sectionInput] of sectionsToSave.entries()) {
+      const response = await workbench.api.createScriptReaderSection(projectId, {
+        title: sectionInput.title,
+        body: sectionInput.body,
+        scriptInputText: scriptText,
+        scriptId: savedScript?.id ?? null,
+        createNewScript: index === 0,
+      });
+      if (response?.script?.id && !savedScript) {
+        savedScript = response.script;
+      }
+      savedSections.push(normalizeScriptReaderSection(response?.section ?? response, {
+        title: sectionInput.title,
+        text: sectionInput.body,
+      }));
+    }
+    if (savedScript?.id) {
+      applySavedManualScript(workbench, savedScript, scriptText);
+      workbench.ui.selectedScriptId = savedScript.id;
+    }
+    workbench.ui.scriptReaderSections = savedSections;
+    workbench.ui.scriptReaderSectionsLoaded = true;
+    workbench.ui.scriptReaderDrafts = {
+      ...(workbench.ui.scriptReaderDrafts ?? {}),
+      ...Object.fromEntries(savedSections.map((section) => [section.id, section.text])),
+    };
+    workbench.ui.scriptReaderTitleDrafts = {
+      ...(workbench.ui.scriptReaderTitleDrafts ?? {}),
+      ...Object.fromEntries(savedSections.map((section) => [section.id, section.title])),
+    };
+    workbench.ui.selectedScriptEpisodeId = savedSections[0]?.id ?? workbench.ui.selectedScriptEpisodeId;
+    workbench.ui.activeNavTab = "script";
+    workbench.ui.scriptDetailOpen = true;
+    workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+    workbench.ui.toast = savedSections.length > 1 ? `已保存 ${savedSections.length} 集剧本。` : "剧本已保存。";
+  }, {
+    successToast: null,
+  });
+  render(workbench);
+}
+
+function applySavedManualScript(workbench, script, scriptText) {
+  const normalizedScript = {
+    ...script,
+    inputText: String(script.inputText ?? scriptText ?? ""),
+    status: script.status ?? "ready",
+  };
+  if (workbench.state) {
+    const existingDetail = workbench.state.projectDetail ?? (
+      workbench.state.project ? { project: workbench.state.project } : null
+    );
+    if (existingDetail) {
+      const scripts = prependUniqueScript(existingDetail.scripts, normalizedScript);
+      workbench.state.projectDetail = {
+        ...existingDetail,
+        script: {
+          ...(existingDetail.script ?? {}),
+          ...normalizedScript,
+        },
+        scripts,
+      };
+    }
+  }
+  if (workbench.ui?.projectDetail) {
+    const scripts = prependUniqueScript(workbench.ui.projectDetail.scripts, normalizedScript);
+    workbench.ui.projectDetail = {
+      ...workbench.ui.projectDetail,
+      script: {
+        ...(workbench.ui.projectDetail.script ?? {}),
+        ...normalizedScript,
+      },
+      scripts,
+    };
+  }
+  if (workbench.state) {
+    workbench.state.script = {
+      ...(workbench.state.script ?? {}),
+      ...normalizedScript,
+    };
+  }
+}
+
+function prependUniqueScript(scripts, script) {
+  const current = Array.isArray(scripts) ? scripts : [];
+  return [
+    script,
+    ...current.filter((candidate) => String(candidate?.id ?? "") !== String(script?.id ?? "")),
+  ];
+}
+
+function splitManualScriptTextIntoEpisodeSections(scriptText, episodes = []) {
+  const normalized = String(scriptText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+  const episodeHeadingPattern = /(^|\n)\s*(第\s*(?:\d+|[一二三四五六七八九十百千两]+)\s*集[^\n]*)/g;
+  const matches = [...normalized.matchAll(episodeHeadingPattern)];
+  if (!matches.length) {
+    return [{ title: getNextEpisodeTitle(episodes), body: normalized }];
+  }
+  return matches.map((match, index) => {
+    const title = match[2].trim();
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    const bodyEnd = index + 1 < matches.length ? (matches[index + 1].index ?? normalized.length) : normalized.length;
+    const body = normalized.slice(bodyStart, bodyEnd).trim();
+    return {
+      title,
+      body: body ? `${title}\n${body}` : title,
+    };
   });
 }
 
@@ -8454,6 +9879,7 @@ async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
       }
       applyEpisodeGenerationTaskResult(workbench, task, storyboard.id, mediaKind, {
         persistConversation: false,
+        suppressFailureToast: true,
       });
     }
     return tasks;
@@ -8699,9 +10125,10 @@ function openBatchEpisodeFlow(workbench) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = false;
   workbench.ui.isScriptModalOpen = true;
+  workbench.ui.scriptModalMode = "full";
   workbench.ui.scriptTab = "script-upload";
   workbench.ui.scriptSubmitAction = "confirm-batch-episode";
-  workbench.ui.scriptSubmitLabel = "确认上传";
+  workbench.ui.scriptSubmitLabel = "开始分析";
   workbench.ui.singleEpisodeNotice = "";
   workbench.ui.uploadNotice = "";
   render(workbench);
@@ -8752,6 +10179,27 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
     previewUrl: result.upload.previewUrl ?? null,
   });
   return result.upload;
+}
+
+function setScriptUploadFile(workbench, file) {
+  const extension = String(file?.name ?? "").trim().toLowerCase().match(/(\.[^.\\/]+)$/)?.[1] ?? "";
+  if (![".docx", ".txt"].includes(extension)) {
+    workbench.ui.scriptUploadFile = null;
+    workbench.ui.scriptUploadFileName = "";
+    workbench.ui.uploadNotice = "仅支持上传 docx 或 txt 剧本文档。";
+    return false;
+  }
+  workbench.ui.scriptUploadFile = file;
+  workbench.ui.scriptUploadFileName = file.name;
+  workbench.ui.uploadNotice = "";
+  return true;
+}
+
+function stripScriptDocumentExtension(fileName) {
+  return String(fileName ?? "")
+    .trim()
+    .replace(/\.(?:docx|txt)$/i, "")
+    .trim();
 }
 
 export async function handleTeamAssetLocalUploadFiles(workbench, category, files = []) {
@@ -9022,6 +10470,7 @@ function mergeProjectCoverUpdate(workbench, project) {
 
 function findCurrentScriptCard(workbench, scriptId) {
   const candidates = [
+    ...(Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : []),
     workbench.state?.projectDetail?.script,
     workbench.ui?.projectDetail?.script,
     workbench.state?.script,
@@ -9029,21 +10478,64 @@ function findCurrentScriptCard(workbench, scriptId) {
   return candidates.find((script) => script && String(script.id) === String(scriptId)) ?? null;
 }
 
+function getSelectableScriptRecords(workbench) {
+  const candidates = [
+    ...(Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : []),
+    ...(Array.isArray(workbench.state?.projectDetail?.scripts) ? workbench.state.projectDetail.scripts : []),
+    workbench.state?.projectDetail?.script,
+    workbench.state?.script,
+  ];
+  const seen = new Set();
+  return candidates.filter((script) => {
+    const id = String(script?.id ?? "");
+    if (!id || seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+}
+
+function resolveScriptRecordProjectId(script) {
+  return (
+    script?.projectId ??
+    script?.project?.id ??
+    script?.project_id ??
+    script?.project?.projectId ??
+    null
+  );
+}
+
 function mergeScriptCardUpdate(workbench, script) {
   if (!script?.id) {
     return;
   }
+  if (Array.isArray(workbench.ui?.scriptLibraryRecords)) {
+    workbench.ui.scriptLibraryRecords = workbench.ui.scriptLibraryRecords.map((candidate) =>
+      String(candidate?.id ?? "") === String(script.id)
+        ? { ...candidate, ...script }
+        : candidate,
+    );
+  }
   const mergeIntoDetail = (detail) => {
-    if (!detail?.script || String(detail.script.id) !== String(script.id)) {
+    if (!detail) {
       return detail;
     }
-    return {
-      ...detail,
-      script: {
+    const nextDetail = { ...detail };
+    if (detail.script && String(detail.script.id) === String(script.id)) {
+      nextDetail.script = {
         ...detail.script,
         ...script,
-      },
-    };
+      };
+    }
+    if (Array.isArray(detail.scripts)) {
+      nextDetail.scripts = detail.scripts.map((candidate) =>
+        String(candidate?.id ?? "") === String(script.id)
+          ? { ...candidate, ...script }
+          : candidate,
+      );
+    }
+    return nextDetail;
   };
 
   workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
@@ -9057,20 +10549,34 @@ function mergeScriptCardUpdate(workbench, script) {
 }
 
 function clearDeletedScriptCard(workbench, scriptId) {
+  if (Array.isArray(workbench.ui?.scriptLibraryRecords)) {
+    workbench.ui.scriptLibraryRecords = workbench.ui.scriptLibraryRecords.filter(
+      (candidate) => String(candidate?.id ?? "") !== String(scriptId),
+    );
+  }
   const clearDetail = (detail) => {
-    if (!detail?.script || String(detail.script.id) !== String(scriptId)) {
+    if (!detail) {
       return detail;
     }
-    return {
-      ...detail,
-      script: null,
-    };
+    const nextDetail = { ...detail };
+    if (detail.script && String(detail.script.id) === String(scriptId)) {
+      nextDetail.script = null;
+    }
+    if (Array.isArray(detail.scripts)) {
+      nextDetail.scripts = detail.scripts.filter(
+        (candidate) => String(candidate?.id ?? "") !== String(scriptId),
+      );
+    }
+    return nextDetail;
   };
 
   workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
   workbench.ui.projectDetail = clearDetail(workbench.ui.projectDetail);
   if (workbench.state?.script && String(workbench.state.script.id) === String(scriptId)) {
     workbench.state.script = null;
+  }
+  if (String(workbench.ui?.selectedScriptId ?? "") === String(scriptId)) {
+    workbench.ui.selectedScriptId = workbench.ui.scriptLibraryRecords?.[0]?.id ?? "";
   }
 }
 
@@ -9106,6 +10612,9 @@ function datasetToObject(dataset = {}) {
 }
 
 function collectEpisodeWorkbenchEvent(workbench, eventType, payload = {}) {
+  if (!ENABLE_EPISODE_EVENT_TRACKING) {
+    return;
+  }
   if (typeof workbench?.api?.collectEpisodeEvent !== "function") {
     return;
   }
@@ -10931,6 +12440,69 @@ async function deleteStoryboardConversationTurn(workbench, storyboardId, taskId,
   }
 }
 
+async function deleteAssetGenerationResult(workbench, draft = {}) {
+  const taskId = String(draft.taskId ?? "").trim();
+  const imageResult =
+    resolveAssetConversationActionResult(workbench, taskId, "image") ??
+    workbench.ui.imageGenerationResult;
+  const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
+  const selectedAssetId =
+    draft.selectedAssetId ??
+    imageResult?.selectionContext?.selectedAssetId ??
+    workbench.ui.selectedEpisodeAssetId ??
+    workbench.ui.selectedEpisodeCardId ??
+    null;
+
+  try {
+    workbench.ui.busy = true;
+    render(workbench);
+    if (
+      isRealEpisodeWorkbench(workbench) &&
+      typeof workbench.api.deleteFileResource === "function" &&
+      isUuidLike(firstImage?.storageObjectId ?? null)
+    ) {
+      await workbench.api.deleteFileResource(workbench.ui.selectedEpisodeId, firstImage.storageObjectId, {
+        assetVersionId: firstImage.id ?? null,
+        storageObjectId: firstImage.storageObjectId,
+      });
+    }
+    if (
+      isRealEpisodeWorkbench(workbench) &&
+      typeof workbench.api.deleteAssetConversationTurn === "function" &&
+      selectedAssetId &&
+      String(imageResult?.taskId ?? taskId).trim()
+    ) {
+      const resultTaskId = String(imageResult?.taskId ?? taskId);
+      const response = await workbench.api.deleteAssetConversationTurn(
+        workbench.ui.selectedEpisodeId,
+        selectedAssetId,
+        resultTaskId,
+        "image",
+      );
+      applyAssetConversationHistoryAfterDelete(
+        workbench,
+        selectedAssetId,
+        resultTaskId,
+        "image",
+        Array.isArray(response?.entries) ? response.entries : null,
+      );
+    } else {
+      applyAssetConversationHistoryAfterDelete(
+        workbench,
+        selectedAssetId,
+        imageResult?.taskId ?? taskId,
+        "image",
+      );
+    }
+    workbench.ui.toast = "已删除当前结果。";
+  } catch (error) {
+    workbench.ui.toast = `删除失败：${friendlyError(error)}`;
+  } finally {
+    workbench.ui.busy = false;
+    render(workbench);
+  }
+}
+
 function resolveStoryboardConversationActionResult(workbench, taskId, mediaKind = "image", storyboardId = null) {
   const targetStoryboardId = storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
   const history = listStoryboardConversationHistoryEntries(workbench, targetStoryboardId, mediaKind);
@@ -12036,7 +13608,9 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
         ? { ...generationState.lastSubmission, status: "failed" }
         : generationState.lastSubmission,
     }));
-    workbench.ui.toast = generationTaskNoticePrefix(task) + generationTaskFailureMessage(task);
+    if (!options.suppressFailureToast) {
+      workbench.ui.toast = generationTaskNoticePrefix(task) + generationTaskFailureMessage(task);
+    }
     return;
   }
   if (resolveWorkflowStatus(task.status) !== "completed") {
@@ -12680,10 +14254,19 @@ function removeDeletedShotFromState(workbench, shotId) {
 }
 
 function resolveScriptReaderProjectId(workbench) {
+  const selectedScriptId = String(workbench.ui?.selectedScriptId ?? "");
+  const scriptLibraryRecords = Array.isArray(workbench.ui?.scriptLibraryRecords)
+    ? workbench.ui.scriptLibraryRecords
+    : [];
+  const selectedScriptRecord = selectedScriptId
+    ? scriptLibraryRecords.find((script) => String(script?.id ?? "") === selectedScriptId)
+    : null;
   return (
+    selectedScriptRecord?.projectId ??
+    selectedScriptRecord?.project?.id ??
+    workbench.ui?.selectedProjectCardId ??
     workbench.state?.projectDetail?.project?.id ??
     workbench.state?.project?.id ??
-    workbench.ui?.selectedProjectCardId ??
     ""
   );
 }
@@ -12703,7 +14286,9 @@ async function loadScriptReaderSections(workbench) {
   if (!projectId || typeof workbench.api?.getScriptReaderSections !== "function") {
     return;
   }
-  const response = await workbench.api.getScriptReaderSections(projectId);
+  const response = await workbench.api.getScriptReaderSections(projectId, {
+    scriptId: workbench.ui.selectedScriptId ?? null,
+  });
   const sections = Array.isArray(response?.sections) ? response.sections : [];
   workbench.ui.scriptReaderSections = sections.map((section) => normalizeScriptReaderSection(section));
   workbench.ui.scriptReaderSectionsLoaded = true;
@@ -12982,6 +14567,19 @@ function hydratePersistedWorkbenchState(workbench) {
   if (typeof persisted.selectedEpisodeCardId === "string" || persisted.selectedEpisodeCardId === null) {
     workbench.ui.selectedEpisodeCardId = persisted.selectedEpisodeCardId;
   }
+  if (persisted.canvasDocument && typeof persisted.canvasDocument === "object") {
+    workbench.ui.canvasDocument = persisted.canvasDocument;
+  }
+  if (persisted.canvasProjectView === "detail" || persisted.canvasProjectView === "list") {
+    workbench.ui.canvasProjectView = persisted.canvasProjectView;
+  }
+  if (typeof persisted.selectedCanvasNodeId === "string" || persisted.selectedCanvasNodeId === null) {
+    workbench.ui.selectedCanvasNodeId = persisted.selectedCanvasNodeId;
+  }
+  const routeToken = typeof window !== "undefined" ? String(window.location?.hash ?? "").replace(/^#/, "") : "";
+  if (routeToken === "tools" || routeToken === "tools-canvas") {
+    workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(routeToken);
+  }
   sanitizeEpisodeWorkbenchSelection(workbench, { persist: true });
 }
 
@@ -13010,8 +14608,14 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = workbench.ui.projectInteriorSection ?? "overview";
     return;
   }
-  if (token === "home" || token === "script" || token === "library" || token === "tools") {
+  if (token === "home" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
     workbench.ui.activeNavTab = token;
+    if (token === "tools-canvas") {
+      workbench.ui.activeNavTab = "tools";
+      workbench.ui.canvasProjectView = "detail";
+    } else if (token === "tools") {
+      workbench.ui.canvasProjectView = "list";
+    }
     workbench.ui.projectPanelMode = "library";
     workbench.ui.selectedEpisodeId = null;
     workbench.ui.episodeWorkbenchContext = null;
@@ -13038,6 +14642,22 @@ function syncWorkbenchRouteState(workbench, hash) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.selectedEpisodeId =
     workbench.ui.selectedEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench);
+}
+
+function syncCanvasRouteState(workbench, hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  if (token !== "tools" && token !== "tools-canvas") {
+    return;
+  }
+  workbench.ui.activeNavTab = "tools";
+  workbench.ui.projectPanelMode = "library";
+  workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(token);
+  if (token === "tools") {
+    workbench.ui.selectedCanvasNodeId = null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+  }
 }
 
 async function restoreEpisodeRouteState(workbench, locationLike) {
@@ -13249,6 +14869,9 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     projectAssetTab: workbench.ui.projectAssetTab ?? "character",
     storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
     episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
+    canvasDocument: workbench.ui.canvasDocument ?? null,
+    canvasProjectView: workbench.ui.canvasProjectView === "detail" ? "detail" : "list",
+    selectedCanvasNodeId: workbench.ui.selectedCanvasNodeId ?? null,
     customEpisodes: detailEpisodes.length
       ? detailEpisodes
       : (Array.isArray(workbench.ui.customEpisodes) ? workbench.ui.customEpisodes : []),
@@ -15765,6 +17388,7 @@ function statusForAction(action) {
   return (
     {
       "create-project": "正在创建项目...",
+      "import-script-document": "正在创建剧本...",
       "parse-script": "正在解析剧本...",
       "confirm-all-assets": "正在确认全部资产...",
       "confirm-asset": "正在确认资产...",
@@ -15997,13 +17621,18 @@ function deriveInitialNavTab(hash) {
   if (token === "library") {
     return "library";
   }
-  if (token === "tools") {
+  if (token === "tools" || token === "tools-canvas") {
     return "tools";
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
     return "team";
   }
   return "project";
+}
+
+function deriveInitialCanvasProjectView(hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  return token === "tools-canvas" ? "detail" : "list";
 }
 
 function deriveInitialLibraryTeamRoute(hash) {
@@ -16548,6 +18177,21 @@ async function refreshProjectLibraryIfAvailable(workbench) {
   await syncProjectLibraryFromApi(workbench);
 }
 
+async function syncScriptLibraryFromApi(workbench) {
+  if (typeof workbench.api?.getWorkspaceScripts !== "function") {
+    return;
+  }
+  const payload = await workbench.api.getWorkspaceScripts();
+  workbench.ui.scriptLibraryRecords = Array.isArray(payload?.scripts) ? payload.scripts : [];
+}
+
+async function refreshScriptLibraryIfAvailable(workbench) {
+  if (typeof workbench.api?.getWorkspaceScripts !== "function") {
+    return;
+  }
+  await syncScriptLibraryFromApi(workbench);
+}
+
 async function syncAssetLibraryFromApi(workbench, options = {}) {
   const scope = workbench.ui.libraryTeamAssetScope ?? "official";
   if (
@@ -16793,7 +18437,7 @@ function applyStoryboardImageToolAction(workbench, action, storyboardId) {
     workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "first-frame", "seedance-i2v-pro");
     syncGenerationStateFromStoryboardImage(workbench, storyboardId);
     workbench.ui.prompt = workbench.ui.prompt || buildSuggestedPrompt(storyboard, { episodeMediaMode: "video" });
-    workbench.ui.toast = "已切换到图片生成视频模式。";
+    workbench.ui.toast = "";
     return;
   }
 
@@ -16828,7 +18472,7 @@ function applyStoryboardImageToolAction(workbench, action, storyboardId) {
           }
         : state.imageReference,
     }));
-    workbench.ui.toast = "已切换图片裁切方式。";
+    workbench.ui.toast = "";
     return;
   }
 
@@ -16869,7 +18513,7 @@ function applyStoryboardVideoToolAction(workbench, action, storyboardId, videoId
   workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "edit-video", "happy-horse");
   if (action === "storyboard-video-upscale") {
     workbench.ui.videoResolution = "2K";
-    workbench.ui.toast = "已切换到高清视频处理配置。";
+    workbench.ui.toast = "";
     return;
   }
   if (action === "storyboard-video-subtitle-clean") {
@@ -16877,7 +18521,7 @@ function applyStoryboardVideoToolAction(workbench, action, storyboardId, videoId
     workbench.ui.toast = "已填入去字幕处理提示词。";
     return;
   }
-  workbench.ui.toast = "已切换到视频编辑模式。";
+  workbench.ui.toast = "";
 }
 
 async function deleteStoryboardImage(workbench, storyboardId, imageId = "") {

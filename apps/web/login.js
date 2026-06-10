@@ -238,6 +238,11 @@ const statusMessage = document.querySelector("#status-message");
 const debugPanel = document.querySelector("#debug-panel");
 
 let activeChallengeId = null;
+let requestCodeCooldownTimer = null;
+let requestCodeCooldownEndsAt = 0;
+let globalToastTimer = null;
+const CODE_REQUEST_COOLDOWN_SECONDS = 60;
+const GLOBAL_TOAST_DURATION_MS = 2000;
 const appUrl =
   window.location.protocol === "file:"
     ? resolveApiUrl("/app.html#project")
@@ -271,6 +276,57 @@ function setStatus(message) {
   statusMessage.textContent = message;
 }
 
+function showGlobalToast(type, title, detail) {
+  const tone = type === "success" ? "success" : "error";
+  let toast = document.querySelector("#global-toast");
+
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "global-toast";
+    toast.className = "global-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+
+  toast.className = `global-toast ${tone}`;
+  toast.innerHTML = "";
+
+  const icon = document.createElement("span");
+  icon.className = "global-toast-icon";
+  icon.textContent = tone === "success" ? "✓" : "!";
+
+  const copy = document.createElement("span");
+  copy.className = "global-toast-copy";
+
+  const titleNode = document.createElement("strong");
+  titleNode.textContent = title;
+  copy.appendChild(titleNode);
+
+  if (detail) {
+    const detailNode = document.createElement("span");
+    detailNode.textContent = detail;
+    copy.appendChild(detailNode);
+  }
+
+  toast.append(icon, copy);
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+
+  if (globalToastTimer) {
+    clearTimeout(globalToastTimer);
+  }
+
+  globalToastTimer = setTimeout(() => {
+    toast.classList.remove("visible");
+    globalToastTimer = setTimeout(() => {
+      toast.remove();
+      globalToastTimer = null;
+    }, 220);
+  }, GLOBAL_TOAST_DURATION_MS);
+}
+
 const errorCopy = {
   invalid_phone: "请输入正确的中国大陆手机号",
   sms_cooldown_active: "验证码已发送，请稍后再试",
@@ -290,29 +346,100 @@ function showDebug(message) {
   debugPanel.textContent = message;
 }
 
-requestCodeButton?.addEventListener("click", async () => {
-  const phone = phoneInput?.value?.trim() ?? "";
-  setStatus("正在请求验证码...");
-
-  const requestResponse = await fetch(resolveApiUrl("/api/auth/code/request"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-
-  const requestPayload = await requestResponse.json();
-
-  if (!requestResponse.ok) {
-    setStatus(authErrorMessage(requestPayload, "验证码请求失败"));
+function updateRequestCodeButton() {
+  if (!requestCodeButton) {
     return;
   }
 
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((requestCodeCooldownEndsAt - Date.now()) / 1000),
+  );
+
+  if (remainingSeconds > 0) {
+    requestCodeButton.disabled = true;
+    requestCodeButton.textContent = `${remainingSeconds} 秒后重新发送`;
+    return;
+  }
+
+  if (requestCodeCooldownTimer) {
+    clearInterval(requestCodeCooldownTimer);
+    requestCodeCooldownTimer = null;
+  }
+
+  requestCodeCooldownEndsAt = 0;
+  requestCodeButton.disabled = false;
+  requestCodeButton.textContent = "重新发送";
+}
+
+function startRequestCodeCooldown(seconds = CODE_REQUEST_COOLDOWN_SECONDS) {
+  requestCodeCooldownEndsAt = Date.now() + seconds * 1000;
+  updateRequestCodeButton();
+
+  if (requestCodeCooldownTimer) {
+    clearInterval(requestCodeCooldownTimer);
+  }
+
+  requestCodeCooldownTimer = setInterval(updateRequestCodeButton, 250);
+}
+
+function resetRequestCodeButton(label = "获取验证码") {
+  if (requestCodeCooldownTimer) {
+    clearInterval(requestCodeCooldownTimer);
+    requestCodeCooldownTimer = null;
+  }
+
+  requestCodeCooldownEndsAt = 0;
+
+  if (requestCodeButton) {
+    requestCodeButton.disabled = false;
+    requestCodeButton.textContent = label;
+  }
+}
+
+requestCodeButton?.addEventListener("click", async () => {
+  if (requestCodeButton.disabled) {
+    return;
+  }
+
+  const phone = phoneInput?.value?.trim() ?? "";
+  requestCodeButton.disabled = true;
+  requestCodeButton.textContent = "发送中...";
+  setStatus("正在请求验证码...");
+
+  let requestResponse;
+  let requestPayload;
+  try {
+    requestResponse = await fetch(resolveApiUrl("/api/auth/code/request"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ phone }),
+    });
+    requestPayload = await requestResponse.json();
+  } catch {
+    resetRequestCodeButton();
+    setStatus("验证码请求失败");
+    showGlobalToast("error", "验证码发送失败", "网络连接异常，请稍后再试");
+    return;
+  }
+
+  if (!requestResponse.ok) {
+    const message = authErrorMessage(requestPayload, "验证码请求失败");
+    resetRequestCodeButton();
+    setStatus(message);
+    showGlobalToast("error", "验证码发送失败", message);
+    return;
+  }
+
+  startRequestCodeCooldown();
   activeChallengeId = requestPayload.challengeId;
   const remainingText =
     typeof requestPayload.remainingToday === "number"
       ? `，今日还可发送 ${requestPayload.remainingToday} 次`
       : "";
-  setStatus(`验证码已发送至 ${requestPayload.maskedPhone}${remainingText}`);
+  const deliveredMessage = `验证码已发送至 ${requestPayload.maskedPhone}${remainingText}`;
+  setStatus(deliveredMessage);
+  showGlobalToast("success", "验证码已发送", deliveredMessage);
 
   if (requestPayload.devCode) {
     showDebug(`开发验证码：${requestPayload.devCode}`);
@@ -338,6 +465,7 @@ form?.addEventListener("submit", async (event) => {
 
   if (!activeChallengeId) {
     setStatus("请先获取验证码");
+    showGlobalToast("error", "登录失败", "请先获取验证码");
     return;
   }
 
@@ -357,11 +485,15 @@ form?.addEventListener("submit", async (event) => {
   const verifyPayload = await verifyResponse.json();
 
   if (!verifyResponse.ok) {
-    setStatus(authErrorMessage(verifyPayload, "登录失败"));
+    const message = authErrorMessage(verifyPayload, "登录失败");
+    setStatus(message);
+    showGlobalToast("error", "登录失败", message);
     return;
   }
 
-  setStatus(`登录成功：${verifyPayload.user.phone}`);
+  const loginMessage = `登录成功：${verifyPayload.user.phone}`;
+  setStatus(loginMessage);
+  showGlobalToast("success", "登录成功", loginMessage);
 
   const overlay = document.createElement("div");
   overlay.className = "dissolve-overlay";

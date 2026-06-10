@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { renderAssetExtractModal } from "../src/features/production-workbench/asset-extract-modal.js";
 import { renderScriptManagementPage } from "../src/features/production-workbench/script-page.js";
 
 test("script management shows creation entries when no backend script exists", () => {
@@ -9,6 +11,57 @@ test("script management shows creation entries when no backend script exists", (
   assert.match(html, /class="script-entry-grid"/);
   assert.match(html, /从分析开始改编小说/);
   assert.match(html, /暂无剧本/);
+});
+
+test("script management keeps analysis and direct adaptation modal entries separate", () => {
+  const html = renderScriptManagementPage({ state: {}, ui: {} });
+  const buttons = [...html.matchAll(/<button[^>]*data-action="open-script-modal"[^>]*>/g)]
+    .map((match) => match[0]);
+
+  assert.equal(buttons.length, 2);
+  assert.match(buttons[0], /data-script-modal-mode="manual"/);
+  assert.match(buttons[1], /data-script-modal-mode="upload"/);
+});
+
+test("direct novel adaptation modal only renders the script upload tab", () => {
+  const html = renderAssetExtractModal({
+    show: true,
+    mode: "upload",
+    activeTab: "script-library",
+  });
+
+  assert.equal([...html.matchAll(/data-action="switch-script-tab"/g)].length, 1);
+  assert.match(html, /data-tab="script-upload"/);
+  assert.doesNotMatch(html, /data-tab="script-library"/);
+});
+
+test("script upload modal close button is pinned to the far-right grid column", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const closeBlock = css.match(/\.upload-modal-close\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+
+  assert.match(closeBlock, /grid-column:\s*4/);
+});
+
+test("script management does not render default status toast", () => {
+  const html = renderScriptManagementPage({ state: {}, ui: {} });
+
+  assert.doesNotMatch(html, /id="workspace-status"/);
+});
+
+test("script management renders action feedback as global status toast", () => {
+  const successHtml = renderScriptManagementPage({ state: {}, ui: { toast: "已重命名为 新剧本。" } });
+  const errorHtml = renderScriptManagementPage({ state: {}, ui: { toast: "删除失败：权限不足" } });
+
+  assert.match(successHtml, /id="workspace-status"/);
+  assert.match(successHtml, /global-workbench-toast success/);
+  assert.match(successHtml, /操作成功/);
+  assert.match(successHtml, /已重命名为 新剧本。/);
+  assert.match(errorHtml, /global-workbench-toast error/);
+  assert.match(errorHtml, /操作失败/);
+  assert.match(errorHtml, /删除失败：权限不足/);
 });
 
 test("script management shows creation entries above cover tabs when backend script exists", () => {
@@ -59,6 +112,54 @@ test("script management shows creation entries above cover tabs when backend scr
   assert.doesNotMatch(html, /class="script-record-tabpanel"/);
   assert.doesNotMatch(html, /class="script-credit-note"/);
   assert.match(html, /第一个项目/);
+});
+
+test("script management renders every script returned by project detail", () => {
+  const html = renderScriptManagementPage({
+    state: {
+      projectDetail: {
+        project: {
+          id: "project-1",
+          name: "多剧本项目",
+          phase: "asset_review",
+        },
+        script: {
+          id: "script-old",
+          projectId: "project-1",
+          title: "旧剧本",
+          status: "ready",
+          inputText: "旧剧本正文",
+          updatedAt: "2026-06-10T10:00:00.000Z",
+        },
+        scripts: [
+          {
+            id: "script-new",
+            projectId: "project-1",
+            title: "新保存剧本",
+            status: "ready",
+            inputText: "新保存剧本正文",
+            updatedAt: "2026-06-10T11:00:00.000Z",
+          },
+          {
+            id: "script-old",
+            projectId: "project-1",
+            title: "旧剧本",
+            status: "ready",
+            inputText: "旧剧本正文",
+            updatedAt: "2026-06-10T10:00:00.000Z",
+          },
+        ],
+        episodes: [],
+        shots: [],
+      },
+    },
+    ui: {},
+  });
+
+  assert.match(html, /script-new/);
+  assert.match(html, /script-old/);
+  assert.match(html, /新保存/);
+  assert.match(html, /旧剧本/);
 });
 
 test("script management uses script cover instead of project cover fallback", () => {

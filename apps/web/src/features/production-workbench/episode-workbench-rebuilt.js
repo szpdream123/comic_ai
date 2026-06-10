@@ -187,6 +187,7 @@ export function renderEpisodeWorkbench({
   storyboardDeleteTarget = null,
   storyboardImageDeleteTarget = null,
   storyboardVideoDeleteTarget = null,
+  generationResultDeleteTarget = null,
   episodeAssetCreateModal = null,
   assetInspector = null,
   episodeWorkbenchAttachments = [],
@@ -455,6 +456,13 @@ export function renderEpisodeWorkbench({
         text: "删除后无法找回，确认删除吗？",
         closeAction: "close-delete-episode-asset-modal",
         confirmAction: "confirm-delete-episode-asset",
+      })}
+      ${renderEpisodeDeleteModal({
+        show: Boolean(generationResultDeleteTarget?.scope),
+        title: "删除生成结果提示",
+        text: "删除后会移除当前生成结果和对应记录，确认删除吗？",
+        closeAction: "close-generation-result-delete-modal",
+        confirmAction: "confirm-delete-generation-result",
       })}
       ${renderEpisodeAssetCreateModal(episodeAssetCreateModal)}
       ${renderEpisodeVoiceModal(episodeVoiceModal)}

@@ -7,6 +7,7 @@ import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/pr
 import { dirname, extname, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import mammoth from "mammoth";
 
 import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
 import { appendAuditEvent } from "../modules/audit/audit.service.ts";
@@ -36,6 +37,7 @@ import {
   createTextModelChatGateway,
   type TextChatGatewayLike,
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
+import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import {
@@ -81,6 +83,7 @@ import {
   buildSignedObjectUrls,
   createScopedStorageObject,
   deleteStorageObjectRecord,
+  findStorageObject,
   markStorageObjectAvailable,
   markStorageObjectFailed,
   type StorageObjectRecord,
@@ -223,6 +226,21 @@ const episodeUploadLimits = {
     ".tar",
     ".zip",
   ],
+};
+const scriptDocumentUploadLimits = {
+  document: {
+    label: "剧本文档",
+    maxBytes: 30 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/octet-stream",
+    ],
+    extensions: [".txt", ".docx"],
+  },
+  blockedExtensions: episodeUploadLimits.blockedExtensions.filter(
+    (extension) => ![".txt", ".docx"].includes(extension),
+  ),
 };
 
 const contentTypes: Record<string, string> = {
@@ -1174,6 +1192,129 @@ function paginateItems<T>(items: T[], page: number, pageSize: number) {
   };
 }
 
+class ScriptDocumentUploadError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function extractScriptInputFromUploadedDocument(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    sessionToken: string;
+    userId: string;
+    body: {
+      scriptUploadSessionId?: string | null;
+      scriptStorageObjectId?: string | null;
+      scriptFileName?: string | null;
+      scriptContentType?: string | null;
+    };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    fetchImpl: typeof fetch;
+  },
+) {
+  const uploadSessionId = String(input.body.scriptUploadSessionId ?? "").trim();
+  const requestedStorageObjectId = String(input.body.scriptStorageObjectId ?? "").trim();
+  if (!uploadSessionId && !requestedStorageObjectId) {
+    throw new ScriptDocumentUploadError(400, "script_document_required", "请先上传 docx/txt 剧本文档");
+  }
+
+  const session = uploadSessionId ? await findUploadSession(db, uploadSessionId) : undefined;
+  if (uploadSessionId && !session) {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (session?.status !== "uploaded") {
+    throw new ScriptDocumentUploadError(400, "script_document_not_ready", "剧本文档尚未上传完成，请稍后重试");
+  }
+  if (session?.createdByUserId && session.createdByUserId !== input.userId) {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (requestedStorageObjectId && session && session.storageObjectId !== requestedStorageObjectId) {
+    throw new ScriptDocumentUploadError(400, "script_document_mismatch", "剧本文档上传信息不一致，请重新上传");
+  }
+
+  const storageObjectId = requestedStorageObjectId || session?.storageObjectId || "";
+  const object = storageObjectId ? await findStorageObject(db, storageObjectId) : undefined;
+  if (!object || object.status !== "available") {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (session && object.organizationId !== session.organizationId) {
+    throw new ScriptDocumentUploadError(400, "script_document_mismatch", "剧本文档上传信息不一致，请重新上传");
+  }
+
+  const fileName = input.body.scriptFileName || session?.originalFileName || object.objectKey;
+  const extension = extname(fileName).toLowerCase();
+  if (![".txt", ".docx"].includes(extension)) {
+    throw new ScriptDocumentUploadError(400, "script_document_type_not_supported", "仅支持 docx 或 txt 剧本文档");
+  }
+
+  const bytes = await readUploadedStorageObjectBytes(db, {
+    sessionToken: input.sessionToken,
+    storageObjectId: object.id,
+    bucket: object.bucket,
+    objectKey: object.objectKey,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+    fetchImpl: input.fetchImpl,
+  });
+  const text = await extractTextFromScriptDocumentBytes(bytes, extension);
+  const normalized = text.replace(/^\uFEFF/, "").trim();
+  if (!normalized) {
+    throw new ScriptDocumentUploadError(400, "script_document_empty", "剧本文档内容为空，请检查文件后重新上传");
+  }
+  return normalized;
+}
+
+async function readUploadedStorageObjectBytes(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    sessionToken: string;
+    storageObjectId: string;
+    bucket: string;
+    objectKey: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    fetchImpl: typeof fetch;
+  },
+) {
+  const localPath = resolveLocalStorageObjectPath(input.bucket, input.objectKey);
+  try {
+    return await readFile(localPath);
+  } catch {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.storageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    const response = await input.fetchImpl(urls.sourceUrl ?? urls.downloadUrl ?? urls.previewUrl);
+    if (!response.ok) {
+      throw new ScriptDocumentUploadError(502, "script_document_read_failed", "无法读取上传的剧本文档，请重新上传");
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+}
+
+async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
+  if (extension === ".txt") {
+    return bytes.toString("utf8");
+  }
+  if (extension === ".docx") {
+    const result = await mammoth.extractRawText({ buffer: bytes });
+    return result.value ?? "";
+  }
+  throw new ScriptDocumentUploadError(400, "script_document_type_not_supported", "仅支持 docx 或 txt 剧本文档");
+}
+
 function canonicalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => canonicalizeJson(item));
@@ -1462,10 +1603,20 @@ function getUploadExtension(fileName: unknown) {
   return extname(String(fileName ?? "").trim()).toLowerCase();
 }
 
-function getUploadLimitKind(contentType: unknown, fileName: unknown) {
+function resolveUploadLimitsForPurpose(purpose: unknown) {
+  return String(purpose ?? "").trim() === "script-documents"
+    ? scriptDocumentUploadLimits
+    : episodeUploadLimits;
+}
+
+function getUploadLimitKind(
+  contentType: unknown,
+  fileName: unknown,
+  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits = episodeUploadLimits,
+) {
   const normalizedContentType = String(contentType ?? "").split(";")[0]!.trim().toLowerCase();
   const extension = getUploadExtension(fileName);
-  for (const [kind, rule] of Object.entries(episodeUploadLimits)) {
+  for (const [kind, rule] of Object.entries(limits)) {
     if (kind === "blockedExtensions") {
       continue;
     }
@@ -1474,7 +1625,7 @@ function getUploadLimitKind(contentType: unknown, fileName: unknown) {
       "mimeTypes" in rule &&
       (rule.mimeTypes.includes(normalizedContentType) || rule.extensions.includes(extension))
     ) {
-      return kind as "image" | "video" | "audio";
+      return kind as "image" | "video" | "audio" | "document";
     }
   }
   return null;
@@ -1484,25 +1635,29 @@ function validateUploadPolicy(input: {
   fileName: unknown;
   contentType: unknown;
   sizeBytes?: unknown;
+  purpose?: unknown;
 }) {
   const extension = getUploadExtension(input.fileName);
   const normalizedContentType = String(input.contentType ?? "").split(";")[0]!.trim().toLowerCase();
-  if (!extension || episodeUploadLimits.blockedExtensions.includes(extension)) {
+  const uploadLimits = resolveUploadLimitsForPurpose(input.purpose);
+  if (!extension || uploadLimits.blockedExtensions.includes(extension)) {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
       message: "\u4e0d\u652f\u6301\u7684\u6587\u4ef6\u7c7b\u578b\u6216\u6269\u5c55\u540d\u3002",
     };
   }
-  const kind = getUploadLimitKind(normalizedContentType, input.fileName);
+  const kind = getUploadLimitKind(normalizedContentType, input.fileName, uploadLimits);
   if (!kind) {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "\u4ec5\u652f\u6301\u56fe\u7247\u3001\u89c6\u9891\u548c\u97f3\u9891\u6587\u4ef6\u3002",
+      message: String(input.purpose ?? "").trim() === "script-documents"
+        ? "仅支持 docx 或 txt 剧本文档。"
+        : "\u4ec5\u652f\u6301\u56fe\u7247\u3001\u89c6\u9891\u548c\u97f3\u9891\u6587\u4ef6\u3002",
     };
   }
-  const rule = episodeUploadLimits[kind];
+  const rule = uploadLimits[kind];
   if (!rule.mimeTypes.includes(normalizedContentType)) {
     return {
       ok: false as const,
@@ -9451,6 +9606,7 @@ export function createPhoneAuthDevServer(
             fileName: body.fileName,
             contentType: body.contentType,
             sizeBytes: body.sizeBytes ?? null,
+            purpose: body.purpose,
           });
           if (!uploadPolicy.ok) {
             return writeJson(
@@ -9564,6 +9720,7 @@ export function createPhoneAuthDevServer(
             fileName: session.originalFileName,
             contentType: request.headers["content-type"] ?? session.contentType,
             sizeBytes: bytes.byteLength,
+            purpose: session.purpose,
           });
           if (!uploadPolicy.ok) {
             response.statusCode = uploadPolicy.errorCode === "upload_file_too_large" ? 413 : 400;
@@ -11006,6 +11163,7 @@ export function createPhoneAuthDevServer(
                   sessionToken: authenticated.sessionToken,
                 },
                 projectId,
+                scriptId: url.searchParams.get("scriptId"),
                 now: new Date(),
               }),
             );
@@ -11015,6 +11173,9 @@ export function createPhoneAuthDevServer(
             const body = (await readJsonBody(request)) as {
               title?: string | null;
               body?: string | null;
+              scriptInputText?: string | null;
+              scriptId?: string | null;
+              createNewScript?: boolean | null;
             };
             return writeJson(
               response,
@@ -11168,6 +11329,73 @@ export function createPhoneAuthDevServer(
         }
 
         const aiStoryboardPreviewMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-storyboard-preview$/);
+        const aiScriptAnalysisMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-script-analysis$/);
+        if (request.method === "POST" && aiScriptAnalysisMatch) {
+          const projectId = decodeURIComponent(aiScriptAnalysisMatch[1]);
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as {
+            scriptText?: string | null;
+            packages?: {
+              genrePackageId?: string | null;
+              emotionPackageId?: string | null;
+            } | null;
+          };
+          const scriptText = String(body.scriptText ?? "").trim();
+          const genrePackageId = String(body.packages?.genrePackageId ?? "");
+          const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
+          if (!scriptText) {
+            return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
+          }
+          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+            return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
+          }
+
+          await ensureDefaultStoryboardPromptData(db);
+          const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
+            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+          ]);
+          if (!genrePackage || !emotionPackage) {
+            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          }
+
+          const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
+          response.statusCode = 200;
+          response.setHeader("content-type", "text/event-stream; charset=utf-8");
+          response.setHeader("cache-control", "no-cache, no-transform");
+          response.setHeader("connection", "keep-alive");
+          response.flushHeaders?.();
+          try {
+            for await (const event of analysisService.generateScriptStream({
+              projectId,
+              createdByUserId: authenticated.user.id,
+              scriptText,
+              packages: {
+                genrePrompt: genrePackage.prompt_content,
+                emotionPrompt: emotionPackage.prompt_content,
+                tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+              },
+            })) {
+              writeSseEvent(response, event.type, event);
+            }
+            response.end();
+          } catch (error) {
+            writeSseEvent(response, "error", {
+              error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+            });
+            response.end();
+          }
+          return;
+        }
+
         if (request.method === "POST" && aiStoryboardPreviewMatch) {
           const projectId = decodeURIComponent(aiStoryboardPreviewMatch[1]);
           if (!isUuid(projectId)) {
@@ -11286,6 +11514,66 @@ export function createPhoneAuthDevServer(
           }));
         }
 
+        if (request.method === "POST" && pathname === "/api/creator/scripts/import-document") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            title?: string | null;
+            scriptInput?: string | null;
+            scriptUploadSessionId?: string | null;
+            scriptStorageObjectId?: string | null;
+            scriptFileName?: string | null;
+            scriptContentType?: string | null;
+          };
+          if (body.scriptUploadSessionId || body.scriptStorageObjectId) {
+            try {
+              body.scriptInput = await extractScriptInputFromUploadedDocument(db, {
+                sessionToken: authenticated.sessionToken,
+                userId: authenticated.user.id,
+                body,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+            } catch (error) {
+              if (error instanceof ScriptDocumentUploadError) {
+                return writeJson(response, envelopedError(error.status, error.code, error.message));
+              }
+              throw error;
+            }
+          }
+          return writeJson(
+            response,
+            await creatorApplication.importScriptDocument({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: {
+                title: body.title,
+                scriptInput: String(body.scriptInput ?? ""),
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/scripts") {
+          return writeJson(
+            response,
+            await creatorApplication.listWorkspaceScripts({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/project/create") {
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
@@ -11293,9 +11581,37 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             name: string;
-            scriptInput: string;
+            scriptInput?: string;
             aspectRatio: string;
             resolution: string;
+            scriptUploadSessionId?: string | null;
+            scriptStorageObjectId?: string | null;
+            scriptFileName?: string | null;
+            scriptContentType?: string | null;
+          };
+          if (body.scriptUploadSessionId || body.scriptStorageObjectId) {
+            try {
+              body.scriptInput = await extractScriptInputFromUploadedDocument(db, {
+                sessionToken: authenticated.sessionToken,
+                userId: authenticated.user.id,
+                body,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+            } catch (error) {
+              if (error instanceof ScriptDocumentUploadError) {
+                return writeJson(response, envelopedError(error.status, error.code, error.message));
+              }
+              throw error;
+            }
+          }
+          const createProjectBody = {
+            name: body.name,
+            scriptInput: String(body.scriptInput ?? ""),
+            aspectRatio: body.aspectRatio,
+            resolution: body.resolution,
           };
           return writeJson(
             response,
@@ -11304,7 +11620,7 @@ export function createPhoneAuthDevServer(
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
-              body,
+              body: createProjectBody,
               idempotencyKey,
               now: new Date(),
             }),

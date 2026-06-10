@@ -61,6 +61,34 @@ describe("login page client flow", () => {
     assert.match(js, /短信发送失败，请稍后再试/);
   });
 
+  it("disables the SMS button for a 60 second resend countdown after delivery", async () => {
+    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+
+    assert.match(js, /CODE_REQUEST_COOLDOWN_SECONDS = 60/);
+    assert.match(js, /startRequestCodeCooldown\(\)/);
+    assert.match(js, /requestCodeButton\.disabled = true/);
+    assert.match(js, /\$\{remainingSeconds\} 秒后重新发送/);
+    assert.match(js, /requestCodeButton\.disabled = false/);
+    assert.match(js, /requestCodeButton\.textContent = "重新发送"/);
+  });
+
+  it("shows global success and failure popups that disappear after two seconds", async () => {
+    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const css = await readFile(new URL("../login.css", import.meta.url), "utf8");
+
+    assert.match(js, /GLOBAL_TOAST_DURATION_MS = 2000/);
+    assert.match(js, /function showGlobalToast\(type, title, detail\)/);
+    assert.match(js, /global-toast \$\{tone\}/);
+    assert.match(js, /showGlobalToast\("success", "验证码已发送"/);
+    assert.match(js, /showGlobalToast\("error", "验证码发送失败"/);
+    assert.match(js, /showGlobalToast\("success", "登录成功"/);
+    assert.match(js, /showGlobalToast\("error", "登录失败"/);
+    assert.match(css, /\.global-toast\.success/);
+    assert.match(css, /oklch\(74% 0\.16 154/);
+    assert.match(css, /\.global-toast\.error/);
+    assert.match(css, /oklch\(66% 0\.22 25/);
+  });
+
   it("wires the creator workspace to the mock creator APIs", async () => {
     const js = await readFile(
       new URL("../src/shared/creator-api.js", import.meta.url),

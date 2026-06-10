@@ -555,6 +555,10 @@ export const creatorApi = {
     return fetchJson("/api/creator/projects");
   },
 
+  getWorkspaceScripts() {
+    return fetchJson("/api/creator/scripts");
+  },
+
   getProjectDetail(projectId) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/detail`);
   },
@@ -725,8 +729,9 @@ export const creatorApi = {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/episodes`);
   },
 
-  getScriptReaderSections(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`);
+  getScriptReaderSections(projectId, input = {}) {
+    const query = input.scriptId ? `?scriptId=${encodeURIComponent(input.scriptId)}` : "";
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`);
   },
 
   createScriptReaderSection(projectId, input) {
@@ -734,6 +739,12 @@ export const creatorApi = {
       `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`,
       input,
     );
+  },
+
+  importScriptDocument(input) {
+    return postJsonWithIdempotency("/api/creator/scripts/import-document", input, {
+      action: "script.import-document",
+    });
   },
 
   updateScriptReaderSection(projectId, sectionId, input) {
@@ -828,6 +839,14 @@ export const creatorApi = {
   createAiStoryboardPreviewStream(projectId, input, options = {}) {
     return postJsonSse(
       `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  createAiScriptAnalysisStream(projectId, input, options = {}) {
+    return postJsonSse(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-script-analysis?stream=1`,
       input,
       options,
     );

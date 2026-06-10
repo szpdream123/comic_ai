@@ -37,6 +37,7 @@ export async function listScriptReaderSectionsForProject(
   input: {
     organizationId: string;
     projectId: string;
+    scriptId?: string | null;
   },
 ): Promise<ScriptReaderSectionRecord[]> {
   const result = await db.query<ScriptReaderSectionRow>(
@@ -45,10 +46,11 @@ export async function listScriptReaderSectionsForProject(
       FROM script_reader_sections
       WHERE organization_id = $1
         AND project_id = $2
+        AND ($3::uuid IS NULL OR script_id = $3::uuid)
         AND status <> 'archived'
       ORDER BY sequence ASC, created_at ASC, id ASC
     `,
-    [input.organizationId, input.projectId],
+    [input.organizationId, input.projectId, input.scriptId ?? null],
   );
 
   return result.rows.map(scriptReaderSectionFromRow);

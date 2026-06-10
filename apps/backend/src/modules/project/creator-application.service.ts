@@ -115,12 +115,127 @@ import {
   createSqlParseScriptCommandHandler,
   createSqlProjectCommandHandler,
 } from "./sql-project.command.ts";
-import type { ProjectBundle } from "./project.service.ts";
+import type { ProjectBundle, ProjectRecord, ScriptRecord } from "./project.service.ts";
 import type { ShotRecord } from "./shot.service.ts";
 
 interface AuthenticatedCreatorUser {
   id: string;
   sessionToken: string;
+}
+
+async function createScriptForReaderSections(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    title: string;
+    inputText: string;
+    createdByUserId: string;
+    now: Date;
+  },
+): Promise<ScriptRecord> {
+  const scriptId = randomUUID();
+  const result = await db.query<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+    title: string | null;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    deleted_at: Date | string | null;
+    status: "draft" | "ready" | "parsed" | "failed";
+    input_text: string;
+    created_by_user_id: string;
+    created_at: Date | string;
+    updated_at: Date | string;
+  }>(
+    `
+      INSERT INTO scripts (
+        id,
+        organization_id,
+        project_id,
+        title,
+        status,
+        input_text,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, 'ready', $5, $6, $7, $7)
+      RETURNING *
+    `,
+    [
+      scriptId,
+      input.organizationId,
+      input.projectId,
+      input.title.trim() || "剧本",
+      input.inputText,
+      input.createdByUserId,
+      input.now,
+    ],
+  );
+  const script = result.rows[0];
+  if (!script) {
+    throw new Error("script_create_failed");
+  }
+  return {
+    id: script.id,
+    organizationId: script.organization_id,
+    projectId: script.project_id,
+    title: script.title,
+    coverImageUrl: script.cover_image_url,
+    coverStorageObjectId: script.cover_storage_object_id,
+    deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
+    status: script.status,
+    inputText: script.input_text,
+    createdByUserId: script.created_by_user_id,
+    createdAt: new Date(script.created_at),
+    updatedAt: new Date(script.updated_at),
+  };
+}
+
+function splitScriptDocumentIntoChapterSections(scriptText: string) {
+  const normalized = String(scriptText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+  const chapterPattern = /(^|\n)\s*((?:第\s*(?:\d+|[零〇一二三四五六七八九十百千万两]+)\s*章)[^\n]*)/g;
+  const matches = [...normalized.matchAll(chapterPattern)];
+  if (!matches.length) {
+    return [{ title: "第 1 集", body: normalized }];
+  }
+  return matches.map((match, index) => {
+    const title = match[2]?.trim() || `第 ${index + 1} 集`;
+    const start = (match.index ?? 0) + (match[1]?.length ?? 0);
+    const next = matches[index + 1];
+    const end = next?.index ?? normalized.length;
+    return {
+      title,
+      body: normalized.slice(start, end).trim(),
+    };
+  }).filter((section) => section.body);
+}
+
+function splitScriptDocumentIntoChapterSectionsStable(scriptText: string) {
+  const normalized = String(scriptText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+  const chapterPattern = /(^|\n)\s*((?:\u7b2c\s*(?:\d+|[\u96f6\u3007\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343\u4e07\u4e24]+)\s*\u7ae0)[^\n]*)/g;
+  const matches = [...normalized.matchAll(chapterPattern)];
+  if (!matches.length) {
+    return [{ title: "\u7b2c 1 \u96c6", body: normalized }];
+  }
+  return matches.map((match, index) => {
+    const title = match[2]?.trim() || `\u7b2c ${index + 1} \u96c6`;
+    const start = (match.index ?? 0) + (match[1]?.length ?? 0);
+    const next = matches[index + 1];
+    const end = next?.index ?? normalized.length;
+    return {
+      title,
+      body: normalized.slice(start, end).trim(),
+    };
+  }).filter((section) => section.body);
 }
 
 export interface CreatorHttpResponse<T> {
@@ -485,6 +600,41 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
     },
 
+    async listWorkspaceScripts(input: {
+      user: AuthenticatedCreatorUser;
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+      const scripts = await listScriptsForWorkspace(deps.db, {
+        organizationId: actor.organizationId,
+        workspaceId: deps.workspaceId,
+      });
+      const signedScripts = deps.storageRuntime
+        ? await Promise.all(
+            scripts.map((script) =>
+              hydrateScriptCoverUrl(deps.db, {
+                script,
+                sessionToken: input.user.sessionToken,
+                runtime: deps.storageRuntime,
+                now: input.now,
+                signedUrlExpiresInSeconds,
+              }),
+            ),
+          )
+        : scripts;
+
+      return {
+        status: 200,
+        body: {
+          scripts: signedScripts,
+        },
+      };
+    },
+
     async createProject(input: {
       user: AuthenticatedCreatorUser;
       body: {
@@ -531,6 +681,112 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: {
           ...result.body,
           state: await creatorApp.getState(),
+        },
+      };
+    },
+
+    async importScriptDocument(input: {
+      user: AuthenticatedCreatorUser;
+      body: {
+        title?: string | null;
+        scriptInput: string;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+      const scriptInput = String(input.body.scriptInput ?? "").trim();
+      if (!scriptInput) {
+        return { status: 400, body: { error: "script_text_required" } };
+      }
+
+      const title = input.body.title?.trim() || "导入剧本";
+      const projectId = randomUUID();
+      await deps.db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            aspect_ratio,
+            resolution,
+            phase,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, '9:16', '1080p', 'script_input', $5, $6, $6)
+        `,
+        [
+          projectId,
+          actor.organizationId,
+          deps.workspaceId,
+          title,
+          actor.actorId,
+          input.now,
+        ],
+      );
+      const script = await createScriptForReaderSections(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        title,
+        inputText: scriptInput,
+        createdByUserId: actor.actorId,
+        now: input.now,
+      });
+      const sections = splitScriptDocumentIntoChapterSectionsStable(scriptInput);
+      const savedSections = [];
+      for (const section of sections) {
+        savedSections.push(await createScriptReaderSection(deps.db, {
+          organizationId: actor.organizationId,
+          projectId,
+          scriptId: script.id,
+          title: section.title,
+          body: section.body,
+          createdByUserId: actor.actorId,
+          now: input.now,
+        }));
+      }
+
+      const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      sqlState.projectId = projectId;
+      sqlState.scriptId = script.id;
+      const detail = await buildProjectDetail(deps.db, {
+        organizationId: actor.organizationId,
+        projectId,
+        sessionToken: input.user.sessionToken,
+        runtime: deps.storageRuntime,
+        signedUrlExpiresInSeconds,
+        now: input.now,
+      });
+      const bundle = await loadProjectBundleFromSql(deps.db, {
+        projectId,
+        scriptId: script.id,
+      });
+      if (bundle) {
+        await creatorApp.createProject({
+          name: title,
+          scriptInput,
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          seedBundle: bundle,
+        });
+      }
+
+      return {
+        status: 200,
+        body: {
+          project: detail.project,
+          script,
+          sections: savedSections,
+          state: {
+            ...(await creatorApp.getState()),
+            projectDetail: detail,
+          },
         },
       };
     },
@@ -1285,6 +1541,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async listScriptReaderSections(input: {
       user: AuthenticatedCreatorUser;
       projectId: string;
+      scriptId?: string | null;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
@@ -1299,7 +1556,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const sections = await ensureScriptReaderSectionsForProject(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
-        scriptId: bundle?.script?.id ?? null,
+        scriptId: input.scriptId ?? bundle?.script?.id ?? null,
         createdByUserId: actor.actorId,
         now: input.now,
       });
@@ -1309,7 +1566,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async createScriptReaderSection(input: {
       user: AuthenticatedCreatorUser;
       projectId: string;
-      body: { title?: string | null; body?: string | null };
+      body: {
+        title?: string | null;
+        body?: string | null;
+        scriptInputText?: string | null;
+        scriptId?: string | null;
+        createNewScript?: boolean | null;
+      };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
@@ -1319,18 +1582,29 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       });
       const bundle = await loadProjectBundleFromSql(deps.db, {
         projectId: input.projectId,
-        scriptId: null,
+        scriptId: input.body.scriptId ?? null,
       });
+      const shouldCreateNewScript = input.body.createNewScript === true;
+      const script = shouldCreateNewScript || !bundle?.script
+        ? await createScriptForReaderSections(deps.db, {
+            organizationId: actor.organizationId,
+            projectId: input.projectId,
+            title: input.body.title?.trim() || "剧本",
+            inputText: input.body.scriptInputText?.trim() || input.body.body || "",
+            createdByUserId: actor.actorId,
+            now: input.now,
+          })
+        : bundle.script;
       const section = await createScriptReaderSection(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
-        scriptId: bundle?.script?.id ?? null,
+        scriptId: script.id,
         title: input.body.title?.trim() || "新增剧情",
         body: input.body.body ?? "",
         createdByUserId: actor.actorId,
         now: input.now,
       });
-      return { status: 200, body: { section } };
+      return { status: 200, body: { section, script } };
     },
 
     async updateScriptReaderSection(input: {
@@ -4806,6 +5080,10 @@ async function buildProjectDetail(
     organizationId: input.organizationId,
     projectId: input.projectId,
   });
+  const scripts = await listScriptsForProjectDetail(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
 
   const assetsByType = groupAssetsByUiType(assets);
   const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
@@ -4924,10 +5202,24 @@ async function buildProjectDetail(
           signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
         })
       : projectBundle.script;
+  const signedScripts = runtime
+    ? await Promise.all(
+        scripts.map((script) =>
+          hydrateScriptCoverUrl(db, {
+            script,
+            sessionToken: input.sessionToken,
+            runtime,
+            now: input.now,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          }),
+        ),
+      )
+    : scripts;
 
   return {
     project: signedProject,
     script: signedScript,
+    scripts: signedScripts,
     assetSummary: buildAssetSummary(groupAssetsByUiType(signedAssets)),
     assetsByType: groupAssetsByUiType(signedAssets),
     episodes: projectEpisodes.map((episode) => {
@@ -5374,6 +5666,147 @@ async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string |
   } catch {
     return input.script;
   }
+}
+
+async function listScriptsForProjectDetail(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+  },
+): Promise<ScriptRecord[]> {
+  const result = await db.query<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+    title: string | null;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    deleted_at: Date | string | null;
+    status: "draft" | "ready" | "parsed" | "failed";
+    input_text: string;
+    created_by_user_id: string;
+    created_at: Date | string;
+    updated_at: Date | string;
+  }>(
+    `
+      SELECT *
+      FROM scripts
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND deleted_at IS NULL
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+    `,
+    [input.organizationId, input.projectId],
+  );
+
+  return result.rows.map((script) => ({
+    id: script.id,
+    organizationId: script.organization_id,
+    projectId: script.project_id,
+    title: script.title,
+    coverImageUrl: script.cover_image_url,
+    coverStorageObjectId: script.cover_storage_object_id,
+    deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
+    status: script.status,
+    inputText: script.input_text,
+    createdByUserId: script.created_by_user_id,
+    createdAt: new Date(script.created_at),
+    updatedAt: new Date(script.updated_at),
+  }));
+}
+
+async function listScriptsForWorkspace(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+  },
+): Promise<Array<ScriptRecord & {
+  projectName: string;
+  projectPhase: ProjectRecord["phase"];
+  projectUpdatedAt: Date;
+  sectionCount: number;
+}>> {
+  const result = await db.query<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+    title: string | null;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    deleted_at: Date | string | null;
+    status: "draft" | "ready" | "parsed" | "failed";
+    input_text: string;
+    created_by_user_id: string;
+    created_at: Date | string;
+    updated_at: Date | string;
+    project_name: string;
+    project_phase: ProjectRecord["phase"];
+    project_updated_at: Date | string;
+    section_count: number | string | null;
+  }>(
+    `
+      SELECT
+        s.id,
+        s.organization_id,
+        s.project_id,
+        s.title,
+        s.cover_image_url,
+        s.cover_storage_object_id,
+        s.deleted_at,
+        s.status,
+        s.input_text,
+        s.created_by_user_id,
+        s.created_at,
+        s.updated_at,
+        p.name AS project_name,
+        p.phase AS project_phase,
+        p.updated_at AS project_updated_at,
+        COALESCE(section_counts.section_count, 0) AS section_count
+      FROM scripts s
+      INNER JOIN projects p
+        ON p.id = s.project_id
+       AND p.organization_id = s.organization_id
+      LEFT JOIN (
+        SELECT
+          organization_id,
+          project_id,
+          script_id,
+          COUNT(*) AS section_count
+        FROM script_reader_sections
+        WHERE status <> 'archived'
+        GROUP BY organization_id, project_id, script_id
+      ) section_counts
+        ON section_counts.organization_id = s.organization_id
+       AND section_counts.project_id = s.project_id
+       AND section_counts.script_id = s.id
+      WHERE s.organization_id = $1
+        AND p.workspace_id = $2
+        AND s.deleted_at IS NULL
+      ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
+    `,
+    [input.organizationId, input.workspaceId],
+  );
+
+  return result.rows.map((script) => ({
+    id: script.id,
+    organizationId: script.organization_id,
+    projectId: script.project_id,
+    title: script.title,
+    coverImageUrl: script.cover_image_url,
+    coverStorageObjectId: script.cover_storage_object_id,
+    deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
+    status: script.status,
+    inputText: script.input_text,
+    createdByUserId: script.created_by_user_id,
+    createdAt: new Date(script.created_at),
+    updatedAt: new Date(script.updated_at),
+    projectName: script.project_name,
+    projectPhase: script.project_phase,
+    projectUpdatedAt: new Date(script.project_updated_at),
+    sectionCount: Number(script.section_count ?? 0),
+  }));
 }
 
 async function buildSignedExportRecord(
