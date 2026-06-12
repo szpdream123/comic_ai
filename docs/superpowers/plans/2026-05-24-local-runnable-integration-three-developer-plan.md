@@ -6,7 +6,7 @@
 
 **Architecture:** 第一版选择“主链路优先”：保留现有单进程 phone-auth dev server 和 render-function 前端，不重做框架；沿登录 -> 创建项目 -> 解析 -> 资产确认 -> 校准 -> 生成 -> 导出这条链路补齐真实 API、idempotency、状态恢复、smoke 和文档。三人按 Platform/API、Frontend Integration、DX/QA/Ops 分工，所有任务都围绕 Local Runnable Alpha 出口。
 
-**Tech Stack:** TypeScript, JavaScript ES modules, Node test runner, PGlite, existing `runIdempotentCommand`, existing phone-auth dev server, existing creator workbench.
+**Tech Stack:** TypeScript, JavaScript ES modules, Node test runner, PostgreSQL test schemas, existing `runIdempotentCommand`, existing phone-auth dev server, existing creator workbench.
 
 ---
 
@@ -564,7 +564,7 @@ Expected: 分组测试均通过。
 
 ## 7. Assumptions and Defaults
 
-- 本次默认使用现有 PGlite memory DB；每次 dev server 重启会重置数据，这是 Local Alpha 可接受行为。
+- 本次默认使用 PostgreSQL；测试通过临时 schema 隔离，dev server 使用 `DATABASE_URL` 指向的持久数据库。
 - 本次默认 provider/storage 使用 `.env.example` 中的 dev mode。
 - 本次不要求 browser E2E；`smoke:local` 先用 Node fetch 覆盖真实 HTTP 主链路。
 - 本次要求 Chrome dogfood gate；可以先手工 checklist，后续再自动化。

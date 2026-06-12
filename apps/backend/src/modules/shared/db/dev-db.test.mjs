@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { PGlite } from "@electric-sql/pglite";
-
 import { ensureFoundationSchema } from "./dev-db.ts";
+import { createEmptyTestDb } from "./test-db.ts";
 
 test("ensureFoundationSchema applies admin management migration to existing foundation databases", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0010_admin_management_platform.sql", db);
 
@@ -20,7 +16,7 @@ test("ensureFoundationSchema applies admin management migration to existing foun
   const tables = await db.query(`
     SELECT table_name
     FROM information_schema.tables
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name IN ('admin_accounts', 'admin_auth_sessions', 'runtime_config_entries')
     ORDER BY table_name
   `);
@@ -34,12 +30,10 @@ test("ensureFoundationSchema applies admin management migration to existing foun
 });
 
 test("ensureFoundationSchema repairs legacy admin account tables missing lock columns", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0010_admin_management_platform.sql", db);
-  await db.exec(`
+  await db.query(`
     CREATE TABLE admin_accounts (
       id uuid PRIMARY KEY,
       login_name text NOT NULL UNIQUE,
@@ -54,7 +48,7 @@ test("ensureFoundationSchema repairs legacy admin account tables missing lock co
   const columns = await db.query(`
     SELECT column_name
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name = 'admin_accounts'
       AND column_name IN ('failed_login_count', 'locked_until')
     ORDER BY column_name
@@ -69,61 +63,17 @@ test("ensureFoundationSchema repairs legacy admin account tables missing lock co
 });
 
 test("ensureFoundationSchema repairs legacy foundation databases missing team member tables", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
-  await db.exec(`
-    CREATE TABLE users (
-      id uuid PRIMARY KEY,
-      phone_e164 text UNIQUE,
-      display_name text,
-      status text NOT NULL DEFAULT 'active',
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE organizations (
-      id uuid PRIMARY KEY,
-      name text NOT NULL,
-      status text NOT NULL DEFAULT 'active',
-      credit_balance_cached integer NOT NULL DEFAULT 0,
-      credit_reserved_cached integer NOT NULL DEFAULT 0,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE workspaces (
-      id uuid PRIMARY KEY,
-      organization_id uuid NOT NULL REFERENCES organizations(id),
-      name text NOT NULL,
-      status text NOT NULL DEFAULT 'active',
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE memberships (
-      id uuid PRIMARY KEY,
-      organization_id uuid NOT NULL REFERENCES organizations(id),
-      workspace_id uuid REFERENCES workspaces(id),
-      user_id uuid NOT NULL REFERENCES users(id),
-      role text NOT NULL,
-      status text NOT NULL DEFAULT 'active',
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-    CREATE TABLE sms_send_records (id uuid PRIMARY KEY);
-    CREATE TABLE storage_upload_sessions (id uuid PRIMARY KEY);
-    CREATE TABLE episode_generation_drafts (id uuid PRIMARY KEY);
-    CREATE TABLE episode_asset_conversation_threads (id uuid PRIMARY KEY);
-    CREATE TABLE project_upload_records (id uuid PRIMARY KEY);
-    CREATE TABLE ai_generation_task_snapshots (id uuid PRIMARY KEY);
-    CREATE TABLE admin_accounts (
-      id uuid PRIMARY KEY,
-      login_name text NOT NULL UNIQUE,
-      password_hash text NOT NULL,
-      display_name text NOT NULL,
-      status text NOT NULL DEFAULT 'active',
-      failed_login_count integer NOT NULL DEFAULT 0,
-      locked_until timestamptz NULL
-    );
+  await applyMigrationsBefore("0010_admin_management_platform.sql", db);
+  await db.query(`
+    DROP TABLE IF EXISTS team_plan_limits CASCADE;
+    DROP TABLE IF EXISTS team_credit_adjustments CASCADE;
+    DROP TABLE IF EXISTS team_project_ownerships CASCADE;
+    DROP TABLE IF EXISTS team_project_assignments CASCADE;
+    DROP TABLE IF EXISTS team_member_profiles CASCADE;
+    DROP TABLE IF EXISTS team_member_groups CASCADE;
+    DROP TABLE IF EXISTS organization_entitlements CASCADE;
   `);
 
   await ensureFoundationSchema(db);
@@ -131,7 +81,7 @@ test("ensureFoundationSchema repairs legacy foundation databases missing team me
   const tables = await db.query(`
     SELECT table_name
     FROM information_schema.tables
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name IN ('team_member_groups', 'team_member_profiles')
     ORDER BY table_name
   `);
@@ -145,12 +95,10 @@ test("ensureFoundationSchema repairs legacy foundation databases missing team me
 });
 
 test("ensureFoundationSchema repairs legacy storyboard prompt schema cleanup", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0017_remove_deprecated_prompt_categories.sql", db);
-  await db.exec(`
+  await db.query(`
     ALTER TABLE storyboard_prompt_packages
       DROP CONSTRAINT IF EXISTS storyboard_prompt_packages_package_type_check,
       ADD CONSTRAINT storyboard_prompt_packages_package_type_check
@@ -172,7 +120,7 @@ test("ensureFoundationSchema repairs legacy storyboard prompt schema cleanup", a
   const outputColumn = await db.query(`
     SELECT is_nullable
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name = 'storyboard_prompt_templates'
       AND column_name = 'output_package_id'
   `);
@@ -190,9 +138,7 @@ test("ensureFoundationSchema repairs legacy storyboard prompt schema cleanup", a
 });
 
 test("ensureFoundationSchema repairs legacy storyboard prompt packages missing cover image column", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0013_prompt_cover_images.sql", db);
 
@@ -201,7 +147,7 @@ test("ensureFoundationSchema repairs legacy storyboard prompt packages missing c
   const columns = await db.query(`
     SELECT column_name
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name = 'storyboard_prompt_packages'
       AND column_name = 'cover_image_url'
   `);
@@ -215,13 +161,11 @@ test("ensureFoundationSchema repairs legacy storyboard prompt packages missing c
 });
 
 test("ensureFoundationSchema repairs episode generation draft mode uniqueness on existing databases", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0019_episode_generation_draft_modes.sql", db);
 
-  await db.exec(`
+  await db.query(`
     ALTER TABLE episode_generation_drafts
       DROP CONSTRAINT IF EXISTS episode_generation_drafts_mode_unique;
     ALTER TABLE episode_generation_drafts
@@ -244,7 +188,7 @@ test("ensureFoundationSchema repairs episode generation draft mode uniqueness on
     FROM pg_constraint con
     JOIN pg_class rel ON rel.oid = con.conrelid
     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-    WHERE nsp.nspname = 'public'
+    WHERE nsp.nspname = current_schema()
       AND rel.relname = 'episode_generation_drafts'
       AND con.contype = 'u'
       AND (
@@ -267,12 +211,10 @@ test("ensureFoundationSchema repairs episode generation draft mode uniqueness on
 });
 
 test("ensureFoundationSchema repairs and enables Seedance model configs on existing databases", async () => {
-  const dbPath = resolve(process.cwd(), ".local", "test-db", randomUUID());
-  await mkdir(dbPath, { recursive: true });
-  const db = new PGlite(dbPath);
+  const db = await createEmptyTestDb();
 
   await applyMigrationsBefore("0020_seedance_video_model_configs.sql", db);
-  await db.exec(`
+  await db.query(`
     UPDATE ai_model_configs
     SET status = 'disabled',
         provider_model = 'legacy-seedance-2-0'
@@ -289,10 +231,15 @@ test("ensureFoundationSchema repairs and enables Seedance model configs on exist
       'Doubao-Seedance-2.0',
       'doubao-seedance-1-0-pro-250528'
     )
-    ORDER BY model_code
+    ORDER BY lower(model_code), model_code
   `);
 
   assert.deepEqual(seedanceModels.rows, [
+    {
+      model_code: "doubao-seedance-1-0-pro-250528",
+      provider_model: "doubao-seedance-1-0-pro-250528",
+      status: "active",
+    },
     {
       model_code: "Doubao-Seedance-2.0",
       provider_model: "doubao-seedance-2-0-260128",
@@ -301,11 +248,6 @@ test("ensureFoundationSchema repairs and enables Seedance model configs on exist
     {
       model_code: "Doubao-Seedance-2.0-fast",
       provider_model: "doubao-seedance-2-0-fast-260128",
-      status: "active",
-    },
-    {
-      model_code: "doubao-seedance-1-0-pro-250528",
-      provider_model: "doubao-seedance-1-0-pro-250528",
       status: "active",
     },
   ]);
@@ -320,6 +262,6 @@ async function applyMigrationsBefore(stopName, db) {
     .sort((left, right) => left.localeCompare(right));
 
   for (const file of files) {
-    await db.exec(await readFile(join(migrationDir, file), "utf8"));
+    await db.query(await readFile(join(migrationDir, file), "utf8"));
   }
 }

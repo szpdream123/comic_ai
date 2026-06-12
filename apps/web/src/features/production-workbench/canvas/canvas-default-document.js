@@ -26,7 +26,7 @@ export function createDefaultCanvasDocument(input = {}) {
           title: "剧本源",
           status: "ready",
           source: "project_script",
-          text: "《我在盛唐写天下》\n类型：古风 / 穿越 / 爽文漫剧\n片段：现代深夜办公室，键盘声急促，诗卷光影从屏幕边缘浮现。",
+          text: "",
           ports: {
             outputs: [{ id: "out_text", kind: "text", label: "文本" }],
             inputs: [],
@@ -43,7 +43,7 @@ export function createDefaultCanvasDocument(input = {}) {
           status: "running",
           mediaKind: "image",
           modelCode: "gpt-image-2-cn",
-          prompt: "根据剧本生成第一幕分镜脚本：办公室冷光、主角伏案、盛唐诗卷浮现，节奏紧凑。",
+          prompt: "",
           ports: {
             inputs: [{ id: "in_text", kind: "text", label: "文本" }],
             outputs: [{ id: "out_image", kind: "image", label: "图片" }],

@@ -531,6 +531,16 @@ export const creatorApi = {
     return fetchJson("/api/creator/state");
   },
 
+  getCreditLedger(options = {}) {
+    const pageSize = Number(options.pageSize ?? 50);
+    const params = new URLSearchParams();
+    if (Number.isFinite(pageSize) && pageSize > 0) {
+      params.set("pageSize", String(Math.min(100, Math.round(pageSize))));
+    }
+    const query = params.toString();
+    return fetchJson(`/api/creator/credits/ledger${query ? `?${query}` : ""}`);
+  },
+
   getTeamOverview() {
     return fetchJson("/api/creator/team/overview");
   },
@@ -553,6 +563,24 @@ export const creatorApi = {
 
   getProjects() {
     return fetchJson("/api/creator/projects");
+  },
+
+  getCanvasProjects() {
+    return fetchJson("/api/creator/canvas-projects");
+  },
+
+  createCanvasProject(input) {
+    return postJsonWithIdempotency("/api/creator/canvas-projects", input, {
+      action: "canvas-project.create",
+    });
+  },
+
+  updateCanvasProject(projectId, input) {
+    return patchJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`, input);
+  },
+
+  deleteCanvasProject(projectId) {
+    return deleteJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`);
   },
 
   getWorkspaceScripts() {
@@ -1067,6 +1095,10 @@ export const creatorApi = {
 
   listGenerationConfig(episodeId) {
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-config`);
+  },
+
+  listGlobalGenerationConfig() {
+    return fetchJson("/api/generation-config");
   },
 
   createImageTask(episodeId, input, options = {}) {

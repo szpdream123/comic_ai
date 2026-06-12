@@ -152,6 +152,12 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "default_grant",
     "ledgerResult.summary",
     "renderCreditSummary",
+    "creditLedgerDisplayChange",
+    "creditLedgerSourceLabel",
+    "积分变化",
+    "图片生成",
+    "视频生成",
+    "剧本生成",
     "balanceScope",
     "userFilters",
     "filteredUsers",
@@ -168,6 +174,18 @@ test("admin shell wires final design actions to real admin APIs", () => {
   }
 
   new vm.Script(script);
+});
+
+test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
+  for (const contract of [
+    "function resolveAdminApiUrl",
+    "backendOwnedPath",
+    "isAlternateDevPort",
+    '"http://127.0.0.1:4310"',
+    "fetch(resolveAdminApiUrl(path)",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
 });
 
 test("model editor defaults new configs to an identifiable image model template", () => {
@@ -222,6 +240,14 @@ test("model editor lets admins choose a secret reference for providerConfig apiK
   assert.match(script, /providerConfig\.apiKeyEnv/);
   assert.match(script, /providerConfig\.apiKey/);
   assert.match(script, /form\.elements\.providerConfig\.value = JSON\.stringify\(config, null, 2\)/);
+});
+
+test("model editor exposes base credit pricing as dedicated fields", () => {
+  assert.match(script, /name="pricingBaseCredits"/);
+  assert.match(script, /name="pricingUnit"/);
+  assert.match(script, /syncModelEditorPricingJson/);
+  assert.match(script, /pricing\.baseCredits = baseCredits/);
+  assert.match(script, /pricing\.unit = String\(form\.elements\.pricingUnit\.value/);
 });
 
 test("model status drawer refreshes model detail before launch checks", () => {
@@ -417,6 +443,20 @@ test("admin login form shows submitting state while authenticating", () => {
   }
 });
 
+test("admin login form exposes remember-password option and local persistence hooks", () => {
+  for (const contract of [
+    "remember-password",
+    "记住账号密码",
+    "admin-login-remembered-credentials",
+    "saveRememberedLogin",
+    "readRememberedLogin",
+    "clearRememberedLogin",
+    "form.get(\"remember\")",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin shell provides submitting and success feedback for write actions", () => {
   for (const contract of [
     "runAdminMutation",
@@ -438,6 +478,7 @@ test("admin shell routes every sensitive write drawer through the mutation feedb
     "user-status-form",
     "credit-deduct-form",
     "runtime-config-form",
+    "legal-document-form",
     "config-rollback-form",
     "secret-reference-form",
     "secret-probe-form",
@@ -454,6 +495,91 @@ test("admin shell routes every sensitive write drawer through the mutation feedb
     const nextFunction = script.indexOf("function ", start + 1);
     const block = script.slice(start, nextFunction === -1 ? undefined : nextFunction);
     assert.match(block, /runAdminMutation/, `${formId} uses runAdminMutation`);
+  }
+});
+
+test("admin shell exposes editable legal agreement management in system settings", () => {
+  for (const contract of [
+    "legalDocumentConfigs",
+    "legalDocumentEditor",
+    "用户服务协议",
+    "隐私政策",
+    "agreement-rich-text",
+    "openLegalDocumentDrawer",
+    "legal-document-form",
+    "contenteditable",
+    "execCommand",
+    "serviceAgreement",
+    "privacyPolicy",
+    "service_agreement",
+    "privacy_policy",
+    "富文本",
+    "预览",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin shell exposes a standalone agreement management menu and list workflow", () => {
+  for (const contract of [
+    'data-page="agreements"',
+    "/admin/agreements",
+    "loadLegalDocuments",
+    "agreementsPage",
+    "legalDocumentsTable",
+    "legal-document-status",
+    "legal-document-type",
+    "toggleLegalDocumentStatus",
+    "deleteLegalDocument",
+    "/api/admin/legal-documents",
+    "新增协议",
+    "启用",
+    "停用",
+    "删除",
+    "协议类型",
+    "协议状态",
+    "预览",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin agreement editor exposes a richer toolbar and preserves selection for formatting", () => {
+  for (const contract of [
+    'data-legal-command="underline"',
+    'data-legal-command="strikeThrough"',
+    'data-legal-command="insertOrderedList"',
+    'data-legal-command="justifyCenter"',
+    'data-legal-command="unlink"',
+    'data-legal-block="h1"',
+    'data-legal-block="h3"',
+    'data-legal-block="p"',
+    "legal-document-toolbar-group",
+    "legal-document-toolbar-separator",
+    "data-legal-active-command",
+    "data-legal-active-block",
+    "savedSelection",
+    "restoreSelection",
+    "focusEditor",
+    "syncToolbarState",
+    "runEditorCommand",
+    "document.queryCommandState",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin agreement editor sanitizes legacy rich text wrappers and normalizes display blocks", () => {
+  for (const contract of [
+    'const blockTags = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "H1", "H2", "H3", "BLOCKQUOTE"])',
+    'const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "S", "H1", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "A"])',
+    'element.tagName === "SPAN" || element.tagName === "FONT"',
+    'element = replaceTag(element, "p")',
+    "initialContentHtml = sanitizeRichTextHtml",
+    ".legal-document-surface h1",
+    ".legal-document-surface blockquote",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
   }
 });
 

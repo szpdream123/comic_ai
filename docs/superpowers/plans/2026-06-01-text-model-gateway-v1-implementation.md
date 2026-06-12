@@ -6,7 +6,7 @@
 
 **Architecture:** Add a small text gateway stack inside `apps/backend/src/modules/model-gateway`: model catalog resolution, OpenAI-compatible text adapter, provider request lifecycle helpers, and the internal service that wraps streaming chunks and records audit facts. Business services keep building prompts and owning business persistence.
 
-**Tech Stack:** TypeScript ESM, Node test runner, `tsx`, PGlite test DB, existing `provider_requests`, OpenAI Node SDK.
+**Tech Stack:** TypeScript ESM, Node test runner, `tsx`, PostgreSQL test schemas, existing `provider_requests`, OpenAI Node SDK.
 
 ---
 

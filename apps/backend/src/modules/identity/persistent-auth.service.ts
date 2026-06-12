@@ -16,6 +16,18 @@ import {
   verifySessionToken,
 } from "./session.service.ts";
 import type { SmsProvider } from "./sms-provider.ts";
+import {
+  createUserPasswordHash,
+  defaultPasswordFromPhone,
+  verifyTeamCredential,
+} from "./team-account-credentials.service.ts";
+
+const rememberedSessionTtlMs = 30 * 24 * 60 * 60 * 1000;
+const transientSessionTtlMs = 24 * 60 * 60 * 1000;
+
+export function sessionTtlMsForRemember(remember = true): number {
+  return remember ? rememberedSessionTtlMs : transientSessionTtlMs;
+}
 
 interface LoginChallengeRow {
   id: string;
@@ -35,6 +47,7 @@ interface UserRow {
   id: string;
   phone_e164: string;
   status: "active" | "disabled";
+  password_hash?: string | null;
 }
 
 interface AuthSessionRow {
@@ -71,6 +84,16 @@ export type PersistentLoginCodeRequestResult =
   | { kind: "sms_cooldown_active"; retryAfterSeconds: number }
   | { kind: "daily_sms_limit_exceeded"; retryAfterSeconds: 0 }
   | { kind: "sms_send_failed"; errorCode: string };
+
+export type PersistentPasswordLoginResult =
+  | {
+      kind: "verified";
+      user: { id: string; phone: string };
+      session: AuthSession;
+      token: string;
+    }
+  | { kind: "invalid_credentials" }
+  | { kind: "user_disabled" };
 
 export async function requestPersistentLoginCode(
   db: SqlDatabase,
@@ -263,6 +286,7 @@ export async function verifyPersistentLoginChallenge(
     phone: string;
     code: string;
     now: Date;
+    remember?: boolean;
   },
 ): Promise<PersistentLoginVerifyResult> {
   const phone = normalizeCnPhone(input.phone);
@@ -324,6 +348,7 @@ export async function verifyPersistentLoginChallenge(
     const createdSession = await createAuthSession({
       userId: user.id,
       now: input.now,
+      ttlMs: sessionTtlMsForRemember(input.remember),
     });
 
     await db.query(
@@ -369,6 +394,117 @@ export async function verifyPersistentLoginChallenge(
     await db.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function verifyPersistentPasswordLogin(
+  db: SqlDatabase,
+  input: {
+    account: string;
+    password: string;
+    now: Date;
+    remember?: boolean;
+  },
+): Promise<PersistentPasswordLoginResult> {
+  const phone = normalizeCnPhone(input.account);
+  const user = await queryOne<UserRow>(
+    db,
+    `
+      SELECT id, phone_e164, status, password_hash
+      FROM users
+      WHERE phone_e164 = $1
+      LIMIT 1
+    `,
+    [phone],
+  );
+
+  if (!user) {
+    return { kind: "invalid_credentials" };
+  }
+
+  if (user.status !== "active") {
+    return { kind: "user_disabled" };
+  }
+
+  if (!user.password_hash) {
+    if (input.password !== defaultPasswordFromPhone(phone)) {
+      return { kind: "invalid_credentials" };
+    }
+
+    user.password_hash = await createUserPasswordHash(input.password);
+    await db.query(
+      `
+        UPDATE users
+        SET password_hash = $2,
+            updated_at = $3
+        WHERE id = $1
+          AND password_hash IS NULL
+      `,
+      [user.id, user.password_hash, input.now],
+    );
+  }
+
+  const validPassword = await verifyTeamCredential({
+    password: input.password,
+    passwordHash: user.password_hash,
+  });
+
+  if (!validPassword) {
+    return { kind: "invalid_credentials" };
+  }
+
+  const createdSession = await createAuthSession({
+    userId: user.id,
+    now: input.now,
+    ttlMs: sessionTtlMsForRemember(input.remember),
+  });
+
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      createdSession.session.id,
+      createdSession.session.userId,
+      createdSession.session.status,
+      createdSession.session.sessionTokenHash,
+      createdSession.session.sessionTokenHashVersion,
+      createdSession.session.expiresAt,
+      createdSession.session.lastSeenAt,
+      createdSession.session.revokedAt,
+      input.now,
+    ],
+  );
+
+  await db.query(
+    `
+      UPDATE users
+      SET last_login_at = $2,
+          updated_at = $2
+      WHERE id = $1
+    `,
+    [user.id, input.now],
+  );
+
+  return {
+    kind: "verified",
+    user: {
+      id: user.id,
+      phone: user.phone_e164,
+    },
+    session: createdSession.session,
+    token: createdSession.token,
+  };
 }
 
 export async function findPersistentAuthSessionByToken(
@@ -444,16 +580,19 @@ async function findOrCreateUserByPhone(
   db: SqlDatabase,
   phoneE164: string,
 ): Promise<UserRow> {
+  const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone(phoneE164));
   const user = await queryOne<UserRow>(
     db,
     `
-      INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, $2, 'active')
+      INSERT INTO users (id, phone_e164, password_hash, status)
+      VALUES ($1, $2, $3, 'active')
       ON CONFLICT (phone_e164)
-      DO UPDATE SET phone_e164 = EXCLUDED.phone_e164
-      RETURNING id, phone_e164, status
+      DO UPDATE SET
+        phone_e164 = EXCLUDED.phone_e164,
+        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash)
+      RETURNING id, phone_e164, status, password_hash
     `,
-    [randomUUID(), phoneE164],
+    [randomUUID(), phoneE164, passwordHash],
   );
 
   return user!;

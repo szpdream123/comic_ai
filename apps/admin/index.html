@@ -66,6 +66,25 @@
         border-color: var(--primary);
         box-shadow: 0 0 0 3px var(--primary-soft);
       }
+      .login-options {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: -4px 0 14px;
+      }
+      .remember-option {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .remember-option input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--primary);
+      }
       .btn {
         border: 1px solid transparent;
         border-radius: 6px;
@@ -179,6 +198,261 @@
         border: 1px solid var(--line);
         border-radius: var(--radius);
         padding: 16px;
+      }
+      .section-stack { display: grid; gap: 14px; }
+      .legal-document-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .agreements-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .agreements-card {
+        display: grid;
+        gap: 14px;
+      }
+      .agreements-side-panel {
+        display: grid;
+        gap: 12px;
+      }
+      .legal-document-status,
+      .legal-document-type {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+      }
+      .legal-document-preview-panel {
+        display: grid;
+        gap: 10px;
+      }
+      .legal-document-preview-panel h4 {
+        margin: 0;
+        font-size: 15px;
+      }
+      .legal-document-empty {
+        min-height: 220px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--muted);
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        background: #fbfcfe;
+        padding: 18px;
+      }
+      .legal-document-card {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: linear-gradient(180deg, rgba(36, 107, 254, .03), rgba(255,255,255,.98));
+      }
+      .legal-document-card-head,
+      .legal-document-preview-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .legal-document-card-head h4,
+      .legal-document-preview-head h4,
+      .legal-document-editor-shell h4 { margin: 0; font-size: 15px; }
+      .legal-document-card-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .legal-document-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 0 10px;
+        border: 1px solid #d8e5ff;
+        border-radius: 999px;
+        background: #f4f8ff;
+        color: #35527a;
+        font-size: 12px;
+      }
+      .legal-document-preview-shell,
+      .legal-document-editor-shell { display: grid; gap: 8px; }
+      .drawer-panel.legal-document-drawer-panel {
+        width: min(max(68vw, 980px), 100%);
+        min-height: 100vh;
+        max-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 24px 24px 20px;
+      }
+      .legal-document-form {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .legal-document-editor-shell,
+      .legal-document-preview-shell {
+        min-height: 0;
+        grid-template-rows: auto 1fr;
+      }
+      .legal-document-surface {
+        min-height: 460px;
+        height: 100%;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--text);
+        overflow: auto;
+        line-height: 1.75;
+        font-size: 14px;
+      }
+      .legal-document-surface,
+      .legal-document-surface * {
+        color: #0f172a;
+      }
+      .legal-document-surface.is-editor {
+        min-height: 460px;
+        outline: none;
+        color: #0f172a;
+        caret-color: #0f172a;
+        background: #ffffff;
+        overflow-wrap: anywhere;
+      }
+      .legal-document-surface.is-editor:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-soft);
+      }
+      .legal-document-surface.is-editor:empty::before {
+        content: "请输入协议内容";
+        color: #94a3b8;
+      }
+      .legal-document-surface p,
+      .legal-document-surface h1,
+      .legal-document-surface h2,
+      .legal-document-surface h3,
+      .legal-document-surface blockquote,
+      .legal-document-surface ul,
+      .legal-document-surface ol {
+        margin-top: 0;
+      }
+      .legal-document-surface p,
+      .legal-document-surface li,
+      .legal-document-surface blockquote,
+      .legal-document-surface div,
+      .legal-document-surface span {
+        color: #334155;
+      }
+      .legal-document-surface p {
+        margin: 0 0 16px;
+        text-align: left;
+      }
+      .legal-document-surface ul,
+      .legal-document-surface ol {
+        margin: 0 0 16px 22px;
+        padding: 0;
+      }
+      .legal-document-surface li {
+        margin: 0 0 8px;
+      }
+      .legal-document-surface h1,
+      .legal-document-surface h2,
+      .legal-document-surface h3,
+      .legal-document-surface strong,
+      .legal-document-surface b {
+        color: #0f172a;
+      }
+      .legal-document-surface h1 {
+        margin: 0 0 20px;
+        font-size: 30px;
+        line-height: 1.3;
+        text-align: center;
+      }
+      .legal-document-surface h2 {
+        margin: 28px 0 14px;
+        font-size: 22px;
+        line-height: 1.4;
+      }
+      .legal-document-surface h3 {
+        margin: 22px 0 12px;
+        font-size: 18px;
+        line-height: 1.45;
+      }
+      .legal-document-surface blockquote {
+        margin: 0 0 16px;
+        padding: 10px 14px;
+        border-left: 4px solid #bfd3ff;
+        background: #f8fbff;
+        color: #475569;
+      }
+      .legal-document-surface a {
+        color: var(--primary);
+      }
+      .legal-document-summary-text {
+        min-height: 84px;
+        padding: 12px 14px;
+        border: 1px solid #e4edf8;
+        border-radius: 10px;
+        background: #f8fbff;
+        color: #4f6076;
+        font-size: 13px;
+        line-height: 1.75;
+        white-space: pre-wrap;
+      }
+      .legal-document-editor-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+        align-items: stretch;
+        flex: 1;
+        min-height: 0;
+      }
+      .legal-document-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #f8fbff;
+      }
+      .legal-document-toolbar-group {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .legal-document-toolbar-separator {
+        width: 1px;
+        min-height: 28px;
+        background: #d9e4f5;
+        margin: 0 2px;
+      }
+      .legal-document-toolbar .btn {
+        min-width: 44px;
+        padding: 8px 10px;
+      }
+      .legal-document-toolbar .btn.is-active {
+        border-color: #a9c7ff;
+        background: #e8f1ff;
+        color: #1d4ed8;
+        box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .12);
+      }
+      .legal-document-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .legal-document-actions {
+        margin-top: auto;
+        padding-top: 4px;
       }
       .metric-label { color: var(--muted); font-size: 13px; }
       .metric-value { font-size: 26px; margin-top: 8px; font-weight: 700; }
@@ -571,6 +845,18 @@
         .content > .grid {
           grid-template-columns: minmax(0, 1fr) !important;
         }
+        .agreements-layout,
+        .legal-document-grid,
+        .legal-document-editor-layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .drawer-panel.legal-document-drawer-panel {
+          width: 100%;
+        }
+        .legal-document-surface,
+        .legal-document-surface.is-editor {
+          min-height: 320px;
+        }
         .trend-bars {
           grid-template-columns: repeat(5, minmax(42px, 1fr));
           gap: 6px;
@@ -715,9 +1001,61 @@
           description: "默认团队子账号上限",
           updatedAt: null,
         },
+        {
+          key: "legal.service_agreement",
+          value: {
+            title: "用户服务协议",
+            contentHtml: "<p>暂无协议内容。</p>",
+            versionLabel: "2025-11-15",
+          },
+          valueType: "json",
+          scope: "creator",
+          description: "登录页用户服务协议富文本",
+          updatedAt: null,
+        },
+        {
+          key: "legal.privacy_policy",
+          value: {
+            title: "隐私政策",
+            contentHtml: "<p>暂无协议内容。</p>",
+            versionLabel: "2025-11-15",
+          },
+          valueType: "json",
+          scope: "creator",
+          description: "登录页隐私政策富文本",
+          updatedAt: null,
+        },
       ];
 
       const app = document.getElementById("admin-app");
+      const rememberedLoginStorageKey = "admin-login-remembered-credentials";
+
+      function readRememberedLogin() {
+        try {
+          const saved = localStorage.getItem(rememberedLoginStorageKey);
+          if (!saved) return { enabled: false, loginName: "", password: "" };
+          const parsed = JSON.parse(saved);
+          return {
+            enabled: Boolean(parsed?.enabled),
+            loginName: typeof parsed?.loginName === "string" ? parsed.loginName : "",
+            password: typeof parsed?.password === "string" ? parsed.password : "",
+          };
+        } catch {
+          return { enabled: false, loginName: "", password: "" };
+        }
+      }
+
+      function saveRememberedLogin(loginName, password) {
+        localStorage.setItem(rememberedLoginStorageKey, JSON.stringify({
+          enabled: true,
+          loginName: String(loginName || ""),
+          password: String(password || ""),
+        }));
+      }
+
+      function clearRememberedLogin() {
+        localStorage.removeItem(rememberedLoginStorageKey);
+      }
 
       function routeFromPath() {
         const path = location.pathname;
@@ -731,8 +1069,25 @@
         return "dashboard";
       }
 
+      function resolveAdminApiUrl(path) {
+        if (typeof window === "undefined" || /^https?:\/\//i.test(path)) {
+          return path;
+        }
+        const backendOwnedPath = /^\/(?:api|uploads|vendor)(?:\/|$)/.test(path);
+        const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
+          window.location.host ?? "",
+        );
+        const isAlternateDevPort = /^(?:4311|4312|4313|4314|4315|4399)$/.test(window.location.port ?? "");
+        const origin =
+          window.location.protocol === "file:" ||
+          (backendOwnedPath && localHttpHost && isAlternateDevPort)
+            ? "http://127.0.0.1:4310"
+            : window.location.origin;
+        return new URL(path, origin).toString();
+      }
+
       async function api(path, options = {}) {
-        const response = await fetch(path, {
+        const response = await fetch(resolveAdminApiUrl(path), {
           credentials: "include",
           headers: { "content-type": "application/json", ...(options.headers || {}) },
           ...options,
@@ -888,6 +1243,7 @@
       }
 
       function renderLogin(message = "") {
+        const remembered = readRememberedLogin();
         app.innerHTML = `
           <main class="login-page">
             <section class="login-card">
@@ -896,11 +1252,17 @@
               <form id="login-form">
                 <div class="field">
                   <label for="login-name">账号</label>
-                  <input id="login-name" name="loginName" autocomplete="username" required />
+                  <input id="login-name" name="loginName" autocomplete="username" value="${escapeAttribute(remembered.loginName)}" required />
                 </div>
                 <div class="field">
                   <label for="login-password">密码</label>
-                  <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+                  <input id="login-password" name="password" type="password" autocomplete="current-password" value="${escapeAttribute(remembered.password)}" required />
+                </div>
+                <div class="login-options">
+                  <label class="remember-option" for="remember-password">
+                    <input id="remember-password" name="remember" type="checkbox" ${remembered.enabled ? "checked" : ""} />
+                    <span>记住账号密码</span>
+                  </label>
                 </div>
                 <div class="error-text" id="login-error">${message}</div>
                 <button class="btn primary full" type="submit">登录</button>
@@ -922,6 +1284,11 @@
                 password: form.get("password"),
               }),
             });
+            if (form.get("remember")) {
+              saveRememberedLogin(form.get("loginName"), form.get("password"));
+            } else {
+              clearRememberedLogin();
+            }
             state.session = result.data;
             await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
             history.replaceState(null, "", "/admin/dashboard");
@@ -2090,6 +2457,183 @@
         return `<label class="field"><span>${label}</span><input value="${value}" /></label>`;
       }
 
+      const legalDocumentConfigs = [
+        {
+          id: "serviceAgreement",
+          key: "legal.service_agreement",
+          title: "用户服务协议",
+          description: "登录页用户服务协议，支持富文本展示与弹窗预览。",
+        },
+        {
+          id: "privacyPolicy",
+          key: "legal.privacy_policy",
+          title: "隐私政策",
+          description: "登录页隐私政策，支持富文本展示与弹窗预览。",
+        },
+      ];
+
+      function legalDocumentConfigByKey(configKey) {
+        return legalDocumentConfigs.find((item) => item.key === configKey) || null;
+      }
+
+      function legalDocumentEditor(configKey) {
+        const config = legalDocumentConfigByKey(configKey);
+        const runtimeConfig = state.settings.configs.find((item) => item.key === configKey) || null;
+        const documentValue = normalizeLegalDocumentValue(config?.key || configKey, runtimeConfig?.value);
+        return { config, runtimeConfig, documentValue };
+      }
+
+      function normalizeLegalDocumentValue(configKey, value) {
+        const config = legalDocumentConfigByKey(configKey);
+        const fallbackTitle = config?.title || "协议文档";
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return {
+            title: fallbackTitle,
+            contentHtml: "<p>暂无协议内容。</p>",
+            versionLabel: "2025-11-15",
+          };
+        }
+        return {
+          title: String(value.title || fallbackTitle).trim() || fallbackTitle,
+          contentHtml: String(value.contentHtml || "<p>暂无协议内容。</p>").trim() || "<p>暂无协议内容。</p>",
+          versionLabel: String(value.versionLabel || "2025-11-15").trim() || "2025-11-15",
+        };
+      }
+
+      function stripHtmlToText(html) {
+        return String(html || "")
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/p>/gi, "\n\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&")
+          .trim();
+      }
+
+      function sanitizeRichTextHtml(html) {
+        const template = document.createElement("template");
+        template.innerHTML = String(html || "");
+        const blockedTags = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
+        const blockTags = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "H1", "H2", "H3", "BLOCKQUOTE"]);
+        const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "S", "H1", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "A"]);
+
+        const unwrapElement = (element) => {
+          const parent = element.parentNode;
+          if (!parent) return;
+          while (element.firstChild) {
+            parent.insertBefore(element.firstChild, element);
+          }
+          element.remove();
+        };
+
+        const replaceTag = (element, tagName) => {
+          const replacement = document.createElement(tagName);
+          while (element.firstChild) {
+            replacement.appendChild(element.firstChild);
+          }
+          element.replaceWith(replacement);
+          return replacement;
+        };
+
+        Array.from(template.content.querySelectorAll("*")).forEach((originalElement) => {
+          let element = originalElement;
+          if (blockedTags.has(element.tagName)) {
+            element.remove();
+            return;
+          }
+
+          if (element.tagName === "SPAN" || element.tagName === "FONT") {
+            unwrapElement(element);
+            return;
+          }
+
+          if (element.tagName === "DIV") {
+            const hasNestedBlocks = Array.from(element.children).some((child) => blockTags.has(child.tagName));
+            if (hasNestedBlocks) {
+              unwrapElement(element);
+              return;
+            }
+            element = replaceTag(element, "p");
+          }
+
+          if (!allowedTags.has(element.tagName)) {
+            unwrapElement(element);
+            return;
+          }
+
+          Array.from(element.attributes).forEach((attribute) => {
+            const attributeName = attribute.name.toLowerCase();
+            if (/^on/i.test(attributeName)) {
+              element.removeAttribute(attribute.name);
+              return;
+            }
+            if (element.tagName === "A" && attributeName === "href") {
+              if (/^\s*javascript:/i.test(attribute.value)) {
+                element.removeAttribute(attribute.name);
+              }
+              return;
+            }
+            element.removeAttribute(attribute.name);
+          });
+
+          if (element.tagName === "A") {
+            element.setAttribute("target", "_blank");
+            element.setAttribute("rel", "noopener noreferrer");
+            if (!element.getAttribute("href")) {
+              unwrapElement(element);
+              return;
+            }
+          }
+
+          if (blockTags.has(element.tagName)) {
+            const text = element.textContent.replace(/\u00a0/g, " ").trim();
+            if (!text && !element.querySelector("ul,ol,li")) {
+              element.remove();
+            }
+          }
+        });
+
+        Array.from(template.content.childNodes).forEach((node) => {
+          if (node.nodeType !== Node.TEXT_NODE) return;
+          const text = node.textContent.replace(/\u00a0/g, " ").trim();
+          if (!text) {
+            node.remove();
+            return;
+          }
+          const paragraph = document.createElement("p");
+          paragraph.textContent = text;
+          node.replaceWith(paragraph);
+        });
+
+        return template.innerHTML;
+      }
+
+      function legalDocumentSummaryHtml(configKey) {
+        const { config, runtimeConfig, documentValue } = legalDocumentEditor(configKey);
+        const previewText = stripHtmlToText(documentValue.contentHtml).slice(0, 120) || "暂无协议内容";
+        return `<section class="card">
+          <div class="toolbar">
+            <div>
+              <h3>${escapeHtml(config?.title || "协议文档")}</h3>
+              <div class="metric-note">${escapeHtml(config?.description || "")}</div>
+            </div>
+            <button class="btn primary" onclick="openLegalDocumentDrawer('${configKey}')" ${permissionAttrs("settings.write")}>编辑</button>
+          </div>
+          <div class="grid" style="grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);align-items:start;">
+            <div>
+              <div class="metric-note">版本 ${escapeHtml(documentValue.versionLabel || "-")}</div>
+              <div class="json-box" style="background:#fff;color:var(--text);border-color:var(--line);min-height:180px;">${escapeHtml(previewText)}</div>
+            </div>
+              <div class="agreement-rich-text" style="border:1px solid var(--line);border-radius:8px;padding:14px;min-height:180px;background:#fff;color:var(--text);overflow:auto;">
+              ${sanitizeRichTextHtml(documentValue.contentHtml)}
+            </div>
+          </div>
+          <div class="metric-note" style="margin-top:10px;">配置键：${escapeHtml(runtimeConfig?.key || configKey)}</div>
+        </section>`;
+      }
+
       function filteredUsers() {
         const filters = state.userFilters || {};
         const keyword = String(filters.keyword || "").trim().toLowerCase();
@@ -2931,8 +3475,9 @@
       }
 
       function settingsPage() {
-        const configRows = state.settings.configs.length
-          ? state.settings.configs.map(configRow).join("")
+        const runtimeConfigs = state.settings.configs.filter((config) => !legalDocumentConfigByKey(config.key));
+        const configRows = runtimeConfigs.length
+          ? runtimeConfigs.map(configRow).join("")
           : `<tr><td colspan="5">${state.settingsLoadError || "暂无运行配置"}</td></tr>`;
         const secretRows = state.settings.secretReferences.length
           ? state.settings.secretReferences.map(secretReferenceRow).join("")
@@ -2941,6 +3486,10 @@
           ? state.adminAccounts.map(adminAccountRow).join("")
           : `<tr><td colspan="5">暂无后台权限账户</td></tr>`;
         return `<div class="grid" style="grid-template-columns:minmax(0,1fr);">
+          <section class="card">
+            <div class="toolbar"><h3>协议管理</h3><span class="metric-note">登录页协议由后台统一维护，支持富文本编辑与弹窗展示。</span></div>
+            <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));">${legalDocumentConfigs.map((item) => legalDocumentSummaryHtml(item.key)).join("")}</div>
+          </section>
           <section class="card">
             <div class="toolbar"><h3>运行配置</h3><button class="btn primary" onclick="openRuntimeConfigDrawer()" ${permissionAttrs("settings.write")}>新增配置</button></div>
             <div class="table-wrap settings compact"><table><thead><tr><th>配置键</th><th>作用域</th><th>类型</th><th>当前值</th><th class="actions">操作</th></tr></thead><tbody>${configRows}</tbody></table></div>
@@ -2976,7 +3525,126 @@
 
       function compactJson(value) {
         if (typeof value === "string") return value;
+        if (value && typeof value === "object" && "contentHtml" in value) {
+          const legalValue = normalizeLegalDocumentValue("", value);
+          return JSON.stringify({
+            title: legalValue.title,
+            versionLabel: legalValue.versionLabel,
+            contentPreview: stripHtmlToText(legalValue.contentHtml).slice(0, 80),
+          });
+        }
         return JSON.stringify(value);
+      }
+
+      function openLegalDocumentDrawer(configKey) {
+        const { config, runtimeConfig, documentValue } = legalDocumentEditor(configKey);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(980px,100%);">
+          <div class="drawer-head">
+            <h3>编辑${escapeHtml(config?.title || "协议文档")}</h3>
+            <button class="icon-btn" onclick="closeDrawer()">×</button>
+          </div>
+          <p style="color:var(--muted);line-height:1.7">${escapeHtml(config?.description || "支持富文本编辑与登录页弹窗展示。")}</p>
+          <form id="legal-document-form">
+            <div class="form-grid">
+              <label class="field"><span>协议标题</span><input name="title" value="${escapeAttribute(documentValue.title)}" required /></label>
+              <label class="field"><span>版本标记</span><input name="versionLabel" value="${escapeAttribute(documentValue.versionLabel || "")}" placeholder="例如：2025-11-15" /></label>
+            </div>
+            <div class="toolbar" style="margin:12px 0 10px;">
+              <div class="filters">
+                <button class="btn ghost" type="button" data-legal-command="bold">B</button>
+                <button class="btn ghost" type="button" data-legal-command="italic">I</button>
+                <button class="btn ghost" type="button" data-legal-block="h2">H2</button>
+                <button class="btn ghost" type="button" data-legal-block="blockquote">引用</button>
+                <button class="btn ghost" type="button" data-legal-command="insertUnorderedList">列表</button>
+                <button class="btn ghost" type="button" data-legal-link="true">链接</button>
+                <button class="btn ghost" type="button" data-legal-command="removeFormat">清除</button>
+              </div>
+            </div>
+            <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;">
+              <div>
+                <div class="metric-note" style="margin-bottom:8px;">富文本编辑器</div>
+                <div id="legal-document-editor" class="agreement-rich-text" contenteditable="true" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:14px;background:#fff;color:var(--text);overflow:auto;">${sanitizeRichTextHtml(documentValue.contentHtml)}</div>
+                <textarea id="legal-document-html" name="contentHtml" hidden>${escapeHtml(documentValue.contentHtml)}</textarea>
+              </div>
+              <div>
+                <div class="metric-note" style="margin-bottom:8px;">预览</div>
+                <div id="legal-document-preview" class="agreement-rich-text" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:14px;background:#fff;color:var(--text);overflow:auto;">${sanitizeRichTextHtml(documentValue.contentHtml)}</div>
+              </div>
+            </div>
+            <label class="field" style="margin-top:12px;"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：更新登录页协议内容 / 调整版本说明"></textarea></label>
+            <div class="error-text" id="legal-document-error"></div>
+            <div class="toolbar" style="margin-top:12px;">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存协议</button>
+            </div>
+          </form>
+        </aside>`;
+
+        const form = document.getElementById("legal-document-form");
+        const editor = document.getElementById("legal-document-editor");
+        const preview = document.getElementById("legal-document-preview");
+        const htmlInput = document.getElementById("legal-document-html");
+        const error = document.getElementById("legal-document-error");
+
+        const syncEditor = () => {
+          const safeHtml = sanitizeRichTextHtml(editor.innerHTML);
+          htmlInput.value = safeHtml;
+          preview.innerHTML = safeHtml;
+        };
+
+        drawer.querySelectorAll("[data-legal-command]").forEach((button) => {
+          button.addEventListener("click", () => {
+            editor.focus();
+            document.execCommand(button.dataset.legalCommand, false);
+            syncEditor();
+          });
+        });
+        drawer.querySelectorAll("[data-legal-block]").forEach((button) => {
+          button.addEventListener("click", () => {
+            editor.focus();
+            document.execCommand("formatBlock", false, button.dataset.legalBlock);
+            syncEditor();
+          });
+        });
+        drawer.querySelectorAll("[data-legal-link]").forEach((button) => {
+          button.addEventListener("click", () => {
+            editor.focus();
+            const url = window.prompt("请输入链接地址", "https://");
+            if (!url) return;
+            document.execCommand("createLink", false, url);
+            syncEditor();
+          });
+        });
+        editor.addEventListener("input", syncEditor);
+        syncEditor();
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const formData = new FormData(event.currentTarget);
+          syncEditor();
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/settings/${encodeURIComponent(configKey)}`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-legal-document-${configKey}-${Date.now()}` },
+              body: JSON.stringify({
+                value: {
+                  title: String(formData.get("title") || "").trim(),
+                  contentHtml: htmlInput.value,
+                  versionLabel: String(formData.get("versionLabel") || "").trim(),
+                },
+                valueType: "json",
+                scope: String(runtimeConfig?.scope || "creator"),
+                description: String(runtimeConfig?.description || config?.description || ""),
+                reason: String(formData.get("reason") || ""),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "协议内容已保存");
+        });
       }
 
       function accountPage() {
@@ -3274,7 +3942,10 @@
           ]);
           const creditSummary = renderCreditSummary(ledgerResult.summary || {});
           const ledgerRows = (ledgerResult.data || [])
-            .map((entry) => `<tr><td>${entry.entryType}</td><td>${entry.sourceType}</td><td>${Number(entry.amount).toLocaleString()}</td><td>${entry.metadata?.workOrderNo || "-"}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${entry.reason}</td></tr>`)
+            .map((entry) => {
+              const creditChange = creditLedgerDisplayChange(entry);
+              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
+            })
             .join("") || `<tr><td colspan="6">暂无流水</td></tr>`;
           const subRows = (subaccountsResult.data || [])
             .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
@@ -3282,7 +3953,7 @@
           document.getElementById("user-ledger-panel").innerHTML = `
             ${creditSummary}
             <h4>积分流水</h4>
-            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
             <h4 style="margin-top:14px;">关联子账户</h4>
             <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
           `;
@@ -4063,6 +4734,8 @@
         form.elements.parameterSchema.value = JSON.stringify(template.parameterSchema, null, 2);
         form.elements.defaultParams.value = JSON.stringify(template.defaultParams, null, 2);
         form.elements.pricing.value = JSON.stringify(template.pricing, null, 2);
+        if (form.elements.pricingBaseCredits) form.elements.pricingBaseCredits.value = Number(template.pricing.baseCredits || 0);
+        if (form.elements.pricingUnit) form.elements.pricingUnit.value = template.pricing.unit || template.mediaType || "image";
         form.elements.providerConfig.value = JSON.stringify(template.providerConfig, null, 2);
         if (form.elements.modelApiKeyEnv) form.elements.modelApiKeyEnv.value = template.providerConfig.apiKeyEnv || "";
         if (form.elements.modelApiKey) form.elements.modelApiKey.value = template.providerConfig.apiKey || "";
@@ -4075,6 +4748,19 @@
         form.elements.submitConcurrencyLimit.value = template.dispatchPolicy.submitConcurrencyLimit;
         form.elements.pollingIntervalMs.value = template.dispatchPolicy.pollingIntervalMs;
         refreshParameterSchemaList(template.parameterSchema);
+      }
+
+      function syncModelEditorPricingJson() {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const pricing = parseJsonTextarea(new FormData(form), "pricing");
+        const baseCredits = Number(form.elements.pricingBaseCredits.value);
+        if (!Number.isFinite(baseCredits) || baseCredits <= 0) {
+          throw new Error("基础积分必须大于 0");
+        }
+        pricing.baseCredits = baseCredits;
+        pricing.unit = String(form.elements.pricingUnit.value || "").trim() || String(form.elements.mediaType.value || "image");
+        form.elements.pricing.value = JSON.stringify(pricing, null, 2);
       }
 
       function modelSecretReferenceOptions(selectedEnvName = "") {
@@ -4205,6 +4891,13 @@
             </section>
             <label class="field"><span>参数 schema JSON</span><textarea name="parameterSchema" rows="8" required>${escapeHtml(JSON.stringify(defaults.parameterSchema || {}, null, 2))}</textarea></label>
             <label class="field"><span>默认参数 JSON</span><textarea name="defaultParams" rows="4">${escapeHtml(JSON.stringify(defaults.defaultParams || {}, null, 2))}</textarea></label>
+            <section class="card" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar"><h4>模型定价</h4><span class="metric-note">这里会同步写入下面的 pricing JSON。</span></div>
+              <div class="form-grid">
+                <label class="field"><span>基础积分</span><input name="pricingBaseCredits" type="number" min="1" step="1" value="${Number(defaults.pricing?.baseCredits || 0)}" required /></label>
+                <label class="field"><span>计费单位</span><input name="pricingUnit" value="${escapeAttribute(defaults.pricing?.unit || defaults.mediaType || "image")}" required /></label>
+              </div>
+            </section>
             <label class="field"><span>模型定价 JSON</span><textarea name="pricing" rows="5" required>${escapeHtml(JSON.stringify(defaults.pricing || {}, null, 2))}</textarea></label>
             <div class="form-grid">
               <label class="field"><span>API 密钥</span><input name="modelApiKey" type="password" autocomplete="off" value="${escapeAttribute(selectedApiKey)}" placeholder="直接填写供应商 API Key" /></label>
@@ -4242,6 +4935,20 @@
             document.getElementById("model-editor-error").textContent = err.message || "API 密钥写入供应商配置失败";
           }
         });
+        modelEditorForm.elements.pricingBaseCredits.addEventListener("input", () => {
+          try {
+            syncModelEditorPricingJson();
+          } catch {
+            // Submit validation will show the actionable message once the value is complete.
+          }
+        });
+        modelEditorForm.elements.pricingUnit.addEventListener("input", () => {
+          try {
+            syncModelEditorPricingJson();
+          } catch {
+            // Submit validation will show the actionable message once the value is complete.
+          }
+        });
         const syncVideoCategoryVisibility = () => {
           const field = document.getElementById("video-category-field");
           if (field) field.style.display = modelEditorForm.elements.mediaType.value === "video" ? "" : "none";
@@ -4276,6 +4983,7 @@
           const error = document.getElementById("model-editor-error");
           error.textContent = "";
           try {
+            syncModelEditorPricingJson();
             const payload = modelPayloadFromForm(form);
             const path = isEdit ? `/api/admin/models/${model.id}` : "/api/admin/models";
             await runAdminMutation(event.currentTarget, error, async () => {
@@ -4580,6 +5288,73 @@
           correction: "财务修正",
           promotion: "活动赠送",
         }[value] || "手动调整";
+      }
+
+      function creditLedgerTypeLabel(value) {
+        return {
+          grant: "充值/发放",
+          reservation: "预冻结",
+          consume: "消费扣减",
+          release: "冻结释放",
+        }[value] || "积分变动";
+      }
+
+      function creditLedgerDisplayChange(entry = {}) {
+        const availableDelta = Number(entry.availableDelta ?? 0);
+        const reservedDelta = Number(entry.reservedDelta ?? 0);
+        const consumedDelta = Number(entry.consumedDelta ?? 0);
+        if (availableDelta) return availableDelta;
+        if (reservedDelta < 0 && consumedDelta > 0) return -consumedDelta;
+        if (reservedDelta < 0) return Math.abs(reservedDelta);
+        if (reservedDelta > 0) return -reservedDelta;
+        return Number(entry.amount ?? 0);
+      }
+
+      function formatSignedCredit(value) {
+        const amount = Number(value || 0);
+        const sign = amount > 0 ? "+" : amount < 0 ? "-" : "";
+        return `${sign}${Math.abs(amount).toLocaleString()}`;
+      }
+
+      function creditLedgerSourceLabel(entry = {}) {
+        const metadata = entry.metadata || {};
+        const sourceType = String(entry.sourceType || "");
+        const sourceText = [
+          sourceType,
+          metadata.mediaType,
+          metadata.taskType,
+          metadata.modelCode,
+          metadata.providerOperation,
+          metadata.operation,
+          entry.reason,
+        ].filter(Boolean).join(" ").toLowerCase();
+        if (sourceType === "payment_order") return "充值订单";
+        if (sourceType === "admin_manual_grant") return "后台发放";
+        if (sourceType === "admin_manual_deduct") return "后台扣减";
+        if (sourceText.includes("script") || sourceText.includes("story")) return "剧本生成";
+        if (sourceText.includes("video")) return "视频生成";
+        if (sourceText.includes("image")) return "图片生成";
+        if (sourceText.includes("audio") || sourceText.includes("voice")) return "音频生成";
+        if (sourceText.includes("episode")) return "剧集生成";
+        if (entry.entryType === "reservation") return "任务预冻结";
+        if (entry.entryType === "release") return "任务释放";
+        if (entry.entryType === "consume") return "任务扣减";
+        return sourceType || "-";
+      }
+
+      function creditLedgerReasonLabel(entry = {}) {
+        const reason = String(entry.reason || "");
+        const metadata = entry.metadata || {};
+        const scenario = metadata.adjustmentScenario ? adjustmentScenarioLabel(metadata.adjustmentScenario) : "";
+        if (scenario && entry.sourceType?.startsWith("admin_manual")) return scenario;
+        const text = [reason, metadata.mediaType, metadata.modelCode].filter(Boolean).join(" ").toLowerCase();
+        if (text.includes("image generation") || text.includes("image")) return "图片生成";
+        if (text.includes("video generation") || text.includes("video")) return "视频生成";
+        if (text.includes("script generation") || text.includes("script")) return "剧本生成";
+        if (text.includes("manual support grant")) return "人工充值补发";
+        if (text.includes("paid order")) return "充值到账";
+        if (reason) return reason;
+        return creditLedgerSourceLabel(entry);
       }
 
       function renderCreditSummary(summary = {}) {
@@ -5518,6 +6293,593 @@
         document.getElementById("drawer").classList.add("hidden");
       }
 
+      legalDocumentSummaryHtml = function legalDocumentSummaryHtml(configKey) {
+        const { config, runtimeConfig, documentValue } = legalDocumentEditor(configKey);
+        const previewText = stripHtmlToText(documentValue.contentHtml).slice(0, 120) || "\u6682\u65e0\u534f\u8bae\u5185\u5bb9";
+        return `<article class="legal-document-card">
+          <div class="legal-document-card-head">
+            <div>
+              <h4>${escapeHtml(config?.title || "\u534f\u8bae\u6587\u6863")}</h4>
+              <div class="metric-note">${escapeHtml(config?.description || "")}</div>
+            </div>
+            <button class="btn primary" onclick="openLegalDocumentDrawer('${configKey}')" ${permissionAttrs("settings.write")}>\u7f16\u8f91</button>
+          </div>
+          <div class="legal-document-card-meta">
+            <span class="legal-document-pill">\u7248\u672c ${escapeHtml(documentValue.versionLabel || "-")}</span>
+            <span class="legal-document-pill">${escapeHtml(runtimeConfig?.key || configKey)}</span>
+          </div>
+          <div class="legal-document-preview-shell">
+            <div class="legal-document-preview-head">
+              <h4>\u524d\u53f0\u5f39\u7a97\u9884\u89c8</h4>
+              <span class="metric-note">\u767b\u5f55\u9875\u4f1a\u76f4\u63a5\u4f7f\u7528\u8fd9\u4efd\u5bcc\u6587\u672c\u5185\u5bb9\u3002</span>
+            </div>
+            <div class="legal-document-surface agreement-rich-text">${sanitizeRichTextHtml(documentValue.contentHtml)}</div>
+          </div>
+          <div>
+            <div class="metric-note">\u5185\u5bb9\u6458\u8981</div>
+            <div class="legal-document-summary-text">${escapeHtml(previewText)}</div>
+          </div>
+        </article>`;
+      };
+
+      pages.agreements = "\u534f\u8bae\u7ba1\u7406";
+      const standaloneAgreementMenuContract = 'data-page="agreements"';
+      const standaloneAgreementTextContracts = ["新增协议", "启用", "删除", "协议类型", "协议状态", "预览"];
+      state.legalDocuments = Array.isArray(state.legalDocuments) ? state.legalDocuments : [];
+      state.legalDocumentLoadError = state.legalDocumentLoadError || "";
+      state.selectedLegalDocumentId = state.selectedLegalDocumentId || null;
+
+      routeFromPath = function routeFromPath() {
+        const path = location.pathname;
+        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
+        if (path.includes("/models")) return "models";
+        if (path.includes("/users")) return "users";
+        if (path.includes("/prompts")) return "prompts";
+        if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/agreements")) return "agreements";
+        if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
+        if (path.includes("/account")) return "account";
+        return "dashboard";
+      };
+
+      loadLegalDocuments = async function loadLegalDocuments() {
+        setPageLoading("agreements", true);
+        try {
+          const result = await api("/api/admin/legal-documents");
+          state.legalDocuments = Array.isArray(result.data?.documents) ? result.data.documents : [];
+          state.legalDocumentLoadError = "";
+          if (!state.selectedLegalDocumentId || !state.legalDocuments.some((item) => item.id === state.selectedLegalDocumentId)) {
+            state.selectedLegalDocumentId = state.legalDocuments[0]?.id || null;
+          }
+          clearPageForbidden("agreements");
+        } catch (error) {
+          setPageForbidden("agreements", error);
+          state.legalDocumentLoadError = error.payload?.error?.message || "\u534f\u8bae\u5217\u8868\u52a0\u8f7d\u5931\u8d25";
+          state.legalDocuments = [];
+        } finally {
+          setPageLoading("agreements", false);
+        }
+      };
+
+      navigate = function navigate(page) {
+        state.page = page;
+        const pathMap = {
+          dashboard: "/admin/dashboard",
+          models: "/admin/models",
+          "model-workbench": "/admin/models/new",
+          users: "/admin/users",
+          prompts: "/admin/prompts",
+          risks: "/admin/risks",
+          agreements: "/admin/agreements",
+          settings: "/admin/settings",
+          account: "/admin/account",
+        };
+        history.pushState(null, "", pathMap[page] || "/admin/dashboard");
+        renderShell();
+      };
+
+      renderShell = function renderShell() {
+        app.innerHTML = `
+          <div class="admin-shell">
+            <aside class="sidebar">
+              <div class="brand"><div class="brand-mark">\u7ba1</div><span>\u540e\u53f0\u7ba1\u7406</span></div>
+              <nav class="nav">
+                ${navButton("dashboard", "\u603b\u89c8")}
+                ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
+                ${navButton("model-workbench", "\u53c2\u6570\u8be6\u60c5")}
+                ${navButton("users", "\u7528\u6237\u79ef\u5206")}
+                ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
+                ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
+                ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
+              </nav>
+            </aside>
+            <section class="main">
+              <header class="topbar">
+                <h2>${pages[state.page]}</h2>
+                <div class="account-menu">
+                  <span>${state.session?.account?.displayName || "\u7ba1\u7406\u5458"}</span>
+                  <button class="btn ghost" data-page="account">\u8d26\u6237</button>
+                  <button class="btn ghost" id="logout-btn">\u9000\u51fa</button>
+                </div>
+              </header>
+              <main class="content">${renderPage()}</main>
+            </section>
+          </div>
+          <div id="drawer" class="drawer hidden"></div>
+          <div id="toast" class="toast-message hidden" role="status" aria-live="polite"></div>
+        `;
+        document.querySelectorAll("[data-page]").forEach((button) => {
+          button.addEventListener("click", () => navigate(button.dataset.page));
+        });
+        document.getElementById("logout-btn").addEventListener("click", logout);
+        bindUserFilterControls();
+      };
+
+      renderPage = function renderPage() {
+        const pageState = renderPageState(state.page);
+        if (pageState) return pageState;
+        if (state.page === "dashboard") return dashboardPage();
+        if (state.page === "models") return modelsPage();
+        if (state.page === "model-workbench") return modelWorkbenchPage();
+        if (state.page === "users") return usersPage();
+        if (state.page === "prompts") return promptsPage();
+        if (state.page === "risks") return risksPage();
+        if (state.page === "agreements") return agreementsPage();
+        if (state.page === "settings") return settingsPage();
+        return accountPage();
+      };
+
+      settingsPage = function settingsPage() {
+        const runtimeConfigs = state.settings.configs.filter((config) => !legalDocumentConfigByKey(config.key));
+        const configRows = runtimeConfigs.length
+          ? runtimeConfigs.map(configRow).join("")
+          : `<tr><td colspan="5">${state.settingsLoadError || "\u6682\u65e0\u8fd0\u884c\u914d\u7f6e"}</td></tr>`;
+        const secretRows = state.settings.secretReferences.length
+          ? state.settings.secretReferences.map(secretReferenceRow).join("")
+          : `<tr><td colspan="5">\u6682\u65e0\u5bc6\u94a5\u5f15\u7528</td></tr>`;
+        const accountRows = state.adminAccounts.length
+          ? state.adminAccounts.map(adminAccountRow).join("")
+          : `<tr><td colspan="5">\u6682\u65e0\u540e\u53f0\u6743\u9650\u8d26\u6237</td></tr>`;
+        return `<div class="section-stack">
+          <section class="card">
+            <div class="toolbar"><h3>\u8fd0\u884c\u914d\u7f6e</h3><button class="btn primary" onclick="openRuntimeConfigDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u914d\u7f6e</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>\u914d\u7f6e\u952e</th><th>\u4f5c\u7528\u57df</th><th>\u7c7b\u578b</th><th>\u5f53\u524d\u503c</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${configRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>\u5bc6\u94a5\u5f15\u7528</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u5bc6\u94a5\u5f15\u7528</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>\u5f15\u7528\u540d</th><th>\u73af\u5883\u53d8\u91cf</th><th>\u4f9b\u5e94\u5546</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${secretRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>\u540e\u53f0\u6743\u9650\u8d26\u6237</h3><button class="btn primary" onclick="openAdminAccountDrawer()" ${permissionAttrs("admin_account.write")}>\u65b0\u589e\u8d26\u6237</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>\u8d26\u53f7</th><th>\u663e\u793a\u540d</th><th>\u89d2\u8272</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${accountRows}</tbody></table></div>
+          </section>
+        </div>`;
+      };
+
+      legalDocumentsTable = function legalDocumentsTable() {
+        const rows = state.legalDocuments.length
+          ? state.legalDocuments.map((item) => {
+              const statusClass = item.status === "enabled" ? "green legal-document-status" : "warn legal-document-status";
+              const statusLabel = item.status === "enabled" ? "\u542f\u7528" : "\u505c\u7528";
+              const typeLabel = item.type === "service" ? "\u7528\u6237\u534f\u8bae" : "\u9690\u79c1\u534f\u8bae";
+              const toggleLabel = item.status === "enabled" ? "\u505c\u7528" : "\u542f\u7528";
+              const toggleAction = item.status === "enabled" ? "\u505c" : "\u542f";
+              return `<tr>
+                <td><button class="btn ghost" onclick="selectLegalDocument('${item.id}')">\u9884\u89c8</button></td>
+                <td>${escapeHtml(item.title || "-")}</td>
+                <td><span class="tag blue legal-document-type">${typeLabel}</span></td>
+                <td><span class="tag ${statusClass}">${statusLabel}</span></td>
+                <td>${escapeHtml(item.versionLabel || "-")}</td>
+                <td>${item.updatedAt ? new Date(item.updatedAt).toLocaleString("zh-CN") : "-"}</td>
+                <td class="actions">
+                  <div class="actions-row">
+                    <button class="icon-btn" title="\u7f16\u8f91" onclick="openLegalDocumentDrawer('${item.id}')"
+                      ${permissionAttrs("settings.write")}>\u7f16</button>
+                    <button class="icon-btn" title="${toggleLabel}" onclick="toggleLegalDocumentStatus('${item.id}')"
+                      ${permissionAttrs("settings.write")}>${toggleAction}</button>
+                    <button class="icon-btn" title="\u5220\u9664" onclick="deleteLegalDocument('${item.id}')"
+                      ${permissionAttrs("settings.write")}>\u5220</button>
+                  </div>
+                </td>
+              </tr>`;
+            }).join("")
+          : `<tr><td colspan="7">${state.legalDocumentLoadError || "\u6682\u65e0\u534f\u8bae\u6570\u636e"}</td></tr>`;
+        return `<div class="table-wrap dense"><table><thead><tr><th>\u9884\u89c8</th><th>\u534f\u8bae\u540d\u79f0</th><th>\u534f\u8bae\u7c7b\u578b</th><th>\u534f\u8bae\u72b6\u6001</th><th>\u7248\u672c</th><th>\u66f4\u65b0\u65f6\u95f4</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      };
+
+      agreementsPage = function agreementsPage() {
+        const selected = state.legalDocuments.find((item) => item.id === state.selectedLegalDocumentId) || state.legalDocuments[0] || null;
+        const previewHtml = selected?.document?.contentHtml ? sanitizeRichTextHtml(selected.document.contentHtml) : "";
+        const previewTitle = selected?.title || "\u9009\u62e9\u534f\u8bae\u9884\u89c8";
+        return `<div class="agreements-layout">
+          <section class="card agreements-card">
+            <div class="toolbar">
+              <div>
+                <h3 style="margin:0;">\u534f\u8bae\u5217\u8868</h3>
+                <div class="metric-note">\u7edf\u4e00\u7ef4\u62a4\u767b\u5f55\u9875\u53ef\u5c55\u793a\u7684\u7528\u6237\u534f\u8bae\u4e0e\u9690\u79c1\u534f\u8bae\u7248\u672c\u3002</div>
+              </div>
+              <div class="filters">
+                <button class="btn ghost" onclick="loadLegalDocuments().then(renderShell)">\u5237\u65b0</button>
+                <button class="btn primary" onclick="openLegalDocumentDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u534f\u8bae</button>
+              </div>
+            </div>
+            ${legalDocumentsTable()}
+          </section>
+          <aside class="card agreements-side-panel">
+            <div class="legal-document-preview-panel">
+              <div class="legal-document-card-head">
+                <div>
+                  <h4>${escapeHtml(previewTitle)}</h4>
+                  <div class="metric-note">${selected ? `${selected.type === "service" ? "\u7528\u6237\u534f\u8bae" : "\u9690\u79c1\u534f\u8bae"} / ${selected.status === "enabled" ? "\u5f53\u524d\u542f\u7528" : "\u672a\u542f\u7528"}` : "\u70b9\u51fb\u8868\u683c\u4e2d\u7684\u9884\u89c8\u67e5\u770b\u8be6\u60c5"}</div>
+                </div>
+              </div>
+              ${selected ? `<div class="legal-document-surface agreement-rich-text">${previewHtml}</div>` : `<div class="legal-document-empty">\u6682\u65e0\u53ef\u9884\u89c8\u7684\u534f\u8bae\u6587\u6863</div>`}
+            </div>
+          </aside>
+        </div>`;
+      };
+
+      selectLegalDocument = function selectLegalDocument(documentId) {
+        state.selectedLegalDocumentId = documentId;
+        renderShell();
+      };
+
+      openLegalDocumentDrawer = function openLegalDocumentDrawer(documentId) {
+        const existing = state.legalDocuments.find((item) => item.id === documentId) || null;
+        const defaultType = existing?.type || "service";
+        const defaultTitle = existing?.title || "";
+        const defaultVersionLabel = existing?.versionLabel || "";
+        const initialContentHtml = sanitizeRichTextHtml(existing?.document?.contentHtml || "");
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel legal-document-drawer-panel">
+          <div class="drawer-head">
+            <h3>${existing ? "\u7f16\u8f91\u534f\u8bae" : "\u65b0\u589e\u534f\u8bae"}</h3>
+            <button class="icon-btn" onclick="closeDrawer()">\u00d7</button>
+          </div>
+          <p style="color:var(--muted);line-height:1.7">\u652f\u6301\u65b0\u589e\u3001\u7f16\u8f91\u4e0d\u540c\u7248\u672c\u7684\u534f\u8bae\u5185\u5bb9\uff0c\u542f\u7528\u540e\u4f1a\u7acb\u5373\u540c\u6b65\u5230\u767b\u5f55\u9875\u3002</p>
+          <form id="legal-document-form" class="legal-document-form">
+            <div class="legal-document-toolbar">
+              <div class="legal-document-toolbar-group">
+                <button class="btn ghost" type="button" data-legal-command="bold" data-legal-active-command="bold" title="\u52a0\u7c97">B</button>
+                <button class="btn ghost" type="button" data-legal-command="italic" data-legal-active-command="italic" title="\u659c\u4f53">I</button>
+                <button class="btn ghost" type="button" data-legal-command="underline" data-legal-active-command="underline" title="\u4e0b\u5212\u7ebf">U</button>
+                <button class="btn ghost" type="button" data-legal-command="strikeThrough" data-legal-active-command="strikeThrough" title="\u5220\u9664\u7ebf">S</button>
+              </div>
+              <span class="legal-document-toolbar-separator" aria-hidden="true"></span>
+              <div class="legal-document-toolbar-group">
+                <button class="btn ghost" type="button" data-legal-block="h1" data-legal-active-block="h1" title="\u4e00\u7ea7\u6807\u9898">H1</button>
+                <button class="btn ghost" type="button" data-legal-block="h2" data-legal-active-block="h2" title="\u4e8c\u7ea7\u6807\u9898">H2</button>
+                <button class="btn ghost" type="button" data-legal-block="h3" data-legal-active-block="h3" title="\u4e09\u7ea7\u6807\u9898">H3</button>
+                <button class="btn ghost" type="button" data-legal-block="p" data-legal-active-block="p" title="\u6b63\u6587">\u6b63\u6587</button>
+              </div>
+              <span class="legal-document-toolbar-separator" aria-hidden="true"></span>
+              <div class="legal-document-toolbar-group">
+                <button class="btn ghost" type="button" data-legal-command="justifyLeft" title="\u5de6\u5bf9\u9f50">\u5de6</button>
+                <button class="btn ghost" type="button" data-legal-command="justifyCenter" title="\u5c45\u4e2d">\u4e2d</button>
+                <button class="btn ghost" type="button" data-legal-command="justifyRight" title="\u53f3\u5bf9\u9f50">\u53f3</button>
+              </div>
+              <span class="legal-document-toolbar-separator" aria-hidden="true"></span>
+              <div class="legal-document-toolbar-group">
+                <button class="btn ghost" type="button" data-legal-command="insertUnorderedList" data-legal-active-command="insertUnorderedList" title="\u65e0\u5e8f\u5217\u8868">\u65e0\u5e8f</button>
+                <button class="btn ghost" type="button" data-legal-command="insertOrderedList" data-legal-active-command="insertOrderedList" title="\u6709\u5e8f\u5217\u8868">\u6709\u5e8f</button>
+                <button class="btn ghost" type="button" data-legal-block="blockquote" data-legal-active-block="blockquote" title="\u5f15\u7528">\u5f15\u7528</button>
+                <button class="btn ghost" type="button" data-legal-command="outdent" title="\u51cf\u5c11\u7f29\u8fdb">\u51cf\u7f29</button>
+                <button class="btn ghost" type="button" data-legal-command="indent" title="\u589e\u52a0\u7f29\u8fdb">\u589e\u7f29</button>
+              </div>
+              <span class="legal-document-toolbar-separator" aria-hidden="true"></span>
+              <div class="legal-document-toolbar-group">
+                <button class="btn ghost" type="button" data-legal-link="true" title="\u63d2\u5165\u94fe\u63a5">\u94fe\u63a5</button>
+                <button class="btn ghost" type="button" data-legal-command="unlink" title="\u53d6\u6d88\u94fe\u63a5">\u53bb\u94fe</button>
+                <button class="btn ghost" type="button" data-legal-command="removeFormat" title="\u6e05\u9664\u683c\u5f0f">\u6e05\u9664</button>
+              </div>
+            </div>
+            <p class="legal-document-note">\u652f\u6301\u7b80\u5355\u5bcc\u6587\u672c\uff1a\u6807\u9898\u3001\u52a0\u7c97\u3001\u5217\u8868\u3001\u94fe\u63a5\u548c\u5f15\u7528\u3002\u53f3\u4fa7\u9884\u89c8\u533a\u4f1a\u540c\u6b65\u53cd\u6620\u767b\u5f55\u9875\u7684\u5b9e\u9645\u5c55\u73b0\u3002</p>
+            <div class="legal-document-editor-layout">
+              <div class="legal-document-editor-shell">
+                <h4>\u5bcc\u6587\u672c\u7f16\u8f91</h4>
+                <div id="legal-document-editor" class="agreement-rich-text legal-document-surface is-editor" contenteditable="true">${initialContentHtml}</div>
+                <textarea id="legal-document-html" name="contentHtml" hidden>${escapeHtml(initialContentHtml)}</textarea>
+              </div>
+              <div class="legal-document-preview-shell">
+                <div class="legal-document-preview-head">
+                  <h4>\u9884\u89c8</h4>
+                  <span class="metric-note">\u6839\u636e\u767b\u5f55\u9875\u5f39\u7a97\u6837\u5f0f\u5b9e\u65f6\u9884\u6f14</span>
+                </div>
+                <div id="legal-document-preview" class="agreement-rich-text legal-document-surface">${initialContentHtml}</div>
+              </div>
+            </div>
+            <div class="error-text" id="legal-document-error"></div>
+            <div class="toolbar legal-document-actions">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">\u53d6\u6d88</button>
+              <button class="btn primary" type="submit">\u4fdd\u5b58\u534f\u8bae</button>
+            </div>
+          </form>
+        </aside>`;
+
+        const form = document.getElementById("legal-document-form");
+        const editor = document.getElementById("legal-document-editor");
+        const preview = document.getElementById("legal-document-preview");
+        const htmlInput = document.getElementById("legal-document-html");
+        const error = document.getElementById("legal-document-error");
+        let savedSelection = null;
+
+        const saveSelection = () => {
+          const selection = window.getSelection();
+          if (!selection || selection.rangeCount === 0) return;
+          const range = selection.getRangeAt(0);
+          if (!editor.contains(range.commonAncestorContainer)) return;
+          savedSelection = range.cloneRange();
+        };
+
+        const restoreSelection = () => {
+          if (!savedSelection) return false;
+          const selection = window.getSelection();
+          if (!selection) return false;
+          selection.removeAllRanges();
+          selection.addRange(savedSelection);
+          return true;
+        };
+
+        const focusEditor = () => {
+          editor.focus();
+          if (!restoreSelection()) {
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            saveSelection();
+          }
+        };
+
+        const activeBlockTag = () => {
+          const selection = window.getSelection();
+          if (!selection || selection.rangeCount === 0) return "";
+          let node = selection.anchorNode;
+          if (!node) return "";
+          if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+          while (node && node !== editor) {
+            const tagName = node.nodeName?.toLowerCase?.() || "";
+            if (["h1", "h2", "h3", "p", "blockquote"].includes(tagName)) return tagName;
+            node = node.parentElement;
+          }
+          return "p";
+        };
+
+        const syncEditor = () => {
+          const safeHtml = sanitizeRichTextHtml(editor.innerHTML);
+          htmlInput.value = safeHtml;
+          preview.innerHTML = safeHtml;
+        };
+
+        const syncToolbarState = () => {
+          drawer.querySelectorAll("[data-legal-active-command]").forEach((button) => {
+            const command = button.dataset.legalActiveCommand;
+            let active = false;
+            try {
+              active = !!document.queryCommandState(command);
+            } catch {
+              active = false;
+            }
+            button.classList.toggle("is-active", active);
+          });
+          const blockTag = activeBlockTag();
+          drawer.querySelectorAll("[data-legal-active-block]").forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.legalActiveBlock === blockTag);
+          });
+        };
+
+        const runEditorCommand = (command, value = null) => {
+          focusEditor();
+          document.execCommand(command, false, value);
+          saveSelection();
+          syncEditor();
+          syncToolbarState();
+        };
+
+        drawer.querySelectorAll("[data-legal-command]").forEach((button) => {
+          button.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            saveSelection();
+          });
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            runEditorCommand(button.dataset.legalCommand);
+          });
+        });
+        drawer.querySelectorAll("[data-legal-block]").forEach((button) => {
+          button.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            saveSelection();
+          });
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            runEditorCommand("formatBlock", button.dataset.legalBlock);
+          });
+        });
+        drawer.querySelectorAll("[data-legal-link]").forEach((button) => {
+          button.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            saveSelection();
+          });
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            focusEditor();
+            const url = window.prompt("\u8bf7\u8f93\u5165\u94fe\u63a5\u5730\u5740", "https://");
+            if (!url) return;
+            document.execCommand("createLink", false, url);
+            saveSelection();
+            syncEditor();
+            syncToolbarState();
+          });
+        });
+        editor.addEventListener("mouseup", () => {
+          saveSelection();
+          syncToolbarState();
+        });
+        editor.addEventListener("keyup", () => {
+          saveSelection();
+          syncToolbarState();
+        });
+        editor.addEventListener("focus", () => {
+          saveSelection();
+          syncToolbarState();
+        });
+        editor.addEventListener("input", syncEditor);
+        syncToolbarState();
+        syncEditor();
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          syncEditor();
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(existing ? `/api/admin/legal-documents/${encodeURIComponent(existing.id)}` : "/api/admin/legal-documents", {
+              method: existing ? "PATCH" : "POST",
+              headers: { "idempotency-key": `admin-ui-legal-document-${existing?.id || "new"}-${Date.now()}` },
+              body: JSON.stringify({
+                type: defaultType,
+                title: defaultTitle,
+                contentHtml: htmlInput.value,
+                versionLabel: defaultVersionLabel,
+                reason: existing ? "\u66f4\u65b0\u534f\u8bae\u5185\u5bb9" : "\u65b0\u589e\u534f\u8bae\u5185\u5bb9",
+              }),
+            });
+            await loadLegalDocuments();
+            closeDrawer();
+            renderShell();
+          }, existing ? "\u534f\u8bae\u5df2\u66f4\u65b0" : "\u534f\u8bae\u5df2\u65b0\u589e");
+        });
+      };
+
+      toggleLegalDocumentStatus = async function toggleLegalDocumentStatus(documentId) {
+        const document = state.legalDocuments.find((item) => item.id === documentId);
+        if (!document) return;
+        const enabled = document.status !== "enabled";
+        await api(`/api/admin/legal-documents/${encodeURIComponent(documentId)}/enable`, {
+          method: "POST",
+          headers: { "idempotency-key": `admin-ui-legal-document-status-${documentId}-${Date.now()}` },
+          body: JSON.stringify({
+            enabled,
+            reason: enabled ? "\u542f\u7528\u534f\u8bae\u7248\u672c" : "\u505c\u7528\u534f\u8bae\u7248\u672c",
+          }),
+        });
+        await loadLegalDocuments();
+        renderShell();
+        showToast(enabled ? "\u534f\u8bae\u5df2\u542f\u7528" : "\u534f\u8bae\u5df2\u505c\u7528");
+      };
+
+      deleteLegalDocument = async function deleteLegalDocument(documentId) {
+        const confirmed = window.confirm("\u786e\u8ba4\u5220\u9664\u8fd9\u4efd\u534f\u8bae\u5417\uff1f");
+        if (!confirmed) return;
+        await api(`/api/admin/legal-documents/${encodeURIComponent(documentId)}`, {
+          method: "DELETE",
+          headers: { "idempotency-key": `admin-ui-legal-document-delete-${documentId}-${Date.now()}` },
+          body: JSON.stringify({ reason: "\u5220\u9664\u534f\u8bae\u7248\u672c" }),
+        });
+        await loadLegalDocuments();
+        renderShell();
+        showToast("\u534f\u8bae\u5df2\u5220\u9664");
+      };
+
+      bootstrap = async function bootstrap() {
+        if (location.pathname === "/admin/login") {
+          await bootstrapAdminLoginRoute();
+          return;
+        }
+        try {
+          app.innerHTML = `<main class="content"><section class="state-panel" data-state="loading"><strong>\u6b63\u5728\u52a0\u8f7d\u540e\u53f0\u6570\u636e</strong><span>\u6b63\u5728\u6821\u9a8c\u540e\u53f0\u767b\u5f55\u6001</span></section></main>`;
+          const me = await api("/api/admin/auth/me");
+          state.session = me.data;
+          state.page = routeFromPath();
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
+          renderShell();
+        } catch {
+          history.replaceState(null, "", "/admin/login");
+          renderLogin("\u540e\u53f0\u767b\u5f55\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55");
+        }
+      };
+
+      bootstrapAdminLoginRoute = async function bootstrapAdminLoginRoute() {
+        app.innerHTML = `<main class="content"><section class="state-panel" data-state="loading"><strong>\u6b63\u5728\u52a0\u8f7d\u540e\u53f0\u6570\u636e</strong><span>\u6b63\u5728\u6821\u9a8c\u540e\u53f0\u767b\u5f55\u6001</span></section></main>`;
+        try {
+          const me = await api("/api/admin/auth/me");
+          state.session = me.data;
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
+          history.replaceState(null, "", "/admin/dashboard");
+          state.page = "dashboard";
+          renderShell();
+        } catch {
+          renderLogin();
+        }
+      };
+
+      renderLogin = (function (originalRenderLogin) {
+        return function renderLogin(message = "") {
+          const remembered = readRememberedLogin();
+          app.innerHTML = `
+            <main class="login-page">
+              <section class="login-card">
+                <h1>\u540e\u53f0\u7ba1\u7406</h1>
+                <p>\u8bf7\u8f93\u5165\u7ba1\u7406\u5458\u8d26\u53f7\u8fdb\u5165\u8fd0\u8425\u540e\u53f0</p>
+                <form id="login-form">
+                  <div class="field">
+                    <label for="login-name">\u8d26\u53f7</label>
+                    <input id="login-name" name="loginName" autocomplete="username" value="${escapeAttribute(remembered.loginName)}" required />
+                  </div>
+                  <div class="field">
+                    <label for="login-password">\u5bc6\u7801</label>
+                    <input id="login-password" name="password" type="password" autocomplete="current-password" value="${escapeAttribute(remembered.password)}" required />
+                  </div>
+                  <div class="login-options">
+                    <label class="remember-option" for="remember-password">
+                      <input id="remember-password" name="remember" type="checkbox" ${remembered.enabled ? "checked" : ""} />
+                      <span>\u8bb0\u4f4f\u8d26\u53f7\u5bc6\u7801</span>
+                    </label>
+                  </div>
+                  <div class="error-text" id="login-error">${message}</div>
+                  <button class="btn primary full" type="submit">\u767b\u5f55</button>
+                </form>
+              </section>
+            </main>
+          `;
+          document.getElementById("login-form").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            const error = document.getElementById("login-error");
+            error.textContent = "";
+            setSubmitting(event.currentTarget, true, "\u6b63\u5728\u767b\u5f55");
+            try {
+              const result = await api("/api/admin/auth/login", {
+                method: "POST",
+                body: JSON.stringify({
+                  loginName: form.get("loginName"),
+                  password: form.get("password"),
+                }),
+              });
+              if (form.get("remember")) {
+                saveRememberedLogin(form.get("loginName"), form.get("password"));
+              } else {
+                clearRememberedLogin();
+              }
+              state.session = result.data;
+              await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
+              history.replaceState(null, "", "/admin/dashboard");
+              state.page = "dashboard";
+              renderShell();
+            } catch (err) {
+              error.textContent = err.payload?.error?.code === "admin_account_locked"
+                ? "\u8d26\u53f7\u5df2\u88ab\u4e34\u65f6\u9501\u5b9a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5"
+                : err.payload?.error?.message || "\u767b\u5f55\u5931\u8d25";
+            } finally {
+              setSubmitting(event.currentTarget, false);
+            }
+          });
+        };
+      })(renderLogin);
+
       window.addEventListener("popstate", () => {
         state.page = routeFromPath();
         state.session ? renderShell() : renderLogin();
@@ -5591,6 +6953,11 @@
       window.openRuntimeConfigDrawer = openRuntimeConfigDrawer;
       window.openRuntimeConfigHistoryDrawer = openRuntimeConfigHistoryDrawer;
       window.openRuntimeConfigRollbackDrawer = openRuntimeConfigRollbackDrawer;
+      window.openLegalDocumentDrawer = openLegalDocumentDrawer;
+      window.loadLegalDocuments = loadLegalDocuments;
+      window.selectLegalDocument = selectLegalDocument;
+      window.toggleLegalDocumentStatus = toggleLegalDocumentStatus;
+      window.deleteLegalDocument = deleteLegalDocument;
       window.openSecretReferenceDrawer = openSecretReferenceDrawer;
       window.probeSecretReference = probeSecretReference;
       window.openAdminAccountDrawer = openAdminAccountDrawer;

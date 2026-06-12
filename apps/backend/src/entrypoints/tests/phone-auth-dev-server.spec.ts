@@ -111,6 +111,7 @@ describe("phone auth dev server", () => {
           challengeId: requested.challengeId,
           phone: "13800138000",
           code: requested.devCode,
+          remember: true,
         }),
       });
       const verifyPayload = await verifyResponse.json();
@@ -130,6 +131,233 @@ describe("phone auth dev server", () => {
       assert.equal(verifyPayload.user.phone, "+8613800138000");
       assert.equal(sessionPayload.authenticated, true);
       assert.match(cookie, /Max-Age=2592000/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns the current user's available credits in session and generation config", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const membership = await db.query<{ id: string; organization_id: string; workspace_id: string }>(
+        `
+          SELECT id, organization_id, workspace_id
+          FROM memberships
+          WHERE user_id = (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+          LIMIT 1
+        `,
+      );
+      assert.ok(membership.rows[0]);
+
+      await db.query("UPDATE organizations SET credit_balance_cached = 0 WHERE id = $1", [
+        membership.rows[0].organization_id,
+      ]);
+      await db.query(
+        `
+          INSERT INTO team_member_profiles (
+            id,
+            organization_id,
+            workspace_id,
+            membership_id,
+            team_account,
+            display_name,
+            business_role,
+            credit_balance_cached,
+            created_by_user_id
+          )
+          VALUES (
+            '00000000-0000-4000-8000-000000000203',
+            $1,
+            $2,
+            $3,
+            'credit_owner_2036',
+            'Credit Owner',
+            'director',
+            2036,
+            (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+          )
+          ON CONFLICT (organization_id, workspace_id, membership_id)
+          DO UPDATE SET credit_balance_cached = EXCLUDED.credit_balance_cached
+        `,
+        [
+          membership.rows[0].organization_id,
+          membership.rows[0].workspace_id,
+          membership.rows[0].id,
+        ],
+      );
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "session-current-user-credit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Credit Project",
+          scriptInput: "Episode 1: Credits should follow current user.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const project = await createProjectResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${project.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "session-current-user-credit-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const episode = await createEpisodeResponse.json();
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episode.data.episode.id}/generation-config`,
+        { headers: { cookie } },
+      );
+      const generationConfig = await generationConfigResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.availableCredits, 2036);
+      assert.equal(session.user.creditBalance, 2036);
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfig.data.creditBalance, 2036);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses a one-day auth cookie when SMS login is not remembered", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: "13800138000" }),
+      });
+      const requested = await requestResponse.json();
+
+      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          challengeId: requested.challengeId,
+          phone: "13800138000",
+          code: requested.devCode,
+          remember: false,
+        }),
+      });
+      const cookie = verifyResponse.headers.get("set-cookie") ?? "";
+
+      assert.equal(verifyResponse.status, 200);
+      assert.match(cookie, /Max-Age=86400/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sets phone users' initial password to the last six phone digits and supports password login", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: "18571521874" }),
+      });
+      const requested = await requestResponse.json();
+
+      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          challengeId: requested.challengeId,
+          phone: "18571521874",
+          code: requested.devCode,
+        }),
+      });
+      const createdUser = await db.query<{ password_hash: string | null }>(
+        "SELECT password_hash FROM users WHERE phone_e164 = '+8618571521874'",
+      );
+
+      const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: "18571521874",
+          password: "521874",
+          remember: true,
+        }),
+      });
+      const passwordPayload = await passwordResponse.json();
+      const cookie = passwordResponse.headers.get("set-cookie") ?? "";
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const sessionPayload = await sessionResponse.json();
+
+      assert.equal(requestResponse.status, 200);
+      assert.equal(verifyResponse.status, 200);
+      assert.match(createdUser.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
+      assert.notEqual(createdUser.rows[0]?.password_hash, "521874");
+      assert.equal(passwordResponse.status, 200);
+      assert.equal(passwordPayload.user.phone, "+8618571521874");
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionPayload.authenticated, true);
+      assert.match(cookie, /Max-Age=2592000/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses a one-day auth cookie when password login is not remembered", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES ('00000000-0000-4000-8000-000000000004', '+8618571521874', 'active')
+        `,
+      );
+
+      const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: "18571521874",
+          password: "521874",
+          remember: false,
+        }),
+      });
+      const cookie = passwordResponse.headers.get("set-cookie") ?? "";
+
+      assert.equal(passwordResponse.status, 200);
+      assert.match(cookie, /Max-Age=86400/);
     } finally {
       await server.close();
     }
@@ -495,6 +723,69 @@ describe("phone auth dev server", () => {
       assert.equal(deleteResponse.status, 200);
       assert.equal(deleted.deleted, true);
       assert.equal(deleted.projectId, created.project.id);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates, renames, and deletes canvas projects through HTTP routes", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138277");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "迷雾世界-第一卷",
+        }),
+      });
+      const created = await createResponse.json();
+      const projectId = created.data.project.id;
+
+      const renameResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "迷雾世界-第二卷",
+        }),
+      });
+      const renamed = await renameResponse.json();
+
+      const listResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie },
+      });
+      const listed = await listResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
+        method: "DELETE",
+        headers: { cookie },
+      });
+      const deleted = await deleteResponse.json();
+
+      const afterDeleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie },
+      });
+      const afterDelete = await afterDeleteResponse.json();
+
+      assert.equal(createResponse.status, 201);
+      assert.equal(created.data.project.title, "迷雾世界-第一卷");
+      assert.equal(renameResponse.status, 200);
+      assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deleted.data.deletedProjectId, projectId);
+      assert.equal(afterDelete.data.projects.some((project) => project.id === projectId), false);
     } finally {
       await server.close();
     }
@@ -4364,6 +4655,10 @@ describe("phone auth dev server", () => {
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(taskResponse.status, 200);
       assert.equal(taskEnvelope.data.status, "succeeded");
+      assert.equal(taskEnvelope.data.progressStage, "completed");
+      assert.equal(taskEnvelope.data.progressPercent, 100);
+      assert.equal(taskEnvelope.data.snapshot.progressStage, "completed");
+      assert.equal(taskEnvelope.data.snapshot.progressPercent, 100);
       assert.equal(taskEnvelope.data.result.imageUrl, snapshotUrl);
       assert.equal(taskEnvelope.data.result.assetVersionId, "snapshot-version");
       assert.equal(listResponse.status, 200);
@@ -6476,8 +6771,7 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
     assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
-    assert.match(launcherScript, /LOCAL_DATABASE_DIR/);
-    assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
+    assert.doesNotMatch(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
     assert.match(launcherScript, /server\.listen\(port\)/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);

@@ -7,7 +7,7 @@
 
 ## 1. 背景和目标
 
-前端和后端已经分别具备基础骨架：后端有 phone-auth dev server、creator API、模块化单体、PGlite-backed 测试；前端有登录页、生产工作台、creator API client 和大量 render-level 测试。但当前系统距离“真正可运行”仍差一层工程化闭环：
+前端和后端已经分别具备基础骨架：后端有 phone-auth dev server、creator API、模块化单体、PostgreSQL-backed 测试；前端有登录页、生产工作台、creator API client 和大量 render-level 测试。但当前系统距离“真正可运行”仍差一层工程化闭环：
 
 - 研发或产品同学需要能用一个稳定入口启动本地系统。
 - 前端所有主链路动作必须走真实后端 API，而不是混合本地状态或一次性 dev key。

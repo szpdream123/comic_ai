@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   createTeamTemporaryCredential,
+  createUserPasswordHash,
+  defaultPasswordFromPhone,
   verifyTeamCredential,
 } from "../team-account-credentials.service.ts";
 
@@ -24,6 +26,28 @@ describe("team account credentials", () => {
       await verifyTeamCredential({
         password: `${credential.temporaryPassword}x`,
         passwordHash: credential.passwordHash,
+      }),
+      false,
+    );
+  });
+
+  it("derives phone user initial passwords from the last six phone digits", async () => {
+    const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone("+8618571521874"));
+
+    assert.equal(defaultPasswordFromPhone("+8618571521874"), "521874");
+    assert.match(passwordHash, /^scrypt:v1:/);
+    assert.notEqual(passwordHash, "521874");
+    assert.equal(
+      await verifyTeamCredential({
+        password: "521874",
+        passwordHash,
+      }),
+      true,
+    );
+    assert.equal(
+      await verifyTeamCredential({
+        password: "152187",
+        passwordHash,
       }),
       false,
     );

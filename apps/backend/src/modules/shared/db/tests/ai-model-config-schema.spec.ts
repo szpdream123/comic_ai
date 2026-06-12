@@ -257,6 +257,87 @@ describe("ai model configuration schema", () => {
     }
   });
 
+  it("seeds Jimeng image models as active configurable image models", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        status: string;
+        task_modes_json: string[];
+        provider_config_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            display_name,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            status,
+            task_modes_json,
+            provider_config_json,
+            pricing_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE model_code IN ('jimeng-5-image', 'jimeng-4-5-image', 'jimeng-4-0-image')
+          ORDER BY sort_order ASC
+        `,
+      );
+
+      assert.deepEqual(result.rows.map((row) => row.model_code), [
+        "jimeng-5-image",
+        "jimeng-4-5-image",
+        "jimeng-4-0-image",
+      ]);
+      assert.deepEqual(result.rows.map((row) => row.provider_model), [
+        "doubao-seedream-5-0-260128",
+        "doubao-seedream-4-5-251128",
+        "doubao-seedream-4-0",
+      ]);
+      for (const row of result.rows) {
+        assert.equal(row.provider_name, "volcengine");
+        assert.equal(row.provider_protocol, "custom_http");
+        assert.equal(row.invocation_mode, "sync");
+        assert.equal(row.media_type, "image");
+        assert.equal(row.status, "active");
+        assert.ok(row.task_modes_json.includes("image.generate"));
+        assert.ok(row.task_modes_json.includes("image.edit"));
+        assert.equal(row.provider_config_json.apiKeyEnv, "VOLCENGINE_ARK_API_KEY");
+        assert.equal(row.provider_config_json.requestFormat, "volcengine_ark_images_generation");
+        assert.equal(row.pricing_json.unit, "image");
+        assert.equal(row.ui_config_json.group, "即梦");
+      }
+
+      const policies = await db.query<{ model_code: string; submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT c.model_code, p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code IN ('jimeng-5-image', 'jimeng-4-5-image', 'jimeng-4-0-image')
+          ORDER BY c.sort_order ASC
+        `,
+      );
+      assert.deepEqual(policies.rows, [
+        { model_code: "jimeng-5-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "jimeng-4-5-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "jimeng-4-0-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("documents the model configuration tables with Chinese comments", () => {
     const migration = readFileSync(
       resolve(process.cwd(), "packages/db/migrations/0007_ai_model_configs.sql"),

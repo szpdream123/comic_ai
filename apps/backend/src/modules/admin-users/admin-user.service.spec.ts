@@ -165,11 +165,11 @@ test("admin user credit ledger keeps subaccount ledger scoped to the target user
 
     assert.deepEqual(
       result.data.map((entry) => entry.sourceType),
-      ["admin_manual_grant"],
+      ["credit_reservation_allocation", "credit_reservation_allocation", "admin_manual_deduct", "admin_manual_grant"],
     );
     assert.deepEqual(
       result.data.map((entry) => entry.metadata.adjustmentScenario),
-      ["compensation"],
+      [undefined, undefined, "correction", "compensation"],
     );
   } finally {
     await db.close();
@@ -197,8 +197,8 @@ test("admin user credit ledger returns balance and usage summary for account det
       displayAvailableCredits: 680,
       displayReservedCredits: 0,
       totalGrantedCredits: 50,
-      totalConsumedCredits: 0,
-      totalReleasedCredits: 0,
+      totalConsumedCredits: 10,
+      totalReleasedCredits: 80,
       activeReservationCount: 0,
       manualReviewReservationCount: 0,
     });
@@ -633,6 +633,7 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
         source_id,
         reason,
         metadata_json,
+        created_by_user_id,
         created_at
       )
       VALUES
@@ -648,6 +649,7 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           '99000000-0000-4000-8000-000000002001',
           'Paid order',
           '{}'::jsonb,
+          NULL,
           '2026-06-05T07:00:00.000Z'
         ),
         (
@@ -662,7 +664,148 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           '99000000-0000-4000-8000-000000002002',
           'Compensation',
           '{"targetUserId":"93000000-0000-4000-8000-000000002003","targetMembershipId":"94000000-0000-4000-8000-000000002003","workOrderNo":"CS-20260605-002","adjustmentScenario":"compensation"}'::jsonb,
+          NULL,
           '2026-06-05T07:05:00.000Z'
+        ),
+        (
+          '98000000-0000-4000-8000-000000002003',
+          '91000000-0000-4000-8000-000000002001',
+          'consume',
+          10,
+          0,
+          -10,
+          10,
+          'admin_manual_deduct',
+          '99000000-0000-4000-8000-000000002003',
+          'Correction',
+          '{"adjustmentScenario":"correction"}'::jsonb,
+          '93000000-0000-4000-8000-000000002003',
+          '2026-06-05T07:10:00.000Z'
+        )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO workflows (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_type,
+        status,
+        input_snapshot_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '97000000-0000-4000-8000-000000002001',
+        '91000000-0000-4000-8000-000000002001',
+        '92000000-0000-4000-8000-000000002001',
+        NULL,
+        'image_generation',
+        'failed',
+        '{}'::jsonb,
+        '93000000-0000-4000-8000-000000002003',
+        '2026-06-05T07:11:00.000Z',
+        '2026-06-05T07:12:00.000Z'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO credit_reservations (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_id,
+        task_id,
+        amount_total,
+        amount_reserved,
+        amount_consumed,
+        amount_released,
+        status,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '97000000-0000-4000-8000-000000002002',
+        '91000000-0000-4000-8000-000000002001',
+        '92000000-0000-4000-8000-000000002001',
+        NULL,
+        '97000000-0000-4000-8000-000000002001',
+        NULL,
+        80,
+        0,
+        0,
+        80,
+        'released',
+        'episode_generation_task',
+        '97000000-0000-4000-8000-000000002003',
+        'Image generation failed and refunded',
+        '{"targetUserId":"93000000-0000-4000-8000-000000002003","targetMembershipId":"94000000-0000-4000-8000-000000002003"}'::jsonb,
+        '93000000-0000-4000-8000-000000002003',
+        '2026-06-05T07:11:00.000Z',
+        '2026-06-05T07:12:00.000Z'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        reservation_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES
+        (
+          '98000000-0000-4000-8000-000000002004',
+          '91000000-0000-4000-8000-000000002001',
+          '97000000-0000-4000-8000-000000002002',
+          'consume',
+          80,
+          0,
+          -80,
+          80,
+          'credit_reservation_allocation',
+          '99000000-0000-4000-8000-000000002004',
+          'reservation allocation consumed',
+          '{"billingEvent":"consumed"}'::jsonb,
+          NULL,
+          '2026-06-05T07:11:30.000Z'
+        ),
+        (
+          '98000000-0000-4000-8000-000000002005',
+          '91000000-0000-4000-8000-000000002001',
+          '97000000-0000-4000-8000-000000002002',
+          'release',
+          80,
+          80,
+          -80,
+          0,
+          'credit_reservation_allocation',
+          '99000000-0000-4000-8000-000000002005',
+          'reservation allocation released',
+          '{"billingEvent":"released","failureCode":"task_timeout"}'::jsonb,
+          NULL,
+          '2026-06-05T07:12:00.000Z'
         )
     `,
   );

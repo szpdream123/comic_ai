@@ -2394,6 +2394,367 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets admins manage backend-driven legal documents and exposes them to the public login page", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const publicBeforeResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicBeforePayload = await publicBeforeResponse.json();
+
+      const updateServiceResponse = await fetch(
+        `${server.origin}/api/admin/settings/legal.service_agreement`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-legal-service-agreement",
+            cookie,
+          },
+          body: JSON.stringify({
+            value: {
+              title: "用户服务协议",
+              contentHtml: "<h1>用户服务协议</h1><p><strong>欢迎使用</strong>万兴剧厂。</p>",
+              versionLabel: "2025-11-15",
+            },
+            valueType: "json",
+            scope: "creator",
+            description: "登录页用户服务协议富文本",
+            reason: "更新登录页协议内容",
+          }),
+        },
+      );
+      const updateServicePayload = await updateServiceResponse.json();
+
+      const updatePrivacyResponse = await fetch(
+        `${server.origin}/api/admin/settings/legal.privacy_policy`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-legal-privacy-policy",
+            cookie,
+          },
+          body: JSON.stringify({
+            value: {
+              title: "隐私政策",
+              contentHtml: "<h1>隐私政策</h1><p>我们会依法处理你的个人信息。</p>",
+              versionLabel: "2025-11-15",
+            },
+            valueType: "json",
+            scope: "creator",
+            description: "登录页隐私政策富文本",
+            reason: "更新登录页隐私政策",
+          }),
+        },
+      );
+      const updatePrivacyPayload = await updatePrivacyResponse.json();
+
+      const settingsResponse = await fetch(`${server.origin}/api/admin/settings`, {
+        headers: { cookie },
+      });
+      const settingsPayload = await settingsResponse.json();
+
+      const publicAfterResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicAfterPayload = await publicAfterResponse.json();
+
+      const revisions = await db.query<{ config_key: string }>(
+        `
+          SELECT config_key
+          FROM runtime_config_revisions
+          WHERE config_key IN ('legal.service_agreement', 'legal.privacy_policy')
+          ORDER BY config_key ASC
+        `,
+      );
+
+      assert.equal(publicBeforeResponse.status, 200);
+      assert.equal(publicBeforePayload.data.serviceAgreement.key, "legal.service_agreement");
+      assert.equal(publicBeforePayload.data.privacyPolicy.key, "legal.privacy_policy");
+
+      assert.equal(updateServiceResponse.status, 200);
+      assert.equal(updateServicePayload.data.key, "legal.service_agreement");
+      assert.equal(updateServicePayload.data.value.title, "用户服务协议");
+      assert.equal(updatePrivacyResponse.status, 200);
+      assert.equal(updatePrivacyPayload.data.key, "legal.privacy_policy");
+      assert.equal(updatePrivacyPayload.data.value.title, "隐私政策");
+
+      assert.equal(settingsResponse.status, 200);
+      assert.ok(
+        settingsPayload.data.configs.some(
+          (config: { key: string }) => config.key === "legal.service_agreement",
+        ),
+      );
+      assert.ok(
+        settingsPayload.data.configs.some(
+          (config: { key: string }) => config.key === "legal.privacy_policy",
+        ),
+      );
+
+      assert.equal(publicAfterResponse.status, 200);
+      assert.equal(publicAfterPayload.data.serviceAgreement.document.title, "用户服务协议");
+      assert.match(publicAfterPayload.data.serviceAgreement.document.contentHtml, /欢迎使用/);
+      assert.equal(publicAfterPayload.data.privacyPolicy.document.title, "隐私政策");
+      assert.match(publicAfterPayload.data.privacyPolicy.document.contentHtml, /个人信息/);
+      assert.deepEqual(revisions.rows, [
+        { config_key: "legal.privacy_policy" },
+        { config_key: "legal.service_agreement" },
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets admins manage legal documents through a list workflow and exposes enabled docs to the public login page", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const listBeforeResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listBeforePayload = await listBeforeResponse.json();
+      const publicBeforeResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicBeforePayload = await publicBeforeResponse.json();
+
+      const createResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-create-privacy-v2",
+          cookie,
+        },
+        body: JSON.stringify({
+          type: "privacy",
+          title: "Privacy Policy V2",
+          contentHtml: "<h1>Privacy Policy V2</h1><p>Updated processing details.</p>",
+          versionLabel: "2026-06-11",
+          reason: "create candidate privacy policy",
+        }),
+      });
+      const createPayload = await createResponse.json();
+
+      const updateResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-update-privacy-v2",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "Privacy Policy V2",
+          contentHtml: "<h1>Privacy Policy V2</h1><p>Updated protection details.</p>",
+          versionLabel: "2026-06-12",
+          reason: "update candidate privacy policy",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+
+      const enableResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}/enable`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-enable-privacy-v2",
+          cookie,
+        },
+        body: JSON.stringify({
+          enabled: true,
+          reason: "enable new privacy policy",
+        }),
+      });
+      const enablePayload = await enableResponse.json();
+
+      const listAfterEnableResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listAfterEnablePayload = await listAfterEnableResponse.json();
+      const publicAfterEnableResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicAfterEnablePayload = await publicAfterEnableResponse.json();
+
+      const disableResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}/enable`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-disable-privacy-v2",
+          cookie,
+        },
+        body: JSON.stringify({
+          enabled: false,
+          reason: "disable privacy policy directly",
+        }),
+      });
+      const disablePayload = await disableResponse.json();
+
+      const listAfterDisableResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listAfterDisablePayload = await listAfterDisableResponse.json();
+      const publicAfterDisableResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicAfterDisablePayload = await publicAfterDisableResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-delete-privacy-v2",
+          cookie,
+        },
+        body: JSON.stringify({
+          reason: "delete candidate privacy policy",
+        }),
+      });
+      const deletePayload = await deleteResponse.json();
+
+      const listAfterDeleteResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listAfterDeletePayload = await listAfterDeleteResponse.json();
+      const publicAfterDeleteResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicAfterDeletePayload = await publicAfterDeleteResponse.json();
+
+      const revisions = await db.query<{ config_key: string }>(
+        `
+          SELECT config_key
+          FROM runtime_config_revisions
+          WHERE config_key = 'legal.documents'
+          ORDER BY created_at ASC
+        `,
+      );
+
+      assert.equal(listBeforeResponse.status, 200);
+      assert.equal(listBeforePayload.data.documents.length, 2);
+      assert.equal(publicBeforeResponse.status, 200);
+      assert.equal(publicBeforePayload.data.serviceAgreement.key, "legal.service_agreement");
+      assert.equal(publicBeforePayload.data.privacyPolicy.key, "legal.privacy_policy");
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.data.type, "privacy");
+      assert.equal(createPayload.data.status, "disabled");
+
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updatePayload.data.id, createPayload.data.id);
+      assert.equal(updatePayload.data.document.versionLabel, "2026-06-12");
+
+      assert.equal(enableResponse.status, 200);
+      assert.equal(enablePayload.data.status, "enabled");
+
+      assert.equal(listAfterEnableResponse.status, 200);
+      assert.ok(
+        listAfterEnablePayload.data.documents.some(
+          (document: { id: string; status: string }) =>
+            document.id === createPayload.data.id && document.status === "enabled",
+        ),
+      );
+
+      assert.equal(publicAfterEnableResponse.status, 200);
+      assert.equal(publicAfterEnablePayload.data.privacyPolicy.document.title, "Privacy Policy V2");
+      assert.match(publicAfterEnablePayload.data.privacyPolicy.document.contentHtml, /Updated protection details/);
+
+      assert.equal(disableResponse.status, 200);
+      assert.equal(disablePayload.data.status, "disabled");
+      assert.equal(listAfterDisableResponse.status, 200);
+      assert.ok(
+        listAfterDisablePayload.data.documents.some(
+          (document: { id: string; status: string }) =>
+            document.id === createPayload.data.id && document.status === "disabled",
+        ),
+      );
+      assert.ok(
+        listAfterDisablePayload.data.documents.every(
+          (document: { type: string; status: string }) =>
+            document.type !== "privacy" || document.status === "disabled",
+        ),
+      );
+      assert.equal(publicAfterDisableResponse.status, 200);
+      assert.equal(publicAfterDisablePayload.data.privacyPolicy.document.title, "隐私政策");
+      assert.match(publicAfterDisablePayload.data.privacyPolicy.document.contentHtml, /暂无协议内容/);
+
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deletePayload.data.id, createPayload.data.id);
+      assert.equal(listAfterDeleteResponse.status, 200);
+      assert.equal(listAfterDeletePayload.data.documents.length, 2);
+      assert.equal(publicAfterDeleteResponse.status, 200);
+      assert.equal(publicAfterDeletePayload.data.privacyPolicy.document.title, "隐私政策");
+      assert.match(publicAfterDeletePayload.data.privacyPolicy.document.contentHtml, /暂无协议内容/);
+
+      assert.equal(revisions.rows.length, 5);
+      assert.ok(revisions.rows.every((row) => row.config_key === "legal.documents"));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("normalizes legacy default legal document ids to stable uuids so updates keep working", async () => {
+    const { server, cookie, db } = await createLoggedInAdminServer();
+
+    try {
+      await db.query(
+        `
+          UPDATE runtime_config_entries
+          SET value_json = $2::jsonb
+          WHERE key = 'legal.documents'
+        `,
+        [
+          "legal.documents",
+          JSON.stringify([
+            {
+              id: "default-service",
+              type: "service",
+              title: "用户服务协议",
+              contentHtml: "<h1>用户服务协议</h1><p>旧默认服务协议。</p>",
+              versionLabel: "2025-11-15",
+              status: "enabled",
+              deleted: false,
+              sortOrder: 100,
+              createdAt: "2025-11-15T00:00:00.000Z",
+              updatedAt: "2025-11-15T00:00:00.000Z",
+            },
+            {
+              id: "default-privacy",
+              type: "privacy",
+              title: "隐私政策",
+              contentHtml: "<h1>隐私政策</h1><p>旧默认隐私协议。</p>",
+              versionLabel: "2025-11-15",
+              status: "enabled",
+              deleted: false,
+              sortOrder: 200,
+              createdAt: "2025-11-15T00:00:00.000Z",
+              updatedAt: "2025-11-15T00:00:00.000Z",
+            },
+          ]),
+        ],
+      );
+
+      const listResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const privacyDocument = listPayload.data.documents.find((item: { type: string }) => item.type === "privacy");
+
+      const updateResponse = await fetch(`${server.origin}/api/admin/legal-documents/${privacyDocument.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-update-legacy-default-privacy",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "隐私政策",
+          contentHtml: "<h1>隐私政策</h1><p>已修复默认协议编号。</p>",
+          versionLabel: "2026-06-11",
+          reason: "repair legacy default legal document id",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+
+      assert.equal(listResponse.status, 200);
+      assert.match(String(privacyDocument.id), /^[0-9a-f-]{36}$/i);
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updatePayload.data.document.versionLabel, "2026-06-11");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects runtime config values that do not match their declared schema type", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);

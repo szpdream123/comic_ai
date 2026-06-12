@@ -2,8 +2,54 @@ import { CANVAS_NODE_SIZES, findCanvasPort } from "./canvas-default-document.js"
 import { validateCanvasConnection } from "./canvas-edge-rules.js";
 
 const MODEL_MODE_BY_MEDIA_KIND = {
-  image: new Set(["image", "single-image", "multi-image", "text-to-image", "image-to-image", "multi-reference", "image-generation"]),
-  video: new Set(["video", "first-frame", "first-last-frame", "reference-video", "edit-video", "image-to-video"]),
+  image: new Set([
+    "image",
+    "single-image",
+    "single_image",
+    "multi-image",
+    "multi_image",
+    "text-image",
+    "text-to-image",
+    "text_to_image",
+    "image-image",
+    "image-to-image",
+    "image_to_image",
+    "multi-reference",
+    "multi_reference",
+    "image-generation",
+    "image_generation",
+    "image-generate",
+    "image_generate",
+    "image-edit",
+    "image_edit",
+    "image-reference",
+    "image-reference-generate",
+    "image_reference_generate",
+  ]),
+  video: new Set([
+    "video",
+    "first-frame",
+    "first_frame",
+    "first-last-frame",
+    "first_last_frame",
+    "reference-video",
+    "reference_video",
+    "edit-video",
+    "edit_video",
+    "image-to-video",
+    "image_to_video",
+    "video-image",
+    "video-first-frame",
+    "video-reference",
+    "video-image-to-video",
+    "video_image_to_video",
+    "video-reference-image-to-video",
+    "video_reference_image_to_video",
+    "video-first-last-frame",
+    "video_first_last_frame",
+    "video-edit",
+    "video_edit",
+  ]),
   audio: new Set(["audio", "voice", "lip-sync"]),
   text: new Set(["text", "script", "storyboard", "text-generation"]),
 };
@@ -14,7 +60,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_text", kind: "text", label: "文本" }],
   },
   send: {
-    inputs: [{ id: "in_text", kind: "text", label: "文本" }],
+    inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image"], label: "文本/图片" }],
     outputs: [{ id: "out_image", kind: "image", label: "图片" }],
   },
   image: {
@@ -31,7 +77,7 @@ const NODE_PORTS = {
   },
   upload: {
     inputs: [],
-    outputs: [{ id: "out_any", kind: "any", label: "资源" }],
+    outputs: [{ id: "out_image", kind: "image", label: "图片" }],
   },
   director: {
     inputs: [{ id: "in_any", kind: "any", label: "资源" }],
@@ -45,97 +91,64 @@ const NODE_PORTS = {
 
 const NODE_TITLES = {
   script: "剧本源",
-  send: "发送流",
+  send: "图片生成",
   image: "图片结果",
-  video: "视频结果",
+  video: "视频生成",
   audio: "音频结果",
-  upload: "上传资源",
-  director: "导演台",
+  upload: "上传",
+  director: "文本源",
   output: "输出",
 };
 
 const CANVAS_NODE_TEMPLATES = [
   {
     id: "template-script",
-    group: "基础",
+    group: "节点",
     type: "script",
-    title: "剧本源",
-    description: "把剧本文本、分镜要求或导演备注接入画布",
+    title: "文本",
+    description: "添加文本输入节点",
     defaultData: {
-      title: "剧本源",
-      text: "输入剧本片段、分镜要求或导演备注。",
+      title: "文本",
+      text: "",
       source: "manual",
     },
   },
   {
-    id: "template-upload",
-    group: "基础",
-    type: "upload",
-    title: "上传资源",
-    description: "把角色、场景、道具或参考图拖入画布",
-    defaultData: {
-      title: "上传资源",
-      status: "empty",
-      source: "upload",
-    },
-  },
-  {
     id: "template-send-image",
-    group: "生成",
+    group: "节点",
     type: "send",
-    title: "文生图发送",
-    description: "组合上游文本与参考素材，提交图片生成",
+    title: "图片",
+    description: "添加图片生成节点",
     mediaKind: "image",
     defaultData: {
-      title: "文生图发送",
+      title: "图片",
       status: "ready",
       mediaKind: "image",
-      prompt: "根据上游内容生成电影感分镜画面。",
-    },
-  },
-  {
-    id: "template-image-result",
-    group: "生成",
-    type: "image",
-    title: "图片结果",
-    description: "承接图片任务结果，并继续派生图生图或视频",
-    defaultData: {
-      title: "图片结果",
-      status: "empty",
+      prompt: "",
     },
   },
   {
     id: "template-video-result",
-    group: "生成",
+    group: "节点",
     type: "video",
-    title: "视频结果",
-    description: "承接图生视频任务结果",
+    title: "视频",
+    description: "添加视频生成节点",
     defaultData: {
-      title: "视频结果",
+      title: "视频",
       status: "empty",
       mediaKind: "video",
     },
   },
   {
-    id: "template-director",
-    group: "编排",
-    type: "director",
-    title: "导演台",
-    description: "汇总多路素材，记录镜头、动作和风格约束",
+    id: "template-upload",
+    group: "节点",
+    type: "upload",
+    title: "上传",
+    description: "添加上传资源节点",
     defaultData: {
-      title: "导演台",
-      text: "镜头调度、动作节奏、角色关系和风格要求。",
-    },
-  },
-  {
-    id: "template-output",
-    group: "编排",
-    type: "output",
-    title: "交付输出",
-    description: "汇总最终图片、视频或导出目标",
-    defaultData: {
-      title: "交付输出",
+      title: "上传",
       status: "empty",
+      source: "upload",
     },
   },
 ];
@@ -215,15 +228,21 @@ export function buildCanvasSidebarItems(document, options = {}) {
     const title = node?.data?.title ?? node?.id ?? "节点";
     const status = node?.data?.status ?? "idle";
     const modelCode = node?.data?.modelCode;
+    const nodeSource = String(node?.data?.source ?? "");
+    const displayTitle = kind === "script" || nodeSource === "project_script" || nodeSource === "project_script_episode"
+      ? "剧本源"
+      : (node?.data?.mediaKind === "text" || kind === "director")
+        ? "文本源"
+        : title;
     return {
       id: String(node?.id ?? ""),
       type: "node",
       kind,
-      title,
+      title: displayTitle,
       meta: modelCode
-        ? `${modelCode} · ${node?.data?.mediaKind ?? kind}`
+        ? `${modelCode} 路 ${node?.data?.mediaKind ?? kind}`
         : node?.data?.source === "project_script"
-          ? "项目剧本片段"
+          ? "椤圭洰鍓ф湰鐗囨"
           : status,
       status,
     };
@@ -280,6 +299,24 @@ export function updateCanvasNodePosition(document, nodeId, position = {}) {
   });
 }
 
+export function updateCanvasNodeSize(document, nodeId, size = {}) {
+  const normalizedNodeId = String(nodeId ?? "");
+  return touchCanvasDocument({
+    ...clone(document),
+    nodes: safeArray(document?.nodes).map((node) =>
+      node.id === normalizedNodeId
+        ? {
+            ...clone(node),
+            size: {
+              width: Number(size.width ?? node.size?.width ?? 360),
+              height: Number(size.height ?? node.size?.height ?? 260),
+            },
+          }
+        : clone(node),
+    ),
+  });
+}
+
 export function connectCanvasNodes(document, connection = {}) {
   const nodes = safeArray(document?.nodes);
   const sourceNodeId = String(connection.sourceNodeId ?? "");
@@ -288,7 +325,7 @@ export function connectCanvasNodes(document, connection = {}) {
   const targetPortId = String(connection.targetPortId ?? "");
   const sourceNode = nodes.find((node) => node.id === sourceNodeId);
   const targetNode = nodes.find((node) => node.id === targetNodeId);
-  const sourcePort = findCanvasPort(sourceNode, sourcePortId);
+  const sourcePort = normalizeCanvasSourcePortForConnection(sourceNode, findCanvasPort(sourceNode, sourcePortId));
   const targetPort = normalizeCanvasTargetPortForConnection(targetNode, findCanvasPort(targetNode, targetPortId), sourcePort);
   const validation = validateCanvasConnection(sourcePort, targetPort);
   if (!validation.ok || !sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) {
@@ -354,7 +391,7 @@ function normalizeCanvasTargetPortForConnection(targetNode, targetPort, sourcePo
   }
   if (
     targetPort.direction === "in" &&
-    ["image", "video"].includes(targetNode?.type) &&
+    (["image", "video"].includes(targetNode?.type) || (targetNode?.type === "send" && targetNode?.data?.mediaKind === "image")) &&
     ["text", "image", "any"].includes(sourcePort.kind)
   ) {
     return {
@@ -363,6 +400,17 @@ function normalizeCanvasTargetPortForConnection(targetNode, targetPort, sourcePo
     };
   }
   return targetPort;
+}
+
+function normalizeCanvasSourcePortForConnection(sourceNode, sourcePort) {
+  if (!sourcePort || sourcePort.direction !== "out" || sourceNode?.type !== "upload") {
+    return sourcePort;
+  }
+  const mediaKind = sourceNode?.data?.mediaKind === "video" ? "video" : "image";
+  return {
+    ...sourcePort,
+    kind: mediaKind,
+  };
 }
 
 export function removeCanvasNode(document, nodeId) {
@@ -379,8 +427,12 @@ export function removeCanvasNode(document, nodeId) {
 export function resolveCanvasModelOptions(generationConfig, mediaKind = "image") {
   const modes = MODEL_MODE_BY_MEDIA_KIND[mediaKind] ?? MODEL_MODE_BY_MEDIA_KIND.image;
   return safeArray(generationConfig?.models)
-    .filter((model) => model && model.enabled !== false)
+    .filter((model) => model && model.enabled !== false && model.disabled !== true)
     .filter((model) => {
+      const configuredMediaKind = normalizeCanvasModelMediaKind(model);
+      if (configuredMediaKind) {
+        return configuredMediaKind === mediaKind;
+      }
       const supportedModes = safeArray(model.supportedModes ?? model.modes ?? model.capabilities);
       if (!supportedModes.length) {
         const modelType = String(model.modelType ?? model.type ?? model.category ?? "").toLowerCase();
@@ -396,8 +448,16 @@ export function resolveCanvasModelOptions(generationConfig, mediaKind = "image")
     .filter((model) => model.modelCode);
 }
 
+function normalizeCanvasModelMediaKind(model) {
+  const value = String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? model?.media_kind ?? "").trim().toLowerCase();
+  if (value === "image" || value === "video") {
+    return value;
+  }
+  return "";
+}
+
 function normalizeModeToken(mode) {
-  return String(mode ?? "").trim().toLowerCase().replace(/_/g, "-");
+  return String(mode ?? "").trim().toLowerCase().replace(/[._]/g, "-");
 }
 
 export function buildCanvasRunPreview(document, nodeId) {
@@ -405,16 +465,18 @@ export function buildCanvasRunPreview(document, nodeId) {
   if (!node) {
     return { ok: false, reason: "canvas_run_node_missing" };
   }
-  if (node.type !== "send") {
+  if (node.type !== "send" && node.type !== "image" && node.type !== "video") {
     return { ok: false, reason: "canvas_run_send_node_required" };
   }
   const prompt = String(node.data?.prompt ?? "").trim();
-  if (!prompt) {
-    return { ok: false, reason: "canvas_run_prompt_required" };
-  }
   const modelCode = String(node.data?.modelCode ?? "").trim();
   if (!modelCode) {
     return { ok: false, reason: "canvas_run_model_required" };
+  }
+  const upstreamNodeIdList = upstreamNodeIds(document, nodeId);
+  const upstreamTextFragmentList = upstreamTextFragments(document, nodeId);
+  if (!prompt && !upstreamTextFragmentList.length && !upstreamNodeIdList.length) {
+    return { ok: false, reason: "canvas_run_input_required" };
   }
   return {
     ok: true,
@@ -422,7 +484,8 @@ export function buildCanvasRunPreview(document, nodeId) {
     mediaKind: String(node.data?.mediaKind ?? "image"),
     modelCode,
     prompt,
-    upstreamNodeIds: upstreamNodeIds(document, nodeId),
+    upstreamNodeIds: upstreamNodeIdList,
+    upstreamTextFragments: upstreamTextFragmentList,
   };
 }
 
@@ -432,7 +495,11 @@ export function applyCanvasRunResult(document, preview, task = null) {
   }
   const taskId = resolveCanvasTaskId(task);
   const resultKind = preview.mediaKind === "video" ? "video" : "image";
-  const resultStatus = task ? "queued" : "preview";
+  const taskStatus = resolveCanvasTaskStatus(task);
+  const taskProgress = resolveCanvasTaskProgress(task, taskStatus);
+  const taskStage = resolveCanvasTaskStage(task, taskStatus);
+  const mediaUrl = resolveCanvasTaskMediaUrl(task, resultKind);
+  const resultStatus = task ? taskStatus : "preview";
   return touchCanvasDocument({
     ...clone(document),
     nodes: safeArray(document?.nodes).map((node) => {
@@ -441,9 +508,19 @@ export function applyCanvasRunResult(document, preview, task = null) {
           ...clone(node),
           data: {
             ...clone(node.data ?? {}),
-            status: task ? "queued" : "ready",
+            status: task ? taskStatus : "ready",
             lastRunAt: new Date(0).toISOString(),
             lastTaskId: taskId,
+            taskId,
+            generationProgress: taskProgress,
+            generationStage: taskStage,
+            ...(mediaUrl
+              ? {
+                  previewUrl: mediaUrl,
+                  resultUrl: mediaUrl,
+                  url: mediaUrl,
+                }
+              : {}),
           },
         };
       }
@@ -458,6 +535,15 @@ export function applyCanvasRunResult(document, preview, task = null) {
             modelCode: preview.modelCode,
             prompt: preview.prompt,
             mediaKind: resultKind,
+            generationProgress: taskProgress,
+            generationStage: taskStage,
+            ...(mediaUrl
+              ? {
+                  previewUrl: mediaUrl,
+                  resultUrl: mediaUrl,
+                  url: mediaUrl,
+                }
+              : {}),
           },
         };
       }
@@ -476,6 +562,115 @@ export function applyCanvasRunResult(document, preview, task = null) {
         : clone(edge),
     ),
   });
+}
+
+function resolveCanvasTaskStatus(task) {
+  const raw = String(task?.status ?? task?.workflowStatus ?? task?.platform?.workflowStatus ?? "").trim().toLowerCase();
+  if (!task) {
+    return "ready";
+  }
+  if (raw === "succeeded" || raw === "completed") {
+    return "completed";
+  }
+  if (raw === "failed" || raw === "canceled" || raw === "manual_review_required" || raw === "result_unknown") {
+    return raw;
+  }
+  if (raw === "running" || raw === "processing") {
+    return "running";
+  }
+  return "queued";
+}
+
+function resolveCanvasTaskProgress(task, status) {
+  const candidates = [
+    task?.progress,
+    task?.progressPercent,
+    task?.progress_percent,
+    task?.percent,
+    task?.snapshot?.progress,
+    task?.snapshot?.progressPercent,
+    task?.snapshot?.progress_percent,
+    task?.platform?.progress,
+    task?.platform?.progressPercent,
+    task?.platform?.progress_percent,
+    task?.result?.progress,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value)) {
+      return Math.max(0, Math.min(100, Math.round(value <= 1 ? value * 100 : value)));
+    }
+  }
+  const stageProgress = resolveCanvasTaskStageProgress(resolveCanvasTaskStage(task, status));
+  if (stageProgress !== null) {
+    return stageProgress;
+  }
+  if (status === "completed") return 100;
+  if (status === "running") return 55;
+  if (status === "queued") return 12;
+  if (status === "failed" || status === "canceled" || status === "manual_review_required" || status === "result_unknown") return 100;
+  return 0;
+}
+
+function resolveCanvasTaskStage(task, status) {
+  const stage = String(
+    task?.progressStage ??
+    task?.progress_stage ??
+    task?.stage ??
+    task?.snapshot?.progressStage ??
+    task?.snapshot?.progress_stage ??
+    task?.platform?.progressStage ??
+    task?.platform?.progress_stage ??
+    "",
+  ).trim();
+  if (stage) {
+    return stage;
+  }
+  if (status === "completed") return "completed";
+  if (status === "running") return "provider_rendering";
+  if (status === "queued") {
+    return hasCanvasTaskDispatchSignal(task) ? "submitted" : "queue_unavailable";
+  }
+  return status || "";
+}
+
+function hasCanvasTaskDispatchSignal(task) {
+  return Boolean(
+    task?.providerRequestId ??
+      task?.provider_request_id ??
+      task?.attemptId ??
+      task?.attempt_id ??
+      task?.platform?.providerRequestId ??
+      task?.platform?.provider_request_id ??
+      task?.platform?.tasks?.[0]?.attemptId,
+  );
+}
+
+function resolveCanvasTaskStageProgress(stage) {
+  const normalized = String(stage ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["queued", "submitted", "created"].includes(normalized)) return 12;
+  if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return 24;
+  if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return 58;
+  if (["provider_succeeded", "provider_completed"].includes(normalized)) return 78;
+  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 88;
+  if (["completed", "succeeded"].includes(normalized)) return 100;
+  if (["failed", "asset_persist_failed", "manual_review_required", "result_unknown", "canceled"].includes(normalized)) return 100;
+  return null;
+}
+
+function resolveCanvasTaskMediaUrl(task, mediaKind) {
+  const result = task?.result ?? {};
+  const candidates = mediaKind === "video"
+    ? [result.videoUrl, result.url, result.previewUrl, result.sourceUrl, task?.videoUrl, task?.url]
+    : [result.imageUrl, result.url, result.previewUrl, result.sourceUrl, result.thumbnailUrl, task?.imageUrl, task?.url];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 export function createCanvasNode(type, input = {}) {
@@ -528,6 +723,41 @@ function upstreamNodeIds(document, nodeId) {
     .filter((edge) => edge.targetNodeId === nodeId)
     .map((edge) => edge.sourceNodeId)
     .filter(Boolean);
+}
+
+function upstreamTextFragments(document, nodeId) {
+  const nodes = safeArray(document?.nodes);
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return safeArray(document?.edges)
+    .filter((edge) => edge.targetNodeId === nodeId)
+    .map((edge) => nodeMap.get(edge.sourceNodeId))
+    .filter((node) => node && (node.type === "script" || node.type === "director" || node.data?.mediaKind === "text"))
+    .map((node) => ({
+      nodeId: String(node.id ?? ""),
+      title: String(node.data?.title ?? "鏂囨湰鐗囨"),
+      text: normalizeUpstreamText(node.data?.text || stripUpstreamHtml(node.data?.textHtml)),
+    }))
+    .filter((fragment) => fragment.text);
+}
+
+function normalizeUpstreamText(text) {
+  return String(text ?? "")
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripUpstreamHtml(html) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h1|h2|h3|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function nextCanvasNodeId(document, type) {

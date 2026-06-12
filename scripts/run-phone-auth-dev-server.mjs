@@ -19,10 +19,6 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath);
-if (!process.env.LOCAL_DATABASE_DIR?.trim()) {
-  const port = process.env.PORT?.trim() || "4310";
-  process.env.LOCAL_DATABASE_DIR = `.local/dev-db/phone-auth-${port}`;
-}
 
 const result = spawnSync(
   runtime,

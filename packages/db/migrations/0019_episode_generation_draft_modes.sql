@@ -5,7 +5,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name = 'episode_generation_drafts'
       AND column_name IN ('organization_id', 'episode_id', 'target_type', 'target_id', 'mode')
     GROUP BY table_name
@@ -19,7 +19,7 @@ BEGIN
     FROM pg_constraint con
     JOIN pg_class rel ON rel.oid = con.conrelid
     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-    WHERE nsp.nspname = 'public'
+    WHERE nsp.nspname = current_schema()
       AND rel.relname = 'episode_generation_drafts'
       AND con.contype = 'u'
       AND (
@@ -36,7 +36,7 @@ BEGIN
     FROM pg_constraint con
     JOIN pg_class rel ON rel.oid = con.conrelid
     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-    WHERE nsp.nspname = 'public'
+    WHERE nsp.nspname = current_schema()
       AND rel.relname = 'episode_generation_drafts'
       AND con.contype = 'u'
       AND (

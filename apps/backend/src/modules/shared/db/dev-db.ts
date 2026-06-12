@@ -1,8 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
 
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
 import { applySqlMigrations } from "./migrations.ts";
@@ -14,54 +12,139 @@ export interface DevDatabase extends SqlDatabase {
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    return createLocalDevDb();
+    throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");
   }
 
   const pool = new Pool({
     connectionString,
   });
+  const configuredSchemaName = process.env.DATABASE_SCHEMA?.trim();
+  const autoTestSchemaName = !configuredSchemaName && isTestRuntime()
+    ? `test_${randomUUID().replaceAll("-", "_")}`
+    : undefined;
+  const schemaName = configuredSchemaName || autoTestSchemaName;
 
   try {
-    await ensureFoundationSchema(pool);
+    if (schemaName) {
+      await prepareSchema(pool, schemaName);
+    }
+    const db = createPostgresDatabase(pool, schemaName);
+    await ensureFoundationSchema(db);
+    if (autoTestSchemaName) {
+      return withSchemaCleanup(db, autoTestSchemaName);
+    }
+    return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
-    console.warn(
-      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
+    throw new Error(
+      `PostgreSQL database initialization failed. ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
-    return createLocalDevDb();
   }
+}
+
+export function createPostgresDatabase(pool: Pool, schemaName?: string): DevDatabase {
+  let transactionClient: PoolClient | null = null;
 
   return {
     async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
-      const result = await pool.query(sql, params);
-      return {
-        rows: result.rows as T[],
-      };
+      const command = leadingSqlCommand(sql);
+      if (transactionClient) {
+        try {
+          const result = await transactionClient.query(sql, params);
+          if (command === "commit" || command === "rollback") {
+            transactionClient.release();
+            transactionClient = null;
+          }
+          return {
+            rows: result.rows as T[],
+          };
+        } catch (error) {
+          if (command === "commit" || command === "rollback") {
+            transactionClient.release();
+            transactionClient = null;
+          }
+          throw error;
+        }
+      }
+
+      if (command === "begin" || command === "start") {
+        transactionClient = await pool.connect();
+        try {
+          await setSearchPathIfNeeded(transactionClient, schemaName);
+          const result = await transactionClient.query(sql, params);
+          return {
+            rows: result.rows as T[],
+          };
+        } catch (error) {
+          transactionClient.release();
+          transactionClient = null;
+          throw error;
+        }
+      }
+
+      if (!schemaName) {
+        const result = await pool.query(sql, params);
+        return {
+          rows: result.rows as T[],
+        };
+      }
+
+      const client = await pool.connect();
+      try {
+        await setSearchPathIfNeeded(client, schemaName);
+        const result = await client.query(sql, params);
+        return {
+          rows: result.rows as T[],
+        };
+      } finally {
+        client.release();
+      }
     },
     async close() {
+      if (transactionClient) {
+        transactionClient.release();
+        transactionClient = null;
+      }
       await pool.end();
     },
   };
 }
 
-async function createLocalDevDb(): Promise<DevDatabase> {
-  const configuredLocalDir = process.env.LOCAL_DATABASE_DIR?.trim();
+async function setSearchPathIfNeeded(client: PoolClient, schemaName?: string) {
+  if (!schemaName) {
+    return;
+  }
+  await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
+}
+
+function leadingSqlCommand(sql: string) {
+  return sql.trimStart().split(/\s+/, 1)[0]?.toLowerCase();
+}
+
+async function prepareSchema(pool: Pool, schemaName: string) {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`);
+}
+
+function withSchemaCleanup(db: DevDatabase, schemaName: string): DevDatabase {
+  const close = db.close.bind(db);
+  return {
+    async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
+      return db.query<T>(sql, params);
+    },
+    async close() {
+      try {
+        await db.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
+      } finally {
+        await close();
+      }
+    },
+  };
+}
+
+function isTestRuntime() {
   const callerFile = process.argv[1]?.replaceAll("\\", "/") ?? "";
-  const runningFromSpecFile = /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
-  const ephemeralLocalDir = !configuredLocalDir &&
-      (process.env.NODE_ENV === "test" || runningFromSpecFile)
-    ? `.local/dev-db/test-${randomUUID()}`
-    : null;
-  const localDbPath = resolve(
-    process.cwd(),
-    configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
-  );
-  await mkdir(dirname(localDbPath), { recursive: true });
-  const { PGlite } = await import("@electric-sql/pglite");
-  const db = new PGlite(localDbPath) as DevDatabase;
-  await ensureFoundationSchema(db);
-  console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
-  return db;
+  return process.env.NODE_ENV === "test" || /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
 }
 
 export async function ensureFoundationSchema(db: SqlDatabase) {
@@ -77,6 +160,10 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "sms_send_records"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0009_sms_send_records_backfill.sql" });
+  }
+
+  if (!(await columnExists(db, "users", "wechat_openid"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0024_wechat_login_user_fields.sql" });
   }
 
   if (!(await tableExists(db, "storage_upload_sessions"))) {
@@ -133,6 +220,9 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
       await applySqlMigrations(db, process.cwd(), { fromName: "0021_aliyun_bailian_happyhorse_video_model.sql" });
     }
+    if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0025_jimeng_image_model_configs.sql" });
+    }
     await ensureHappyHorseResolutionConfig(db);
     await ensureVideoModelCategories(db);
   }
@@ -143,6 +233,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (
     !(await tableExists(db, "organization_entitlements")) ||
+    !(await tableExists(db, "library_assets")) ||
+    !(await tableExists(db, "library_asset_versions")) ||
     !(await tableExists(db, "team_member_groups")) ||
     !(await tableExists(db, "team_member_profiles")) ||
     !(await tableExists(db, "team_project_assignments")) ||
@@ -151,6 +243,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "team_plan_limits"))
   ) {
     await ensureLegacyTenantUniqueConstraints(db);
+    await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
 
@@ -436,6 +529,55 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
   `);
 }
 
+async function ensureLibraryAssetTables(db: SqlDatabase) {
+  await executeSchemaPatch(db, `
+    CREATE TABLE IF NOT EXISTS library_assets (
+      id uuid PRIMARY KEY,
+      scope text NOT NULL CHECK (scope IN ('official', 'team', 'personal')),
+      organization_id uuid NULL REFERENCES organizations(id),
+      workspace_id uuid NULL REFERENCES workspaces(id),
+      created_by_user_id uuid NULL REFERENCES users(id),
+      asset_type text NOT NULL CHECK (asset_type IN ('character', 'scene', 'prop', 'image', 'video')),
+      category text NOT NULL CHECK (category IN ('character', 'scene', 'prop', 'image', 'video')),
+      folder text NOT NULL,
+      name text NOT NULL,
+      description text NULL,
+      tags_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+      status text NOT NULL CHECK (status IN ('active', 'archived')),
+      requires_pro_entitlement boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (
+        (scope = 'official' AND organization_id IS NULL AND workspace_id IS NULL AND created_by_user_id IS NULL)
+        OR (scope = 'team' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL)
+        OR (scope = 'personal' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL AND created_by_user_id IS NOT NULL)
+      ),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS library_assets_scope_idx
+      ON library_assets (scope, organization_id, workspace_id, category, folder, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS library_asset_versions (
+      id uuid PRIMARY KEY,
+      library_asset_id uuid NOT NULL REFERENCES library_assets(id),
+      version_number integer NOT NULL CHECK (version_number >= 1),
+      storage_object_key text NOT NULL,
+      preview_url text NULL,
+      mime_type text NOT NULL,
+      width integer NOT NULL CHECK (width >= 1),
+      height integer NOT NULL CHECK (height >= 1),
+      metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (library_asset_id, version_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS library_asset_versions_asset_idx
+      ON library_asset_versions (library_asset_id, version_number DESC);
+  `);
+}
+
 async function executeSchemaPatch(db: SqlDatabase, sql: string) {
   const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
   if (typeof exec === "function") {
@@ -482,7 +624,7 @@ async function needsStoryboardPromptCleanup(db: SqlDatabase) {
     `
       SELECT is_nullable
       FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'storyboard_prompt_templates'
         AND column_name = 'output_package_id'
     `,
@@ -508,7 +650,7 @@ async function tableExists(db: SqlDatabase, tableName: string) {
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.tables
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
       ) AS exists
     `,
@@ -632,7 +774,7 @@ async function constraintExists(db: SqlDatabase, tableName: string, constraintNa
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.table_constraints
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
           AND constraint_name = $2
       ) AS exists
@@ -651,7 +793,7 @@ async function uniqueConstraintForColumnsExists(db: SqlDatabase, tableName: stri
         FROM pg_constraint con
         JOIN pg_class rel ON rel.oid = con.conrelid
         JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-        WHERE nsp.nspname = 'public'
+        WHERE nsp.nspname = current_schema()
           AND rel.relname = $1
           AND con.contype = 'u'
           AND (
@@ -674,7 +816,7 @@ async function uniqueConstraintNamesForColumns(db: SqlDatabase, tableName: strin
       FROM pg_constraint con
       JOIN pg_class rel ON rel.oid = con.conrelid
       JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-      WHERE nsp.nspname = 'public'
+      WHERE nsp.nspname = current_schema()
         AND rel.relname = $1
         AND con.contype = 'u'
         AND (
@@ -699,7 +841,7 @@ async function episodeGenerationDraftColumnsExist(db: SqlDatabase) {
     `
       SELECT COUNT(*) AS count
       FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'episode_generation_drafts'
         AND column_name = ANY($1::text[])
     `,
@@ -715,7 +857,7 @@ async function columnExists(db: SqlDatabase, tableName: string, columnName: stri
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.columns
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
           AND column_name = $2
       ) AS exists

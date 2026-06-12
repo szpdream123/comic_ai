@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing `identity` module and add a focused SMS delivery boundary plus persisted send records. `persistent-auth.service.ts` remains the orchestration point for challenge creation and verification, while `phone-auth-dev-server.ts` remains the HTTP entrypoint that extracts request metadata and sets cookies.
 
-**Tech Stack:** TypeScript, Node test runner, PGlite-backed SQL migrations, Tencent Cloud SMS SDK package `tencentcloud-sdk-nodejs-sms`, static HTML/CSS/JS login page.
+**Tech Stack:** TypeScript, Node test runner, PostgreSQL-backed SQL migrations, Tencent Cloud SMS SDK package `tencentcloud-sdk-nodejs-sms`, static HTML/CSS/JS login page.
 
 ---
 

@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
+import net from "node:net";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -56,8 +57,10 @@ import {
   findPersistentAuthSessionByToken,
   requestPersistentLoginCode,
   revokePersistentAuthSession,
+  verifyPersistentPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
+import { createAuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
@@ -169,6 +172,7 @@ const adminRoot = join(process.cwd(), "apps", "admin");
 const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
+const canvasProjectStorePath = resolve(process.cwd(), ".local", "canvas-projects.json");
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
@@ -284,6 +288,23 @@ interface AuthHttpResponse<T> {
   cookies?: string[];
 }
 
+interface WeChatLoginConfig {
+  appId: string;
+  appSecret: string;
+  redirectUri: string;
+}
+
+interface WeChatAccessTokenResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  openid?: string;
+  scope?: string;
+  unionid?: string;
+  errcode?: number;
+  errmsg?: string;
+}
+
 class GenerationQueueJobOpsRouteError extends Error {
   constructor(readonly response: AuthHttpResponse<unknown>) {
     super("generation_queue_job_ops_failed");
@@ -301,7 +322,10 @@ class GenerationRequestValidationError extends Error {
 
 interface AuthenticatedUser {
   id: string;
-  phone: string;
+  phone: string | null;
+  creditBalance: number;
+  availableCredits: number;
+  reservedCredits: number;
 }
 
 export interface PhoneAuthDevServer {
@@ -369,14 +393,29 @@ async function readMultipartFormData(
   return webRequest.formData();
 }
 
-const sessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
+const defaultSessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
 
-function sessionCookie(token: string): string {
-  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionCookieMaxAgeSeconds}`;
+function sessionCookie(token: string, maxAgeSeconds = defaultSessionCookieMaxAgeSeconds): string {
+  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+function sessionCookieMaxAgeSecondsFromSession(expiresAt: Date, now: Date): number {
+  return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 1000));
 }
 
 function clearSessionCookie(): string {
   return "auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+}
+
+function redirectWithSessionCookie(
+  response: ServerResponse,
+  location: string,
+  token: string,
+) {
+  response.statusCode = 302;
+  response.setHeader("location", location);
+  response.setHeader("set-cookie", sessionCookie(token));
+  response.end();
 }
 
 function requestIpAddress(request: {
@@ -787,6 +826,60 @@ function envelopedError(
       message,
       details,
     },
+  };
+}
+
+interface CanvasProjectRecord {
+  id: string;
+  title: string;
+  createdAt: string;
+  status: string;
+  ownerUserId: string;
+}
+
+function formatCanvasProjectDate(now = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
+function normalizeCanvasProjectTitle(value: unknown, fallback = "画布项目"): string {
+  return String(value ?? fallback).trim().slice(0, 50) || fallback;
+}
+
+async function readCanvasProjects(): Promise<CanvasProjectRecord[]> {
+  try {
+    const raw = await readFile(canvasProjectStorePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item): item is CanvasProjectRecord => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        id: String((item as CanvasProjectRecord).id ?? randomUUID()),
+        title: normalizeCanvasProjectTitle((item as CanvasProjectRecord).title),
+        createdAt: String((item as CanvasProjectRecord).createdAt ?? "2026/06/11"),
+        status: String((item as CanvasProjectRecord).status ?? "草稿"),
+        ownerUserId: String((item as CanvasProjectRecord).ownerUserId ?? "dev-user"),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function writeCanvasProjects(projects: CanvasProjectRecord[]): Promise<void> {
+  await mkdir(dirname(canvasProjectStorePath), { recursive: true });
+  await writeFile(canvasProjectStorePath, JSON.stringify(projects, null, 2), "utf8");
+}
+
+function serializeCanvasProject(project: CanvasProjectRecord) {
+  return {
+    id: project.id,
+    title: project.title,
+    createdAt: project.createdAt,
+    status: project.status,
   };
 }
 
@@ -1751,6 +1844,55 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   };
 }
 
+async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+  const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
+  const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+  const imageModels = activeImageModels.length
+    ? activeImageModels.map(modelConfigToGenerationConfigModel)
+    : [
+        {
+          modelCode: "nano_banana_2",
+          modelLabel: "nano banana 2",
+          providerGroup: "Nano banana",
+          pipeline: "G",
+          supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
+          supportedRatios: ["16:9", "9:16", "1:1"],
+          supportedQuality: ["2K"],
+          displayBaseCost: 90,
+          disabled: false,
+        },
+      ];
+  const videoModels = activeVideoModels.length
+    ? activeVideoModels.map(modelConfigToGenerationConfigModel)
+    : [
+        {
+          modelCode: "video_mock_1",
+          modelLabel: "Video Mock",
+          providerGroup: "Mock",
+          pipeline: "mock",
+          supportedModes: ["video"],
+          supportedRatios: ["16:9", "9:16"],
+          supportedQuality: ["720p"],
+          displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
+          disabled: false,
+        },
+      ];
+  const defaultVideoModel =
+    videoModels.find((model) => model.videoCategory === "reference") ??
+    videoModels[0] ??
+    null;
+  return {
+    models: [
+      ...imageModels,
+      ...videoModels,
+    ],
+    presets: [],
+    uploadLimits: episodeUploadLimits,
+    defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
+    defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
+  };
+}
+
 function inferVideoModelCategory(taskModes: string[]) {
   if (!taskModes.some((taskMode) => taskMode.startsWith("video."))) return "";
   if (taskModes.includes("video.reference_image_to_video")) return "reference";
@@ -2000,6 +2142,49 @@ async function getOrganizationCreditBalance(
   return Number(row?.credit_balance_cached ?? 0);
 }
 
+async function getUserCreditBalance(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const row = await queryOne<{
+    available_credits: number | string | null;
+    reserved_credits: number | string | null;
+  }>(
+    db,
+    `
+      SELECT
+        COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0) AS available_credits,
+        CASE
+          WHEN tp.id IS NULL THEN COALESCE(o.credit_reserved_cached, 0)
+          ELSE COALESCE((
+            SELECT SUM(r.amount_reserved)
+            FROM credit_reservations r
+            WHERE r.organization_id = m.organization_id
+              AND r.status = 'active'
+              AND (
+                r.metadata_json->>'targetUserId' = u.id::text
+                OR r.metadata_json->>'targetMembershipId' = m.id::text
+              )
+          ), 0)
+        END AS reserved_credits
+      FROM users u
+      LEFT JOIN memberships m ON m.user_id = u.id AND m.status = 'active'
+      LEFT JOIN organizations o ON o.id = m.organization_id
+      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
+      WHERE u.id = $1
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    `,
+    [userId],
+  );
+  const availableCredits = Number(row?.available_credits ?? 0);
+  return {
+    availableCredits,
+    creditBalance: availableCredits,
+    reservedCredits: Number(row?.reserved_credits ?? 0),
+  };
+}
+
 async function getEpisodeContext(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -2055,7 +2240,7 @@ async function getEpisodeContext(
     actor,
     episode,
     project,
-    creditBalance: await getOrganizationCreditBalance(db, actor.organizationId),
+    creditBalance: (await getUserCreditBalance(db, input.userId)).creditBalance,
     userId: input.userId,
   };
 }
@@ -2238,6 +2423,8 @@ async function mapGenerationTaskResponse(
     provider_response_redacted_json: Record<string, unknown> | string | null;
     snapshot_failure_json: Record<string, unknown> | string | null;
     snapshot_result_assets_json: Record<string, unknown>[] | string | null;
+    snapshot_progress_stage: string | null;
+    snapshot_progress_percent: number | string | null;
     credit_balance_cached: number | string | null;
   }>(
     db,
@@ -2269,6 +2456,8 @@ async function mapGenerationTaskResponse(
         pr.status AS provider_request_status,
         pr.failure_code AS provider_failure_code,
         pr.response_redacted_json AS provider_response_redacted_json,
+        s.progress_stage AS snapshot_progress_stage,
+        s.progress_percent AS snapshot_progress_percent,
         s.failure_json AS snapshot_failure_json,
         s.result_assets_json AS snapshot_result_assets_json,
         o.credit_balance_cached
@@ -2324,6 +2513,7 @@ async function mapGenerationTaskResponse(
   const providerResponse = readJsonRecord(row.provider_response_redacted_json);
   const snapshotFailure = readJsonRecord(row.snapshot_failure_json);
   const snapshotResultAssets = readRecordArray(row.snapshot_result_assets_json);
+  const snapshotProgressPercent = Number(row.snapshot_progress_percent);
   const snapshotResultAsset =
     snapshotResultAssets.find((asset) => readString(asset.mediaKind) === kind) ??
     snapshotResultAssets[0] ??
@@ -2474,6 +2664,12 @@ async function mapGenerationTaskResponse(
     prompt: snapshot.prompt ?? null,
     parameters: snapshot.parameters ?? {},
     timeoutAt: snapshot.timeoutAt ?? null,
+    progressStage: readString(row.snapshot_progress_stage) || null,
+    progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
+    snapshot: {
+      progressStage: readString(row.snapshot_progress_stage) || null,
+      progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
+    },
     cost: Number(row.amount_total ?? snapshot.cost ?? 0),
     credit: row.reservation_id
       ? {
@@ -3506,8 +3702,8 @@ async function createEpisodeGenerationTask(
     fetchImpl?: typeof fetch;
     signedUrlExpiresInSeconds: number;
     now: Date;
-  },
-) {
+    },
+  ) {
   const context = await getEpisodeContext(db, {
     episodeId: input.episodeId,
     sessionToken: input.authenticated.sessionToken,
@@ -3530,6 +3726,15 @@ async function createEpisodeGenerationTask(
   const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig);
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
   const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
+  if (shouldUseBullMQDispatch) {
+    const queueReady = await isRedisReachable(generationQueueConfig.redisUrl, 500);
+    if (!queueReady) {
+      throw new GenerationRequestValidationError(
+        "generation_queue_unavailable",
+        "生成队列未启动：请先启动 Redis、generation-outbox 和 generation-worker。",
+      );
+    }
+  }
   const fallbackSubmitQueueName = input.kind === "video"
     ? generationQueueConfig.queues.submitVideo
     : generationQueueConfig.queues.submitImage;
@@ -3619,6 +3824,10 @@ async function createEpisodeGenerationTask(
     targetEntityType === "shot" && isUuid(requestSnapshot.targetId)
       ? requestSnapshot.targetId
       : input.episodeId;
+  const snapshotTargetId =
+    requestSnapshot.targetType === "canvas" && !isUuid(requestSnapshot.targetId)
+      ? input.episodeId
+      : requestSnapshot.targetId;
   const timeoutMs = input.kind === "video" ? videoGenerationTaskTimeoutMs : imageGenerationTaskTimeoutMs;
   const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
@@ -3652,6 +3861,28 @@ async function createEpisodeGenerationTask(
     ],
   });
   const task = workflow.tasks[0]!;
+  const baseBillingMetadata = {
+    targetUserId: context.userId,
+    targetMembershipId: context.actor.membershipId,
+    taskId: task.id,
+    workflowId: workflow.workflow.id,
+    projectId: context.project.id,
+    workspaceId: context.actor.workspaceId,
+    episodeId: input.episodeId,
+    mediaType: input.kind,
+    kind: input.kind,
+    modelCode: requestedModelCode,
+    providerExecutor: modelExecution.providerExecutor,
+    taskMode: modelExecution.taskMode,
+    targetType: requestSnapshot.targetType,
+    targetId: snapshotTargetId,
+    canvasNodeId: requestSnapshot.targetType === "canvas" ? requestSnapshot.targetId : undefined,
+    amount: estimatedCost,
+    requestedAt: input.now,
+    prompt: requestSnapshot.prompt,
+    parameters: requestSnapshot.parameters,
+    referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+  };
 
   await db.query(
     `
@@ -3682,10 +3913,12 @@ async function createEpisodeGenerationTask(
     sourceType: "episode_generation_task",
     sourceId: task.id,
     reason: `${input.kind} generation`,
-    metadata: {
-      episodeId: input.episodeId,
-      kind: input.kind,
-    },
+    metadata: buildGenerationBillingMetadata({
+      ...baseBillingMetadata,
+      billingEvent: "reserved",
+      outcome: "reserved",
+      settledAt: input.now,
+    }),
     createdByUserId: context.userId,
     now: input.now,
   });
@@ -3696,7 +3929,7 @@ async function createEpisodeGenerationTask(
     projectId: context.project.id,
     episodeId: input.episodeId,
     targetType: requestSnapshot.targetType,
-    targetId: requestSnapshot.targetId,
+    targetId: snapshotTargetId,
     workflowId: workflow.workflow.id,
     taskId: task.id,
     modelConfigId: modelConfig?.id ?? null,
@@ -3709,7 +3942,8 @@ async function createEpisodeGenerationTask(
       prompt: requestSnapshot.prompt,
       parameters: requestSnapshot.parameters,
       targetType: requestSnapshot.targetType,
-      targetId: requestSnapshot.targetId,
+      targetId: snapshotTargetId,
+      ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
       referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
     },
     creditSummary: {
@@ -3888,10 +4122,16 @@ async function createEpisodeGenerationTask(
         taskId: task.id,
         attemptId: claim.attempt.id,
         providerRequestId,
-        metadata: {
+        metadata: buildGenerationBillingMetadata({
+          ...baseBillingMetadata,
+          attemptId: claim.attempt.id,
+          billingEvent: "consumed",
+          outcome: "consumed",
           provider: providerLabel,
-          episodeId: input.episodeId,
-        },
+          providerRequestId,
+          externalRequestId: submitted.request.externalRequestId,
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotSucceeded(db, {
@@ -3945,11 +4185,17 @@ async function createEpisodeGenerationTask(
         taskId: task.id,
         attemptId: claim.attempt.id,
         providerRequestId,
-        metadata: {
+        metadata: buildGenerationBillingMetadata({
+          ...baseBillingMetadata,
+          attemptId: claim.attempt.id,
+          billingEvent: "released",
+          outcome: "released",
           provider: modelConfig?.providerName || requestSnapshot.model || "image-provider",
+          providerRequestId,
           failureCode,
           errorMessage: error instanceof Error ? error.message : String(error),
-        },
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotFailed(db, {
@@ -4160,10 +4406,14 @@ async function createEpisodeGenerationTask(
     outcome: "consumed",
     taskId: task.id,
     attemptId: claim.attempt.id,
-    metadata: {
-      episodeId: input.episodeId,
-      kind: input.kind,
-    },
+    metadata: buildGenerationBillingMetadata({
+      ...baseBillingMetadata,
+      attemptId: claim.attempt.id,
+      billingEvent: "consumed",
+      outcome: "consumed",
+      provider: "mock",
+      settledAt: input.now,
+    }),
     now: input.now,
   });
   await markGenerationTaskSnapshotSucceeded(db, {
@@ -4210,6 +4460,136 @@ async function createEpisodeGenerationTask(
   });
 
   return { status: 200 as const, body: responseBody };
+}
+
+function buildGenerationBillingMetadata(input: {
+  billingEvent: "reserved" | "consumed" | "released" | "manual_review_required";
+  outcome: string;
+  taskId: string;
+  workflowId?: string | null;
+  projectId?: string | null;
+  workspaceId?: string | null;
+  episodeId?: string | null;
+  mediaType?: string | null;
+  kind?: string | null;
+  modelCode?: string | null;
+  providerExecutor?: string | null;
+  provider?: string | null;
+  taskMode?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  canvasNodeId?: string | null;
+  amount?: number | string | null;
+  requestedAt?: Date | string | null;
+  settledAt?: Date | string | null;
+  attemptId?: string | null;
+  providerRequestId?: string | null;
+  externalRequestId?: string | null;
+  prompt?: string | null;
+  parameters?: Record<string, unknown> | null;
+  referenceCount?: number | string | null;
+  failureCode?: string | null;
+  errorMessage?: string | null;
+  storageObjectKey?: string | null;
+}) {
+  const requestedAt = toIsoString(input.requestedAt);
+  const settledAt = toIsoString(input.settledAt);
+  const durationMs = requestedAt && settledAt
+    ? Math.max(0, new Date(settledAt).getTime() - new Date(requestedAt).getTime())
+    : null;
+  const prompt = String(input.prompt ?? "");
+  return removeUndefinedValues({
+    billingEvent: input.billingEvent,
+    outcome: input.outcome,
+    status: input.outcome,
+    taskId: input.taskId,
+    workflowId: input.workflowId,
+    projectId: input.projectId,
+    workspaceId: input.workspaceId,
+    episodeId: input.episodeId,
+    mediaType: input.mediaType,
+    kind: input.kind ?? input.mediaType,
+    modelCode: input.modelCode,
+    providerExecutor: input.providerExecutor,
+    provider: input.provider,
+    taskMode: input.taskMode,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    canvasNodeId: input.canvasNodeId,
+    amount: Number(input.amount ?? 0),
+    requestedAt,
+    settledAt,
+    durationMs,
+    attemptId: input.attemptId,
+    providerRequestId: input.providerRequestId,
+    externalRequestId: input.externalRequestId,
+    promptPreview: truncateForLedger(prompt, 180),
+    promptLength: prompt.length,
+    parameterSummary: summarizeGenerationParameters(input.parameters),
+    referenceCount: Number(input.referenceCount ?? 0),
+    failureCode: input.failureCode,
+    errorMessage: truncateForLedger(input.errorMessage ?? "", 240),
+    storageObjectKey: input.storageObjectKey,
+  });
+}
+
+function summarizeGenerationParameters(parameters: Record<string, unknown> | null | undefined) {
+  const source = parameters ?? {};
+  return removeUndefinedValues({
+    aspectRatio: readString(source.aspectRatio) ?? readString(source.ratio),
+    resolution: readString(source.resolution) ?? readString(source.quality),
+    duration: readString(source.duration) ?? readString(source.durationSeconds),
+    mode: readString(source.mode) ?? readString(source.taskMode),
+    referenceImages: readArray(source.referenceImages).length,
+    referenceAssetVersionIds: readArray(source.referenceAssetVersionIds).length,
+  });
+}
+
+function truncateForLedger(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function toIsoString(value: Date | string | null | undefined) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== ""),
+  ) as T;
+}
+
+function isRedisReachable(redisUrl: string, timeoutMs: number) {
+  return new Promise<boolean>((resolveReady) => {
+    let url: URL;
+    try {
+      url = new URL(redisUrl);
+    } catch {
+      resolveReady(false);
+      return;
+    }
+    const socket = net.createConnection({
+      host: url.hostname || "127.0.0.1",
+      port: url.port ? Number(url.port) : 6379,
+    });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolveReady(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolveReady(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolveReady(false);
+    });
+  });
 }
 
 function readGenerationReferenceAssetVersionIds(
@@ -6877,6 +7257,210 @@ async function ensureDevWorkspaceAccess(
   }
 }
 
+function loadWeChatLoginConfig(env: NodeJS.ProcessEnv): WeChatLoginConfig | null {
+  const appId = env.WECHAT_LOGIN_APP_ID?.trim() ?? "";
+  const appSecret = env.WECHAT_LOGIN_APP_SECRET?.trim() ?? "";
+  const redirectUri = env.WECHAT_LOGIN_REDIRECT_URI?.trim() ?? "";
+
+  if (!appId || !appSecret || !redirectUri) {
+    return null;
+  }
+
+  return { appId, appSecret, redirectUri };
+}
+
+function buildWeChatAuthorizeUrl(config: WeChatLoginConfig, state: string): string {
+  const url = new URL("https://open.weixin.qq.com/connect/qrconnect");
+  url.searchParams.set("appid", config.appId);
+  url.searchParams.set("redirect_uri", config.redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", "snsapi_login");
+  url.searchParams.set("state", state);
+  return `${url.toString()}#wechat_redirect`;
+}
+
+async function exchangeWeChatCode(
+  config: WeChatLoginConfig,
+  code: string,
+  fetchImpl: typeof fetch,
+): Promise<WeChatAccessTokenResponse> {
+  const url = new URL("https://api.weixin.qq.com/sns/oauth2/access_token");
+  url.searchParams.set("appid", config.appId);
+  url.searchParams.set("secret", config.appSecret);
+  url.searchParams.set("code", code);
+  url.searchParams.set("grant_type", "authorization_code");
+
+  const response = await fetchImpl(url);
+  const payload = (await response.json()) as WeChatAccessTokenResponse;
+  if (!response.ok || payload.errcode || !payload.openid || !payload.access_token) {
+    return {
+      errcode: payload.errcode ?? response.status,
+      errmsg: payload.errmsg ?? "wechat_token_exchange_failed",
+    };
+  }
+
+  return payload;
+}
+
+async function findOrCreateUserByWeChat(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    appId: string;
+    openid: string;
+    unionid?: string | null;
+    now: Date;
+  },
+) {
+  const userByOpenid = await queryOne<{
+    id: string;
+    status: "active" | "disabled";
+  }>(
+    db,
+    `
+      SELECT id, status
+      FROM users
+      WHERE wechat_app_id = $1
+        AND wechat_openid = $2
+      LIMIT 1
+    `,
+    [input.appId, input.openid],
+  );
+
+  if (userByOpenid) {
+    await updateWeChatUserLogin(db, {
+      userId: userByOpenid.id,
+      appId: input.appId,
+      openid: input.openid,
+      unionid: input.unionid,
+      now: input.now,
+    });
+    return userByOpenid;
+  }
+
+  const normalizedUnionid = input.unionid?.trim() || null;
+  if (normalizedUnionid) {
+    const userByUnionid = await queryOne<{
+      id: string;
+      status: "active" | "disabled";
+    }>(
+      db,
+      `
+        SELECT id, status
+        FROM users
+        WHERE wechat_app_id = $1
+          AND wechat_unionid = $2
+        LIMIT 1
+      `,
+      [input.appId, normalizedUnionid],
+    );
+
+    if (userByUnionid) {
+      await updateWeChatUserLogin(db, {
+        userId: userByUnionid.id,
+        appId: input.appId,
+        openid: input.openid,
+        unionid: normalizedUnionid,
+        now: input.now,
+      });
+      return userByUnionid;
+    }
+  }
+
+  const created = await queryOne<{
+    id: string;
+    status: "active" | "disabled";
+  }>(
+    db,
+    `
+      INSERT INTO users (
+        id,
+        phone_e164,
+        status,
+        wechat_app_id,
+        wechat_openid,
+        wechat_unionid,
+        wechat_last_login_at,
+        last_login_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, NULL, 'active', $2, $3, $4, $5, $5, $5, $5)
+      RETURNING id, status
+    `,
+    [randomUUID(), input.appId, input.openid, normalizedUnionid, input.now],
+  );
+
+  return created!;
+}
+
+async function updateWeChatUserLogin(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    appId: string;
+    openid: string;
+    unionid?: string | null;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE users
+      SET wechat_app_id = $2,
+          wechat_openid = $3,
+          wechat_unionid = COALESCE($4, wechat_unionid),
+          wechat_last_login_at = $5,
+          last_login_at = $5,
+          updated_at = $5
+      WHERE id = $1
+    `,
+    [input.userId, input.appId, input.openid, input.unionid?.trim() || null, input.now],
+  );
+}
+
+async function createPersistentSessionForUser(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    now: Date;
+  },
+) {
+  const createdSession = await createAuthSession({
+    userId: input.userId,
+    now: input.now,
+  });
+
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      createdSession.session.id,
+      createdSession.session.userId,
+      createdSession.session.status,
+      createdSession.session.sessionTokenHash,
+      createdSession.session.sessionTokenHashVersion,
+      createdSession.session.expiresAt,
+      createdSession.session.lastSeenAt,
+      createdSession.session.revokedAt,
+      input.now,
+    ],
+  );
+
+  return createdSession;
+}
+
 async function findAuthenticatedUser(
   db: Awaited<ReturnType<typeof createDevDb>>,
   cookieHeader: string | undefined,
@@ -6897,19 +7481,23 @@ async function findAuthenticatedUser(
 
   const user = await queryOne<{
     id: string;
-    phone_e164: string;
+    phone_e164: string | null;
     status: "active" | "disabled";
   }>(db, "SELECT id, phone_e164, status FROM users WHERE id = $1", [session.userId]);
 
   if (!user || user.status !== "active") {
     return undefined;
   }
+  const credit = await getUserCreditBalance(db, user.id);
 
   return {
     sessionToken,
     user: {
       id: user.id,
       phone: user.phone_e164,
+      creditBalance: credit.creditBalance,
+      availableCredits: credit.availableCredits,
+      reservedCredits: credit.reservedCredits,
     },
   };
 }
@@ -7007,6 +7595,7 @@ export function createPhoneAuthDevServer(
   let repairSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   let repairSchedulerRunning = false;
   const debugChallengeCodes = new Map<string, string>();
+  const wechatLoginStates = new Map<string, { createdAt: number }>();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
@@ -8923,6 +9512,164 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/legal-documents") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.listLegalDocuments(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/legal-documents") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          type?: string;
+          title?: string;
+          contentHtml?: string;
+          versionLabel?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.createLegalDocument({
+            type: String(body.type ?? ""),
+            title: String(body.title ?? ""),
+            contentHtml: String(body.contentHtml ?? ""),
+            versionLabel: body.versionLabel ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentPatchMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)$/);
+      if (request.method === "PATCH" && adminLegalDocumentPatchMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          title?: string;
+          contentHtml?: string;
+          versionLabel?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentPatchMatch[1]),
+            title: String(body.title ?? ""),
+            contentHtml: String(body.contentHtml ?? ""),
+            versionLabel: body.versionLabel ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentEnableMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)\/enable$/);
+      if (request.method === "POST" && adminLegalDocumentEnableMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          enabled?: boolean;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.enableLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentEnableMatch[1]),
+            enabled: body.enabled !== false,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentDeleteMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)$/);
+      if (request.method === "DELETE" && adminLegalDocumentDeleteMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.deleteLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentDeleteMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminSecretProbeMatch = pathname.match(/^\/api\/admin\/secret-references\/([^/]+)\/probe$/);
       if (request.method === "POST" && adminSecretProbeMatch) {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
@@ -9128,6 +9875,14 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/public/legal-documents") {
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.getPublicLegalDocuments(),
+        });
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
         const result = await requestPersistentLoginCode(db, {
@@ -9165,17 +9920,112 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/auth/wechat/start") {
+        const config = loadWeChatLoginConfig(runtimeEnv);
+        if (!config) {
+          return writeJson(response, {
+            status: 503,
+            body: { enabled: false, error: "wechat_login_not_configured" },
+          });
+        }
+
+        const state = randomBytes(32).toString("hex");
+        wechatLoginStates.set(state, { createdAt: Date.now() });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            enabled: true,
+            appId: config.appId,
+            redirectUri: config.redirectUri,
+            scope: "snsapi_login",
+            state,
+            authorizeUrl: buildWeChatAuthorizeUrl(config, state),
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/auth/wechat/callback") {
+        const config = loadWeChatLoginConfig(runtimeEnv);
+        if (!config) {
+          return writeJson(response, {
+            status: 503,
+            body: { error: "wechat_login_not_configured" },
+          });
+        }
+
+        const code = url.searchParams.get("code")?.trim() ?? "";
+        const state = url.searchParams.get("state")?.trim() ?? "";
+        const stateRecord = wechatLoginStates.get(state);
+        wechatLoginStates.delete(state);
+
+        if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "wechat_state_invalid" },
+          });
+        }
+
+        if (!code) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "wechat_code_required" },
+          });
+        }
+
+        const tokenPayload = await exchangeWeChatCode(
+          config,
+          code,
+          options.fetchImpl ?? fetch,
+        );
+
+        if (!tokenPayload.openid || tokenPayload.errcode) {
+          return writeJson(response, {
+            status: 502,
+            body: {
+              error: "wechat_token_exchange_failed",
+              providerCode: tokenPayload.errcode ?? null,
+            },
+          });
+        }
+
+        const now = new Date();
+        const user = await findOrCreateUserByWeChat(db, {
+          appId: config.appId,
+          openid: tokenPayload.openid,
+          unionid: tokenPayload.unionid,
+          now,
+        });
+
+        if (user.status !== "active") {
+          return writeJson(response, {
+            status: 403,
+            body: { error: "user_disabled" },
+          });
+        }
+
+        await ensureDevWorkspaceAccess(db, user.id, options);
+        const session = await createPersistentSessionForUser(db, {
+          userId: user.id,
+          now,
+        });
+
+        return redirectWithSessionCookie(response, "/app.html#project", session.token);
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/verify") {
         const body = (await readJsonBody(request)) as {
           challengeId: string;
           phone: string;
           code: string;
+          remember?: boolean;
         };
+        const now = new Date();
         const verified = await verifyPersistentLoginChallenge(db, {
           challengeId: body.challengeId,
           phone: body.phone,
           code: body.code,
-          now: new Date(),
+          now,
+          remember: body.remember !== false,
         });
 
         if (verified.kind !== "verified") {
@@ -9221,7 +10071,58 @@ export function createPhoneAuthDevServer(
               expiresAt: verified.session.expiresAt.toISOString(),
             },
           },
-          cookies: [sessionCookie(verified.token)],
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/auth/password/login") {
+        const body = (await readJsonBody(request)) as {
+          account: string;
+          password: string;
+          remember?: boolean;
+        };
+        const now = new Date();
+
+        let verified: Awaited<ReturnType<typeof verifyPersistentPasswordLogin>>;
+        try {
+          verified = await verifyPersistentPasswordLogin(db, {
+            account: String(body.account ?? ""),
+            password: String(body.password ?? ""),
+            now,
+            remember: body.remember !== false,
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message === "invalid_phone") {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "invalid_phone" },
+            });
+          }
+          throw error;
+        }
+
+        if (verified.kind !== "verified") {
+          return writeJson(response, {
+            status: verified.kind === "user_disabled" ? 403 : 401,
+            body: { error: verified.kind },
+          });
+        }
+
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            user: {
+              id: verified.user.id,
+              phone: verified.user.phone,
+            },
+            session: {
+              id: verified.session.id,
+              expiresAt: verified.session.expiresAt.toISOString(),
+            },
+          },
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
         });
       }
 
@@ -9848,6 +10749,7 @@ export function createPhoneAuthDevServer(
       if (
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
+        pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
         const authenticated = await findAuthenticatedUser(
@@ -10395,6 +11297,22 @@ export function createPhoneAuthDevServer(
               : {},
           );
           return;
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname === "/api/generation-config"
+        ) {
+          const credit = await getUserCreditBalance(db, authenticated.user.id);
+          return writeJson(
+            response,
+            enveloped(200, {
+              ...(await buildGenerationConfigModelCatalog(db)),
+              creditBalance: credit.creditBalance,
+              availableCredits: credit.availableCredits,
+              reservedCredits: credit.reservedCredits,
+            }),
+          );
         }
 
         if (
@@ -11024,6 +11942,17 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
+          const adminUsers = createAdminUserService({ db });
+          return writeJson(response, {
+            status: 200,
+            body: await adminUsers.listUserCreditLedger({
+              userId: authenticated.user.id,
+              pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+            }),
+          });
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/team/members") {
           const body = (await readJsonBody(request)) as {
             teamAccount?: string | null;
@@ -11048,14 +11977,24 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/creator/state") {
+          const stateResponse = await creatorApplication.getState({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+          });
+          const credit = await getUserCreditBalance(db, authenticated.user.id);
           return writeJson(
             response,
-            await creatorApplication.getState({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
+            {
+              ...stateResponse,
+              body: {
+                ...(stateResponse.body && typeof stateResponse.body === "object" ? stateResponse.body : {}),
+                creditBalance: credit.creditBalance,
+                availableCredits: credit.availableCredits,
+                reservedCredits: credit.reservedCredits,
               },
-            }),
+            },
           );
         }
 
@@ -11104,6 +12043,70 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (pathname === "/api/creator/canvas-projects") {
+          const projects = await readCanvasProjects();
+          const ownedProjects = projects.filter((project) => project.ownerUserId === authenticated.user.id);
+
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              projects: ownedProjects.map(serializeCanvasProject),
+            }));
+          }
+
+          if (request.method === "POST") {
+            const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
+            const nextIndex = ownedProjects.length + 1;
+            const project: CanvasProjectRecord = {
+              id: `canvas-project-${randomUUID()}`,
+              title: normalizeCanvasProjectTitle(body.title, `画布项目 ${nextIndex}`),
+              createdAt: formatCanvasProjectDate(new Date()),
+              status: String(body.status ?? "草稿").trim() || "草稿",
+              ownerUserId: authenticated.user.id,
+            };
+            await writeCanvasProjects([...projects, project]);
+            return writeJson(response, enveloped(201, {
+              project: serializeCanvasProject(project),
+            }));
+          }
+        }
+
+        const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
+        if (canvasProjectMatch) {
+          const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
+          const projects = await readCanvasProjects();
+          const project = projects.find(
+            (item) => item.id === projectId && item.ownerUserId === authenticated.user.id,
+          );
+
+          if (!project) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
+            const updated: CanvasProjectRecord = {
+              ...project,
+              title: Object.prototype.hasOwnProperty.call(body, "title")
+                ? normalizeCanvasProjectTitle(body.title, project.title)
+                : project.title,
+              status: Object.prototype.hasOwnProperty.call(body, "status")
+                ? (String(body.status ?? project.status).trim() || project.status)
+                : project.status,
+            };
+            await writeCanvasProjects(projects.map((item) => (item.id === project.id ? updated : item)));
+            return writeJson(response, enveloped(200, {
+              project: serializeCanvasProject(updated),
+            }));
+          }
+
+          if (request.method === "DELETE") {
+            await writeCanvasProjects(projects.filter((item) => item.id !== project.id));
+            return writeJson(response, enveloped(200, {
+              deletedProjectId: project.id,
+            }));
+          }
         }
 
         if (

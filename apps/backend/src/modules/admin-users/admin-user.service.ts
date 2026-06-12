@@ -1062,7 +1062,34 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
 }
 
 function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
-  const targetFilter = "(metadata_json->>'targetUserId' = $2 OR metadata_json->>'targetMembershipId' = $3)";
+  const targetFilter = `(
+    metadata_json->>'targetUserId' = $2
+    OR metadata_json->>'targetMembershipId' = $3
+    OR created_by_user_id = $2::uuid
+    OR EXISTS (
+      SELECT 1
+      FROM credit_reservations ledger_reservation
+      JOIN workflows ledger_workflow
+        ON ledger_workflow.organization_id = ledger_reservation.organization_id
+       AND ledger_workflow.id = ledger_reservation.workflow_id
+      WHERE ledger_reservation.organization_id = credit_ledger_entries.organization_id
+        AND ledger_reservation.id = credit_ledger_entries.reservation_id
+        AND ledger_workflow.created_by_user_id = $2::uuid
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM credit_reservation_allocations ledger_allocation
+      JOIN tasks ledger_task
+        ON ledger_task.organization_id = ledger_allocation.organization_id
+       AND ledger_task.id = ledger_allocation.task_id
+      JOIN workflows ledger_workflow
+        ON ledger_workflow.organization_id = ledger_task.organization_id
+       AND ledger_workflow.id = ledger_task.workflow_id
+      WHERE ledger_allocation.organization_id = credit_ledger_entries.organization_id
+        AND ledger_allocation.id = credit_ledger_entries.allocation_id
+        AND ledger_workflow.created_by_user_id = $2::uuid
+    )
+  )`;
   if (target.teamProfileId) {
     return {
       sql: targetFilter,
@@ -1108,17 +1135,46 @@ async function buildUserCreditSummary(
     : null;
   const totals = await queryOne<{
     total_granted: number | string;
-    total_consumed: number | string;
     total_released: number | string;
   }>(
     db,
     `
       SELECT
         COALESCE(SUM(amount) FILTER (WHERE entry_type = 'grant'), 0) AS total_granted,
-        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'consume'), 0) AS total_consumed,
         COALESCE(SUM(amount) FILTER (WHERE entry_type = 'release'), 0) AS total_released
       FROM credit_ledger_entries
       WHERE organization_id = $1
+        AND ${ledgerScope.sql}
+    `,
+    [target.organizationId, ...ledgerScope.params],
+  );
+  const reservationConsumed = await queryOne<{ total_consumed: number | string }>(
+    db,
+    `
+      SELECT COALESCE(SUM(r.amount_consumed), 0) AS total_consumed
+      FROM credit_reservations r
+      LEFT JOIN workflows reservation_workflow
+        ON reservation_workflow.organization_id = r.organization_id
+       AND reservation_workflow.id = r.workflow_id
+      WHERE r.organization_id = $1
+        AND (
+          r.metadata_json->>'targetUserId' = $2
+          OR r.metadata_json->>'targetMembershipId' = $3
+          OR r.created_by_user_id = $2::uuid
+          OR reservation_workflow.created_by_user_id = $2::uuid
+        )
+    `,
+    [target.organizationId, target.userId, target.membershipId],
+  );
+  const standaloneConsumed = await queryOne<{ total_consumed: number | string }>(
+    db,
+    `
+      SELECT COALESCE(SUM(amount), 0) AS total_consumed
+      FROM credit_ledger_entries
+      WHERE organization_id = $1
+        AND entry_type = 'consume'
+        AND reservation_id IS NULL
+        AND allocation_id IS NULL
         AND ${ledgerScope.sql}
     `,
     [target.organizationId, ...ledgerScope.params],
@@ -1149,6 +1205,7 @@ async function buildUserCreditSummary(
   const memberAvailable = member ? Number(member.credit_balance_cached ?? 0) : null;
   const memberUsed = member ? Number(member.credit_used_cached ?? 0) : null;
   const targetReserved = Number(reservations?.active_reserved ?? 0);
+  const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
   return {
     balanceScope: target.teamProfileId ? "member" : "organization",
     organizationAvailableCredits: organizationAvailable,
@@ -1158,7 +1215,7 @@ async function buildUserCreditSummary(
     displayAvailableCredits: memberAvailable ?? organizationAvailable,
     displayReservedCredits: target.teamProfileId ? targetReserved : organizationReserved,
     totalGrantedCredits: Number(totals?.total_granted ?? 0),
-    totalConsumedCredits: Number(totals?.total_consumed ?? 0),
+    totalConsumedCredits: totalConsumed,
     totalReleasedCredits: Number(totals?.total_released ?? 0),
     activeReservationCount: Number(reservations?.active_count ?? 0),
     manualReviewReservationCount: Number(reservations?.manual_review_count ?? 0),

@@ -236,11 +236,41 @@ const requestCodeButton = document.querySelector("#request-code-button");
 const verifyButton = document.querySelector("#verify-button");
 const statusMessage = document.querySelector("#status-message");
 const debugPanel = document.querySelector("#debug-panel");
+const authPanel = document.querySelector(".auth-panel");
+const phoneLoginTab = document.querySelector("#phone-login-tab");
+const passwordLoginTab = document.querySelector("#password-login-tab");
+const phoneLoginPanel = document.querySelector("#phone-login-panel");
+const passwordLoginPanel = document.querySelector("#password-login-panel");
+const passwordLoginForm = document.querySelector("#password-login-form");
+const phoneRememberInput = document.querySelector("#phone-remember-input");
+const accountInput = document.querySelector("#account-input");
+const passwordInput = document.querySelector("#password-input");
+const passwordRememberInput = document.querySelector("#password-remember-input");
+const passwordVisibilityToggle = document.querySelector("#password-visibility-toggle");
+const passwordLoginButton = document.querySelector("#password-login-button");
+const agreementsSection = document.querySelector(".agreements-section");
+const agreementsCheckbox = document.querySelector("#agreements-checkbox");
+const agreementsErrorTooltip = document.querySelector("#agreements-error-tooltip");
+const agreementLinks = document.querySelectorAll("[data-agreement]");
+const agreementModal = document.querySelector("#agreement-modal");
+const agreementModalTitle = document.querySelector("#agreement-modal-title");
+const agreementModalContent = document.querySelector("#agreement-modal-content");
+const agreementModalCloseButtons = document.querySelectorAll("[data-agreement-close]");
 
 let activeChallengeId = null;
 let requestCodeCooldownTimer = null;
 let requestCodeCooldownEndsAt = 0;
 let globalToastTimer = null;
+let agreementDocuments = {
+  serviceAgreement: {
+    title: "用户服务协议",
+    contentHtml: "<p>协议内容加载中...</p>",
+  },
+  privacyPolicy: {
+    title: "隐私政策",
+    contentHtml: "<p>协议内容加载中...</p>",
+  },
+};
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
 const appUrl =
@@ -274,6 +304,153 @@ async function loadSession() {
 
 function setStatus(message) {
   statusMessage.textContent = message;
+}
+
+function sanitizeAgreementHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = String(html || "");
+  const blockedTags = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
+  template.content.querySelectorAll("*").forEach((element) => {
+    if (blockedTags.has(element.tagName)) {
+      element.remove();
+      return;
+    }
+    Array.from(element.attributes).forEach((attribute) => {
+      if (/^on/i.test(attribute.name)) {
+        element.removeAttribute(attribute.name);
+        return;
+      }
+      if (["href", "src", "xlink:href"].includes(attribute.name) && /^\s*javascript:/i.test(attribute.value)) {
+        element.removeAttribute(attribute.name);
+      }
+    });
+    if (element.tagName === "A") {
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+  return template.innerHTML;
+}
+
+async function loadAgreementDocuments() {
+  try {
+    const response = await fetch(resolveApiUrl("/api/public/legal-documents"), {
+      credentials: "include",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      return;
+    }
+    agreementDocuments = {
+      serviceAgreement: payload.data?.serviceAgreement?.document || agreementDocuments.serviceAgreement,
+      privacyPolicy: payload.data?.privacyPolicy?.document || agreementDocuments.privacyPolicy,
+    };
+  } catch {
+    // Keep fallback copy when the public agreement endpoint is unavailable.
+  }
+}
+
+function showAgreementError(message) {
+  if (!agreementsErrorTooltip) {
+    return false;
+  }
+  agreementsErrorTooltip.textContent = message;
+  agreementsErrorTooltip.hidden = false;
+  agreementsCheckbox?.focus();
+  return false;
+}
+
+function showAgreementHint(message) {
+  if (!agreementsErrorTooltip) {
+    return false;
+  }
+  agreementsErrorTooltip.textContent = message;
+  agreementsErrorTooltip.hidden = false;
+  return false;
+}
+
+function hideAgreementError() {
+  if (agreementsErrorTooltip) {
+    agreementsErrorTooltip.hidden = true;
+  }
+}
+
+function updateAgreementActionState() {
+  const accepted = Boolean(agreementsCheckbox?.checked);
+  if (accepted) {
+    hideAgreementError();
+  } else {
+    showAgreementHint("请先同意并勾选上述协议");
+  }
+  [verifyButton, passwordLoginButton].forEach((button) => {
+    if (!button) {
+      return;
+    }
+    button.classList.toggle("is-disabled", !accepted);
+    button.setAttribute("aria-disabled", String(!accepted));
+  });
+}
+
+function validateAgreementsAccepted() {
+  if (agreementsCheckbox?.checked) {
+    hideAgreementError();
+    updateAgreementActionState();
+    return true;
+  }
+  updateAgreementActionState();
+  showAgreementError("请先同意并勾选上述协议");
+  return false;
+}
+
+function openAgreementModal(kind) {
+  const documentKey = kind === "privacy" ? "privacyPolicy" : "serviceAgreement";
+  const documentData = agreementDocuments[documentKey];
+  if (agreementModalTitle) {
+    agreementModalTitle.textContent = documentData?.title || "协议详情";
+  }
+  if (agreementModalContent) {
+    agreementModalContent.innerHTML = sanitizeAgreementHtml(documentData?.contentHtml || "<p>暂无协议内容。</p>");
+  }
+  if (agreementModal) {
+    agreementModal.hidden = false;
+  }
+}
+
+function closeAgreementModal() {
+  if (agreementModal) {
+    agreementModal.hidden = true;
+  }
+}
+
+function setAuthMode(mode) {
+  const isPasswordMode = mode === "password";
+
+  document.body.dataset.authMode = mode;
+
+  if (authPanel) {
+    authPanel.dataset.authMode = mode;
+  }
+
+  if (phoneLoginTab) {
+    phoneLoginTab.setAttribute("aria-selected", String(!isPasswordMode));
+  }
+
+  if (passwordLoginTab) {
+    passwordLoginTab.setAttribute("aria-selected", String(isPasswordMode));
+  }
+
+  if (phoneLoginPanel) {
+    phoneLoginPanel.hidden = isPasswordMode;
+  }
+
+  if (passwordLoginPanel) {
+    passwordLoginPanel.hidden = !isPasswordMode;
+  }
+
+  if (isPasswordMode) {
+    debugPanel.hidden = true;
+    setStatus("");
+  }
 }
 
 function showGlobalToast(type, title, detail) {
@@ -346,6 +523,8 @@ function showDebug(message) {
   debugPanel.textContent = message;
 }
 
+await loadAgreementDocuments();
+
 function updateRequestCodeButton() {
   if (!requestCodeButton) {
     return;
@@ -399,6 +578,10 @@ function resetRequestCodeButton(label = "获取验证码") {
 
 requestCodeButton?.addEventListener("click", async () => {
   if (requestCodeButton.disabled) {
+    return;
+  }
+
+  if (!validateAgreementsAccepted()) {
     return;
   }
 
@@ -463,6 +646,10 @@ form?.addEventListener("submit", async (event) => {
   const phone = phoneInput?.value?.trim() ?? "";
   const code = codeInput?.value?.trim() ?? "";
 
+  if (!validateAgreementsAccepted()) {
+    return;
+  }
+
   if (!activeChallengeId) {
     setStatus("请先获取验证码");
     showGlobalToast("error", "登录失败", "请先获取验证码");
@@ -478,6 +665,7 @@ form?.addEventListener("submit", async (event) => {
       challengeId: activeChallengeId,
       phone,
       code,
+      remember: phoneRememberInput?.checked !== false,
     }),
     credentials: "include",
   });
@@ -508,18 +696,129 @@ form?.addEventListener("submit", async (event) => {
   }, 800);
 });
 
+verifyButton?.addEventListener("click", (event) => {
+  if (agreementsCheckbox?.checked) {
+    return;
+  }
+  event.preventDefault();
+  validateAgreementsAccepted();
+});
+
+phoneLoginTab?.addEventListener("click", () => {
+  setAuthMode("phone");
+});
+
+passwordLoginTab?.addEventListener("click", () => {
+  setAuthMode("password");
+});
+
+agreementsCheckbox?.addEventListener("change", () => {
+  if (agreementsCheckbox.checked) {
+    hideAgreementError();
+  }
+  updateAgreementActionState();
+});
+
+agreementLinks.forEach((button) => {
+  button.addEventListener("click", () => {
+    openAgreementModal(button.dataset.agreement);
+  });
+});
+
+agreementModalCloseButtons.forEach((button) => {
+  button.addEventListener("click", closeAgreementModal);
+});
+
+passwordVisibilityToggle?.addEventListener("click", () => {
+  if (!passwordInput) {
+    return;
+  }
+
+  const isPasswordVisible = passwordInput.type === "password";
+  passwordInput.type = isPasswordVisible ? "text" : "password";
+  passwordVisibilityToggle.setAttribute(
+    "aria-label",
+    isPasswordVisible ? "隐藏密码" : "显示密码",
+  );
+});
+
+passwordLoginButton?.addEventListener("click", (event) => {
+  if (agreementsCheckbox?.checked) {
+    return;
+  }
+  event.preventDefault();
+  validateAgreementsAccepted();
+});
+
+passwordLoginForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!validateAgreementsAccepted()) {
+    return;
+  }
+
+  const account = accountInput?.value?.trim() ?? "";
+  const password = passwordInput?.value ?? "";
+  const remember = passwordRememberInput?.checked !== false;
+  passwordLoginButton.disabled = true;
+  setStatus("正在登录...");
+
+  let loginResponse;
+  let loginPayload;
+  try {
+    loginResponse = await fetch(resolveApiUrl("/api/auth/password/login"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ account, password, remember }),
+      credentials: "include",
+    });
+    loginPayload = await loginResponse.json();
+  } catch {
+    passwordLoginButton.disabled = false;
+    setStatus("密码登录失败");
+    showGlobalToast("error", "密码登录失败", "网络连接异常，请稍后再试");
+    return;
+  }
+
+  if (!loginResponse.ok) {
+    passwordLoginButton.disabled = false;
+    const message =
+      loginPayload?.error === "invalid_phone"
+        ? "请输入正确的手机号"
+        : loginPayload?.error === "user_disabled"
+          ? "账号已被禁用"
+          : "账号或密码不正确";
+    setStatus(message);
+    showGlobalToast("error", "密码登录失败", message);
+    return;
+  }
+
+  const loginMessage = `登录成功：${loginPayload.user.phone}`;
+  setStatus(loginMessage);
+  showGlobalToast("success", "登录成功", loginMessage);
+
+  const overlay = document.createElement("div");
+  overlay.className = "dissolve-overlay";
+  document.body.appendChild(overlay);
+
+  requestAnimationFrame(() => {
+    overlay.classList.add("active");
+  });
+
+  setTimeout(() => {
+    window.location.href = appUrl;
+  }, 800);
+});
+
 /* ===== Social Login Placeholders ===== */
 const socialButtons = document.querySelectorAll(".social-btn");
 
 socialButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
-    const provider = btn.classList.contains("wechat")
-      ? "微信"
-      : btn.classList.contains("alipay")
-        ? "支付宝"
-        : "QQ";
+    const provider = btn.dataset.providerLabel || "第三方";
     setStatus(`${provider} 登录即将上线`);
   });
 });
+
+updateAgreementActionState();
 
 await loadSession();

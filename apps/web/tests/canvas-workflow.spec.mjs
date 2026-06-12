@@ -311,6 +311,29 @@ describe("canvas workflow document", () => {
     assert.equal(resultEdge.data.status, "queued");
   });
 
+  it("uses generation task snapshot progress fields for canvas nodes", () => {
+    const document = updateCanvasNodeData(createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+      prompt: "Generate first interior storyboard",
+      modelCode: "image-live",
+      mediaKind: "image",
+    });
+    const preview = buildCanvasRunPreview(document, "send-flow");
+    const nextDocument = applyCanvasRunResult(document, preview, {
+      taskId: "task-canvas-progress-1",
+      status: "running",
+      progress_stage: "saving_asset",
+      progress_percent: 87,
+    });
+    const sendNode = nextDocument.nodes.find((node) => node.id === "send-flow");
+    const resultNode = nextDocument.nodes.find((node) => node.id === "image-result");
+
+    assert.equal(sendNode.data.status, "running");
+    assert.equal(sendNode.data.generationProgress, 87);
+    assert.equal(sendNode.data.generationStage, "saving_asset");
+    assert.equal(resultNode.data.generationProgress, 87);
+    assert.equal(resultNode.data.generationStage, "saving_asset");
+  });
+
   it("removes a canvas node and its attached edges", () => {
     const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const nextDocument = removeCanvasNode(document, "send-flow");

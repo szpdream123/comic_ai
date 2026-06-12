@@ -174,7 +174,15 @@ export async function processSeedanceVideoSubmitJob(
       row: { ...row, attempt_id: claim.attempt.id },
       failureCode: "provider_submission_failed",
       providerRequestId: providerRequest?.provider_request_id ?? null,
-      redactedResponse: { errorMessage },
+      redactedResponse: buildSeedanceBillingMetadata({ ...row, attempt_id: claim.attempt.id }, snapshot, {
+        billingEvent: "released",
+        outcome: "released",
+        provider: modelConfig?.providerName || "volcengine",
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        failureCode: "provider_submission_failed",
+        errorMessage,
+        settledAt: input.now,
+      }),
       now: input.now,
     });
     await markGenerationTaskSnapshotFailed(db, {
@@ -303,7 +311,17 @@ export async function processSeedanceVideoPollJob(
         row,
         failureCode: "provider_failed",
         providerRequestId: row.provider_request_id,
-        redactedResponse: poll.redactedResponse,
+        redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+          billingEvent: "released",
+          outcome: "released",
+          provider: modelConfig?.providerName || "seedance",
+          providerRequestId: row.provider_request_id,
+          externalRequestId: row.external_request_id,
+          failureCode: "provider_failed",
+          errorMessage: readString(poll.redactedResponse.providerMessage) || readString(poll.redactedResponse.providerErrorCode),
+          providerResponse: poll.redactedResponse,
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotFailed(db, {
@@ -402,7 +420,16 @@ export async function expireSeedanceVideoPollJob(
     row,
     failureCode: "provider_poll_timeout",
     providerRequestId: row.provider_request_id,
-    redactedResponse: timeoutStatus,
+    redactedResponse: buildSeedanceBillingMetadata(row, parseSnapshot(row.input_snapshot_json), {
+      billingEvent: "manual_review_required",
+      outcome: "manual_review_required",
+      provider: "seedance",
+      providerRequestId: row.provider_request_id,
+      externalRequestId: row.external_request_id,
+      failureCode: "provider_poll_timeout",
+      providerResponse: timeoutStatus,
+      settledAt: input.now,
+    }),
     now: input.now,
   });
   await markGenerationTaskSnapshotResultUnknown(db, {
@@ -520,13 +547,17 @@ export async function finalizeSeedanceVideoArtifactJob(
         row,
         failureCode,
         providerRequestId: row.provider_request_id,
-        redactedResponse: {
+        redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+          billingEvent: "manual_review_required",
+          outcome: "manual_review_required",
           provider: "seedance",
+          providerRequestId: row.provider_request_id,
           externalRequestId: row.external_request_id,
           failureCode,
           storageObjectKey,
           errorMessage: error instanceof Error ? error.message : String(error),
-        },
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotManualReviewRequired(db, {
@@ -552,12 +583,16 @@ export async function finalizeSeedanceVideoArtifactJob(
       row,
       failureCode,
       providerRequestId: row.provider_request_id,
-      redactedResponse: {
+      redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+        billingEvent: "released",
+        outcome: "released",
         provider: "seedance",
+        providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
         failureCode,
         errorMessage: error instanceof Error ? error.message : String(error),
-      },
+        settledAt: input.now,
+      }),
       now: input.now,
     });
     await markGenerationTaskSnapshotFailed(db, {
@@ -595,10 +630,14 @@ export async function finalizeSeedanceVideoArtifactJob(
       taskId: row.task_id,
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
-      metadata: {
+      metadata: buildSeedanceBillingMetadata(row, snapshot, {
+        billingEvent: "consumed",
+        outcome: "consumed",
         provider: "seedance",
+        providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
-      },
+        settledAt: input.now,
+      }),
       now: input.now,
     });
   }
@@ -712,11 +751,15 @@ export async function persistSeedanceVideoArtifactJob(
       taskId: row.task_id,
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
-      metadata: {
+      metadata: buildSeedanceBillingMetadata(row, snapshot, {
+        billingEvent: "consumed",
+        outcome: "consumed",
         provider: "seedance",
+        providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
         storageObjectKey,
-      },
+        settledAt: input.now,
+      }),
       now: input.now,
     });
   }
@@ -1281,6 +1324,106 @@ function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
     retryAttempts: parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS, 3, 10),
     retryDelayMs: parseNonNegativeInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS, 1000, 60_000),
   };
+}
+
+function buildSeedanceBillingMetadata(
+  row: SeedanceTaskRow,
+  snapshot: Record<string, unknown>,
+  extra: {
+    billingEvent: "consumed" | "released" | "manual_review_required";
+    outcome: string;
+    provider?: string | null;
+    providerRequestId?: string | null;
+    externalRequestId?: string | null;
+    failureCode?: string | null;
+    errorMessage?: string | null;
+    storageObjectKey?: string | null;
+    providerResponse?: Record<string, unknown> | null;
+    settledAt: Date;
+  },
+) {
+  const requestedAt = toIsoString(readString(snapshot.requestedAt));
+  const settledAt = extra.settledAt.toISOString();
+  const durationMs = requestedAt
+    ? Math.max(0, new Date(settledAt).getTime() - new Date(requestedAt).getTime())
+    : null;
+  const prompt = readString(snapshot.prompt) ?? "";
+  return removeUndefinedValues({
+    billingEvent: extra.billingEvent,
+    outcome: extra.outcome,
+    status: extra.outcome,
+    taskId: row.task_id,
+    workflowId: row.workflow_id,
+    projectId: row.project_id,
+    workspaceId: row.workspace_id,
+    episodeId: readString(snapshot.episodeId),
+    mediaType: "video",
+    kind: "video",
+    modelCode: readString(snapshot.model),
+    providerExecutor: readString(snapshot.providerExecutor),
+    provider: extra.provider,
+    targetType: readString(snapshot.targetType),
+    targetId: readString(snapshot.targetId),
+    canvasNodeId: readString(snapshot.canvasNodeId),
+    amount: Number(row.amount_reserved ?? 0),
+    requestedAt,
+    settledAt,
+    durationMs,
+    attemptId: row.attempt_id,
+    providerRequestId: extra.providerRequestId,
+    externalRequestId: extra.externalRequestId,
+    promptPreview: truncateForLedger(prompt, 180),
+    promptLength: prompt.length,
+    parameterSummary: summarizeGenerationParameters(readObject(snapshot.parameters)),
+    firstFrameUrl: readString(snapshot.firstFrameUrl),
+    failureCode: extra.failureCode,
+    errorMessage: truncateForLedger(extra.errorMessage ?? "", 240),
+    storageObjectKey: extra.storageObjectKey,
+    providerResponse: summarizeProviderResponse(extra.providerResponse),
+  });
+}
+
+function summarizeGenerationParameters(parameters: Record<string, unknown>) {
+  return removeUndefinedValues({
+    aspectRatio: readString(parameters.aspectRatio) ?? readString(parameters.ratio),
+    resolution: readString(parameters.resolution) ?? readString(parameters.quality),
+    duration: readString(parameters.duration) ?? readString(parameters.durationSeconds),
+    mode: readString(parameters.mode) ?? readString(parameters.taskMode),
+    referenceImages: readArray(parameters.referenceImages).length,
+    referenceAssetVersionIds: readArray(parameters.referenceAssetVersionIds).length,
+  });
+}
+
+function summarizeProviderResponse(response: Record<string, unknown> | null | undefined) {
+  if (!response) return undefined;
+  return removeUndefinedValues({
+    providerStatus: readString(response.providerStatus) ?? readString(response.status),
+    providerErrorCode: readString(response.providerErrorCode) ?? readString(response.errorCode),
+    providerMessage: truncateForLedger(readString(response.providerMessage) ?? readString(response.message) ?? "", 180),
+    cancelStatus: readString(response.cancelStatus),
+    cancelReason: readString(response.cancelReason),
+  });
+}
+
+function truncateForLedger(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function toIsoString(value: string | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== ""),
+  ) as T;
+}
+
+function readArray(value: unknown) {
+  return Array.isArray(value) ? value : [];
 }
 
 function parseContentLength(value: string | null) {

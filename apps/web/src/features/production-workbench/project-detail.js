@@ -20,6 +20,11 @@ import {
 
 const PROJECT_STATUS_OPTIONS = ["草稿", "进行中", "已交付"];
 const PROJECTS_PER_PAGE = 12;
+const CANVAS_VIDEO_GENERATION_MODES = [
+  { id: "first-frame", label: "首帧生视频" },
+  { id: "first-last-frame", label: "首尾帧生视频" },
+  { id: "reference-video", label: "全能参考" },
+];
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
@@ -162,7 +167,7 @@ export function renderProjectDetail(context = {}) {
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
-  const creditBalance = resolveDisplayedCreditBalance(ui);
+  const creditBalance = resolveDisplayedCreditBalance(ui, session);
 
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
     return `
@@ -197,6 +202,7 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
+      ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
 
@@ -230,19 +236,19 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
+      ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
 
   const toolsModeClass = activeNavTab === "tools"
     ? ` tools-mode ${ui.canvasProjectView === "detail" ? "tools-canvas-detail-mode" : "tools-canvas-list-mode"}`
     : "";
-  const showStatusbar = activeNavTab !== "tools" || ui.canvasProjectView !== "detail";
   return `
     <section class="production-workbench">
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${showStatusbar ? renderGlobalStatusbar(session, { creditBalance }) : ""}
+        ${renderGlobalStatusbar(session, { creditBalance })}
         ${renderMainPanel({ state, ui, session, detailState, progress, activeNavTab })}
       </section>
     </section>
@@ -286,8 +292,520 @@ export function renderProjectDetail(context = {}) {
       projectName:
         ui.projectLibrary?.find((project) => project.id === ui.deleteProjectId)?.name ?? "",
     })}
+    ${renderCanvasProjectRenameModal({
+      show: Boolean(ui.renameCanvasProjectId),
+      value: ui.renameCanvasProjectName ?? "",
+      notice: ui.renameCanvasProjectNotice ?? "",
+    })}
+    ${renderCanvasProjectDeleteModal({
+      show: Boolean(ui.deleteCanvasProjectId),
+      projectName:
+        ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
+    })}
     ${renderGenerationQueueJobConfirmModal(ui)}
+    ${renderCreditLedgerDrawer(ui)}
+    ${renderAccountSettingsDrawer(ui, session)}
   `;
+}
+
+function renderCreditLedgerDrawer(ui = {}) {
+  if (!ui.creditLedgerOpen) {
+    return "";
+  }
+  const rows = Array.isArray(ui.creditLedgerRows) ? ui.creditLedgerRows : [];
+  const summary = ui.creditLedgerSummary ?? {};
+  const loading = ui.creditLedgerLoading === true;
+  const error = String(ui.creditLedgerError ?? "").trim();
+  return `
+    <div class="credit-ledger-backdrop" data-action="close-credit-ledger" aria-hidden="true"></div>
+    <aside class="credit-ledger-drawer" role="dialog" aria-modal="true" aria-labelledby="credit-ledger-title">
+      <header class="credit-ledger-header">
+        <div>
+          <p class="credit-ledger-kicker">Credit Ledger</p>
+          <h2 id="credit-ledger-title">积分明细</h2>
+          <p>每一次充值、生成扣减、预留与释放都会记录在这里。</p>
+        </div>
+        <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+      </header>
+      <section class="credit-ledger-summary" aria-label="积分概览">
+        ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
+        ${renderCreditLedgerMetric("已冻结积分", summary.displayReservedCredits ?? 0, "reserved")}
+        ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
+      </section>
+      <div class="credit-ledger-toolbar">
+        <span>${escapeHtml(String(ui.creditLedgerMeta?.total ?? rows.length))} 条最近记录</span>
+        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
+      </div>
+      ${error ? `<p class="credit-ledger-notice error">${escapeHtml(error)}</p>` : ""}
+      <div class="credit-ledger-scroll">
+        ${loading && !rows.length ? renderCreditLedgerLoadingRows() : ""}
+        ${!loading && !rows.length && !error ? `
+          <div class="credit-ledger-empty">
+            <strong>暂无积分记录</strong>
+            <span>充值或生成任务发生后，这里会显示每一次变动。</span>
+          </div>
+        ` : ""}
+        ${rows.length ? `
+          <table class="credit-ledger-table">
+            <thead>
+              <tr>
+                <th>任务ID</th>
+                <th>类型</th>
+                <th>说明</th>
+                <th>可用变化</th>
+                <th>失败|成功</th>
+                <th>来源</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(renderCreditLedgerRow).join("")}
+            </tbody>
+          </table>
+        ` : ""}
+      </div>
+    </aside>
+  `;
+}
+
+function renderCreditLedgerMetric(label, value, tone) {
+  return `
+    <article class="credit-ledger-metric ${tone}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatCreditNumber(value))}</strong>
+    </article>
+  `;
+}
+
+function renderCreditLedgerRow(row = {}) {
+  const entry = normalizeCreditLedgerEntry(row);
+  return `
+    <tr>
+      <td>${renderCreditLedgerTaskId(entry.taskId)}</td>
+      <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
+      <td>${renderCreditLedgerDescription(entry)}</td>
+      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
+      <td><span class="credit-ledger-type ${entry.result === "失败" ? "consume" : entry.result === "成功" ? "grant" : "neutral"}">${escapeHtml(entry.result)}</span></td>
+      <td><span class="credit-ledger-source">${escapeHtml(entry.source)}</span></td>
+      <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
+    </tr>
+  `;
+}
+
+function renderCreditLedgerDescription(entry = {}) {
+  const title = String(entry.title ?? "").trim();
+  const detail = String(entry.detail ?? "").trim();
+  const text = [title, detail].filter(Boolean).join(" ");
+  if (!text) {
+    return `<span class="credit-ledger-description empty">-</span>`;
+  }
+  return `<span class="credit-ledger-description" data-full-text="${escapeAttr(text)}" tabindex="0"><span class="credit-ledger-description-text">${escapeHtml(text)}</span></span>`;
+}
+
+function renderCreditLedgerTaskId(taskId) {
+  const fullId = String(taskId ?? "").trim();
+  if (!fullId) {
+    return `<code class="credit-ledger-task-id empty">-</code>`;
+  }
+  return `<code class="credit-ledger-task-id" data-full-id="${escapeAttr(fullId)}" tabindex="0">${escapeHtml(fullId.slice(0, 6))}</code>`;
+}
+
+function normalizeCreditLedgerEntry(row = {}) {
+  const type = String(row.entryType ?? "");
+  const metadata = normalizeLedgerMetadata(row.metadata);
+  const labels = {
+    grant: ["充值/发放", "grant"],
+    consume: ["生成扣减", "consume"],
+    reservation: ["任务冻结", "reserve"],
+    reserve: ["任务冻结", "reserve"],
+    release: ["释放返还", "release"],
+  };
+  const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
+  const amount = Number(row.amount ?? 0);
+  const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
+  const reason = String(row.reason ?? metadata.reason ?? "").trim();
+  const model = creditLedgerModelLabel(metadata);
+  const task = String(metadata.taskId ?? metadata.task_id ?? row.sourceId ?? "").trim();
+  const event = String(metadata.billingEvent ?? metadata.outcome ?? metadata.status ?? "").trim();
+  const eventLabel = ledgerBillingEventLabel(event);
+  const duration = formatLedgerDuration(metadata.durationMs ?? metadata.duration_ms);
+  const promptPreview = String(metadata.promptPreview ?? metadata.prompt_preview ?? "").trim();
+  const failureCode = String(metadata.failureCode ?? metadata.failure_code ?? "").trim();
+  const errorMessage = String(metadata.errorMessage ?? metadata.error_message ?? "").trim();
+  const source = creditLedgerSourceLabel(row, metadata);
+  const content = promptPreview ? `内容：${promptPreview}` : "";
+  const failure = creditLedgerFailureLabel(failureCode, errorMessage);
+  const result = creditLedgerResultLabel({ event, failure });
+  const description = failure
+    ? `失败：${failure}`
+    : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
+  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || label;
+  return {
+    label,
+    tone,
+    amount: type === "consume" ? -Math.abs(amount) : amount,
+    availableDelta,
+    createdAt: row.createdAt,
+    taskId: task || String(row.sourceId ?? "").trim(),
+    title,
+    detail: description,
+    result,
+    source,
+  };
+}
+
+function normalizeLedgerMetadata(metadata) {
+  if (metadata && typeof metadata === "object") {
+    return metadata;
+  }
+  if (typeof metadata !== "string" || !metadata.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function creditLedgerSourceLabel(row = {}, metadata = {}) {
+  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  if (targetType === "canvas") {
+    if (mediaType === "video") {
+      return "画布视频生成";
+    }
+    return "画布图片生成";
+  }
+  if (sourceType === "episode_generation_task") {
+    return mediaType === "video" ? "分镜视频生成" : "分镜图片生成";
+  }
+  if (sourceType === "payment_order") {
+    return "订单充值";
+  }
+  if (sourceType.includes("admin") || sourceType.includes("manual")) {
+    return "人工调整";
+  }
+  if (mediaType === "video") {
+    return "视频生成";
+  }
+  if (mediaType === "image") {
+    return "图片生成";
+  }
+  return "积分账本";
+}
+
+function creditLedgerModelLabel(metadata = {}) {
+  const explicit = String(metadata.modelLabel ?? metadata.model_label ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const code = String(metadata.modelCode ?? metadata.model_code ?? metadata.providerExecutor ?? metadata.provider ?? "").trim();
+  const normalized = code.toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.includes("jimeng")) {
+    return normalized.includes("video") ? "即梦视频模型" : "即梦图片模型";
+  }
+  if (normalized.includes("seedance")) {
+    return "豆包视频模型";
+  }
+  if (normalized.includes("gpt")) {
+    return "OpenAI 图片模型";
+  }
+  if (normalized.includes("liblib")) {
+    return "哩布哩布模型";
+  }
+  if (normalized.includes("kling")) {
+    return "可灵模型";
+  }
+  if (normalized.includes("wan") || normalized.includes("qwen")) {
+    return "通义生成模型";
+  }
+  return `模型 ${code}`;
+}
+
+function translateCreditLedgerReason(reason, metadata = {}) {
+  const normalized = String(reason ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "image generation") {
+    return targetType === "canvas" ? "画布图片生成" : "图片生成";
+  }
+  if (normalized === "video generation") {
+    return targetType === "canvas" ? "画布视频生成" : "视频生成";
+  }
+  if (normalized === "reservation allocation released") {
+    return mediaType === "video" ? "视频生成积分返还" : "图片生成积分返还";
+  }
+  if (normalized === "reservation allocation consumed") {
+    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
+  }
+  return reason;
+}
+
+function creditLedgerFailureLabel(code, message) {
+  const normalizedCode = String(code ?? "").trim();
+  const normalizedMessage = String(message ?? "").trim();
+  const labels = {
+    task_timeout: "任务超时，积分已返还",
+    provider_poll_timeout: "模型处理超时，积分已返还",
+    provider_failed: "模型处理失败，积分已返还",
+    provider_submission_failed: "发送模型失败，积分已返还",
+    provider_submission_ambiguous: "模型接收状态不明确，已进入失败处理",
+    provider_output_download_failed: "模型结果下载失败，积分已返还",
+    provider_output_upload_failed: "结果保存失败，积分已返还",
+    provider_output_persist_failed: "结果入库失败，积分已返还",
+    provider_result_unknown: "模型结果状态未知，积分已返还",
+    worker_crashed_after_external_start: "后台处理意外中断，积分已返还",
+    generation_queue_unavailable: "生成队列未启动，未继续扣减",
+  };
+  const translated = labels[normalizedCode];
+  if (translated && normalizedMessage) {
+    return `${translated}（${normalizedMessage}）`;
+  }
+  if (translated) {
+    return translated;
+  }
+  if (normalizedMessage) {
+    return normalizedMessage;
+  }
+  return normalizedCode ? `失败代码：${normalizedCode}` : "";
+}
+
+function creditLedgerResultLabel({ event, failure } = {}) {
+  const normalized = String(event ?? "").toLowerCase();
+  if (failure || normalized.includes("failed") || normalized.includes("timeout")) {
+    return "失败";
+  }
+  if (["consumed", "released", "succeeded", "reserved"].includes(normalized)) {
+    return "成功";
+  }
+  return "-";
+}
+
+function ledgerBillingEventLabel(value) {
+  const labels = {
+    reserved: "已冻结",
+    consumed: "已扣减",
+    released: "已返还",
+    manual_review_required: "待复核",
+    failed: "失败",
+    succeeded: "成功",
+  };
+  return labels[value] ?? "";
+}
+
+function formatLedgerDuration(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "";
+  }
+  if (numeric < 1000) {
+    return `${Math.round(numeric)}ms`;
+  }
+  return `${Math.round(numeric / 100) / 10}s`;
+}
+
+function shortLedgerId(value) {
+  const text = String(value ?? "").trim();
+  if (text.length <= 12) {
+    return text;
+  }
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function renderCreditLedgerLoadingRows() {
+  return `
+    <div class="credit-ledger-loading">
+      <span></span><span></span><span></span>
+    </div>
+  `;
+}
+
+function formatCreditNumber(value) {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString("zh-CN") : "0";
+}
+
+function formatSignedCredit(value) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric) || numeric === 0) {
+    return "0";
+  }
+  return `${numeric > 0 ? "+" : "-"}${Math.abs(Math.round(numeric)).toLocaleString("zh-CN")}`;
+}
+
+function formatLedgerDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderAccountSettingsDrawer(ui = {}, session = {}) {
+  if (!ui.accountSettingsOpen) {
+    return "";
+  }
+
+  const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session);
+  const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
+  const dirty = ui.accountSettingsDirty === true;
+  const saving = ui.busy && ui.accountSettingsOpen;
+  const notice = String(ui.accountSettingsNotice ?? "").trim();
+
+  return `
+    <div class="account-settings-backdrop" data-action="close-account-settings" aria-hidden="true"></div>
+    <aside class="account-settings-drawer" role="dialog" aria-modal="true" aria-labelledby="account-settings-title">
+      <header class="account-settings-header">
+        <div>
+          <p class="account-settings-kicker">Account Console</p>
+          <h2 id="account-settings-title">账号设置</h2>
+          <p class="account-settings-subtitle">管理你的公开信息、登录安全与消息偏好。</p>
+        </div>
+        <button class="account-settings-close" type="button" data-action="close-account-settings" aria-label="关闭账号设置">×</button>
+      </header>
+
+      <section class="account-settings-hero">
+        <div class="account-settings-avatar" aria-hidden="true">${escapeHtml(resolveAccountSettingsAvatarLabel(form, session))}</div>
+        <div class="account-settings-hero-copy">
+          <strong>${escapeHtml(form.displayName || "未命名创作者")}</strong>
+          <span>${escapeHtml(form.phone || "未绑定手机号")}</span>
+          <span>${escapeHtml(form.planLabel)}</span>
+        </div>
+      </section>
+
+      <div class="account-settings-scroll">
+        <section class="account-settings-card">
+          <div class="account-settings-card-head">
+            <span>基础资料</span>
+            <em>Profile</em>
+          </div>
+          <label class="account-settings-field">
+            <span>显示昵称</span>
+            <input
+              type="text"
+              value="${escapeAttr(form.displayName)}"
+              maxlength="40"
+              placeholder="请输入显示昵称"
+              data-action="change-account-settings-field"
+              data-field="displayName"
+            />
+          </label>
+          <label class="account-settings-field readonly">
+            <span>绑定手机号</span>
+            <div class="account-settings-static-field">
+              <input type="text" value="${escapeAttr(form.phone)}" readonly />
+              <button type="button" data-action="account-settings-placeholder" data-message="手机号更换功能将在后续版本开放。">更换</button>
+            </div>
+          </label>
+        </section>
+
+        <section class="account-settings-card">
+          <div class="account-settings-card-head">
+            <span>账号安全</span>
+            <em>Security</em>
+          </div>
+          <div class="account-settings-security-row">
+            <div>
+              <strong>修改密码</strong>
+              <span>更新登录密码，保护你的创作资产与团队协作空间。</span>
+            </div>
+            <button type="button" data-action="toggle-account-settings-password">
+              ${passwordExpanded ? "收起" : "修改密码"}
+            </button>
+          </div>
+          ${
+            passwordExpanded
+              ? `
+                <div class="account-settings-password-grid">
+                  <label class="account-settings-field">
+                    <span>当前密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.currentPassword)}"
+                      placeholder="请输入当前密码"
+                      data-action="change-account-settings-field"
+                      data-field="currentPassword"
+                    />
+                  </label>
+                  <label class="account-settings-field">
+                    <span>新密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.newPassword)}"
+                      placeholder="至少 8 位"
+                      data-action="change-account-settings-field"
+                      data-field="newPassword"
+                    />
+                  </label>
+                  <label class="account-settings-field">
+                    <span>确认新密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.confirmPassword)}"
+                      placeholder="再次输入新密码"
+                      data-action="change-account-settings-field"
+                      data-field="confirmPassword"
+                    />
+                  </label>
+                </div>
+              `
+              : ""
+          }
+        </section>
+
+      </div>
+
+      <footer class="account-settings-footer">
+        <div class="account-settings-footer-copy">
+          <strong>${dirty ? "有未保存的更改" : "当前更改已同步"}</strong>
+          <span>${escapeHtml(notice || "保存后会立即在当前工作台生效。")}</span>
+        </div>
+        <div class="account-settings-footer-actions">
+          <button type="button" class="ghost" data-action="close-account-settings">取消</button>
+          <button type="button" class="primary" data-action="submit-account-settings" ${saving ? "disabled" : ""}>保存更改</button>
+        </div>
+      </footer>
+    </aside>
+  `;
+}
+
+function normalizeAccountSettingsForm(form = {}, session = {}) {
+  const user = session?.user ?? {};
+  const notifications = form.notifications ?? {};
+  return {
+    displayName: String(form.displayName ?? user.displayName ?? ""),
+    phone: String(form.phone ?? user.phone ?? ""),
+    email: String(form.email ?? user.email ?? ""),
+    currentPassword: String(form.currentPassword ?? ""),
+    newPassword: String(form.newPassword ?? ""),
+    confirmPassword: String(form.confirmPassword ?? ""),
+    notifications: {
+      projectUpdates: notifications.projectUpdates !== false,
+      renderComplete: notifications.renderComplete !== false,
+      marketing: notifications.marketing === true,
+    },
+    planLabel: String(form.planLabel ?? user.planLabel ?? "当前方案 · 创作者版"),
+  };
+}
+
+function resolveAccountSettingsAvatarLabel(form, session = {}) {
+  const preferred = String(form.displayName || session?.user?.displayName || session?.user?.phone || "我").trim();
+  return [...preferred].slice(0, 2).join("");
 }
 
 function renderWorkspaceStatusToast(message, extraClassName = "") {
@@ -329,8 +847,13 @@ function resolveWorkspaceToastTone(message) {
   return errorMarkers.some((marker) => normalizedMessage.includes(marker)) ? "error" : "success";
 }
 
-function resolveDisplayedCreditBalance(ui) {
+function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
+    session?.user?.availableCredits,
+    session?.user?.creditBalance,
+    session?.user?.credits,
+    session?.availableCredits,
+    session?.creditBalance,
     ui.creditBalance,
     ui.episodeGenerationConfig?.creditBalance,
     ui.episodeWorkbenchContext?.creditBalance,
@@ -3039,7 +3562,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "tools") {
     return `
-      ${renderToolsPanel(ui)}
+      ${renderToolsPanel(ui, state)}
       ${renderWorkspaceStatusToast(ui.toast)}
     `;
   }
@@ -3207,7 +3730,7 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
-function renderToolsPanel(ui = {}) {
+function renderToolsPanel(ui = {}, state = {}) {
   if (ui.canvasProjectView !== "detail") {
     return renderCanvasProjectGallery(ui);
   }
@@ -3218,6 +3741,8 @@ function renderToolsPanel(ui = {}) {
   const nodes = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [];
   const viewport = canvasDocument.viewport ?? {};
   const zoomPercent = Math.round(Number(viewport.zoom ?? 1) * 100);
+  const viewportStyle = canvasViewportStyle(viewport);
+  const gridStyle = canvasGridStyle(viewport);
   const sidebarMode = ui.canvasSidebarMode === "assets" ? "assets" : "nodes";
   const canvasAssets = Array.isArray(ui.canvasAssets) ? ui.canvasAssets : [];
   const sidebarItems = buildCanvasSidebarItems(canvasDocument, {
@@ -3228,24 +3753,21 @@ function renderToolsPanel(ui = {}) {
   const selectedNode =
     nodes.find((node) => node.id === ui.selectedCanvasNodeId) ??
     null;
-  const sendNode = selectedNode?.type === "send"
-    ? selectedNode
-    : nodes.find((node) => node.type === "send") ?? selectedNode;
-  const modelOptions = resolveCanvasModelOptions(ui.episodeGenerationConfig, sendNode?.data?.mediaKind ?? "image");
-  const modelOptionHtml = (modelOptions.length
-    ? modelOptions
-    : [
-        { modelCode: sendNode?.data?.modelCode ?? "gpt-image-2-cn", modelLabel: sendNode?.data?.modelCode ?? "GPT Image" },
-        { modelCode: "CVLM 5.5", modelLabel: "CVLM 5.5" },
-      ])
-    .map((model) => `
-      <option value="${escapeAttr(model.modelCode)}" ${model.modelCode === sendNode?.data?.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel)}</option>
-    `)
-    .join("");
+  const selectedModelOptionHtml = renderCanvasModelOptions(ui.episodeGenerationConfig, selectedNode);
+  const selectedCanvasModelControls = renderCanvasModelParameterControls({
+    generationConfig: ui.episodeGenerationConfig,
+    node: selectedNode,
+    parameterValues: resolveCanvasNodeParameterValues(selectedNode, ui),
+    openMenu: ui.openGenerationSelectMenu,
+  });
+  const selectedCanvasModel = resolveSelectedCanvasModel(ui.episodeGenerationConfig, selectedNode);
+  const generatingCanvasNodeId = String(ui.canvasGeneratingNodeId ?? "");
+  const selectedNodeGenerating = selectedNode?.id && selectedNode.id === generatingCanvasNodeId;
   const addMenuOpen = ui.canvasAddMenuOpen === true;
   const contextMenu = ui.canvasContextMenu && typeof ui.canvasContextMenu === "object"
     ? ui.canvasContextMenu
     : null;
+  const scriptPicker = resolveCanvasScriptPicker(ui, state);
   return `
     <section class="canvas-workspace" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}">
       <aside class="canvas-sidebar" aria-label="画布侧栏">
@@ -3281,17 +3803,20 @@ function renderToolsPanel(ui = {}) {
           <span>${sidebarMode === "assets" ? `共 ${sidebarItems.length} 素材` : `共 ${nodes.length} 节点`}</span>
         </footer>
       </aside>
-      <main class="canvas-stage ${viewport.gridVisible === false ? "is-grid-hidden" : ""}" aria-label="自由生成画布">
+      <main class="canvas-stage ${viewport.gridVisible === false ? "is-grid-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
         <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
           ${renderCanvasIcon("collapse")}<span>项目</span>
         </button>
         <div class="canvas-x6-mount" data-canvas-x6-mount aria-label="可拖拽连线画布"></div>
-        <div class="canvas-flow" aria-label="AI 节点工作流">
+        <div class="canvas-flow" aria-label="AI 节点工作流" style="${escapeAttr(viewportStyle)}">
           ${renderLiblibCanvasEdges(canvasDocument)}
           ${nodes.map((node) => renderLiblibCanvasNode(node, {
             selected: node.id === selectedNode?.id,
-            modelOptionHtml,
+            activeTextToolbar: ui.editingCanvasTextNodeId === node.id,
+            canvasDocument,
+            generatingNodeId: generatingCanvasNodeId,
           })).join("")}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
         </div>
 
         ${addMenuOpen ? `
@@ -3306,8 +3831,9 @@ function renderToolsPanel(ui = {}) {
           </aside>
         ` : ""}
 
-        ${selectedNode && ui.canvasEditorOpen === true ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml }) : ""}
-        ${contextMenu ? renderCanvasContextMenu(contextMenu) : ""}
+        ${contextMenu ? renderCanvasContextMenu(contextMenu, { episodeGenerationConfig: ui.episodeGenerationConfig }) : ""}
+
+        ${scriptPicker ? renderCanvasScriptPicker(scriptPicker) : ""}
 
         <div class="canvas-zoom-tools" aria-label="画布视图工具">
           <button class="${viewport.gridVisible === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-grid" aria-label="网格视图">${renderCanvasIcon("grid")}</button>
@@ -3316,29 +3842,24 @@ function renderToolsPanel(ui = {}) {
           <button class="${viewport.snapEnabled === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-snap" aria-label="吸附">${renderCanvasIcon("link")}</button>
           <strong>${escapeHtml(String(zoomPercent))}%</strong>
         </div>
-        <div class="canvas-bottom-tools" aria-label="画布快捷工具">
-          <button class="primary" type="button" data-action="toggle-canvas-add-menu" aria-label="新增节点">${renderCanvasIcon("plus")}</button>
-          <button type="button" aria-label="节点连线">${renderCanvasIcon("share")}</button>
-          <button type="button" aria-label="历史记录">${renderCanvasIcon("clock")}</button>
-          <button type="button" aria-label="键盘快捷键">${renderCanvasIcon("keyboard")}</button>
-          <button type="button" aria-label="帮助">${renderCanvasIcon("help")}</button>
-        </div>
       </main>
     </section>
   `;
 }
 
 function renderCanvasProjectGallery(ui = {}) {
-  const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
-    projectId: ui.selectedProjectCardId ?? "",
-    episodeId: ui.selectedEpisodeId ?? "",
-  });
-  const nodeCount = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes.length : 0;
-  const createdAt = "2026/06/10";
+  const projects = normalizeCanvasProjectCards(ui);
+  const documentsByProject = ui.canvasDocumentsByProject && typeof ui.canvasDocumentsByProject === "object"
+    ? ui.canvasDocumentsByProject
+    : {};
+  const totalNodeCount = projects.reduce((count, project) => {
+    const document = documentsByProject[project.id] ?? (project.id === (ui.selectedCanvasProjectId ?? projects[0]?.id) ? ui.canvasDocument : null);
+    return count + (Array.isArray(document?.nodes) ? document.nodes.length : 0);
+  }, 0);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
-        <h1>全部项目(1)</h1>
+        <h1>全部项目(${escapeHtml(String(projects.length))})</h1>
         <div class="canvas-project-gallery-controls">
           <button class="canvas-project-filter" type="button">
             <span>项目状态</span>
@@ -3351,22 +3872,53 @@ function renderCanvasProjectGallery(ui = {}) {
         </div>
       </header>
       <div class="canvas-project-card-grid">
-        <article class="canvas-project-card">
-          <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" aria-label="打开画布项目">
-            <span class="canvas-project-cover" aria-hidden="true">
-              <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
-            </span>
-            <span class="canvas-project-card-copy">
-              <strong>画布项目</strong>
-              <small>创建人：—  创建时间：${escapeHtml(createdAt)}</small>
-            </span>
-          </button>
-          <button class="canvas-project-menu" type="button" aria-label="画布项目更多操作">⋮</button>
-        </article>
+        ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
       <div class="canvas-project-aurora" aria-hidden="true"></div>
-      <span class="canvas-project-count" aria-hidden="true">共 ${nodeCount} 节点</span>
+      <span class="canvas-project-count" aria-hidden="true">共 ${totalNodeCount} 节点</span>
+      <button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
+        <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
+        创建画布
+      </button>
     </section>
+  `;
+}
+
+function normalizeCanvasProjectCards(ui = {}) {
+  const fallback = [{ id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" }];
+  const projects = Array.isArray(ui.canvasProjects) && ui.canvasProjects.length ? ui.canvasProjects : fallback;
+  return projects.map((project, index) => ({
+    id: String(project?.id ?? `canvas-project-${index + 1}`),
+    title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
+    createdAt: String(project?.createdAt ?? "2026/06/10"),
+    status: String(project?.status ?? "草稿"),
+  }));
+}
+
+function renderCanvasProjectCard(project = {}, menuOpen = false) {
+  return `
+    <article class="canvas-project-card">
+      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+        <span class="canvas-project-cover" aria-hidden="true">
+          <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
+        </span>
+        <span class="canvas-project-card-copy">
+          <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
+          <small>创建人：—  创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
+        </span>
+      </button>
+      <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}更多操作">⋮</button>
+      ${menuOpen ? renderCanvasProjectMenu(project) : ""}
+    </article>
+  `;
+}
+
+function renderCanvasProjectMenu(project = {}) {
+  return `
+    <div class="canvas-project-card-menu" role="menu" aria-label="画布操作">
+      <button class="canvas-project-card-menu-item" type="button" data-action="rename-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">重命名</button>
+      <button class="canvas-project-card-menu-item danger" type="button" data-action="delete-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">删除</button>
+    </div>
   `;
 }
 
@@ -3430,7 +3982,7 @@ function renderLiblibCanvasEdges(document = {}) {
     })
     .join("");
   return `
-    <svg class="canvas-lib-edge-layer" viewBox="0 0 2200 1600" aria-hidden="true">
+    <svg class="canvas-lib-edge-layer" viewBox="-3200 -2400 6400 4800" aria-hidden="true">
       ${edgePaths}
     </svg>
   `;
@@ -3439,6 +3991,9 @@ function renderLiblibCanvasEdges(document = {}) {
 function renderLiblibCanvasNode(node, options = {}) {
   if (node?.type === "script") {
     return renderLiblibTextNode(node, options);
+  }
+  if (node?.type === "upload") {
+    return renderLiblibUploadNode(node, options);
   }
   if (node?.type === "send") {
     return renderLiblibGenerationNode(node, options);
@@ -3464,15 +4019,64 @@ function renderLiblibCanvasNode(node, options = {}) {
   return renderLiblibTextNode(node, options);
 }
 
-function renderLiblibGenerationNode(node, { selected = false } = {}) {
+function renderLiblibUploadNode(node, { selected = false } = {}) {
+  const title = node?.data?.title && !String(node.data.title).includes("�")
+    ? node.data.title
+    : "上传";
+  const mediaKind = node?.data?.mediaKind === "video" ? "video" : "image";
+  const mediaUrl = node?.data?.url ?? node?.data?.previewUrl ?? node?.data?.src ?? "";
+  const fileName = node?.data?.fileName ?? node?.data?.name ?? "";
+  const status = node?.data?.status ?? "empty";
+  const style = canvasNodePositionStyle(node, { width: 360, height: 220 });
+  return `
+    <article
+      class="canvas-lib-node canvas-upload-node ${selected ? "selected" : ""}"
+      data-action="select-canvas-node"
+      data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-kind="upload"
+      style="${escapeAttr(style)}"
+    >
+      <header class="canvas-lib-node-title">
+        ${renderCanvasIcon("upload")}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}">
+        <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+        ${mediaUrl ? `
+          <span class="canvas-upload-preview">
+            ${mediaKind === "video"
+              ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
+              : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
+          </span>
+          <span class="canvas-upload-meta">
+            <strong>${escapeHtml(fileName || (mediaKind === "video" ? "视频素材" : "图片素材"))}</strong>
+            <small>${status === "uploading" ? "上传中" : "已选择"}</small>
+          </span>
+        ` : `
+          <span class="canvas-upload-empty-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
+          <span class="canvas-upload-empty-text">上传图片或视频</span>
+        `}
+        <input class="canvas-upload-file-input" type="file" accept="image/*,video/*" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
+      </button>
+    </article>
+  `;
+}
+
+function renderLiblibGenerationNode(node, { selected = false, canvasDocument = null, generatingNodeId = "" } = {}) {
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const title = mediaKind === "video" ? "视频生成" : "图片生成";
   const promptLabel = mediaKind === "video" ? "输入提示词生成视频" : "输入提示词生成图片";
   const style = canvasNodePositionStyle(node, mediaKind === "video" ? { width: 420, height: 378 } : { width: 420, height: 378 });
+  const mediaUrl = resolveCanvasGenerationNodeMediaUrl(node, mediaKind);
+  const progress = resolveCanvasGenerationNodeProgress(node);
+  const progressStage = resolveCanvasGenerationNodeStage(node);
+  const progressTaskId = resolveCanvasGenerationNodeTaskId(node);
+  const isGenerating = String(node?.id ?? "") === String(generatingNodeId ?? "");
   return `
     <article
-      class="canvas-lib-node canvas-generation-node ${mediaKind} ${selected ? "selected" : ""}"
-      data-action="select-canvas-node"
+      class="canvas-lib-node canvas-generation-node ${mediaKind} ${selected ? "selected" : ""} ${isGenerating ? "is-generating" : ""}"
+      ${isGenerating ? 'aria-disabled="true"' : 'data-action="select-canvas-node"'}
       data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-kind="${escapeAttr(node?.type ?? "send")}"
@@ -3486,24 +4090,170 @@ function renderLiblibGenerationNode(node, { selected = false } = {}) {
       <div class="canvas-generation-preview">
         <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
-        <div class="canvas-generation-empty">
-          ${renderCanvasIcon(mediaKind)}
-          <strong>${promptLabel}</strong>
-        </div>
+        ${mediaUrl ? `
+          <div class="canvas-generation-result ${isGenerating ? "is-generating" : ""}">
+            ${mediaKind === "video"
+              ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
+              : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
+          </div>
+        ` : isGenerating ? "" : `
+          <div class="canvas-generation-empty">
+            ${renderCanvasIcon(mediaKind)}
+            <strong>${promptLabel}</strong>
+          </div>
+        `}
+        ${isGenerating ? renderCanvasGenerationProgress(progress, progressStage, progressTaskId) : ""}
       </div>
     </article>
   `;
 }
 
-function renderLiblibTextNode(node, { selected = false } = {}) {
-  const title = node?.data?.title && !String(node.data.title).includes("�")
-    ? node.data.title
-    : "文本节点 2";
+function renderCanvasGenerationProgress(progress, stage = "", taskId = "") {
+  const percent = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+  const stageLabel = canvasGenerationStageLabel(stage, percent);
+  const shortTaskId = shortCanvasTaskId(taskId);
+  return `
+    <div class="canvas-generation-progress" aria-label="生成进度 ${percent}%">
+      <span class="canvas-generation-progress-kicker">任务已发送</span>
+      <span class="canvas-generation-progress-label">生成中 ${percent}%</span>
+      ${shortTaskId ? `<span class="canvas-generation-progress-task" title="${escapeAttr(taskId)}">任务ID ${escapeHtml(shortTaskId)}</span>` : ""}
+      <span class="canvas-generation-progress-stage">${escapeHtml(stageLabel)}</span>
+      <span class="canvas-generation-progress-track"><i style="width:${percent}%"></i></span>
+    </div>
+  `;
+}
+
+function resolveCanvasGenerationNodeProgress(node) {
+  const rawValue = node?.data?.generationProgress ?? node?.data?.progress;
+  const value = Number(rawValue);
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  const status = String(node?.data?.status ?? "").toLowerCase();
+  if (status === "running") return 55;
+  if (status === "queued") return 12;
+  return 0;
+}
+
+function resolveCanvasGenerationNodeStage(node) {
+  return String(node?.data?.generationStage ?? node?.data?.progressStage ?? node?.data?.progress_stage ?? node?.data?.stage ?? "").trim();
+}
+
+function resolveCanvasGenerationNodeTaskId(node) {
+  const data = node?.data ?? {};
+  const value = data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? data.platform?.tasks?.[0]?.taskId ?? "";
+  return String(value ?? "").trim();
+}
+
+function shortCanvasTaskId(taskId) {
+  const value = String(taskId ?? "").trim();
+  if (!value) return "";
+  return value.length > 14 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
+}
+
+function canvasGenerationStageLabel(stage, percent) {
+  const normalized = String(stage ?? "").trim().toLowerCase();
+  if (["queue_unavailable", "queue_stalled", "queued_unprocessed"].includes(normalized)) return "生成队列未处理，请检查 Redis、outbox 和 worker";
+  if (["queued", "submitted", "created"].includes(normalized)) return "任务已入库，等待队列投递到模型";
+  if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return "模型已接收，正在排队";
+  if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return "模型正在生成画面";
+  if (["provider_succeeded", "provider_completed"].includes(normalized)) return "模型已返回，正在整理结果";
+  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return "正在保存结果到素材库";
+  if (["completed", "succeeded"].includes(normalized) || percent >= 100) return "生成完成，正在刷新画布";
+  return percent <= 12 ? "任务已发送，等待进度回传" : "正在同步生成状态";
+}
+
+function resolveCanvasGenerationNodeMediaUrl(node, mediaKind) {
+  const data = node?.data ?? {};
+  const candidates = mediaKind === "video"
+    ? [data.previewUrl, data.resultUrl, data.url, data.videoUrl, data.assetUrl, data.thumbnailUrl]
+    : [data.previewUrl, data.resultUrl, data.url, data.imageUrl, data.assetUrl, data.thumbnailUrl];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function resolveCanvasUploadReferences(document, targetNodeId) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === targetNodeId)
+    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document))
+    .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
+    .filter((item) => item.url);
+}
+
+function resolveCanvasReferenceImagesForNode(node, document = {}) {
+  const direct = resolveCanvasReferenceImage(node);
+  if (direct.url) {
+    return [direct];
+  }
+  if (!(node?.type === "image" || node?.data?.mediaKind === "image")) {
+    return [];
+  }
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((item) => [item.id, item]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === node.id)
+    .map((edge) => resolveCanvasReferenceImage(nodeMap.get(edge.sourceNodeId)))
+    .filter((item) => item.url);
+}
+
+function resolveCanvasReferenceImage(node) {
+  if (!node) {
+    return { id: "", name: "", url: "" };
+  }
+  if (node.type === "upload" && (node.data?.mediaKind ?? "image") !== "video") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? "参考图"),
+      url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
+    };
+  }
+  if (node.type === "image" || node.data?.mediaKind === "image") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考图"),
+      url: String(
+        node.data?.previewUrl ??
+        node.data?.url ??
+        node.data?.src ??
+        node.data?.imageUrl ??
+        node.data?.resultUrl ??
+        node.data?.assetUrl ??
+        node.data?.thumbnailUrl ??
+        "",
+      ),
+    };
+  }
+  return { id: "", name: "", url: "" };
+}
+
+function renderCanvasGenerationReferences(references = []) {
+  return `
+    <div class="canvas-generation-references" aria-label="连接的参考图片">
+      ${references.map((item) => `
+        <span class="canvas-generation-reference-thumb" title="${escapeAttr(item.name)}">
+          <img src="${escapeAttr(item.url)}" alt="" loading="lazy" />
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderLiblibTextNode(node, { selected = false, activeTextToolbar = false } = {}) {
+  const title = resolveCanvasTextNodeTitle(node);
+  const hasContent = Boolean(String(node?.data?.textHtml ?? node?.data?.text ?? "").trim());
+  const inlineText = activeTextToolbar || hasContent;
   const style = canvasNodePositionStyle(node, { width: 310, height: 300 });
   return `
     <article
-      class="canvas-lib-node canvas-text-node ${selected ? "selected" : ""}"
-      data-action="select-canvas-node"
+      class="canvas-lib-node canvas-text-node ${inlineText ? "is-text-editing" : ""} ${activeTextToolbar ? "is-toolbar-active" : ""} ${selected ? "selected" : ""}"
+      ${inlineText ? "" : 'data-action="select-canvas-node"'}
       data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-kind="${escapeAttr(node?.type ?? "script")}"
@@ -3516,19 +4266,96 @@ function renderLiblibTextNode(node, { selected = false } = {}) {
       <div class="canvas-text-card">
         <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
-        <div class="canvas-text-glyph" aria-hidden="true">
-          <i></i><i></i><i></i><i></i>
-        </div>
-        <div class="canvas-text-tries">
-          <span>尝试:</span>
-          <b>${renderCanvasIcon("text")}自己编写内容</b>
-          <b>${renderCanvasIcon("video")}文生视频</b>
-          <b>${renderCanvasIcon("image")}图片反推提示词</b>
-          <b>${renderCanvasIcon("audio")}文字生音乐</b>
-        </div>
+        ${inlineText ? renderInlineCanvasTextEditor(node, { toolbar: activeTextToolbar }) : `
+          <div class="canvas-text-glyph" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </div>
+          <div class="canvas-text-tries">
+            <span>尝试:</span>
+            <button type="button" data-action="edit-canvas-text-node" data-node-id="${escapeAttr(node?.id ?? "")}">${renderCanvasIcon("text")}自己编写内容</button>
+            <button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeAttr(node?.id ?? "")}">${renderCanvasIcon("book")}剧本</button>
+          </div>
+        `}
+        ${inlineText ? `<span class="canvas-node-resize-handle" data-canvas-node-resize-handle data-node-id="${escapeAttr(node?.id ?? "")}" aria-hidden="true"></span>` : ""}
       </div>
     </article>
   `;
+}
+
+function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}) {
+  const nodeId = node?.id ?? "";
+  const html = node?.data?.textHtml ? String(node.data.textHtml) : canvasTextToHtml(node?.data?.text ?? "");
+  const title = resolveCanvasTextNodeTitle(node);
+  const toolbarItems = [
+    ["clear-format", "clear-format"],
+    ["heading-1", "H1"],
+    ["heading-2", "H2"],
+    ["heading-3", "H3"],
+    ["paragraph", "paragraph"],
+    ["bold", "B"],
+    ["italic", "italic"],
+    ["bullet", "list"],
+    ["numbered", "ordered-list"],
+    ["divider", "divider"],
+  ];
+  return `
+    ${showToolbar ? `<div class="canvas-text-format-toolbar" aria-label="文本格式工具条">
+      ${toolbarItems.map(([command, label]) => `
+        <button type="button" data-action="format-canvas-text-node" data-node-id="${escapeAttr(nodeId)}" data-format-command="${escapeAttr(command)}" aria-label="${escapeAttr(label)}" onmousedown="event.preventDefault()">${renderCanvasToolbarLabel(label)}</button>
+      `).join("")}
+    </div>` : ""}
+    <div class="canvas-inline-editor-title" aria-hidden="true">${renderCanvasIcon("text")}<span>${escapeHtml(title)}</span></div>
+    <div
+      class="canvas-inline-richtext"
+      role="textbox"
+      contenteditable="true"
+      aria-label="节点内容"
+      data-canvas-text-input
+      data-node-id="${escapeAttr(nodeId)}"
+      data-placeholder="输入内容..."
+    >${sanitizeCanvasTextHtml(html)}</div>
+  `;
+}
+
+function resolveCanvasTextNodeTitle(node) {
+  const source = String(node?.data?.source ?? "");
+  return node?.type === "script" || source === "project_script" || source === "project_script_episode"
+    ? "剧本源"
+    : "文本源";
+}
+
+function renderCanvasToolbarLabel(label) {
+  const icons = {
+    "clear-format": '<span class="canvas-toolbar-clear-mark"></span>',
+    italic: '<span class="canvas-toolbar-italic" aria-hidden="true">I</span>',
+    paragraph: '<span class="canvas-toolbar-paragraph">¶</span>',
+    list: '<span class="canvas-toolbar-list"><i></i><i></i><i></i></span>',
+    "ordered-list": '<span class="canvas-toolbar-ordered"><i></i><i></i><i></i></span>',
+    divider: '<span class="canvas-toolbar-divider-line"></span>',
+    copy: renderCanvasIcon("copy"),
+    fullscreen: renderCanvasIcon("fullscreen"),
+  };
+  return icons[label] ?? escapeHtml(label);
+}
+
+function canvasTextToHtml(text) {
+  const value = String(text ?? "");
+  if (!value.trim()) {
+    return "";
+  }
+  return value
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function sanitizeCanvasTextHtml(html) {
+  const value = String(html ?? "");
+  return value
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, "")
+    .replace(/\sstyle\s*=\s*(['"]).*?\1/gi, "")
+    .replace(/javascript:/gi, "");
 }
 
 function firstCanvasPortId(node, direction) {
@@ -3537,6 +4364,12 @@ function firstCanvasPortId(node, direction) {
 }
 
 function canvasVisualNodeSize(node) {
+  if (Number.isFinite(Number(node?.size?.width)) && Number.isFinite(Number(node?.size?.height))) {
+    return {
+      width: Number(node.size.width),
+      height: Number(node.size.height),
+    };
+  }
   if (node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
     return { width: 310, height: 300 };
   }
@@ -3553,28 +4386,234 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
-function renderLiblibCanvasEditor(node, { modelOptionHtml = "" } = {}) {
-  if (node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
-    return renderLiblibTextEditor(node);
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+  if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
+    return "";
   }
-  return renderLiblibGenerationEditor(node, { modelOptionHtml });
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel });
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "" } = {}) {
+function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return null;
+  }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const tabs = mediaKind === "video"
-    ? ["单图参考", "首尾帧", "多图融合", "全能参考"]
-    : [];
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  return modelOptions.find((model) => model.modelCode === selectedModelCode)?.raw ?? null;
+}
+
+function renderCanvasModelOptions(generationConfig = {}, node = null) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return "";
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  if (!modelOptions.length) {
+    return `<option value="${escapeAttr(selectedModelCode)}">${escapeHtml(selectedModelCode || "后台未配置模型")}</option>`;
+  }
+  return modelOptions
+    .map((model) => `
+      <option value="${escapeAttr(model.modelCode)}" ${model.modelCode === selectedModelCode ? "selected" : ""}>${escapeHtml(model.modelLabel)}</option>
+    `)
+    .join("");
+}
+
+function renderCanvasModelParameterControls({ generationConfig = {}, node = null, parameterValues = {}, openMenu = "" } = {}) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return "";
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  const selectedModel = modelOptions.find((model) => model.modelCode === selectedModelCode)?.raw ?? null;
+  return buildCanvasParameterControls({
+    selectedModel,
+    mediaKind,
+    parameterValues,
+    openMenu,
+    nodeId: node?.id ?? "",
+  });
+}
+
+function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image", parameterValues = {}, openMenu = "", nodeId = "" } = {}) {
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
+    ? selectedModel.parameterSchema
+    : {};
+  const entries = Object.entries(schema)
+    .filter(([key, parameter]) => shouldRenderCanvasParameterControl(key, parameter));
+  if (entries.length) {
+    return entries
+      .map(([key, parameter]) => {
+        const options = canvasOptionPairsFromParameter(parameter);
+        if (!options.length) {
+          return "";
+        }
+        const value = resolveCanvasParameterValue(key, {
+          parameter,
+          options,
+          selectedModel,
+          parameterValues,
+          mediaKind,
+        });
+        return renderCanvasParameterMenu(
+          key,
+          canvasParameterLabel(value, options),
+          openMenu,
+          options,
+          parameter?.label ?? key,
+          nodeId,
+        );
+      })
+      .filter(Boolean)
+      .join("");
+  }
+  const isVideo = mediaKind === "video";
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const ratioOptions = canvasOptionPairsFromValues(selectedModel?.supportedRatios, isVideo ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"]);
+  const qualityOptions = canvasOptionPairsFromValues(selectedModel?.supportedQuality, isVideo ? ["1080p"] : ["2K"]);
+  const durationOptions = canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
+  const ratio = firstCanvasParameterValue(parameterValues.aspectRatio, parameterValues.imageAspectRatio, defaults.aspectRatio, ratioOptions[0]?.[0]);
+  const quality = firstCanvasParameterValue(
+    isVideo ? parameterValues.resolution : parameterValues.quality,
+    isVideo ? parameterValues.videoResolution : parameterValues.imageResolution,
+    defaults.resolution,
+    defaults.quality,
+    qualityOptions[0]?.[0],
+  );
+  const duration = firstCanvasParameterValue(parameterValues.durationSec, parameterValues.videoDurationSec, defaults.durationSec, durationOptions[0]?.[0]);
+  return [
+    renderCanvasParameterMenu("aspectRatio", ratio, openMenu, ratioOptions, "比例", nodeId),
+    renderCanvasParameterMenu(isVideo ? "resolution" : "quality", quality, openMenu, qualityOptions, isVideo ? "清晰度" : "画质", nodeId),
+    isVideo ? renderCanvasParameterMenu("durationSec", `${duration}秒`, openMenu, durationOptions, "时长", nodeId) : "",
+  ].filter(Boolean).join("");
+}
+
+function shouldRenderCanvasParameterControl(key, parameter) {
+  if (parameter?.visible === false) {
+    return false;
+  }
+  if (["prompt", "negativePrompt", "referenceImages", "editInstruction"].includes(key)) {
+    return false;
+  }
+  return canvasOptionPairsFromParameter(parameter).length > 0;
+}
+
+function canvasOptionPairsFromParameter(parameter) {
+  const rawOptions = Array.isArray(parameter?.options)
+    ? parameter.options
+    : Array.isArray(parameter?.enum)
+      ? parameter.enum
+      : [];
+  return rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const value = String(item.value ?? item.providerValue ?? item.label ?? "").trim();
+        const label = String(item.label ?? item.name ?? value).trim();
+        return value ? [value, label || value] : null;
+      }
+      const value = String(item ?? "").trim();
+      return value ? [value, value] : null;
+    })
+    .filter(Boolean);
+}
+
+function canvasOptionPairsFromValues(values, fallback = [], labeler = (value) => value) {
+  const source = Array.isArray(values) && values.length ? values : fallback;
+  return source
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .map((value) => [value, String(labeler(value))]);
+}
+
+function resolveCanvasParameterValue(key, { parameter, options, selectedModel, parameterValues, mediaKind }) {
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const candidates = [
+    parameterValues?.[key],
+    key === "aspectRatio" ? parameterValues?.imageAspectRatio : undefined,
+    key === "quality" && mediaKind !== "video" ? parameterValues?.imageResolution : undefined,
+    key === "resolution" ? (mediaKind === "video" ? parameterValues?.videoResolution : parameterValues?.imageResolution) : undefined,
+    key === "durationSec" ? parameterValues?.videoDurationSec : undefined,
+    defaults[key],
+    options[0]?.[0],
+  ];
+  const optionValues = new Set(options.map(([value]) => String(value)));
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "" && optionValues.has(String(candidate))) {
+      return String(candidate);
+    }
+  }
+  return String(options[0]?.[0] ?? "");
+}
+
+function firstCanvasParameterValue(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "") {
+      return String(candidate);
+    }
+  }
+  return "";
+}
+
+function canvasParameterLabel(value, options) {
+  return options.find(([optionValue]) => String(optionValue) === String(value))?.[1] ?? String(value ?? "");
+}
+
+function resolveCanvasNodeParameterValues(node = null, ui = {}) {
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  return {
+    ...(ui.generationParameterValues ?? {}),
+    ...(data.parameterValues && typeof data.parameterValues === "object" ? data.parameterValues : {}),
+    ...data,
+  };
+}
+
+function renderCanvasParameterMenu(field, label, openMenu, options, title = "", nodeId = "") {
+  if (!options.length) {
+    return "";
+  }
+  const open = openMenu === `canvas:${field}`;
+  return `
+    <span class="canvas-parameter-wrap">
+      <button type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
+      ${open ? `<span class="canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
+    </span>
+  `;
+}
+
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
   const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
-  const cost = mediaKind === "video" ? "4500" : "90";
+  const cost = resolveCanvasModelCredits(selectedModel, mediaKind);
+  const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
+  const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
+    ? resolveCanvasUploadReferences(canvasDocument, node?.id)
+    : [];
   return `
     <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
-      ${tabs.length ? `
-        <div class="canvas-editor-tabs">
-          ${tabs.map((tab, index) => `<button class="${index === 0 ? "active" : ""}" type="button">${escapeHtml(tab)}</button>`).join("")}
-        </div>
-      ` : ""}
-      <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
+      ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
+      <div class="canvas-editor-reference-row">
+        <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
+        ${renderCanvasConnectedTextReference(connectedTextFragments)}
+        ${renderCanvasGenerationReferences(connectedUploadReferences)}
+      </div>
       <textarea
         aria-label="提示词"
         data-canvas-prompt-input
@@ -3585,13 +4624,177 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "" } = {}) {
         <select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">
           ${modelOptionHtml}
         </select>
-        <button type="button">16:9⌄</button>
-        <button type="button">${mediaKind === "video" ? "720p" : "2K"}⌄</button>
-        <button type="button">${mediaKind === "video" ? "15秒" : "画风·无预设"}⌄</button>
+        ${parameterControlHtml}
         <button class="canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">✦ ${cost} 生成</button>
       </footer>
     </aside>
   `;
+}
+
+function resolveCanvasModelCredits(model, mediaKind = "image") {
+  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
+    ? model.pricing
+    : {};
+  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
+    ? model.pricingJson
+    : {};
+  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
+    ? model.pricing_json
+    : {};
+  const candidates = [
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    pricingJson.baseCredits,
+    pricingJson.credits,
+    pricingJson.cost,
+    pricingJson.price,
+    pricingSnakeJson.baseCredits,
+    pricingSnakeJson.credits,
+    pricingSnakeJson.cost,
+    pricingSnakeJson.price,
+    model?.displayBaseCost,
+    model?.baseCredits,
+    model?.credits,
+    model?.creditCost,
+    model?.cost,
+    model?.price,
+    model?.priceCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return String(Math.round(value));
+    }
+  }
+  return mediaKind === "video" ? "4500" : "90";
+}
+
+function renderCanvasVideoModeTabs(activeMode, nodeId) {
+  return `
+    <div class="canvas-editor-tabs video-mode-tabs" role="tablist" aria-label="视频生成模式">
+      ${CANVAS_VIDEO_GENERATION_MODES.map((mode) => `
+        <button class="${mode.id === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${mode.id === activeMode ? "true" : "false"}" data-action="set-canvas-video-generation-mode" data-node-id="${escapeAttr(nodeId)}" data-mode="${escapeAttr(mode.id)}">${escapeHtml(mode.label)}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function resolveCanvasVideoGenerationMode(node) {
+  const mode = String(node?.data?.videoGenerationMode ?? node?.data?.videoMode ?? "").trim();
+  return CANVAS_VIDEO_GENERATION_MODES.some((item) => item.id === mode) ? mode : "first-frame";
+}
+
+function canvasModelMatchesVideoMode(model, mode) {
+  const category = String(model?.videoCategory ?? model?.video_category ?? "").trim();
+  if (category) {
+    return canvasVideoCategoryMatchesMode(category, mode);
+  }
+  const supportedModes = Array.isArray(model?.supportedModes)
+    ? model.supportedModes.map((item) => normalizeCanvasModeToken(item)).filter(Boolean)
+    : [];
+  if (!supportedModes.length) {
+    return true;
+  }
+  const aliases = canvasVideoModeAliases(mode);
+  return supportedModes.some((item) => aliases.has(item));
+}
+
+function canvasVideoCategoryMatchesMode(videoCategory, mode) {
+  const category = normalizeCanvasModeToken(videoCategory);
+  const normalizedMode = normalizeCanvasModeToken(mode);
+  if (normalizedMode === "reference_video") return category === "reference";
+  if (normalizedMode === "first_frame" || normalizedMode === "image_to_video") return category === "first_frame";
+  if (normalizedMode === "first_last_frame") return category === "first_last_frame";
+  return false;
+}
+
+function canvasVideoModeAliases(mode) {
+  const normalized = normalizeCanvasModeToken(mode);
+  const aliases = new Set([normalized]);
+  if (normalized === "first_frame") {
+    aliases.add("image_to_video");
+    aliases.add("video_first_frame");
+    aliases.add("video_image_to_video");
+  } else if (normalized === "first_last_frame") {
+    aliases.add("video_first_last_frame");
+  } else if (normalized === "reference_video") {
+    aliases.add("reference");
+    aliases.add("video_reference");
+    aliases.add("reference_image_to_video");
+    aliases.add("video_reference_image_to_video");
+  }
+  return aliases;
+}
+
+function normalizeCanvasModeToken(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[.\-]/g, "_");
+}
+
+function resolveConnectedCanvasTextFragments(document = {}, nodeId = "") {
+  const normalizedNodeId = String(nodeId ?? "");
+  if (!normalizedNodeId) {
+    return [];
+  }
+  const nodes = Array.isArray(document.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const edges = Array.isArray(document.edges) ? document.edges : [];
+  return edges
+    .filter((edge) => edge.targetNodeId === normalizedNodeId)
+    .map((edge) => nodeMap.get(edge.sourceNodeId))
+    .filter((node) => node && (node.type === "script" || node.type === "director" || node.data?.mediaKind === "text"))
+    .map((node) => {
+      const text = normalizeCanvasFragmentText(node.data?.text || stripCanvasHtml(node.data?.textHtml));
+      return {
+        id: String(node.id ?? ""),
+        title: String(node.data?.title ?? "文本片段"),
+        text,
+      };
+    })
+    .filter((item) => item.text);
+}
+
+function renderCanvasConnectedTextReference(fragments = []) {
+  if (!fragments.length) {
+    return "";
+  }
+  const preview = fragments
+    .map((fragment, index) => {
+      const title = fragments.length > 1 ? `${index + 1}. ${fragment.title}` : fragment.title;
+      return `${title}\n${fragment.text}`;
+    })
+    .join("\n\n");
+  return `
+    <span class="canvas-connected-text-reference">
+      <button class="canvas-connected-text-trigger" type="button" aria-label="查看连接剧本片段">
+        ${renderCanvasIcon("text")}
+        <i>${escapeHtml(String(fragments.length))}</i>
+      </button>
+      <span class="canvas-connected-text-popover" role="tooltip">${escapeHtml(preview)}</span>
+    </span>
+  `;
+}
+
+function normalizeCanvasFragmentText(text) {
+  return String(text ?? "")
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 420);
+}
+
+function stripCanvasHtml(html) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h1|h2|h3|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function renderLiblibTextEditor(node) {
@@ -3614,32 +4817,178 @@ function renderLiblibTextEditor(node) {
   `;
 }
 
-function renderCanvasContextMenu(menu = {}) {
-  const left = Math.max(8, Math.min(720, Number(menu.x ?? 120)));
-  const top = Math.max(8, Math.min(520, Number(menu.y ?? 120)));
-  const items = [
-    { label: "文本", icon: "text", templateId: "template-script", kind: "script" },
-    { label: "图片", icon: "image", templateId: "template-send-image", kind: "send" },
-    { label: "视频", icon: "video", templateId: "template-video-result", kind: "video" },
-    { label: "上传", icon: "upload", templateId: "template-upload", kind: "upload" },
-  ];
+function renderCanvasContextMenu(menu = {}, options = {}) {
+  const isNodeMenu = menu.mode === "node" && menu.nodeId;
+  const menuWidth = 244;
+  const menuHeight = isNodeMenu ? 296 : 236;
+  const stageWidth = Number(menu.stageWidth ?? 0);
+  const stageHeight = Number(menu.stageHeight ?? 0);
+  const maxLeft = stageWidth > menuWidth ? stageWidth - menuWidth - 8 : Number.POSITIVE_INFINITY;
+  const maxTop = stageHeight > menuHeight ? stageHeight - menuHeight - 8 : Number.POSITIVE_INFINITY;
+  const left = Math.max(8, Math.min(maxLeft, Number(menu.x ?? 120)));
+  const top = Math.max(8, Math.min(maxTop, Number(menu.y ?? 120)));
+  const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig);
   return `
-    <aside class="canvas-context-menu" data-canvas-context-menu role="menu" aria-label="添加节点菜单" style="left:${left}px;top:${top}px">
+    <aside class="canvas-context-menu${isNodeMenu ? " canvas-node-context-menu" : ""}" data-canvas-context-menu role="menu" aria-label="${isNodeMenu ? "节点操作菜单" : "添加节点菜单"}" style="left:${left}px;top:${top}px">
+      ${isNodeMenu ? `
+        <button type="button" role="menuitem" class="danger" data-action="delete-canvas-node" data-node-id="${escapeAttr(menu.nodeId)}">
+          <span aria-hidden="true">${renderCanvasIcon("trash")}</span>
+          删除
+        </button>
+      ` : ""}
       ${items.map((item) => `
-        <button type="button" role="menuitem" data-action="add-canvas-template" data-template-id="${escapeAttr(item.templateId)}" data-node-kind="${escapeAttr(item.kind)}">
-          <span aria-hidden="true">${renderCanvasIcon(item.icon)}</span>
-          ${escapeHtml(item.label)}
+        <button type="button" role="menuitem" data-action="add-canvas-template" data-template-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.type)}">
+          <span aria-hidden="true">${renderCanvasIcon(item.type)}</span>
+          ${escapeHtml(item.title)}
         </button>
       `).join("")}
     </aside>
   `;
 }
 
+function resolveCanvasScriptPicker(ui = {}, state = {}) {
+  const picker = ui.canvasScriptPicker && typeof ui.canvasScriptPicker === "object"
+    ? ui.canvasScriptPicker
+    : null;
+  if (!picker?.nodeId) {
+    return null;
+  }
+  const scripts = resolveCanvasProjectScripts(state, ui);
+  const selectedScript =
+    scripts.find((script) => script.id === picker.scriptId) ??
+    (picker.scriptId ? null : null);
+  return {
+    nodeId: String(picker.nodeId),
+    x: Number(picker.x ?? 140),
+    y: Number(picker.y ?? 120),
+    scriptId: picker.scriptId ?? "",
+    scripts,
+    selectedScript,
+  };
+}
+
+function resolveCanvasProjectScripts(state = {}, ui = {}) {
+  const records = [];
+  const sectionCache = ui?.canvasScriptSectionsByScriptId && typeof ui.canvasScriptSectionsByScriptId === "object"
+    ? ui.canvasScriptSectionsByScriptId
+    : {};
+  const pushScript = (script = {}, episodes = []) => {
+    const id = String(script.id ?? script.scriptId ?? "");
+    if (!id || records.some((record) => record.id === id)) {
+      return;
+    }
+    const projectId = String(script.projectId ?? script.project?.id ?? script.project_id ?? state?.projectDetail?.project?.id ?? state?.project?.id ?? "");
+    const sections = Array.isArray(sectionCache[id])
+      ? resolveCanvasScriptEpisodes(sectionCache[id], script)
+      : [];
+    records.push({
+      id,
+      projectId,
+      title: String(script.title ?? script.name ?? state?.project?.name ?? state?.projectDetail?.project?.name ?? "项目剧本"),
+      type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
+      updatedAt: String(script.updatedAt ?? script.createdAt ?? ""),
+      text: String(script.inputText ?? script.text ?? script.content ?? ""),
+      sections,
+      episodes: resolveCanvasScriptEpisodes(episodes, script),
+    });
+  };
+  if (state?.projectDetail?.script) {
+    pushScript(state.projectDetail.script, state.projectDetail.episodes);
+  }
+  if (state?.script) {
+    pushScript(state.script, state?.projectDetail?.episodes ?? []);
+  }
+  const scriptRecords = [
+    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
+    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
+    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
+    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
+  ];
+  scriptRecords.forEach((record) => {
+    const script = record.script ?? record;
+    pushScript(script, record.episodes ?? script.episodes ?? []);
+  });
+  return records;
+}
+
+function resolveCanvasScriptEpisodes(episodes = [], script = {}) {
+  const normalized = Array.isArray(episodes) ? episodes : [];
+  if (normalized.length) {
+    return normalized.map((episode, index) => ({
+      id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
+      title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
+      text: String(
+        episode.scriptText ??
+        episode.inputText ??
+        episode.text ??
+        episode.summary ??
+        script.inputText ??
+        script.text ??
+        "",
+      ),
+      storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
+    }));
+  }
+  return [{
+    id: "episode-primary",
+    title: "剧一",
+    text: String(script.inputText ?? script.text ?? script.content ?? ""),
+    storyboardCount: 0,
+  }];
+}
+
+function renderCanvasScriptPicker(picker = {}) {
+  const scriptSelected = Boolean(picker.selectedScript);
+  const title = scriptSelected ? "选择目录" : "选择剧本";
+  const selectedItems = picker.selectedScript?.sections?.length
+    ? picker.selectedScript.sections
+    : picker.selectedScript?.episodes ?? [];
+  const items = scriptSelected ? selectedItems : picker.scripts;
+  return `
+    <aside class="canvas-script-picker" data-canvas-script-picker style="left:${Math.max(8, Math.round(picker.x))}px;top:${Math.max(8, Math.round(picker.y))}px" aria-label="${escapeAttr(title)}">
+      <header>
+        ${scriptSelected ? `<button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeAttr(picker.nodeId)}" aria-label="返回剧本列表">${renderCanvasIcon("collapse")}</button>` : ""}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <div class="canvas-script-picker-list">
+        ${items.length ? items.map((item) => scriptSelected
+          ? renderCanvasEpisodePickerItem(item, picker)
+          : renderCanvasScriptPickerItem(item, picker)).join("") : `<p>暂无可用${scriptSelected ? "剧集" : "剧本"}</p>`}
+      </div>
+    </aside>
+  `;
+}
+
+function renderCanvasScriptPickerItem(script, picker) {
+  return `
+    <button type="button" data-action="select-canvas-script-source" data-node-id="${escapeAttr(picker.nodeId)}" data-script-id="${escapeAttr(script.id)}">
+      ${renderCanvasIcon("book")}
+      <span>
+        <strong>${escapeHtml(script.title)}</strong>
+      </span>
+    </button>
+  `;
+}
+
+function renderCanvasEpisodePickerItem(episode, picker) {
+  return `
+    <button type="button" data-action="apply-canvas-script-episode" data-node-id="${escapeAttr(picker.nodeId)}" data-script-id="${escapeAttr(picker.scriptId)}" data-episode-id="${escapeAttr(episode.id)}">
+      ${renderCanvasIcon("story")}
+      <span>
+        <strong>${escapeHtml(episode.title)}</strong>
+        <small>${episode.storyboardCount ? `${escapeHtml(String(episode.storyboardCount))} 分镜` : "剧集文本"}</small>
+      </span>
+    </button>
+  `;
+}
+
 function canvasNodePositionStyle(node, fallbackSize = {}) {
   const x = Number(node?.position?.x ?? 360);
   const y = Number(node?.position?.y ?? 100);
-  const width = Number(fallbackSize.width ?? node?.size?.width ?? 360);
-  const height = Number(fallbackSize.height ?? node?.size?.height ?? 260);
+  const width = Number(node?.size?.width ?? fallbackSize.width ?? 360);
+  const height = Number(node?.size?.height ?? fallbackSize.height ?? 260);
   return `left:${x}px;top:${y}px;--node-width:${width}px;--node-height:${height}px`;
 }
 
@@ -3652,6 +5001,21 @@ function canvasEditorPositionStyle(node, options = {}) {
   const left = Math.max(8, Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2)));
   const top = Math.round(nodeY + nodeHeight + 2);
   return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px`;
+}
+
+function canvasViewportStyle(viewport = {}) {
+  const x = Number(viewport.x ?? 0);
+  const y = Number(viewport.y ?? 0);
+  const zoom = Number(viewport.zoom ?? 1);
+  return `--canvas-pan-x:${x}px;--canvas-pan-y:${y}px;--canvas-zoom:${zoom}`;
+}
+
+function canvasGridStyle(viewport = {}) {
+  const x = Number(viewport.x ?? 0);
+  const y = Number(viewport.y ?? 0);
+  const zoom = Number(viewport.zoom ?? 1);
+  const gridSize = Math.max(6, Math.round(18 * zoom * 100) / 100);
+  return `--canvas-grid-size:${gridSize}px;--canvas-grid-x:${x}px;--canvas-grid-y:${y}px`;
 }
 
 function renderCanvasInspectorMetrics({ inputCount = 0, outputCount = 0, selectedNode = null } = {}) {
@@ -3719,7 +5083,9 @@ function renderCanvasIcon(icon) {
     book: '<path d="M5 5.5h6.2a2.8 2.8 0 0 1 2.8 2.8v10.2H7.8A2.8 2.8 0 0 1 5 15.7V5.5Z" /><path d="M14 8.3h5v10.2h-5" />',
     clock: '<circle cx="12" cy="12" r="8" /><path d="M12 7.8v4.6l3 1.8" />',
     collapse: '<path d="M14 6 8 12l6 6" /><path d="M20 6 14 12l6 6" />',
+    copy: '<rect x="8" y="8" width="10" height="10" rx="1.6" /><path d="M6 15.5H5.8A1.8 1.8 0 0 1 4 13.7V5.8A1.8 1.8 0 0 1 5.8 4h7.9A1.8 1.8 0 0 1 15.5 5.8V6" />',
     cursor: '<path d="M7 4.5 18.5 12 13 13.2l-2.4 5.1L7 4.5Z" />',
+    fullscreen: '<path d="M8.5 4H4v4.5" /><path d="M4 4l5.2 5.2" /><path d="M15.5 4H20v4.5" /><path d="m20 4-5.2 5.2" /><path d="M8.5 20H4v-4.5" /><path d="m4 20 5.2-5.2" /><path d="M15.5 20H20v-4.5" /><path d="m20 20-5.2-5.2" />',
     grid: '<path d="M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z" />',
     help: '<circle cx="12" cy="12" r="8" /><path d="M9.8 9.4a2.4 2.4 0 1 1 3.8 2c-.9.6-1.5 1.1-1.5 2.1" /><path d="M12 16.7h.01" />',
     image: '<rect x="4.5" y="5" width="15" height="14" rx="2" /><path d="m7.5 16 3.4-4 2.5 2.8 1.7-2 2.9 3.2" /><circle cx="15.5" cy="9" r="1.2" />',
@@ -3749,6 +5115,35 @@ function renderCanvasIcon(icon) {
   `;
 }
 
+function renderStatusbarActionIcon(icon) {
+  const icons = {
+    handbook: `
+      <path d="M7.5 6.75A2.25 2.25 0 0 1 9.75 4.5H18v12H9.75A2.25 2.25 0 0 0 7.5 18.75M7.5 6.75A2.25 2.25 0 0 0 5.25 4.5H4.5v12h.75A2.25 2.25 0 0 1 7.5 18.75M12 8.25h3.75M12 11.25h3.75" />
+    `,
+    sparkle: `
+      <path d="M9 6.75 9.848 8.902 12 9.75 9.848 10.598 9 12.75 8.152 10.598 6 9.75 8.152 8.902ZM16.5 5.25l.424 1.076L18 6.75l-1.076.424L16.5 8.25l-.424-1.076L15 6.75l1.076-.424ZM15.75 12.75l.636 1.614L18 15l-1.614.636L15.75 17.25l-.636-1.614L13.5 15l1.614-.636Z" />
+    `,
+    cart: `
+      <path d="M2.25 3h1.386a.75.75 0 0 1 .73.582L4.71 5.25H19.5a.75.75 0 0 1 .728.93l-1.5 6A.75.75 0 0 1 18 12.75H6.06a.75.75 0 0 1-.728-.57L3.39 4.5H2.25M7.5 16.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm9 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+    `,
+    bell: `
+      <path d="M14.857 17.082a23.848 23.848 0 0 0 4.182 1.022.75.75 0 0 1 .21 1.415 24.878 24.878 0 0 1-14.498 0 .75.75 0 0 1 .21-1.415 23.848 23.848 0 0 0 4.182-1.022M15 8.25a3 3 0 1 0-6 0c0 1.102-.412 2.105-1.091 2.867-.549.617-.879 1.398-.879 2.258v.375h9.94v-.375c0-.86-.33-1.64-.88-2.258A4.233 4.233 0 0 1 15 8.25Z" />
+    `,
+    support: `
+      <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
+    `,
+    user: `
+      <path d="M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM4.5 19.5a7.5 7.5 0 0 1 15 0H4.5Z" />
+    `,
+  };
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      ${icons[icon] ?? icons.user}
+    </svg>
+  `;
+}
+
 function renderGlobalStatusbar(session, options = {}) {
   const { hideBrand = false, creditBalance = 0 } = options;
   return `
@@ -3762,13 +5157,25 @@ function renderGlobalStatusbar(session, options = {}) {
         </div>
       </div>
       <div class="statusbar-actions">
-        <span class="statusbar-seedance">限时特惠 免费排队 <b>SEEDANCE 2.0</b></span>
-        <button class="statusbar-pill" type="button">创作手册</button>
-        <button class="statusbar-pill" type="button">商务合作</button>
-        <button class="statusbar-credit" type="button" aria-label="积分余额"><span>✦</span> ${escapeHtml(String(creditBalance))} <span aria-hidden="true">⌄</span></button>
-        <button class="statusbar-icon" type="button" aria-label="消息通知">✉</button>
+        <button class="statusbar-quick-action text-action" type="button" aria-label="创作手册">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
+          <span>创作手册</span>
+        </button>
+        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作">
+          <span>商务合作</span>
+        </button>
+        <button class="statusbar-quick-action credit-action" type="button" aria-label="积分余额" data-action="open-credit-ledger">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("sparkle")}</span>
+          <b>${escapeHtml(String(creditBalance))}</b>
+          <span class="statusbar-action-icon trailing">${renderStatusbarActionIcon("cart")}</span>
+        </button>
+        <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
+        </button>
         <div class="statusbar-popover-wrap">
-          <button class="statusbar-icon" type="button" aria-haspopup="menu" aria-label="客服支持">◎</button>
+          <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
+            <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
+          </button>
           <div class="statusbar-popover support-popover" role="menu">
             <button class="popover-menu-item featured" type="button" role="menuitem">
               <strong>客服热线：4000-300624</strong>
@@ -3778,7 +5185,9 @@ function renderGlobalStatusbar(session, options = {}) {
           </div>
         </div>
         <div class="statusbar-popover-wrap">
-          <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">${escapeHtml(session.user.phone.slice(-2) || "我")}</button>
+          <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
+            <span class="statusbar-action-icon user-avatar-icon">${renderStatusbarActionIcon("user")}</span>
+          </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
               <strong>创作者 ${escapeHtml(session.user.phone.slice(-8) || "442027442")}</strong>
@@ -3787,7 +5196,7 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem">我的订阅</button>
             <button class="popover-menu-item" type="button" role="menuitem">订单开票</button>
             <button class="popover-menu-item" type="button" role="menuitem">合伙人中心</button>
-            <button class="popover-menu-item" type="button" role="menuitem">账号设置</button>
+            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
             <button class="popover-menu-item" type="button" role="menuitem">问题反馈</button>
@@ -4136,6 +5545,65 @@ function renderProjectDeleteModal({ show, projectName }) {
         <div class="delete-project-actions">
           <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-project-modal">取消</button>
           <button class="delete-confirm-button" type="button" data-action="confirm-delete-project-card">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasProjectRenameModal({ show, value, notice }) {
+  if (!show) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名画布">
+      <div class="rename-project-modal canvas-project-rename-modal">
+        <div class="rename-project-head">
+          <h2>重命名</h2>
+          <button class="modal-close" type="button" data-action="close-rename-canvas-project-modal" aria-label="关闭">×</button>
+        </div>
+        <label class="rename-project-field">
+          <input
+            id="canvas-project-rename-name-input"
+            type="text"
+            maxlength="50"
+            value="${escapeHtml(value)}"
+            placeholder="请输入画布名称"
+          />
+          <span class="rename-project-count canvas-project-rename-count">${[...value].length}/50</span>
+        </label>
+        <div class="rename-project-actions">
+          <p class="modal-inline-status">${escapeHtml(notice)}</p>
+          <div class="rename-project-button-row">
+            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-canvas-project-modal">取消</button>
+            <button class="primary-action rename-save-button" type="button" data-action="confirm-rename-canvas-project">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasProjectDeleteModal({ show, projectName }) {
+  if (!show) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除画布">
+      <div class="delete-project-modal canvas-project-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-canvas-project-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-canvas-project-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-delete-canvas-project">确定</button>
         </div>
       </div>
     </section>

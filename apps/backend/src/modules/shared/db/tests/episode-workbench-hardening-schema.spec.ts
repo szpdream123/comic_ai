@@ -15,7 +15,7 @@ describe("episode workbench hardening migration", () => {
     assert.match(sql, /ADD COLUMN IF NOT EXISTS plot_preview text NOT NULL DEFAULT ''/);
     assert.match(sql, /ADD COLUMN IF NOT EXISTS prompt_draft text NOT NULL DEFAULT ''/);
     assert.match(sql, /CREATE TABLE IF NOT EXISTS episode_generation_drafts/);
-    assert.match(sql, /UNIQUE \(organization_id, episode_id, target_type, target_id\)/);
+    assert.match(sql, /UNIQUE \(organization_id, episode_id, target_type, target_id, mode\)/);
     assert.match(sql, /ALTER TABLE export_records\s+ADD COLUMN IF NOT EXISTS episode_id uuid NULL;/);
     assert.match(sql, /CREATE INDEX IF NOT EXISTS shots_episode_sort_idx/);
   });

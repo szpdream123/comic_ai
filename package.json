@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
+    "dev": "node scripts/run-creator-dev-stack.mjs",
+    "dev:creator": "node scripts/run-creator-dev-stack.mjs",
     "dev:phone-auth": "node --import tsx scripts/run-phone-auth-dev-server.mjs",
     "admin:bootstrap": "node --import tsx scripts/bootstrap-admin-account.mjs",
     "admin:qa": "node scripts/admin-browser-qa.mjs",
@@ -28,7 +30,6 @@
     "three": "^0.184.0"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.4.5",
     "pg": "^8.21.0",
     "tsx": "^4.22.1"
   }

@@ -6,7 +6,7 @@
 
 **Architecture:** Add one creator-application service method that accepts the current preview `commitPayload`, resolves actor/project context, creates the episode, persists assets and shots, and stores `episode_generation_drafts` for each storyboard. Expose it through the phone-auth HTTP server and add a frontend API/action that commits the current preview then opens the new episode workbench.
 
-**Tech Stack:** Node.js, TypeScript backend with SQL helpers, PGLite tests via `node --import tsx --test`, vanilla JS frontend.
+**Tech Stack:** Node.js, TypeScript backend with SQL helpers, PostgreSQL-backed tests via `node --import tsx --test`, vanilla JS frontend.
 
 ---
 

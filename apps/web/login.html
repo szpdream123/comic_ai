@@ -57,46 +57,141 @@
           </div>
         </div>
 
-        <section class="auth-panel">
-          <div class="panel-head">
-            <p class="panel-kicker">身份验证</p>
-            <h2>手机号登录</h2>
-            <p class="panel-copy">
-              使用中国大陆手机号获取验证码，进入当前开发环境。
-            </p>
+        <section class="auth-panel" data-auth-mode="phone">
+          <div class="auth-mode-tabs" role="tablist" aria-label="登录方式">
+            <button
+              id="phone-login-tab"
+              class="auth-mode-tab"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="phone-login-panel"
+              data-auth-target="phone"
+            >
+              验证码登录
+            </button>
+            <button
+              id="password-login-tab"
+              class="auth-mode-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="password-login-panel"
+              data-auth-target="password"
+            >
+              密码登录
+            </button>
           </div>
 
-          <form id="login-form" class="login-form">
-            <label class="field">
-              <span>手机号</span>
-              <input
-                id="phone-input"
-                name="phone"
-                inputmode="numeric"
-                maxlength="11"
-                placeholder="13800138000"
-                autocomplete="tel"
-              />
-            </label>
+          <div id="phone-login-panel" class="auth-mode-panel" role="tabpanel" aria-labelledby="phone-login-tab">
+            <form id="login-form" class="login-form">
+              <label class="field">
+                <span class="sr-only">手机号</span>
+                <input
+                  id="phone-input"
+                  name="phone"
+                  inputmode="numeric"
+                  maxlength="11"
+                  placeholder="请输入手机号码"
+                  autocomplete="tel"
+                />
+              </label>
 
-            <button id="request-code-button" class="secondary-action" type="button">
-              获取验证码
-            </button>
+              <label class="field field-inline">
+                <span class="sr-only">验证码</span>
+                <span class="field-control">
+                  <input
+                    id="code-input"
+                    name="code"
+                    inputmode="numeric"
+                    maxlength="6"
+                    placeholder="请输入验证码"
+                    autocomplete="one-time-code"
+                  />
+                  <button id="request-code-button" class="secondary-action inline-action" type="button">
+                    发送验证码
+                  </button>
+                </span>
+              </label>
 
-            <label class="field">
-              <span>验证码</span>
-              <input
-                id="code-input"
-                name="code"
-                inputmode="numeric"
-                maxlength="6"
-                placeholder="请输入6位验证码"
-                autocomplete="one-time-code"
-              />
-            </label>
+              <label class="field">
+                <span class="sr-only">邀请码</span>
+                <input
+                  id="invite-code-input"
+                  name="inviteCode"
+                  type="text"
+                  placeholder="请输入邀请码（选填）"
+                  autocomplete="off"
+                />
+              </label>
 
-            <button id="verify-button" class="primary-action" type="submit">进入工作台</button>
-          </form>
+              <div class="form-options">
+                <label class="remember-option">
+                  <input id="phone-remember-input" type="checkbox" name="remember" checked />
+                  <span>保持登录</span>
+                </label>
+              </div>
+
+              <button id="verify-button" class="primary-action" type="submit">立即登录</button>
+            </form>
+          </div>
+
+          <div
+            id="password-login-panel"
+            class="auth-mode-panel"
+            role="tabpanel"
+            aria-labelledby="password-login-tab"
+            hidden
+          >
+            <form id="password-login-form" class="login-form password-form">
+              <label class="field">
+                <span class="sr-only">账号</span>
+                <input
+                  id="account-input"
+                  name="account"
+                  type="text"
+                  placeholder="请输入手机号/邮箱"
+                  autocomplete="username"
+                />
+              </label>
+
+              <label class="field">
+                <span class="sr-only">密码</span>
+                <span class="password-input-shell">
+                  <input
+                    id="password-input"
+                    name="password"
+                    type="password"
+                    placeholder="请输入密码"
+                    autocomplete="current-password"
+                  />
+                  <button
+                    id="password-visibility-toggle"
+                    class="password-visibility-toggle"
+                    type="button"
+                    aria-label="显示密码"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M2.8 12s3.2-5.2 9.2-5.2S21.2 12 21.2 12s-3.2 5.2-9.2 5.2S2.8 12 2.8 12z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                      <circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.7"/>
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <div class="password-options">
+                <label class="remember-option">
+                  <input id="password-remember-input" type="checkbox" name="remember" checked />
+                  <span>保持登录</span>
+                </label>
+                <button type="button" class="text-action">忘记密码？</button>
+              </div>
+
+              <button id="password-login-button" class="primary-action" type="submit">
+                立即登录
+              </button>
+            </form>
+          </div>
 
           <div class="social-login">
             <div class="social-divider">
@@ -105,24 +200,47 @@
               <span class="social-divider-line"></span>
             </div>
             <div class="social-icons" role="group" aria-label="第三方登录方式">
-              <button type="button" class="social-btn wechat" aria-label="微信登录">
+              <button type="button" class="social-btn wechat" aria-label="微信登录" data-provider-label="微信">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                   <path d="M9.5 4C5.91 4 3 6.462 3 9.5c0 1.68.89 3.173 2.27 4.153-.1.56-.42 1.44-.66 2.107 1.1-.153 2.293-.7 2.94-1.147.63.173 1.3.267 2 .267 3.59 0 6.5-2.462 6.5-5.5S13.09 4 9.5 4zM7 8.75a.75.75 0 110-1.5.75.75 0 010 1.5zm5 0a.75.75 0 110-1.5.75.75 0 010 1.5z" fill="currentColor"/>
                   <path d="M14.76 9.027c-.013.16-.02.32-.02.487 0 3.62 3.18 6.56 7.1 6.56.54 0 1.06-.06 1.56-.167.507.353 1.407.78 2.253.893-.187-.507-.427-1.18-.507-1.62 1.093-.773 1.793-1.927 1.793-3.22 0-2.353-2.24-4.26-5-4.26-2.76 0-5 1.907-5 4.26 0 .14.007.28.02.42l-.2-.353zM17.5 13.5a.625.625 0 110-1.25.625.625 0 010 1.25zm3.75 0a.625.625 0 110-1.25.625.625 0 010 1.25z" fill="currentColor" opacity=".85"/>
                 </svg>
               </button>
-              <button type="button" class="social-btn alipay" aria-label="支付宝登录">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M5 4h14v16H5V4zm2 2v3h4.5c-.3-.9-.9-2.1-1.5-3H7zm6 0c.6.9 1.2 2.1 1.5 3H17V6h-4zM7 10v1h10v-1H7zm0 2v1h3.5c.5-1.2 1-2.5 1.3-3.8-.4.5-.8 1.2-1.1 1.8H7zm4.5 0c.2-.5.5-1 .7-1.5.3.5.6 1 1 1.5h-1.7zm2.8 0c-.4-.6-.8-1.3-1.1-2 .3-.2.6-.4 1-.5.3.9.5 1.8.5 2.5h-.4zM7 14v1h10v-1H7zm0 2v1h10v-1H7z" fill="currentColor"/>
-                </svg>
-              </button>
-              <button type="button" class="social-btn qq" aria-label="QQ登录">
+              <button type="button" class="social-btn qq" aria-label="QQ登录" data-provider-label="QQ">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                   <path d="M12 3c-3.87 0-7 2.24-7 5 0 1.65.96 3.12 2.45 4.06-.1.44-.33 1.13-.54 1.68 1.68-.18 2.93-.67 3.59-1.1.5.13 1.03.2 1.59.2 3.87 0 7-2.24 7-5s-3.13-5-7-5zm-2 5.5a.75.75 0 110-1.5.75.75 0 010 1.5zm4 0a.75.75 0 110-1.5.75.75 0 010 1.5z" fill="currentColor"/>
                   <path d="M12 13.5c-2.2 0-4.17.73-5.3 1.87.67 2.4 2.47 4.13 4.55 4.13h1.5c2.08 0 3.88-1.73 4.55-4.13-1.13-1.14-3.1-1.87-5.3-1.87z" fill="currentColor" opacity=".85"/>
                 </svg>
               </button>
+              <button type="button" class="social-btn apple" aria-label="Apple 登录" data-provider-label="Apple">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M15.37 3.6c0 1-.39 1.97-1 2.65-.67.75-1.75 1.32-2.73 1.24-.13-.95.35-1.95.98-2.63.68-.75 1.84-1.29 2.75-1.26z" fill="currentColor"/>
+                  <path d="M18.44 12.84c.02 2.45 2.16 3.27 2.18 3.28-.02.06-.34 1.17-1.11 2.32-.67 1-1.37 2-2.47 2.02-1.08.02-1.43-.64-2.67-.64-1.24 0-1.63.62-2.64.66-1.05.04-1.85-1.05-2.52-2.05-1.37-1.98-2.42-5.59-1.01-8.02.7-1.21 1.96-1.98 3.33-2 1.04-.02 2.02.7 2.67.7.65 0 1.87-.87 3.16-.74.54.02 2.06.22 3.04 1.66-.08.05-1.82 1.06-1.8 3.15z" fill="currentColor"/>
+                </svg>
+              </button>
+              <button type="button" class="social-btn douyin" aria-label="抖音登录" data-provider-label="抖音">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M14.2 4.2c.42 1.2 1.13 2.2 2.15 2.98 1.02.77 2.17 1.17 3.45 1.2v3.02c-1.06-.03-2.1-.2-3.1-.56v5.43c0 1.35-.42 2.5-1.25 3.44-.83.94-1.87 1.55-3.11 1.83-1.24.29-2.41.18-3.52-.32a5.74 5.74 0 0 1-2.56-2.21 5.96 5.96 0 0 1-.92-3.27c0-1.58.47-2.92 1.42-4.01.95-1.1 2.16-1.82 3.63-2.16v3.16a2.78 2.78 0 0 0-1.39.91 2.54 2.54 0 0 0-.52 1.59c0 .86.29 1.58.87 2.16.58.58 1.3.87 2.15.87.78 0 1.47-.23 2.06-.68.59-.45.97-1.03 1.14-1.74.08-.29.11-.73.11-1.33V4.2h3.39z" fill="currentColor"/>
+                  <path d="M14.2 8.52c.42 1.2 1.13 2.2 2.15 2.98 1.02.77 2.17 1.17 3.45 1.2v1.7c-1.28-.03-2.43-.43-3.45-1.2-1.02-.78-1.73-1.77-2.15-2.98v6.4c0 .6-.03 1.04-.1 1.33-.18.71-.56 1.29-1.15 1.74a3.4 3.4 0 0 1-2.06.68c-.38 0-.75-.07-1.11-.18a3 3 0 0 0 2.31 1.06c.78 0 1.47-.23 2.06-.68.59-.45.97-1.03 1.14-1.74.08-.29.11-.73.11-1.33V8.52h.8z" fill="currentColor" opacity=".72"/>
+                </svg>
+              </button>
             </div>
+          </div>
+
+          <div class="agreements-section">
+            <label class="agreements-check" for="agreements-checkbox">
+              <input id="agreements-checkbox" type="checkbox" />
+              <span class="agreement-copy">
+                <span class="agreement-line">
+                  我已阅读并同意万兴科技
+                  <button type="button" class="agreement-link" data-agreement="service">用户服务协议</button>
+                  和
+                  <button type="button" class="agreement-link" data-agreement="privacy">隐私政策</button>，
+                </span>
+                <span class="agreement-line">未注册手机号登录时会自动创建账号</span>
+              </span>
+            </label>
+            <div id="agreements-error-tooltip" class="agreements-error-tooltip" hidden>请先同意并勾选上述协议</div>
           </div>
 
           <pre id="debug-panel" class="debug-panel" hidden></pre>
@@ -135,6 +253,17 @@
       <span>v0.9.0</span>
       <span class="version-separator">·</span>
       <span>Build 2024.12.18</span>
+    </div>
+
+    <div id="agreement-modal" class="agreement-modal" hidden>
+      <div class="agreement-modal-backdrop" data-agreement-close></div>
+      <section class="agreement-modal-panel" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title">
+        <button type="button" class="agreement-modal-close" data-agreement-close aria-label="关闭协议弹窗">×</button>
+        <div class="agreement-modal-head">
+          <h3 id="agreement-modal-title">协议详情</h3>
+        </div>
+        <div id="agreement-modal-content" class="agreement-modal-content agreement-rich-text"></div>
+      </section>
     </div>
 
     <script type="module" src="./login.js"></script>

@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing single-process phone-auth dev server for Local Runnable Alpha, but make creator write routes behave like real platform commands: stable `Idempotency-Key` protocol, predictable error mapping, and application-service boundaries. Developer A owns the backend side of the R0 Creator API Contract Matrix and must keep response shapes aligned with Developer B and smoke assertions owned by Developer C.
 
-**Tech Stack:** TypeScript, Node test runner, PGlite, existing `runIdempotentCommand`, `createCreatorApplication`, workflow-task, provider-request, and phone-auth dev server.
+**Tech Stack:** TypeScript, Node test runner, PostgreSQL test schemas, existing `runIdempotentCommand`, `createCreatorApplication`, workflow-task, provider-request, and phone-auth dev server.
 
 ---
 
