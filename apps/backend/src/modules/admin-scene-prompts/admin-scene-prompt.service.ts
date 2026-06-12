@@ -363,5 +363,26 @@ function template(input: {
 }
 
 const defaultScenePromptTemplates = [
+  template({
+    name: "长篇小说场景拆分",
+    code: "scene_split_long_novel",
+    stage: "split",
+    model_family: "general",
+    tags: ["long_novel", "scene_detail"],
+    variables: ["novel_chapter"],
+    json_schema: "sections: scene_name, scene_role, scene_description, image_prompt",
+    prompt_content: `请将长篇小说章节拆分为适合漫画分镜制作的连续场景。
 
+输入章节：
+{{novel_chapter}}
+
+输出要求：
+1. 每个场景包含 scene_name、scene_role、scene_description、location_id。
+2. 保留 continuity_notes、visual_motifs、previous_scene_link、next_scene_hook。
+3. image_prompt 需要包含 foreground、midground、background 和 cinematic concept art guidance。
+4. 只输出合法 JSON，不要 Markdown。`,
+    negative_prompt: defaultNegativePrompt,
+    sort_order: 300,
+    remark: "默认长篇小说场景拆分提示词",
+  }),
 ];

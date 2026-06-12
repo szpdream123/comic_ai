@@ -2684,17 +2684,17 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
   });
 
   it("normalizes legacy default legal document ids to stable uuids so updates keep working", async () => {
-    const { server, cookie, db } = await createLoggedInAdminServer();
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
 
     try {
       await db.query(
         `
           UPDATE runtime_config_entries
-          SET value_json = $2::jsonb
+          SET value_json = $1::jsonb
           WHERE key = 'legal.documents'
         `,
         [
-          "legal.documents",
           JSON.stringify([
             {
               id: "default-service",
@@ -2875,7 +2875,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           SELECT event_type, reason
           FROM audit_events
           WHERE event_type = 'admin.secret_reference.probed'
-          ORDER BY reason ASC
+          ORDER BY created_at ASC, id ASC
         `,
       );
       const combinedPayload = JSON.stringify([configuredProbePayload, missingProbePayload, rows.rows, audit.rows]);

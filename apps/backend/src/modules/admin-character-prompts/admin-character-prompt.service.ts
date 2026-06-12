@@ -417,7 +417,7 @@ const defaultCharacterPromptTemplates = [
     chunk_max_chars: 8000,
     overlap_chars: 500,
     json_schema: "characters[].name, aliases, gender, age_text, identity, faction, importance, evidence arrays, confidence",
-    prompt_content: `你是小说人物抽取专家。请只分析当前小说片段，抽取片段中出现的主要人物、重要配角、反派、推动剧情的人物，以及对人物外貌、身份、服装、武器、性格、关系、场景有用的信息。
+    prompt_content: `你是小说人物抽取专家。请只分析当前小说片段，抽取片段中出现的主要人物、重要配角、反派、推动剧情的人物，以及对人物完整人物外观、身份、服装、武器、性格、关系、场景有用的信息。
 
 重要规则：
 1. 只根据当前片段抽取，不要臆造后文剧情。

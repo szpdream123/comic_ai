@@ -65,6 +65,17 @@ export function defaultLegalDocumentValue(
   };
 }
 
+export function emptyLegalDocumentValue(
+  key: (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+): LegalDocumentValue {
+  const config = Object.values(legalDocumentConfigs).find((item) => item.key === key);
+  return {
+    title: config?.title ?? "协议文档",
+    contentHtml: "<p>暂无协议内容。</p>",
+    versionLabel: null,
+  };
+}
+
 export function defaultLegalDocuments(now = new Date()): LegalDocumentRecord[] {
   const timestamp = now.toISOString();
   return Object.values(legalDocumentConfigs).map((config, index) => {
@@ -177,7 +188,7 @@ export function publicLegalDocumentTitleByType(type: LegalDocumentType) {
 
 export function buildPublicLegalDocument(type: LegalDocumentType, document: LegalDocumentRecord | null) {
   const config = legalConfigByType[type];
-  const fallback = defaultLegalDocumentValue(config.key);
+  const fallback = emptyLegalDocumentValue(config.key);
   return {
     key: config.key,
     document: document
