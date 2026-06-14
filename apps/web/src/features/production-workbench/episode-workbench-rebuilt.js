@@ -1,6 +1,7 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderAssetImportModal } from "./project-detail.js";
+import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 
 const MEDIA_TABS = [
@@ -201,6 +202,11 @@ export function renderEpisodeWorkbench({
   episodeBatchModal = null,
   assetImportModal = null,
   assetImportModalTab = "local",
+  assetImportModalSource = null,
+  episodeAssetLibraryModal = null,
+  episodeAssetLibraryCategory = "character",
+  episodeAssetLibraryFolder = "",
+  episodeAssetLibraryQuery = "",
   assetImportCategory = "domestic-modern-city",
   assetImportDrafts = [],
   assetImportSelection = [],
@@ -209,6 +215,8 @@ export function renderEpisodeWorkbench({
   assetImportPageSizeMenuOpen = false,
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
+  importedAssets = null,
+  episodeWorkbenchContext = null,
   projectOtherAssetMediaType = "video",
   projectDetail = null,
 } = {}) {
@@ -226,6 +234,11 @@ export function renderEpisodeWorkbench({
       ? MEDIA_TABS.filter((tab) => tab.id === "image")
       : storyboardVisibleMediaTabs;
   const activeVideoGenerationMode = generationUiState.videoGenerationMode ?? "reference-video";
+  const promptDockGenerationUiState = {
+    ...generationUiState,
+    imageGenerationMode: generationUiState.imageGenerationMode ?? imageMode ?? "single-image",
+    videoGenerationMode: activeVideoGenerationMode,
+  };
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
     scopeMode === "assets" && effectiveMediaMode === "image"
@@ -382,7 +395,7 @@ export function renderEpisodeWorkbench({
             validationMessage,
             generationControls,
             episodeGenerationConfig,
-            generationUiState,
+            generationUiState: promptDockGenerationUiState,
             mediaMode: effectiveMediaMode,
             videoMode: activeVideoGenerationMode,
             attachments: episodeWorkbenchAttachments,
@@ -472,6 +485,7 @@ export function renderEpisodeWorkbench({
             projectPanelMode: "episode-workbench",
             assetImportModal,
             assetImportModalTab,
+            assetImportModalSource,
             assetImportCategory,
             assetImportDrafts,
             assetImportSelection,
@@ -480,8 +494,18 @@ export function renderEpisodeWorkbench({
             assetImportPageSizeMenuOpen,
             assetImportOfficialAssets,
             projectLibraryAssetsByType,
+            importedAssets,
+            episodeWorkbenchContext,
             projectOtherAssetMediaType,
             projectDetail,
+          })
+        : ""}
+      ${episodeAssetLibraryModal
+        ? renderEpisodeAssetLibraryModal({
+            scope: episodeAssetLibraryModal,
+            category: episodeAssetLibraryCategory,
+            folder: episodeAssetLibraryFolder,
+            query: episodeAssetLibraryQuery,
           })
         : ""}
     </section>
@@ -535,12 +559,15 @@ function renderAssetWorkspace(
     <div class="episode-replica-asset-toolbar unified">
       <div class="episode-replica-asset-toolbar-head">
         <div class="episode-replica-asset-toolbar-main">
+          <div class="episode-replica-asset-actions left">
+            <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
+          </div>
           <div class="episode-replica-asset-tabs">
             ${ASSET_TABS.map((tab) => `<button class="${tab.id === activeAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
           </div>
-          <div class="episode-replica-asset-actions">
-            <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
-            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(activeAssetTab)}">资产库选取</button>
+          <div class="episode-replica-asset-actions right">
+            <button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(activeAssetTab)}">团队资产库</button>
+            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(activeAssetTab)}">项目资产库</button>
           </div>
         </div>
       </div>
@@ -567,6 +594,124 @@ function renderAssetWorkspace(
         `).join("")}
       </div>
     </div>
+  `;
+}
+
+function renderEpisodeAssetLibraryModal({
+  scope = "official",
+  category = "character",
+  folder = "",
+  query = "",
+} = {}) {
+  const normalizedScope = scope === "team" ? "team" : "official";
+  const normalizedCategory = ["character", "scene", "prop"].includes(category) ? category : "character";
+  const folders = [
+    "国内仿真人-现代都市",
+    "国内仿真人-东方古代",
+    "3D漫-现代都市",
+    "3D漫-东方修仙",
+    "2D漫-现代都市",
+    "2D漫-东方修仙",
+  ];
+  const selectedFolder = folder || folders[0];
+  const assets = normalizedScope === "official"
+    ? getLibraryAssetsForImport({
+        assetKind: normalizedCategory,
+        folder: selectedFolder,
+        searchQuery: query,
+      })
+    : [];
+  const title = selectedFolder || "官方资产库";
+  const assetCount = assets.length;
+
+  return `
+    <section class="episode-library-modal-backdrop modal-backdrop" role="dialog" aria-modal="true" aria-label="${normalizedScope === "team" ? "团队资产库" : "官方资产库"}">
+      <div class="episode-library-modal">
+        <button class="asset-modal-close episode-library-modal-close" type="button" data-action="close-episode-asset-library-modal" aria-label="关闭">×</button>
+        <header class="episode-library-modal-head">
+          <nav class="episode-library-scope-tabs" aria-label="资产库范围">
+            <button class="${normalizedScope === "official" ? "is-active" : ""}" type="button" data-action="switch-episode-asset-library-scope" data-library-scope="official">官方资产库</button>
+            <button class="${normalizedScope === "team" ? "is-active" : ""}" type="button" data-action="switch-episode-asset-library-scope" data-library-scope="team">团队资产库 <small>团队复用</small></button>
+          </nav>
+          <nav class="episode-library-category-tabs" aria-label="资产分类">
+            ${renderEpisodeLibraryCategoryTab("character", "角色", normalizedCategory)}
+            ${renderEpisodeLibraryCategoryTab("scene", "场景", normalizedCategory)}
+            ${renderEpisodeLibraryCategoryTab("prop", "道具", normalizedCategory)}
+            ${normalizedScope === "team" ? `
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="audio">音色</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="style">风格</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="theme">题材</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="storyboard">分镜构图</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="video-effect">视频特效</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="script">小说转剧本</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="api">AI 拆分镜</button>
+              <button type="button" data-action="set-episode-asset-library-category" data-library-category="api">API</button>
+            ` : ""}
+          </nav>
+        </header>
+        ${
+          normalizedScope === "team"
+            ? renderEpisodeTeamLibraryLocked()
+            : `
+              <div class="episode-library-board">
+                <aside class="episode-library-folder-list" aria-label="文件夹">
+                  ${folders.map((item) => `
+                    <button class="${item === selectedFolder ? "is-active" : ""}" type="button" data-action="set-episode-asset-library-folder" data-library-folder="${escapeAttr(item)}">
+                      <span aria-hidden="true"></span>${escapeHtml(item)}
+                    </button>
+                  `).join("")}
+                </aside>
+                <section class="episode-library-browser" aria-label="官方资产库">
+                  <div class="episode-library-browser-head">
+                    <div>
+                      <h2>${escapeHtml(title)}</h2>
+                      <p>${escapeHtml(resolveAssetLabel(normalizedCategory))}<span>${assetCount} 个资产</span></p>
+                    </div>
+                    <label class="episode-library-search">
+                      <input type="search" placeholder="搜索角色、场景、道具" value="${escapeAttr(query)}" data-action="search-episode-asset-library" />
+                    </label>
+                  </div>
+                  <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
+                    ${assets.length ? assets.map((asset, index) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, index === 0)).join("") : `
+                      <div class="episode-library-empty">
+                        <strong>暂无匹配资产</strong>
+                        <span>换个分类、文件夹或关键词再试。</span>
+                      </div>
+                    `}
+                  </div>
+                </section>
+              </div>
+            `
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
+  return `<button class="${id === activeCategory ? "is-active" : ""}" type="button" data-action="set-episode-asset-library-category" data-library-category="${escapeAttr(id)}">${escapeHtml(label)}</button>`;
+}
+
+function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
+  const preview = asset.previewUrl ?? asset.preview ?? "";
+  return `
+    <article class="episode-library-asset-card ${selected ? "is-selected" : ""}">
+      ${preview ? `<img src="${escapeAttr(preview)}" alt="${escapeAttr(asset.name ?? "资产")}" loading="lazy" />` : `<div class="episode-library-asset-placeholder" aria-hidden="true"></div>`}
+      <div>
+        <strong>${escapeHtml(asset.name ?? "未命名资产")}</strong>
+        <small>${escapeHtml(asset.folder ?? resolveAssetLabel(category))}</small>
+      </div>
+    </article>
+  `;
+}
+
+function renderEpisodeTeamLibraryLocked() {
+  return `
+    <section class="episode-library-team-locked">
+      <div class="episode-library-lock-icon" aria-hidden="true">✦</div>
+      <strong>团队资产库为专业版会员权益，开通后使用该功能。</strong>
+      <button type="button" data-action="open-pricing">立即开通</button>
+    </section>
   `;
 }
 
@@ -1808,7 +1953,9 @@ export function renderPromptDock({
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
+  const activeImageGenerationMode = generationUiState.imageGenerationMode ?? "single-image";
   const activeVideoGenerationMode = videoMode ?? generationUiState.videoGenerationMode ?? "reference-video";
+  const isReferenceFreeImageMode = !isVideoMode && activeImageGenerationMode === "single-image";
   const isFirstFrameVideoMode = isVideoMode && activeVideoGenerationMode === "first-frame";
   const isFirstLastFrameVideoMode = isVideoMode && activeVideoGenerationMode === "first-last-frame";
   const isSingleFrameInputMode = isFirstFrameVideoMode || isFirstLastFrameVideoMode;
@@ -1862,21 +2009,23 @@ export function renderPromptDock({
     <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
       ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       <div class="episode-replica-ref-strip ${isFirstLastFrameVideoMode ? "first-last-frame-slots" : ""}">
-        ${isSingleFrameInputMode ? "" : audioAttachmentCards.join("")}
+        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : audioAttachmentCards.join("")}
         ${
-          supportsAudioUpload && !isSingleFrameInputMode
+          supportsAudioUpload && !isSingleFrameInputMode && !isReferenceFreeImageMode
             ? '<button class="episode-replica-ref-card voice uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="audio"><span>+</span><strong>音频</strong></button>'
             : ""
         }
-        ${isSingleFrameInputMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
+        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
         ${
           isFirstLastFrameVideoMode
             ? `${renderFrameImageSlot("first", "首帧图", generationState.firstFrame)}${renderFrameImageSlot("last", "尾帧图", generationState.lastFrame)}
               <button class="episode-replica-frame-quick-all" type="button" data-action="quick-append-selected-asset">快捷引用</button>`
-            : nonAudioAttachmentCards.join("")
+            : isReferenceFreeImageMode
+              ? ""
+              : nonAudioAttachmentCards.join("")
         }
         ${
-          isFirstLastFrameVideoMode
+          isFirstLastFrameVideoMode || isReferenceFreeImageMode
             ? ""
             : `<button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image" data-dropzone="generation-image" data-frame-target="first">
                 <span>+</span><strong>图片</strong>
@@ -1888,9 +2037,9 @@ export function renderPromptDock({
       </div>
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       <div class="episode-replica-prompt-tools">
-        ${isSingleFrameInputMode ? "" : renderMiniMenu("references", "多参考图", activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
-        ${isSingleFrameInputMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
-        ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
+        ${isVideoMode && isSingleFrameInputMode ? "" : renderMiniMenu("references", resolveReferenceModeLabel(activeImageGenerationMode), activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
+        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
+        ${isFirstLastFrameVideoMode || isReferenceFreeImageMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
       </div>
       <label class="episode-replica-textarea">
         <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
@@ -2355,6 +2504,16 @@ function renderMiniMenu(menu, label, activeMenu, options, action = "select-gener
       ${active ? `<span class="episode-replica-float-menu">${options.map(([value, text]) => `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(menu)}" data-value="${escapeAttr(value)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
     </span>
   `;
+}
+
+function resolveReferenceModeLabel(mode) {
+  if (mode === "multi-image") {
+    return "多参考图";
+  }
+  if (mode === "image-to-image") {
+    return "文字改图";
+  }
+  return "文生图";
 }
 
 function buildModelParameterControls({

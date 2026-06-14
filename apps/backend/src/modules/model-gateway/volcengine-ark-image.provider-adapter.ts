@@ -4,6 +4,11 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import {
+  providerResponseError,
+  readProviderResponseDiagnostics,
+  type ProviderResponseDiagnostics,
+} from "./provider-response-diagnostics.ts";
 
 const defaultModel = "doubao-seedream-5-0-260128";
 const defaultPollIntervalMs = 1500;
@@ -313,12 +318,13 @@ function* walkValues(value: unknown): Generator<unknown> {
 async function readJsonResponse(response: Response, prefix: string) {
   if (!response.ok) {
     const error = await readProviderError(response);
-    throw new Error(
+    throw providerResponseError(
       [
         `${prefix}_${response.status}`,
         error.providerErrorCode,
         error.providerMessage,
       ].filter(Boolean).join(":"),
+      error.diagnostics,
     );
   }
   return (await response.json()) as Record<string, unknown>;
@@ -423,9 +429,14 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function readProviderError(response: Response) {
+async function readProviderError(response: Response): Promise<{
+  providerErrorCode: string | null;
+  providerMessage: string | null;
+  diagnostics: ProviderResponseDiagnostics;
+}> {
+  const { text, diagnostics } = await readProviderResponseDiagnostics(response);
   try {
-    const payload = (await response.json()) as Record<string, unknown>;
+    const payload = JSON.parse(text) as Record<string, unknown>;
     return {
       providerErrorCode:
         findFirstString(payload, [
@@ -436,12 +447,13 @@ async function readProviderError(response: Response) {
           ["result", "error", "code"],
         ]) ?? null,
       providerMessage: findProviderMessage(payload) ?? null,
+      diagnostics,
     };
   } catch {
-    const body = await response.text().catch(() => "");
     return {
       providerErrorCode: null,
-      providerMessage: body.trim().slice(0, 500) || null,
+      providerMessage: diagnostics.responseBodyPreview || null,
+      diagnostics,
     };
   }
 }

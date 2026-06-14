@@ -178,12 +178,18 @@ function resolveProviderApiKey(
 
   const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv);
   if (!apiKeyEnv) {
-    throw new Error("provider_api_key_env_required");
+    throw Object.assign(new Error("provider_api_key_env_required"), {
+      failureCode: "provider_api_key_env_required",
+      apiKeyEnv: "",
+    });
   }
 
   const apiKey = env[apiKeyEnv]?.trim();
   if (!apiKey) {
-    throw new Error("provider_api_key_missing");
+    throw Object.assign(new Error("provider_api_key_missing"), {
+      failureCode: "provider_api_key_missing",
+      apiKeyEnv,
+    });
   }
 
   return apiKey;

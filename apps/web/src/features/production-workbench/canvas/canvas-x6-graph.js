@@ -253,12 +253,15 @@ function createGraph(X6, mount, workbench) {
 }
 
 function wireGraphSync(graph, workbench) {
-  const sync = () => {
+  const sync = (options = {}) => {
     const graphData = readGraphData(graph);
     workbench.ui.canvasDocument = canvasDocumentFromX6Data(graphData, workbench.ui.canvasDocument);
+    if (options.clearToast) {
+      workbench.ui.toast = "";
+    }
   };
-  graph.on("node:moved", sync);
-  graph.on("node:resized", sync);
+  graph.on("node:moved", () => sync({ clearToast: true }));
+  graph.on("node:resized", () => sync({ clearToast: true }));
   graph.on("edge:connected", sync);
   graph.on("edge:removed", sync);
   graph.on("cell:change:data", sync);

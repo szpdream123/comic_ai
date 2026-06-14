@@ -262,11 +262,16 @@ function renderScriptRecordTab(card, selectedId, ui = {}) {
       </button>
       <div
         class="script-project-poster ${card.coverImageUrl ? "has-cover" : "needs-cover"}"
-        data-action="pick-script-cover"
-        data-project-id="${escapeHtml(projectId)}"
-        data-script-id="${escapeHtml(scriptId)}"
       >
-        <div class="script-project-cover-placeholder">
+        <div
+          class="script-project-cover-placeholder"
+          data-action="pick-script-cover"
+          data-project-id="${escapeHtml(projectId)}"
+          data-script-id="${escapeHtml(scriptId)}"
+          role="button"
+          tabindex="0"
+          aria-label="上传剧本封面"
+        >
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
           <strong>上传封面</strong>
         </div>

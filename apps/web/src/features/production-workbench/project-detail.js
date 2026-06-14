@@ -11,15 +11,16 @@ import { getProjectDetailState } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
-import { createDefaultCanvasDocument } from "./canvas/canvas-default-document.js";
+import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
   buildCanvasSidebarItems,
   resolveCanvasModelOptions,
   resolveCanvasNodeTemplates,
 } from "./canvas/canvas-state.js";
 
-const PROJECT_STATUS_OPTIONS = ["草稿", "进行中", "已交付"];
-const PROJECTS_PER_PAGE = 12;
+const PROJECT_GALLERY_ROWS_PER_PAGE = 3;
+const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
+const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },
   { id: "first-last-frame", label: "首尾帧生视频" },
@@ -288,7 +289,9 @@ export function renderProjectDetail(context = {}) {
       notice: ui.renameProjectNotice ?? "",
     })}
     ${renderProjectDeleteModal({
-      show: Boolean(ui.deleteProjectId),
+      show: Boolean(ui.deleteProjectId) || ui.deleteProjectMode === "bulk",
+      mode: ui.deleteProjectMode === "bulk" ? "bulk" : "single",
+      count: Array.isArray(ui.deleteProjectIds) ? ui.deleteProjectIds.length : 0,
       projectName:
         ui.projectLibrary?.find((project) => project.id === ui.deleteProjectId)?.name ?? "",
     })}
@@ -323,13 +326,12 @@ function renderCreditLedgerDrawer(ui = {}) {
         <div>
           <p class="credit-ledger-kicker">Credit Ledger</p>
           <h2 id="credit-ledger-title">积分明细</h2>
-          <p>每一次充值、生成扣减、预留与释放都会记录在这里。</p>
+          <p>每一次充值、生成扣减与返还都会记录在这里。</p>
         </div>
         <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
-        ${renderCreditLedgerMetric("已冻结积分", summary.displayReservedCredits ?? 0, "reserved")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       <div class="credit-ledger-toolbar">
@@ -416,8 +418,8 @@ function normalizeCreditLedgerEntry(row = {}) {
   const labels = {
     grant: ["充值/发放", "grant"],
     consume: ["生成扣减", "consume"],
-    reservation: ["任务冻结", "reserve"],
-    reserve: ["任务冻结", "reserve"],
+    reservation: ["生成扣减", "consume"],
+    reserve: ["生成扣减", "consume"],
     release: ["释放返还", "release"],
   };
   const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
@@ -547,6 +549,9 @@ function translateCreditLedgerReason(reason, metadata = {}) {
   if (normalized === "reservation allocation consumed") {
     return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
   }
+  if (normalized.includes("reservation") || normalized.includes("reserve")) {
+    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
+  }
   return reason;
 }
 
@@ -592,7 +597,7 @@ function creditLedgerResultLabel({ event, failure } = {}) {
 
 function ledgerBillingEventLabel(value) {
   const labels = {
-    reserved: "已冻结",
+    reserved: "已扣减",
     consumed: "已扣减",
     released: "已返还",
     manual_review_required: "待复核",
@@ -809,11 +814,12 @@ function resolveAccountSettingsAvatarLabel(form, session = {}) {
 }
 
 function renderWorkspaceStatusToast(message, extraClassName = "") {
-  const normalizedMessage = String(message ?? "").trim();
+  const toast = normalizeWorkspaceToast(message);
+  const normalizedMessage = toast.message;
   if (!normalizedMessage) {
     return "";
   }
-  const tone = resolveWorkspaceToastTone(normalizedMessage);
+  const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
   const title = tone === "error" ? "操作失败" : "操作成功";
   const className = extraClassName
     ? `workbench-toast global-workbench-toast ${tone} ${extraClassName}`
@@ -824,6 +830,18 @@ function renderWorkspaceStatusToast(message, extraClassName = "") {
       <span>${escapeHtml(normalizedMessage)}</span>
     </div>
   `;
+}
+
+function normalizeWorkspaceToast(message) {
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    const normalizedMessage = String(message.message ?? message.text ?? "").trim();
+    const tone = String(message.tone ?? "").trim().toLowerCase();
+    return {
+      message: normalizedMessage,
+      tone: tone === "error" || tone === "success" ? tone : "",
+    };
+  }
+  return { message: String(message ?? "").trim(), tone: "" };
 }
 
 function resolveWorkspaceToastTone(message) {
@@ -967,6 +985,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
           activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
           isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+          imageGenerationMode: ui.imageGenerationMode ?? "single-image",
           videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
           museBoardMode: ui.museBoardMode ?? "operation",
           museScopeMode: ui.museScopeMode ?? "storyboard",
@@ -1002,6 +1021,10 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         episodeBatchModal: ui.episodeBatchModal ?? null,
         assetImportModal: ui.assetImportModal ?? null,
         assetImportModalTab: ui.assetImportModalTab ?? "local",
+        episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
+        episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
+        episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
+        episodeAssetLibraryQuery: ui.episodeAssetLibraryQuery ?? "",
         assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
         assetImportDrafts: ui.assetImportDrafts ?? [],
         assetImportSelection: ui.assetImportSelection ?? [],
@@ -1508,7 +1531,6 @@ function renderSingleEpisodeModal(ui) {
   const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
   const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
   const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
-  const notice = String(ui.singleEpisodeNotice ?? "").trim();
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -1542,7 +1564,6 @@ function renderSingleEpisodeModal(ui) {
             <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">AI 智能分镜</button>
           </div>
         </div>
-        ${notice ? `<p class="single-episode-inline-notice">${escapeHtml(notice)}</p>` : ""}
       </div>
     </section>
   `;
@@ -2530,7 +2551,10 @@ export function renderAssetImportModal(ui) {
   const assetKind = ui.assetImportModal ?? "character";
   const assetLabel = getAssetModalLabel(assetKind, ui.projectOtherAssetMediaType ?? "video");
   const isEpisodeWorkbenchLibraryModal =
-    ui.projectPanelMode === "episode-workbench" && assetKind !== "other";
+    ui.projectPanelMode === "episode-workbench" &&
+    assetKind !== "other" &&
+    ui.assetImportModalSource !== "official" &&
+    ui.assetImportModalSource !== "team";
 
   if (isEpisodeWorkbenchLibraryModal) {
     return renderEpisodeWorkbenchAssetImportModal(ui, assetKind);
@@ -2560,24 +2584,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
     { id: "scene", label: "场景" },
     { id: "prop", label: "道具" },
   ];
-  const episodeBackedAssets =
-    assetKind === "character"
-      ? (ui.importedAssets?.character ?? []).map((asset) => ({
-          id: asset.id,
-          name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-          preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-        }))
-      : assetKind === "scene"
-        ? (ui.importedAssets?.scene ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-          }))
-        : (ui.importedAssets?.prop ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-          }));
+  const episodeBackedAssets = resolveEpisodeWorkbenchModalAssets(ui, assetKind);
   const projectLibraryBackedAssets =
     assetKind === "character"
       ? (ui.projectLibraryAssetsByType?.character ?? []).map((asset) => ({
@@ -2716,6 +2723,71 @@ function normalizeEpisodeWorkbenchImportAssets(assets = []) {
     name: asset.name ?? asset.label ?? "未命名资产",
     preview: resolveApiUrl(asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? ""),
   }));
+}
+
+function resolveEpisodeWorkbenchModalAssets(ui, assetKind) {
+  const sources = [
+    ui.importedAssets?.[assetKind],
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.episodeWorkbenchContext, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.episodeWorkbenchContext?.data, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.projectDetail, assetKind),
+  ];
+  const assets = [];
+  const seen = new Set();
+  for (const source of sources) {
+    for (const asset of normalizeEpisodeWorkbenchAssetSource(source)) {
+      const id = String(asset?.id ?? asset?.assetId ?? "").trim();
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      assets.push({
+        id,
+        name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
+        preview:
+          asset.previewUrl ??
+          asset.preview ??
+          asset.fixedImageUrl ??
+          asset.latestVersion?.previewUrl ??
+          "",
+      });
+    }
+  }
+  return assets;
+}
+
+function resolveEpisodeWorkbenchModalAssetSources(container, assetKind) {
+  if (!container || typeof container !== "object") {
+    return [];
+  }
+  return [
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.assetsByType, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.assets, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.episodeAssets, assetKind),
+  ];
+}
+
+function resolveEpisodeWorkbenchModalAssetKindSources(assetsByType, assetKind) {
+  if (!assetsByType || typeof assetsByType !== "object") {
+    return [];
+  }
+  const keys =
+    assetKind === "character"
+      ? ["character", "characters", "role", "roles"]
+      : assetKind === "scene"
+        ? ["scene", "scenes"]
+        : ["prop", "props"];
+  return keys.map((key) => assetsByType[key]).filter(Boolean);
+}
+
+function normalizeEpisodeWorkbenchAssetSource(source) {
+  if (Array.isArray(source)) {
+    return source;
+  }
+  if (source && typeof source === "object" && Array.isArray(source.items)) {
+    return source.items;
+  }
+  return [];
 }
 
 function normalizeAssetImportPageSize(value) {
@@ -3656,9 +3728,13 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       calibrationOverrideReason: ui.calibrationOverrideReason ?? "",
       imageGenerationResult: ui.imageGenerationResult ?? null,
       videoGenerationResult: ui.videoGenerationResult ?? null,
-      assetImportModal: ui.assetImportModal ?? null,
-      assetImportModalTab: ui.assetImportModalTab ?? "local",
-      assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
+        assetImportModal: ui.assetImportModal ?? null,
+        assetImportModalTab: ui.assetImportModalTab ?? "local",
+        episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
+        episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
+        episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
+        episodeAssetLibraryQuery: ui.episodeAssetLibraryQuery ?? "",
+        assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
       assetImportDrafts: ui.assetImportDrafts ?? [],
       assetImportSelection: ui.assetImportSelection ?? [],
       assetImportPage: ui.assetImportPage ?? 1,
@@ -3690,6 +3766,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
         activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
         isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+        imageGenerationMode: ui.imageGenerationMode ?? "single-image",
         videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
         promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
         promptMentionQuery: ui.promptMentionQuery ?? "",
@@ -3849,17 +3926,10 @@ function renderToolsPanel(ui = {}, state = {}) {
 
 function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
-  const documentsByProject = ui.canvasDocumentsByProject && typeof ui.canvasDocumentsByProject === "object"
-    ? ui.canvasDocumentsByProject
-    : {};
-  const totalNodeCount = projects.reduce((count, project) => {
-    const document = documentsByProject[project.id] ?? (project.id === (ui.selectedCanvasProjectId ?? projects[0]?.id) ? ui.canvasDocument : null);
-    return count + (Array.isArray(document?.nodes) ? document.nodes.length : 0);
-  }, 0);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
-        <h1>全部项目(${escapeHtml(String(projects.length))})</h1>
+        <h1>全部画布(${escapeHtml(String(projects.length))})</h1>
         <div class="canvas-project-gallery-controls">
           <button class="canvas-project-filter" type="button">
             <span>项目状态</span>
@@ -3875,7 +3945,6 @@ function renderCanvasProjectGallery(ui = {}) {
         ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
       <div class="canvas-project-aurora" aria-hidden="true"></div>
-      <span class="canvas-project-count" aria-hidden="true">共 ${totalNodeCount} 节点</span>
       <button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
         <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
         创建画布
@@ -3902,13 +3971,19 @@ function renderCanvasProjectCard(project = {}, menuOpen = false) {
         <span class="canvas-project-cover" aria-hidden="true">
           <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
         </span>
-        <span class="canvas-project-card-copy">
-          <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
-          <small>创建人：—  创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
-        </span>
       </button>
-      <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}更多操作">⋮</button>
-      ${menuOpen ? renderCanvasProjectMenu(project) : ""}
+      <div class="canvas-project-card-copy">
+        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+          <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
+        </button>
+        <div class="canvas-project-card-row">
+          <small>创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
+          <span class="canvas-project-card-actions">
+            <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}编辑">编辑</button>
+            ${menuOpen ? renderCanvasProjectMenu(project) : ""}
+          </span>
+        </div>
+      </div>
     </article>
   `;
 }
@@ -4082,7 +4157,6 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
       data-node-kind="${escapeAttr(node?.type ?? "send")}"
       style="${escapeAttr(style)}"
     >
-      <button class="canvas-history-pill" type="button" tabindex="-1">${renderCanvasIcon("clock")}历史记录</button>
       <header class="canvas-lib-node-title">
         ${renderCanvasIcon(mediaKind)}
         <strong>${title}</strong>
@@ -4091,11 +4165,7 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
         <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
         ${mediaUrl ? `
-          <div class="canvas-generation-result ${isGenerating ? "is-generating" : ""}">
-            ${mediaKind === "video"
-              ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
-              : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
-          </div>
+          ${renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating)}
         ` : isGenerating ? "" : `
           <div class="canvas-generation-empty">
             ${renderCanvasIcon(mediaKind)}
@@ -4106,6 +4176,50 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
       </div>
     </article>
   `;
+}
+
+function renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating = false) {
+  const resultClass = `canvas-generation-result ${isGenerating ? "is-generating" : ""}`;
+  if (mediaKind === "video") {
+    const fileName = resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl);
+    return `
+      <div class="${resultClass}">
+        <video class="canvas-generation-video" src="${escapeAttr(mediaUrl)}" controls playsinline preload="metadata"></video>
+        <div class="canvas-generation-result-actions">
+          <a class="canvas-generation-result-action" href="${escapeAttr(mediaUrl)}" download="${escapeAttr(fileName)}" target="_blank" rel="noopener" aria-label="下载生成视频" title="下载生成视频">
+            ${renderCanvasIcon("download")}
+            <span>下载</span>
+          </a>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="${resultClass}">
+      <img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />
+    </div>
+  `;
+}
+
+function resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl = "") {
+  const data = node?.data ?? {};
+  const baseName = String(
+    data.fileName ??
+    data.name ??
+    data.title ??
+    data.lastTaskId ??
+    node?.id ??
+    (mediaKind === "video" ? "canvas-video" : "canvas-image"),
+  ).trim();
+  const safeBaseName = (baseName || (mediaKind === "video" ? "canvas-video" : "canvas-image"))
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/\.[a-z0-9]{2,5}$/i, "")
+    .slice(0, 80);
+  const extensionMatch = String(mediaUrl ?? "").split(/[?#]/)[0].match(/\.([a-z0-9]{2,5})$/i);
+  const extension = extensionMatch?.[1] ?? (mediaKind === "video" ? "mp4" : "png");
+  return `${safeBaseName}.${extension}`;
 }
 
 function renderCanvasGenerationProgress(progress, stage = "", taskId = "") {
@@ -4166,7 +4280,7 @@ function canvasGenerationStageLabel(stage, percent) {
 function resolveCanvasGenerationNodeMediaUrl(node, mediaKind) {
   const data = node?.data ?? {};
   const candidates = mediaKind === "video"
-    ? [data.previewUrl, data.resultUrl, data.url, data.videoUrl, data.assetUrl, data.thumbnailUrl]
+    ? [data.videoUrl, data.resultVideoUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl, data.thumbnailUrl]
     : [data.previewUrl, data.resultUrl, data.url, data.imageUrl, data.assetUrl, data.thumbnailUrl];
   for (const candidate of candidates) {
     const value = String(candidate ?? "").trim();
@@ -4304,7 +4418,7 @@ function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}
         <button type="button" data-action="format-canvas-text-node" data-node-id="${escapeAttr(nodeId)}" data-format-command="${escapeAttr(command)}" aria-label="${escapeAttr(label)}" onmousedown="event.preventDefault()">${renderCanvasToolbarLabel(label)}</button>
       `).join("")}
     </div>` : ""}
-    <div class="canvas-inline-editor-title" aria-hidden="true">${renderCanvasIcon("text")}<span>${escapeHtml(title)}</span></div>
+    <div class="canvas-inline-editor-title" data-canvas-node-drag-handle data-node-id="${escapeAttr(nodeId)}" aria-hidden="true">${renderCanvasIcon("text")}<span>${escapeHtml(title)}</span></div>
     <div
       class="canvas-inline-richtext"
       role="textbox"
@@ -5085,6 +5199,7 @@ function renderCanvasIcon(icon) {
     collapse: '<path d="M14 6 8 12l6 6" /><path d="M20 6 14 12l6 6" />',
     copy: '<rect x="8" y="8" width="10" height="10" rx="1.6" /><path d="M6 15.5H5.8A1.8 1.8 0 0 1 4 13.7V5.8A1.8 1.8 0 0 1 5.8 4h7.9A1.8 1.8 0 0 1 15.5 5.8V6" />',
     cursor: '<path d="M7 4.5 18.5 12 13 13.2l-2.4 5.1L7 4.5Z" />',
+    download: '<path d="M12 4.5v10" /><path d="m7.5 10 4.5 4.5 4.5-4.5" /><path d="M5 19.5h14" />',
     fullscreen: '<path d="M8.5 4H4v4.5" /><path d="M4 4l5.2 5.2" /><path d="M15.5 4H20v4.5" /><path d="m20 4-5.2 5.2" /><path d="M8.5 20H4v-4.5" /><path d="m4 20 5.2-5.2" /><path d="M15.5 20H20v-4.5" /><path d="m20 20-5.2-5.2" />',
     grid: '<path d="M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z" />',
     help: '<circle cx="12" cy="12" r="8" /><path d="M9.8 9.4a2.4 2.4 0 1 1 3.8 2c-.9.6-1.5 1.1-1.5 2.1" /><path d="M12 16.7h.01" />',
@@ -5248,62 +5363,95 @@ function renderScrollableWorkbenchSurface(surface, content) {
 }
 
 function renderProjectGallery({ ui }) {
-  const projects = ui.projectLibrary ?? [];
-  const searchQuery = String(ui.projectSearchQuery ?? "").trim();
-  const statusFilters = ui.projectStatusFilters ?? [];
-  const filteredProjects = filterProjects(
-    filterProjectsByStatus(sortProjectsByCreatedAt(projects), statusFilters),
-    searchQuery,
-  );
-  const totalProjects = filteredProjects.length;
-  const totalPages = Math.max(1, Math.ceil(totalProjects / PROJECTS_PER_PAGE));
-  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
-  const pageStart = (currentPage - 1) * PROJECTS_PER_PAGE;
-  const pagedProjects = filteredProjects.slice(pageStart, pageStart + PROJECTS_PER_PAGE);
+  const snapshot = getProjectGallerySnapshot(ui);
+  const selectedIds = normalizeSelectedProjectIds(ui.selectedProjectIds);
+  const selectedCount = snapshot.pageProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;
+  const searchQuery = snapshot.searchQuery;
+  const searchDraft = String(ui.projectSearchDraft ?? searchQuery);
 
   return `
     <section class="project-gallery-shell">
       <header class="project-gallery-header">
         <div>
-          <h1>全部项目(${totalProjects})</h1>
+          <h1>全部项目(${snapshot.totalProjects})</h1>
         </div>
         <div class="project-gallery-filters">
-          <div class="gallery-filter-group">
-            <button
-              class="gallery-filter ${ui.projectStatusMenuOpen ? "active" : ""}"
-              type="button"
-              data-action="toggle-project-status-menu"
-              aria-expanded="${ui.projectStatusMenuOpen ? "true" : "false"}"
-            >
-              <span>项目状态</span>
-              <span class="gallery-filter-caret">${ui.projectStatusMenuOpen ? "⌃" : "⌄"}</span>
-            </button>
-            ${ui.projectStatusMenuOpen ? renderProjectStatusMenu(statusFilters) : ""}
-          </div>
           <label class="gallery-search">
             <input
               type="search"
                 placeholder="请输入项目名称"
-              value="${escapeHtml(searchQuery)}"
+              value="${escapeHtml(searchDraft)}"
               data-action="search-projects"
             />
           </label>
         </div>
       </header>
+      <div class="project-gallery-toolbar">
+        <div class="project-gallery-toolbar-summary">
+          <strong>本页已选 ${selectedCount}</strong>
+          <span>仅作用于当前页</span>
+        </div>
+        <div class="project-gallery-toolbar-actions">
+          <button class="gallery-toolbar-button" type="button" data-action="select-current-page-projects">全选本页</button>
+          <button class="gallery-toolbar-button" type="button" data-action="clear-selected-projects" ${selectedCount ? "" : "disabled"}>取消选择</button>
+          <button class="gallery-toolbar-button danger" type="button" data-action="delete-selected-projects" ${selectedCount ? "" : "disabled"}>删除所选</button>
+        </div>
+      </div>
       <section class="project-gallery-grid" aria-label="项目列表">
         ${
-          totalProjects
-            ? pagedProjects.map((project) => renderProjectCard(project, ui.projectCardMenuId === project.id)).join("")
-            : renderEmptyProjectState(searchQuery, statusFilters)
+          snapshot.totalProjects
+            ? snapshot.pageProjects.map((project) => renderProjectCard(
+                project,
+                ui.projectCardMenuId === project.id,
+                selectedIds.has(String(project.id ?? "")),
+              )).join("")
+            : renderEmptyProjectState(searchQuery, [])
         }
       </section>
       ${renderWorkspaceStatusToast(ui.toast)}
-      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pagedProjects.length) : ""}
+      ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.pageProjects.length) : ""}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>
     </section>
   `;
+}
+
+export function getProjectGallerySnapshot(ui = {}) {
+  const projects = Array.isArray(ui.projectLibrary) ? ui.projectLibrary : [];
+  const searchQuery = String(ui.projectSearchQuery ?? "").trim();
+  const filteredProjects = filterProjects(sortProjectsByCreatedAt(projects), searchQuery, ui);
+  const projectsPerPage = resolveProjectGalleryPageSize(ui);
+  const totalProjects = filteredProjects.length;
+  const totalPages = Math.max(1, Math.ceil(totalProjects / projectsPerPage));
+  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
+  const pageStart = (currentPage - 1) * projectsPerPage;
+  const pageProjects = filteredProjects.slice(pageStart, pageStart + projectsPerPage);
+  return {
+    searchQuery,
+    filteredProjects,
+    projectsPerPage,
+    totalProjects,
+    totalPages,
+    currentPage,
+    pageProjects,
+  };
+}
+
+export function resolveProjectGalleryPageSize(ui = {}) {
+  const columns = Math.min(
+    PROJECT_GALLERY_MAX_COLUMNS,
+    Math.max(1, Math.floor(Number(ui.projectLibraryColumns ?? PROJECT_GALLERY_DEFAULT_COLUMNS))),
+  );
+  return columns * PROJECT_GALLERY_ROWS_PER_PAGE;
+}
+
+function normalizeSelectedProjectIds(value) {
+  return new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id) => String(id ?? "").trim())
+      .filter(Boolean),
+  );
 }
 
 function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize) {
@@ -5373,33 +5521,22 @@ function buildProjectPageItems(currentPage, totalPages) {
   return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
-function renderProjectStatusMenu(activeStatuses) {
-  const activeSet = new Set(activeStatuses);
-  return `
-    <div class="project-status-menu" role="menu" aria-label="项目状态筛选">
-      ${PROJECT_STATUS_OPTIONS.map(
-        (status) => `
-          <label class="project-status-option">
-            <input
-              type="checkbox"
-              name="project-status-filter"
-              value="${escapeHtml(status)}"
-              ${activeSet.has(status) ? "checked" : ""}
-            />
-            <span class="project-status-box" aria-hidden="true"></span>
-            <span>${escapeHtml(status)}</span>
-          </label>
-        `,
-      ).join("")}
-    </div>
-  `;
-}
-
-function renderProjectCard(project, isMenuOpen) {
+function renderProjectCard(project, isMenuOpen, isSelected = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
-    <article class="project-gallery-card" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
+    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
+      <button
+        class="project-gallery-select-toggle"
+        type="button"
+        data-action="toggle-project-selection"
+        data-project-id="${escapeHtml(project.id)}"
+        aria-pressed="${isSelected ? "true" : "false"}"
+        aria-label="${isSelected ? "取消选择项目" : "选择项目"}"
+        title="${isSelected ? "取消选择" : "选择当前项目"}"
+      >
+        <span aria-hidden="true"></span>
+      </button>
       <div class="project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}">
         <label class="project-cover-placeholder" for="${coverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
@@ -5411,7 +5548,6 @@ function renderProjectCard(project, isMenuOpen) {
       <div class="project-gallery-meta">
         <div class="project-gallery-copy">
           <h2>${escapeHtml(project.name)}</h2>
-          <span class="project-gallery-status">${escapeHtml(project.status ?? "未开始")}</span>
           <p>创建于：${escapeHtml(project.createdAt ?? "2026/05/21")}</p>
         </div>
         <div class="project-card-actions">
@@ -5526,10 +5662,14 @@ function renderProjectRenameModal({ show, value, notice }) {
   `;
 }
 
-function renderProjectDeleteModal({ show, projectName }) {
+function renderProjectDeleteModal({ show, projectName, mode = "single", count = 0 }) {
   if (!show) {
     return "";
   }
+  const normalizedCount = Math.max(0, Number(count) || 0);
+  const message = mode === "bulk"
+    ? `所选内容将被删除，确定删除本页选中的 ${normalizedCount} 个项目吗？`
+    : `所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？`;
 
   return `
     <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除">
@@ -5538,7 +5678,7 @@ function renderProjectDeleteModal({ show, projectName }) {
           <div class="delete-project-icon">×</div>
           <div>
             <h2>确认删除</h2>
-            <p>所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？</p>
+            <p>${message}</p>
           </div>
           <button class="modal-close" type="button" data-action="close-delete-project-modal" aria-label="关闭">×</button>
         </div>
@@ -5648,15 +5788,57 @@ function renderEmptyProjectState(searchQuery, statusFilters) {
   return '<article class="project-empty-card"><strong>还没有项目</strong><span>从下方创建项目开始，创建后会在这里出现。</span></article>';
 }
 
-function filterProjects(projects, searchQuery) {
+function filterProjects(projects, searchQuery, ui = {}) {
   if (!searchQuery) {
     return projects;
   }
 
-  const normalizedQuery = searchQuery.toLocaleLowerCase();
-  return projects.filter((project) =>
-    String(project.name ?? "").toLocaleLowerCase().includes(normalizedQuery),
-  );
+  const normalizedQuery = normalizeProjectSearchText(searchQuery);
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  return projects.filter((project) => {
+    const searchableText = buildProjectSearchText(project, ui);
+    return searchableText.includes(normalizedQuery) || (compactQuery && searchableText.replace(/\s+/g, "").includes(compactQuery));
+  });
+}
+
+function buildProjectSearchText(project, ui = {}) {
+  return [
+    project?.name,
+    project?.title,
+    project?.scriptTitle,
+    project?.scriptName,
+    project?.scriptFileName,
+    project?.originalScriptTitle,
+    project?.currentScriptTitle,
+    project?.script?.title,
+    project?.script?.name,
+    ...(Array.isArray(project?.scripts)
+      ? project.scripts.flatMap((script) => [script?.title, script?.name])
+      : []),
+    ...findProjectScriptTitles(project, ui),
+  ]
+    .map(normalizeProjectSearchText)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function findProjectScriptTitles(project, ui = {}) {
+  const projectId = String(project?.id ?? "").trim();
+  if (!projectId || !Array.isArray(ui.scriptLibraryRecords)) {
+    return [];
+  }
+  return ui.scriptLibraryRecords
+    .filter((script) => {
+      const scriptProjectId = String(script?.projectId ?? script?.project?.id ?? script?.project_id ?? "").trim();
+      return scriptProjectId === projectId;
+    })
+    .flatMap((script) => [script?.title, script?.name]);
+}
+
+function normalizeProjectSearchText(value) {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase();
 }
 
 function filterProjectsByStatus(projects, statusFilters) {

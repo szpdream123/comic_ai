@@ -16,6 +16,65 @@ const organizationId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("creator application service", { concurrency: false }, () => {
+  it("keeps workspace project and script libraries separated", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-library-separation-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const projectCreated = await creator.createProject({
+        user,
+        body: {
+          name: "普通项目",
+          scriptInput: "Episode 1: ordinary project script.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-library-separation-project",
+        now: new Date("2026-06-13T08:00:00.000Z"),
+      });
+      const scriptImported = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "独立剧本",
+          scriptInput: "第 1 集\n独立剧本正文。",
+        },
+        now: new Date("2026-06-13T08:01:00.000Z"),
+      });
+
+      const projects = await creator.listProjects({
+        user,
+        now: new Date("2026-06-13T08:02:00.000Z"),
+      });
+      const scripts = await creator.listWorkspaceScripts({
+        user,
+        now: new Date("2026-06-13T08:03:00.000Z"),
+      });
+
+      assert.equal(projectCreated.status, 200);
+      assert.equal(scriptImported.status, 200);
+      assert.deepEqual(
+        (projects.body as any).projects.map((project: any) => project.name),
+        ["普通项目"],
+      );
+      assert.deepEqual(
+        (scripts.body as any).scripts.map((script: any) => script.title),
+        ["独立剧本"],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("runs the creator flow through formal handlers and writes calibration audit plus export records", async () => {
     const db = await createMigratedTestDb();
 
@@ -710,6 +769,194 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("deletes a project with its internal scripts after script reader sections reference episodes", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-project-script-reader-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Delete project with script reader sections",
+          scriptInput: "Episode 1: This project has script reader sections.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-delete-project-script-reader-create",
+        now: new Date("2026-06-14T09:10:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-delete-project-script-reader-parse",
+        now: new Date("2026-06-14T09:11:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-06-14T09:12:00.000Z"),
+      });
+      const episodeId = (detail.body as any).episodes[0].id;
+      const projectStorageObjectId = "40000000-0000-4000-8000-000000000901";
+      localObjectStore.put("projects/delete-project-cover.png", {});
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            bucket,
+            object_key,
+            content_type,
+            metadata_json,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, $4, 'creator-dev', 'projects/delete-project-cover.png', 'image/png', '{}'::jsonb, $5)
+        `,
+        [projectStorageObjectId, organizationId, workspaceId, projectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO script_reader_sections (
+            id,
+            organization_id,
+            project_id,
+            script_id,
+            episode_id,
+            title,
+            body,
+            sequence,
+            status,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            '30000000-0000-4000-8000-000000000901',
+            $1,
+            $2,
+            NULL,
+            $3,
+            'Referenced episode',
+            'reader section body',
+            1,
+            'draft',
+            $4,
+            $5,
+            $5
+          )
+        `,
+        [organizationId, projectId, episodeId, userId, new Date("2026-06-14T09:13:00.000Z")],
+      );
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-06-14T09:14:00.000Z"),
+      });
+      const counts = await db.query<{
+        originalProject: number;
+        scripts: number;
+        sections: number;
+        episodes: number;
+        storageObjects: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id = $2) AS originalProject,
+            (SELECT count(*)::int FROM scripts WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL) AS scripts,
+            (SELECT count(*)::int FROM script_reader_sections WHERE organization_id = $1 AND project_id = $2 AND status <> 'archived') AS sections,
+            (SELECT count(*)::int FROM episodes WHERE organization_id = $1 AND project_id = $2) AS episodes,
+            (SELECT count(*)::int FROM storage_objects WHERE id = $3) AS storageObjects
+        `,
+        [organizationId, projectId, projectStorageObjectId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(counts.rows[0], {
+        originalProject: 0,
+        scripts: 0,
+        sections: 0,
+        episodes: 0,
+        storageObjects: 0,
+      });
+      assert.equal(localObjectStore.has("projects/delete-project-cover.png"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps imported script projects when deleting their project shell", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-imported-script-project-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const imported = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "Imported Script",
+          scriptInput: "Chapter 1\nImported script body.",
+        },
+        now: new Date("2026-06-14T10:10:00.000Z"),
+      });
+      const projectId = (imported.body as any).project.id;
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-06-14T10:11:00.000Z"),
+      });
+      const counts = await db.query<{
+        originalProject: number;
+        retainedProjects: number;
+        movedScripts: number;
+        movedSections: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id = $2) AS originalProject,
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id <> $2) AS retainedProjects,
+            (SELECT count(*)::int FROM scripts WHERE organization_id = $1 AND project_id <> $2 AND title = 'Imported Script' AND deleted_at IS NULL) AS movedScripts,
+            (SELECT count(*)::int FROM script_reader_sections WHERE organization_id = $1 AND project_id <> $2 AND status <> 'archived') AS movedSections
+        `,
+        [organizationId, projectId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(counts.rows[0], {
+        originalProject: 0,
+        retainedProjects: 1,
+        movedScripts: 1,
+        movedSections: 1,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("lists reusable official assets as browse-only application data", async () => {
     const db = await createMigratedTestDb();
 
@@ -1139,6 +1386,150 @@ describe("creator application service", { concurrency: false }, () => {
 
       assert.equal(deleted.status, 200);
       assert.equal(localObjectStore.has(prepared.objectKey), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates episode storyboards in the requested project and persists them to SQL", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-create-shot-project-context-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Persist requested storyboard",
+          scriptInput: "Episode 1: create one manual storyboard.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-create-shot-project-context-create",
+        now: new Date("2026-06-14T08:00:00.000Z"),
+      });
+      const projectId = (created.body as any).project.id;
+      const episodeCreated = await creator.createEpisode({
+        user,
+        body: {
+          projectId,
+          title: "第一集",
+        },
+        now: new Date("2026-06-14T08:01:00.000Z"),
+      });
+      const episodeId = (episodeCreated.body as any).episode.id;
+
+      const shotCreated = await creator.createShot({
+        user,
+        body: {
+          projectId,
+          episodeId,
+          title: "2",
+          description: "新增分镜内容",
+        },
+        now: new Date("2026-06-14T08:02:00.000Z"),
+      });
+      const shotId = (shotCreated.body as any).shot.id;
+      const storedShots = await db.query<{
+        id: string;
+        project_id: string;
+        episode_id: string;
+        title: string;
+        description: string;
+      }>(
+        `
+          SELECT id, project_id, episode_id, title, description
+          FROM shots
+          WHERE id = $1
+        `,
+        [shotId],
+      );
+
+      assert.equal(created.status, 200);
+      assert.equal(episodeCreated.status, 200);
+      assert.equal(shotCreated.status, 200);
+      assert.equal(storedShots.rows[0]?.project_id, projectId);
+      assert.equal(storedShots.rows[0]?.episode_id, episodeId);
+      assert.equal(storedShots.rows[0]?.title, "2");
+      assert.equal(storedShots.rows[0]?.description, "新增分镜内容");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates missing episode records before persisting a storyboard shot", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-create-shot-missing-episode-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Auto create missing episode",
+          scriptInput: "Episode 1: create shot should also create the missing episode.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-create-shot-missing-episode-create",
+        now: new Date("2026-06-14T09:00:00.000Z"),
+      });
+      const projectId = (created.body as any).project.id;
+      const missingEpisodeId = "11111111-1111-4111-8111-111111111111";
+
+      const shotCreated = await creator.createShot({
+        user,
+        body: {
+          projectId,
+          episodeId: missingEpisodeId,
+          episodeTitle: "第 2 集",
+          title: "1",
+          description: "",
+        },
+        now: new Date("2026-06-14T09:01:00.000Z"),
+      });
+      const episodeRows = await db.query<{ id: string; title: string }>(
+        `
+          SELECT id, title
+          FROM episodes
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+        `,
+        [organizationId, projectId, missingEpisodeId],
+      );
+      const shotRows = await db.query<{ id: string; episode_id: string }>(
+        `
+          SELECT id, episode_id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND episode_id = $3
+        `,
+        [organizationId, projectId, missingEpisodeId],
+      );
+
+      assert.equal(shotCreated.status, 200);
+      assert.equal(episodeRows.rows[0]?.title, "第 2 集");
+      assert.equal(shotRows.rows.length, 1);
     } finally {
       await db.close();
     }

@@ -187,6 +187,14 @@ function patchJson(url, body) {
   });
 }
 
+function putJson(url, body) {
+  return fetchJson(url, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
 function deleteJson(url, body) {
   return fetchJson(url, {
     method: "DELETE",
@@ -581,6 +589,36 @@ export const creatorApi = {
 
   deleteCanvasProject(projectId) {
     return deleteJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`);
+  },
+
+  getProjectCanvas(projectId) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`);
+  },
+
+  saveProjectCanvas(projectId, input) {
+    return putJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`, input);
+  },
+
+  runCanvasNode(canvasProjectId, nodeKey, input, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/run`,
+      input,
+      {
+        action: "canvas.node.run",
+        idempotencyKey: options.idempotencyKey,
+      },
+    );
+  },
+
+  listCanvasNodeRuns(canvasProjectId, nodeKey) {
+    return fetchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/runs`);
+  },
+
+  selectCanvasNodeArtifact(canvasProjectId, artifactId, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/artifacts/${encodeURIComponent(artifactId)}/select`,
+      input,
+    );
   },
 
   getWorkspaceScripts() {

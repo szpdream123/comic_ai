@@ -170,6 +170,69 @@ describe("createDevDb", () => {
     });
   });
 
+  it("repairs GPT Image provider drift and missing reference image model config", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET provider_config_json = '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY"}'::jsonb
+          WHERE model_code = 'gpt-image-2-cn'
+        `,
+      );
+      await db.query(
+        `
+          DELETE FROM ai_model_dispatch_policies
+          WHERE model_config_id IN (
+            SELECT id
+            FROM ai_model_configs
+            WHERE model_code = 'gpt-image-2-reference-cn'
+          )
+        `,
+      );
+      await db.query("DELETE FROM ai_model_configs WHERE model_code = 'gpt-image-2-reference-cn'");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const models = await repairedDb.query<{
+        model_code: string;
+        provider_config_json: Record<string, unknown>;
+        supported_modes: unknown;
+      }>(
+        `
+          SELECT
+            model_code,
+            provider_config_json,
+            ui_config_json->'supportedModes' AS supported_modes
+          FROM ai_model_configs
+          WHERE model_code IN ('gpt-image-2-cn', 'gpt-image-2-reference-cn')
+          ORDER BY model_code
+        `,
+      );
+      const policies = await repairedDb.query<{ count: number }>(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code = 'gpt-image-2-reference-cn'
+            AND p.submit_queue_name = 'generation-submit-image'
+        `,
+      );
+      await repairedDb.close();
+
+      assert.deepEqual(models.rows.map((row) => row.model_code), [
+        "gpt-image-2-cn",
+        "gpt-image-2-reference-cn",
+      ]);
+      for (const row of models.rows) {
+        assert.equal(row.provider_config_json.baseURL, "https://code.shoestravel.xin");
+        assert.equal(row.provider_config_json.endpoint, "/v1/images/generations");
+        assert.equal(row.provider_config_json.editEndpoint, "/v1/images/edits");
+      }
+      assert.equal(policies.rows[0]?.count, 1);
+    });
+  });
+
   it("repairs existing PostgreSQL databases missing team collaboration tables", async () => {
     await withIsolatedDevSchema(async () => {
       const db = await createDevDb();

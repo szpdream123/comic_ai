@@ -1,7 +1,11 @@
 ﻿import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createDefaultCanvasDocument } from "../src/features/production-workbench/canvas/canvas-default-document.js";
+import {
+  createDefaultCanvasDocument,
+  createLegacyStarterCanvasDocument,
+  isLegacyStarterCanvasDocument,
+} from "../src/features/production-workbench/canvas/canvas-default-document.js";
 import { validateCanvasConnection } from "../src/features/production-workbench/canvas/canvas-edge-rules.js";
 import {
   canvasDocumentFromX6Data,
@@ -23,12 +27,22 @@ import {
 } from "../src/features/production-workbench/canvas/canvas-state.js";
 
 describe("canvas workflow document", () => {
-  it("creates the first functional canvas workflow document", () => {
+  function createStarterCanvasDocument(input = {}) {
+    return createLegacyStarterCanvasDocument(input);
+  }
+
+  it("creates a blank canvas workflow document by default", () => {
     const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
 
     assert.equal(document.version, 1);
-    assert.equal(document.nodes.length, 3);
-    assert.equal(document.edges.length, 2);
+    assert.equal(document.nodes.length, 0);
+    assert.equal(document.edges.length, 0);
+  });
+
+  it("identifies the old starter workflow so cached blank projects can be reset", () => {
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+
+    assert.equal(isLegacyStarterCanvasDocument(document), true);
     assert.deepEqual(document.nodes.map((node) => node.type), ["script", "send", "image"]);
     assert.deepEqual(document.edges.map((edge) => `${edge.sourceNodeId}:${edge.sourcePortId}->${edge.targetNodeId}:${edge.targetPortId}`), [
       "script-source:out_text->send-flow:in_text",
@@ -52,7 +66,7 @@ describe("canvas workflow document", () => {
   });
 
   it("round trips the canvas document through X6 graph data", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const x6Data = canvasDocumentToX6Data(document);
     const nextDocument = canvasDocumentFromX6Data(x6Data, document);
 
@@ -84,7 +98,7 @@ describe("canvas workflow document", () => {
   });
 
   it("connects compatible nodes as executable workflow edges", () => {
-    const document = addCanvasNode(createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), {
+    const document = addCanvasNode(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), {
       type: "image",
       id: "image-second",
       position: { x: 1280, y: 240 },
@@ -128,7 +142,7 @@ describe("canvas workflow document", () => {
   });
 
   it("disconnects workflow edges when dragged back from input to output", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
 
     const result = disconnectCanvasNodes(document, {
       sourceNodeId: "send-flow",
@@ -164,13 +178,10 @@ describe("canvas workflow document", () => {
     assert.deepEqual(
       templates.map((template) => `${template.group}:${template.type}`),
       [
-        "基础:script",
-        "基础:upload",
-        "生成:send",
-        "生成:image",
-        "生成:video",
-        "编排:director",
-        "编排:output",
+        "节点:script",
+        "节点:send",
+        "节点:video",
+        "节点:upload",
       ],
     );
     assert.equal(templates.find((template) => template.type === "send").defaultData.modelCode, "image-live");
@@ -199,7 +210,7 @@ describe("canvas workflow document", () => {
   });
 
   it("builds sidebar items for node and asset modes", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const nodeItems = buildCanvasSidebarItems(document, {
       mode: "nodes",
       assets: [{ id: "asset-1", title: "角色立绘", kind: "character" }],
@@ -243,7 +254,7 @@ describe("canvas workflow document", () => {
   });
 
   it("updates send node prompt and model from existing generation config options", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const options = resolveCanvasModelOptions(
       {
         models: [
@@ -265,9 +276,12 @@ describe("canvas workflow document", () => {
     assert.equal(sendNode.data.modelCode, "image-live");
   });
 
-  it("builds a run preview only when a send node has a prompt and model", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
-    const emptyPromptDocument = updateCanvasNodeData(document, "send-flow", { prompt: "   " });
+  it("builds a run preview when a generation node has a prompt, connected text, and model", () => {
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const emptyPromptDocument = {
+      ...updateCanvasNodeData(document, "send-flow", { prompt: "   " }),
+      edges: [],
+    };
     const readyDocument = updateCanvasNodeData(document, "send-flow", {
       prompt: "Generate first interior storyboard",
       modelCode: "image-live",
@@ -276,7 +290,7 @@ describe("canvas workflow document", () => {
 
     assert.deepEqual(buildCanvasRunPreview(emptyPromptDocument, "send-flow"), {
       ok: false,
-      reason: "canvas_run_prompt_required",
+      reason: "canvas_run_input_required",
     });
     assert.deepEqual(buildCanvasRunPreview(readyDocument, "send-flow"), {
       ok: true,
@@ -284,12 +298,36 @@ describe("canvas workflow document", () => {
       mediaKind: "image",
       modelCode: "image-live",
       prompt: "Generate first interior storyboard",
+      nodePrompt: "Generate first interior storyboard",
+      videoGenerationMode: "",
       upstreamNodeIds: ["script-source"],
+      upstreamTextFragments: [],
     });
   });
 
+  it("combines connected text nodes with the generation node prompt", () => {
+    const document = updateCanvasNodeData(
+      createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }),
+      "script-source",
+      { text: "第一章：主角进入废墟。" },
+    );
+    const promptOnlyFromText = buildCanvasRunPreview(document, "send-flow");
+    const promptWithLocalInstruction = buildCanvasRunPreview(
+      updateCanvasNodeData(document, "send-flow", { prompt: "生成电影感视频，镜头缓慢推进。" }),
+      "send-flow",
+    );
+
+    assert.equal(promptOnlyFromText.prompt, "第一章：主角进入废墟。");
+    assert.equal(promptOnlyFromText.nodePrompt, "");
+    assert.equal(promptOnlyFromText.upstreamTextFragments[0].text, "第一章：主角进入废墟。");
+    assert.equal(
+      promptWithLocalInstruction.prompt,
+      "第一章：主角进入废墟。\n\n生成电影感视频，镜头缓慢推进。",
+    );
+  });
+
   it("applies submitted canvas run tasks to connected result nodes", () => {
-    const document = updateCanvasNodeData(createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+    const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
       prompt: "Generate first interior storyboard",
       modelCode: "image-live",
       mediaKind: "image",
@@ -311,8 +349,36 @@ describe("canvas workflow document", () => {
     assert.equal(resultEdge.data.status, "queued");
   });
 
+  it("writes generated output item urls into canvas image nodes", () => {
+    const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+      prompt: "Generate first interior storyboard",
+      modelCode: "image-live",
+      mediaKind: "image",
+    });
+    const preview = buildCanvasRunPreview(document, "send-flow");
+    const nextDocument = applyCanvasRunResult(document, preview, {
+      taskId: "task-canvas-generated-1",
+      status: "completed",
+      generatedOutputItems: [
+        {
+          kind: "image",
+          previewUrl: "https://example.test/canvas-generated.png",
+          sourceUrl: "https://example.test/canvas-generated-source.png",
+        },
+      ],
+    });
+    const sendNode = nextDocument.nodes.find((node) => node.id === "send-flow");
+    const resultNode = nextDocument.nodes.find((node) => node.id === "image-result");
+
+    assert.equal(sendNode.data.status, "completed");
+    assert.equal(sendNode.data.previewUrl, "https://example.test/canvas-generated.png");
+    assert.equal(sendNode.data.resultUrl, "https://example.test/canvas-generated.png");
+    assert.equal(resultNode.data.status, "completed");
+    assert.equal(resultNode.data.previewUrl, "https://example.test/canvas-generated.png");
+  });
+
   it("uses generation task snapshot progress fields for canvas nodes", () => {
-    const document = updateCanvasNodeData(createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+    const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
       prompt: "Generate first interior storyboard",
       modelCode: "image-live",
       mediaKind: "image",
@@ -335,7 +401,7 @@ describe("canvas workflow document", () => {
   });
 
   it("removes a canvas node and its attached edges", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const nextDocument = removeCanvasNode(document, "send-flow");
 
     assert.deepEqual(nextDocument.nodes.map((node) => node.id), ["script-source", "image-result"]);

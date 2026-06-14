@@ -6,6 +6,12 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import {
+  providerResponseDiagnostics,
+  providerResponseError,
+  readProviderResponseDiagnostics,
+  type ProviderResponseDiagnostics,
+} from "./provider-response-diagnostics.ts";
 
 const defaultEndpoint = "https://api.openai.com/v1/images/generations";
 const defaultEditEndpoint = "https://api.openai.com/v1/images/edits";
@@ -58,7 +64,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     );
 
     if (!response.ok) {
-      throw new Error(`openai_images_${response.status}`);
+      throw providerResponseError(`openai_images_${response.status}`, providerResponseDiagnostics(response, text));
     }
 
     const diagnostics = providerResponseDiagnostics(response, text);
@@ -125,7 +131,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     );
 
     if (!response.ok) {
-      throw new Error(`openai_images_${response.status}`);
+      throw providerResponseError(`openai_images_${response.status}`, providerResponseDiagnostics(response, text));
     }
 
     const diagnostics = providerResponseDiagnostics(response, text);
@@ -184,36 +190,6 @@ function parseOpenAIImagesResponsePayload(text: string, diagnostics: ProviderRes
   } catch {
     throw providerResponseError("openai_images_invalid_json", diagnostics);
   }
-}
-
-interface ProviderResponseDiagnostics {
-  httpStatus: number;
-  contentType: string | null;
-  responseBodyLength: number;
-  responseBodyPreview: string;
-}
-
-function providerResponseDiagnostics(response: Response, text: string): ProviderResponseDiagnostics {
-  return {
-    httpStatus: response.status,
-    contentType: response.headers.get("content-type"),
-    responseBodyLength: Buffer.byteLength(text, "utf8"),
-    responseBodyPreview: redactResponsePreview(text),
-  };
-}
-
-function providerResponseError(message: string, diagnostics: ProviderResponseDiagnostics) {
-  return Object.assign(new Error(message), {
-    providerDiagnostics: diagnostics,
-  });
-}
-
-function redactResponsePreview(text: string) {
-  const preview = text.trim().slice(0, 500);
-  if (!preview) return "";
-  return preview
-    .replace(/"b64_json"\s*:\s*"[^"]+"/gi, '"b64_json":"[redacted]"')
-    .replace(/"url"\s*:\s*"[^"]+"/gi, '"url":"[redacted]"');
 }
 
 function normalizeResultFormat(value: string | undefined) {
@@ -553,7 +529,8 @@ async function imageReferenceToBlob(reference: ImageReference, fetchImpl: typeof
   }
   const response = await fetchImpl(reference.url);
   if (!response.ok) {
-    throw new Error(`openai_images_reference_${response.status}`);
+    const { diagnostics } = await readProviderResponseDiagnostics(response);
+    throw providerResponseError(`openai_images_reference_${response.status}`, diagnostics);
   }
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || reference.mimeType;
   return new Blob([await response.arrayBuffer()], { type: contentType });

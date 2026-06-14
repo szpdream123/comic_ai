@@ -223,6 +223,9 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
       await applySqlMigrations(db, process.cwd(), { fromName: "0025_jimeng_image_model_configs.sql" });
     }
+    if (!(await gptImageReferenceModelConfigsCurrent(db))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0027_gpt_image_reference_model_config.sql" });
+    }
     await ensureHappyHorseResolutionConfig(db);
     await ensureVideoModelCategories(db);
   }
@@ -293,6 +296,51 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   if (!(await tableExists(db, "prop_prompt_templates"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0018_prop_prompt_templates.sql" });
   }
+
+  if (!(await tableExists(db, "creator_canvas_projects"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0026_creator_canvas_projects.sql" });
+  } else {
+    await ensureStandaloneCanvasProjectSchema(db);
+  }
+}
+
+async function ensureStandaloneCanvasProjectSchema(db: SqlDatabase) {
+  await db.query("ALTER TABLE creator_canvas_projects ALTER COLUMN project_id DROP NOT NULL");
+  if (await creatorCanvasProjectIndexCurrent(db)) {
+    return;
+  }
+
+  await db.query("SELECT pg_advisory_lock(hashtext('creator_canvas_projects_project_uidx_repair'))");
+  try {
+    if (await creatorCanvasProjectIndexCurrent(db)) {
+      return;
+    }
+    await db.query("DROP INDEX IF EXISTS creator_canvas_projects_project_uidx");
+    await db.query(
+      `
+        CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_projects_project_uidx
+        ON creator_canvas_projects (organization_id, project_id)
+        WHERE deleted_at IS NULL AND project_id IS NOT NULL
+      `,
+    );
+  } finally {
+    await db.query("SELECT pg_advisory_unlock(hashtext('creator_canvas_projects_project_uidx_repair'))");
+  }
+}
+
+async function creatorCanvasProjectIndexCurrent(db: SqlDatabase) {
+  const result = await db.query<{ indexdef: string }>(
+    `
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'creator_canvas_projects'
+        AND indexname = 'creator_canvas_projects_project_uidx'
+      LIMIT 1
+    `,
+  );
+  const indexDef = result.rows[0]?.indexdef ?? "";
+  return /\bdeleted_at IS NULL\b/i.test(indexDef) && /\bproject_id IS NOT NULL\b/i.test(indexDef);
 }
 
 async function ensurePaymentProviderConstraints(db: SqlDatabase) {
@@ -698,6 +746,38 @@ async function seedanceModelConfigsCurrent(db: SqlDatabase) {
   );
 
   return result.rows[0]?.count === 3;
+}
+
+async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ count: number }>(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM ai_model_configs
+      WHERE status = 'active'
+        AND (
+          (
+            model_code = 'gpt-image-2-cn'
+            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
+            AND provider_config_json->>'endpoint' = '/v1/images/generations'
+            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+          )
+          OR (
+            model_code = 'gpt-image-2-reference-cn'
+            AND provider_protocol = 'openai_images'
+            AND provider_model = 'gpt-image-2'
+            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
+            AND provider_config_json->>'endpoint' = '/v1/images/generations'
+            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+          )
+        )
+    `,
+  );
+
+  return result.rows[0]?.count === 2;
 }
 
 async function ensureVideoModelCategories(db: SqlDatabase) {

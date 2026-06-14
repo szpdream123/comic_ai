@@ -166,6 +166,67 @@ test("project member update targets the member-scoped route", async () => {
   assert.equal(calls[0].options.method, "PATCH");
 });
 
+test("project canvas helpers target project-scoped canvas routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { ok: true },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getProjectCanvas("project/1");
+  await creatorApi.saveProjectCanvas("project/1", {
+    clientRevision: 1,
+    document: { nodes: [], edges: [] },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/canvas");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[1].url, "/api/creator/projects/project%2F1/canvas");
+  assert.equal(calls[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    clientRevision: 1,
+    document: { nodes: [], edges: [] },
+  });
+});
+
+test("canvas node history helpers target canvas-scoped routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { ok: true },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.runCanvasNode("canvas/1", "node/1", { prompt: "frame" }, { idempotencyKey: "run-key" });
+  await creatorApi.listCanvasNodeRuns("canvas/1", "node/1");
+  await creatorApi.selectCanvasNodeArtifact("canvas/1", "artifact/1", { selectionRole: "current" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/canvas/canvas%2F1/nodes/node%2F1/run",
+    "/api/canvas/canvas%2F1/nodes/node%2F1/runs",
+    "/api/canvas/canvas%2F1/artifacts/artifact%2F1/select",
+  ]);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["idempotency-key"], "run-key");
+  assert.equal(calls[1].options.method, undefined);
+  assert.equal(calls[2].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[2].options.body), { selectionRole: "current" });
+});
+
 test("billing read routes target explicit order and payment intent resources", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

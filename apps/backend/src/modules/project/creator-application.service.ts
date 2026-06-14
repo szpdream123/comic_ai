@@ -72,6 +72,7 @@ import {
 import { CalibrationRuleError } from "./calibration.service.ts";
 import {
   createEpisodeForProject,
+  createEpisodeForProjectWithId,
   deleteEpisodeForProject,
   listEpisodesForProject,
   replaceEpisodesForProject,
@@ -999,6 +1000,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       await deleteProjectRecord(deps.db, {
         organizationId: actor.organizationId,
         projectId,
+        runtime: deps.storageRuntime ?? null,
+        now: input.now,
       });
       if (sqlState.projectId === projectId) {
         sqlState.projectId = null;
@@ -2189,10 +2192,20 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async createShot(input: {
       user: AuthenticatedCreatorUser;
-      body: { title?: string | null; description?: string | null; episodeId?: string | null };
+      body: {
+        projectId?: string | null;
+        title?: string | null;
+        description?: string | null;
+        episodeId?: string | null;
+        episodeTitle?: string | null;
+      };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
+      const requestedProjectId = input.body.projectId ?? sqlState.projectId ?? null;
+      if (requestedProjectId && sqlState.projectId !== requestedProjectId) {
+        sqlState.projectId = requestedProjectId;
+      }
       await hydrateActiveCreatorApp({
         user: input.user,
         creatorApp,
@@ -2209,15 +2222,23 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
-      if (
-        input.body.episodeId &&
-        !(await episodeExistsForProject(deps.db, {
+      if (input.body.episodeId) {
+        const episodeExists = await episodeExistsForProject(deps.db, {
           organizationId: actor.organizationId,
           projectId,
           episodeId: input.body.episodeId,
-        }))
-      ) {
-        return { status: 404, body: { error: "episode_not_found" } };
+        });
+        if (!episodeExists) {
+          const episodeTitle = input.body.episodeTitle?.trim() || "未命名剧集";
+          await createEpisodeForProjectWithId(deps.db, {
+            organizationId: actor.organizationId,
+            projectId,
+            episodeId: input.body.episodeId,
+            title: episodeTitle,
+            createdByUserId: actor.actorId,
+            now: input.now,
+          });
+        }
       }
       const result = await creatorApp.createShot(input.body);
       await upsertShotsForProject(deps.db, {
@@ -4017,6 +4038,21 @@ async function listProjectsForWorkspace(
       FROM projects
       WHERE organization_id = $1
         AND workspace_id = $2
+        AND NOT EXISTS (
+          SELECT 1
+          FROM creator_canvas_projects ccp
+          WHERE ccp.organization_id = projects.organization_id
+            AND ccp.project_id = projects.id
+            AND ccp.deleted_at IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM scripts s
+          WHERE s.organization_id = projects.organization_id
+            AND s.project_id = projects.id
+            AND s.title IS NOT NULL
+            AND s.deleted_at IS NULL
+        )
       ORDER BY created_at DESC, id DESC
     `,
     [input.organizationId, input.workspaceId],
@@ -4789,8 +4825,53 @@ async function buildProjectStats(
 
 async function deleteProjectRecord(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string },
+  input: { organizationId: string; projectId: string; runtime?: UploadSessionRuntime | null; now: Date },
 ) {
+  const retainedScriptProjectId = await moveImportedProjectScriptsToRetainedProject(db, input);
+  const removableStorageObjects = await listDeletableProjectStorageObjects(db, input);
+  await deleteProjectStorageObjectsFromRuntime(db, {
+    objects: removableStorageObjects,
+    runtime: input.runtime ?? null,
+    now: input.now,
+  });
+  await db.query(
+    `
+      UPDATE creator_canvas_node_runs
+      SET generation_snapshot_id = NULL
+      WHERE organization_id = $1
+        AND generation_snapshot_id IN (
+          SELECT id
+          FROM ai_generation_task_snapshots
+          WHERE organization_id = $1
+            AND (
+              project_id = $2
+              OR task_id IN (
+                SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
+              )
+              OR credit_reservation_id IN (
+                SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+              )
+            )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query(
+    `
+      DELETE FROM ai_generation_task_snapshots
+      WHERE organization_id = $1
+        AND (
+          project_id = $2
+          OR task_id IN (
+            SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
+          )
+          OR credit_reservation_id IN (
+            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+          )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
   await db.query(
     `
       DELETE FROM credit_ledger_entries
@@ -4929,10 +5010,7 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
-  await db.query("DELETE FROM storage_objects WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await deleteProjectStorageObjectRecords(db, removableStorageObjects);
   await db.query(
     `
       DELETE FROM calibration_items
@@ -4992,6 +5070,10 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
+  await db.query("DELETE FROM script_reader_sections WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
   await db.query("DELETE FROM scripts WHERE organization_id = $1 AND project_id = $2", [
     input.organizationId,
     input.projectId,
@@ -5004,6 +5086,181 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
+  if (retainedScriptProjectId) {
+    await db.query(
+      `
+        UPDATE projects
+        SET updated_at = $3
+        WHERE organization_id = $1
+          AND id = $2
+      `,
+      [input.organizationId, retainedScriptProjectId, input.now],
+    );
+  }
+}
+
+async function moveImportedProjectScriptsToRetainedProject(
+  db: SqlDatabase,
+  input: { organizationId: string; projectId: string; now: Date },
+) {
+  const scripts = await db.query<{
+    id: string;
+    title: string | null;
+    created_by_user_id: string | null;
+  }>(
+    `
+      SELECT id, title, created_by_user_id
+      FROM scripts
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND title IS NOT NULL
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.organizationId, input.projectId],
+  );
+  if (!scripts.rows.length) {
+    return null;
+  }
+
+  const sourceProject = await queryOne<{
+    workspace_id: string;
+    aspect_ratio: string;
+    resolution: string;
+    created_by_user_id: string | null;
+  }>(
+    db,
+    `
+      SELECT workspace_id, aspect_ratio, resolution, created_by_user_id
+      FROM projects
+      WHERE organization_id = $1
+        AND id = $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.projectId],
+  );
+  if (!sourceProject) {
+    return null;
+  }
+
+  const retainedProjectId = randomUUID();
+  const retainedProjectName =
+    scripts.rows[0]?.title?.trim() ||
+    `保留剧本 ${input.projectId.slice(0, 8)}`;
+  await db.query(
+    `
+      INSERT INTO projects (
+        id,
+        organization_id,
+        workspace_id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'script_input', $7, $8, $8)
+    `,
+    [
+      retainedProjectId,
+      input.organizationId,
+      sourceProject.workspace_id,
+      retainedProjectName,
+      sourceProject.aspect_ratio,
+      sourceProject.resolution,
+      sourceProject.created_by_user_id,
+      input.now,
+    ],
+  );
+  await db.query(
+    `
+      UPDATE scripts
+      SET project_id = $3,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND title IS NOT NULL
+        AND deleted_at IS NULL
+    `,
+    [input.organizationId, input.projectId, retainedProjectId, input.now],
+  );
+  await db.query(
+    `
+      UPDATE script_reader_sections
+      SET project_id = $3,
+          episode_id = NULL,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND status <> 'archived'
+    `,
+    [input.organizationId, input.projectId, retainedProjectId, input.now],
+  );
+  return retainedProjectId;
+}
+
+async function listDeletableProjectStorageObjects(
+  db: SqlDatabase,
+  input: { organizationId: string; projectId: string },
+) {
+  const result = await db.query<{
+    id: string;
+    bucket: string;
+    object_key: string;
+  }>(
+    `
+      SELECT id, bucket, object_key
+      FROM storage_objects so
+      WHERE so.organization_id = $1
+        AND so.project_id = $2
+        AND NOT EXISTS (
+          SELECT 1
+          FROM library_asset_versions lav
+          WHERE lav.storage_object_key = so.object_key
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  return result.rows;
+}
+
+async function deleteProjectStorageObjectsFromRuntime(
+  db: SqlDatabase,
+  input: {
+    objects: Array<{ id: string; bucket: string; object_key: string }>;
+    runtime?: UploadSessionRuntime | null;
+    now: Date;
+  },
+) {
+  if (!input.runtime) {
+    return;
+  }
+  for (const object of input.objects) {
+    await deleteStorageObjectRecord(db, {
+      storageObjectId: object.id,
+      adapter: input.runtime.adapter,
+      localObjectStore: input.runtime.localObjectStore ?? null,
+      now: input.now,
+    });
+  }
+}
+
+async function deleteProjectStorageObjectRecords(
+  db: SqlDatabase,
+  objects: Array<{ id: string }>,
+) {
+  if (!objects.length) {
+    return;
+  }
+  await db.query(
+    `
+      DELETE FROM storage_objects
+      WHERE id = ANY($1::uuid[])
+    `,
+    [objects.map((object) => object.id)],
+  );
 }
 
 async function episodeExistsForProject(
@@ -5784,6 +6041,7 @@ async function listScriptsForWorkspace(
       WHERE s.organization_id = $1
         AND p.workspace_id = $2
         AND s.deleted_at IS NULL
+        AND s.title IS NOT NULL
       ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
     `,
     [input.organizationId, input.workspaceId],

@@ -16,6 +16,17 @@ export function createDefaultCanvasDocument(input = {}) {
     projectId: String(input.projectId ?? ""),
     episodeId: String(input.episodeId ?? ""),
     viewport: { x: 0, y: 0, zoom: 1 },
+    nodes: [],
+    edges: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function createLegacyStarterCanvasDocument(input = {}) {
+  const document = createDefaultCanvasDocument(input);
+  return {
+    ...document,
     nodes: [
       {
         id: "script-source",
@@ -84,9 +95,34 @@ export function createDefaultCanvasDocument(input = {}) {
         data: { kind: "image", status: "running" },
       },
     ],
-    createdAt: now,
-    updatedAt: now,
   };
+}
+
+export function isLegacyStarterCanvasDocument(document) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const edges = Array.isArray(document?.edges) ? document.edges : [];
+  if (nodes.length !== 3 || edges.length !== 2) {
+    return false;
+  }
+  const nodeIds = nodes.map((node) => String(node?.id ?? "")).sort();
+  const edgeIds = edges.map((edge) => String(edge?.id ?? "")).sort();
+  if (nodeIds.join("|") !== "image-result|script-source|send-flow") {
+    return false;
+  }
+  if (edgeIds.join("|") !== "edge-script-send|edge-send-image") {
+    return false;
+  }
+  const scriptNode = nodes.find((node) => node?.id === "script-source");
+  const sendNode = nodes.find((node) => node?.id === "send-flow");
+  const imageNode = nodes.find((node) => node?.id === "image-result");
+  return String(scriptNode?.data?.text ?? "") === "" &&
+    String(sendNode?.data?.prompt ?? "") === "" &&
+    String(imageNode?.data?.assetId ?? "") === "" &&
+    !scriptNode?.data?.textHtml &&
+    !sendNode?.data?.resultUrl &&
+    !sendNode?.data?.previewUrl &&
+    !imageNode?.data?.url &&
+    !imageNode?.data?.previewUrl;
 }
 
 export function findCanvasPort(node, portId) {

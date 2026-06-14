@@ -475,7 +475,8 @@ export function buildCanvasRunPreview(document, nodeId) {
   }
   const upstreamNodeIdList = upstreamNodeIds(document, nodeId);
   const upstreamTextFragmentList = upstreamTextFragments(document, nodeId);
-  if (!prompt && !upstreamTextFragmentList.length && !upstreamNodeIdList.length) {
+  const combinedPrompt = combineCanvasPrompt(prompt, upstreamTextFragmentList);
+  if (!combinedPrompt && !upstreamNodeIdList.length) {
     return { ok: false, reason: "canvas_run_input_required" };
   }
   return {
@@ -483,7 +484,9 @@ export function buildCanvasRunPreview(document, nodeId) {
     nodeId,
     mediaKind: String(node.data?.mediaKind ?? "image"),
     modelCode,
-    prompt,
+    prompt: combinedPrompt,
+    nodePrompt: prompt,
+    videoGenerationMode: String(node.data?.videoGenerationMode ?? node.data?.videoMode ?? ""),
     upstreamNodeIds: upstreamNodeIdList,
     upstreamTextFragments: upstreamTextFragmentList,
   };
@@ -661,9 +664,49 @@ function resolveCanvasTaskStageProgress(stage) {
 
 function resolveCanvasTaskMediaUrl(task, mediaKind) {
   const result = task?.result ?? {};
+  const generatedItems = [
+    ...safeArray(task?.generatedOutputItems),
+    ...safeArray(result.generatedOutputItems),
+    ...safeArray(task?.fixedImages),
+    ...safeArray(result.fixedImages),
+    ...safeArray(task?.fixedVideos),
+    ...safeArray(result.fixedVideos),
+  ];
+  const generatedImageUrls = generatedItems.flatMap((item) => [
+    item?.url,
+    item?.imageUrl,
+    item?.previewUrl,
+    item?.sourceUrl,
+    item?.downloadUrl,
+    item?.thumbnailUrl,
+  ]);
+  const generatedVideoUrls = generatedItems.flatMap((item) => [
+    item?.videoUrl,
+    item?.url,
+    item?.previewUrl,
+    item?.sourceUrl,
+    item?.downloadUrl,
+  ]);
   const candidates = mediaKind === "video"
-    ? [result.videoUrl, result.url, result.previewUrl, result.sourceUrl, task?.videoUrl, task?.url]
-    : [result.imageUrl, result.url, result.previewUrl, result.sourceUrl, result.thumbnailUrl, task?.imageUrl, task?.url];
+    ? [
+        result.videoUrl,
+        result.url,
+        result.previewUrl,
+        result.sourceUrl,
+        task?.videoUrl,
+        task?.url,
+        ...generatedVideoUrls,
+      ]
+    : [
+        result.imageUrl,
+        result.url,
+        result.previewUrl,
+        result.sourceUrl,
+        result.thumbnailUrl,
+        task?.imageUrl,
+        task?.url,
+        ...generatedImageUrls,
+      ];
   for (const candidate of candidates) {
     const value = String(candidate ?? "").trim();
     if (value) {
@@ -738,6 +781,16 @@ function upstreamTextFragments(document, nodeId) {
       text: normalizeUpstreamText(node.data?.text || stripUpstreamHtml(node.data?.textHtml)),
     }))
     .filter((fragment) => fragment.text);
+}
+
+function combineCanvasPrompt(prompt, textFragments = []) {
+  return [
+    ...safeArray(textFragments).map((fragment) => fragment?.text),
+    prompt,
+  ]
+    .map((text) => normalizeUpstreamText(text))
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function normalizeUpstreamText(text) {

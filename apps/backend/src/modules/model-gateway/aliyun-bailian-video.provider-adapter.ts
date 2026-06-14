@@ -3,6 +3,11 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import {
+  providerResponseError,
+  readProviderResponseDiagnostics,
+  type ProviderResponseDiagnostics,
+} from "./provider-response-diagnostics.ts";
 
 const defaultModel = "happyhorse-1.0-r2v";
 
@@ -31,12 +36,13 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
 
     if (!response.ok) {
       const error = await readProviderError(response);
-      throw new Error(
+      throw providerResponseError(
         [
           `aliyun_bailian_video_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),
+        error.diagnostics,
       );
     }
 
@@ -95,12 +101,13 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
 
     if (!response.ok) {
       const error = await readProviderError(response);
-      throw new Error(
+      throw providerResponseError(
         [
           `aliyun_bailian_video_poll_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),
+        error.diagnostics,
       );
     }
 
@@ -283,9 +290,14 @@ function normalizeResolution(value: unknown) {
   return resolution;
 }
 
-async function readProviderError(response: Response) {
+async function readProviderError(response: Response): Promise<{
+  providerErrorCode: string | null;
+  providerMessage: string | null;
+  diagnostics: ProviderResponseDiagnostics;
+}> {
+  const { text, diagnostics } = await readProviderResponseDiagnostics(response);
   try {
-    const payload = (await response.json()) as Record<string, unknown>;
+    const payload = JSON.parse(text) as Record<string, unknown>;
     return {
       providerErrorCode:
         findFirstString(payload, [
@@ -301,12 +313,13 @@ async function readProviderError(response: Response) {
           ["output", "message"],
           ["output", "error", "message"],
         ]) ?? null,
+      diagnostics,
     };
   } catch {
-    const body = await response.text().catch(() => "");
     return {
       providerErrorCode: null,
-      providerMessage: body.trim().slice(0, 500) || null,
+      providerMessage: diagnostics.responseBodyPreview || null,
+      diagnostics,
     };
   }
 }

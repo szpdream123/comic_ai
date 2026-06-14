@@ -67,6 +67,20 @@ import {
   createCreatorApplication,
 } from "../modules/project/creator-application.service.ts";
 import {
+  attachCanvasTaskResultToHistory,
+  canvasErrorToStatus,
+  CanvasConflictError,
+  CanvasDocumentError,
+  createCanvasNodeRun,
+  findCanvasByCanvasProjectId,
+  getOrCreateProjectCanvas,
+  listCanvasNodeRuns,
+  markCanvasNodeRunQueued,
+  saveProjectCanvas,
+  selectCanvasNodeArtifact,
+} from "../modules/project/creator-canvas-record.service.ts";
+import { CanvasValidationError } from "../modules/project/creator-canvas-validation.ts";
+import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
 } from "../modules/project/project-upload-record.service.ts";
@@ -172,7 +186,6 @@ const adminRoot = join(process.cwd(), "apps", "admin");
 const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
-const canvasProjectStorePath = resolve(process.cwd(), ".local", "canvas-projects.json");
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
@@ -831,16 +844,34 @@ function envelopedError(
 
 interface CanvasProjectRecord {
   id: string;
+  projectId: string | null;
   title: string;
   createdAt: string;
   status: string;
   ownerUserId: string;
+  organizationId: string;
+  workspaceId: string;
+}
+
+interface CanvasProjectRow {
+  id: string;
+  organization_id: string;
+  workspace_id: string;
+  project_id: string | null;
+  title: string;
+  status: string;
+  created_by_user_id: string | null;
+  created_at: Date | string;
+  server_revision?: number;
+  latest_document_id?: string | null;
 }
 
 function formatCanvasProjectDate(now = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
+  const date = now instanceof Date ? now : new Date(now);
+  const normalized = Number.isFinite(date.getTime()) ? date : new Date();
+  const year = normalized.getFullYear();
+  const month = String(normalized.getMonth() + 1).padStart(2, "0");
+  const day = String(normalized.getDate()).padStart(2, "0");
   return `${year}/${month}/${day}`;
 }
 
@@ -848,39 +879,178 @@ function normalizeCanvasProjectTitle(value: unknown, fallback = "画布项目"):
   return String(value ?? fallback).trim().slice(0, 50) || fallback;
 }
 
-async function readCanvasProjects(): Promise<CanvasProjectRecord[]> {
-  try {
-    const raw = await readFile(canvasProjectStorePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter((item): item is CanvasProjectRecord => Boolean(item && typeof item === "object"))
-      .map((item) => ({
-        id: String((item as CanvasProjectRecord).id ?? randomUUID()),
-        title: normalizeCanvasProjectTitle((item as CanvasProjectRecord).title),
-        createdAt: String((item as CanvasProjectRecord).createdAt ?? "2026/06/11"),
-        status: String((item as CanvasProjectRecord).status ?? "草稿"),
-        ownerUserId: String((item as CanvasProjectRecord).ownerUserId ?? "dev-user"),
-      }));
-  } catch {
-    return [];
-  }
-}
-
-async function writeCanvasProjects(projects: CanvasProjectRecord[]): Promise<void> {
-  await mkdir(dirname(canvasProjectStorePath), { recursive: true });
-  await writeFile(canvasProjectStorePath, JSON.stringify(projects, null, 2), "utf8");
-}
-
 function serializeCanvasProject(project: CanvasProjectRecord) {
   return {
     id: project.id,
+    projectId: project.projectId,
     title: project.title,
     createdAt: project.createdAt,
     status: project.status,
   };
+}
+
+function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    createdAt: formatCanvasProjectDate(new Date(row.created_at)),
+    status: row.status,
+    ownerUserId: row.created_by_user_id ?? "",
+    organizationId: row.organization_id,
+    workspaceId: row.workspace_id,
+  };
+}
+
+async function listCanvasProjects(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string },
+): Promise<CanvasProjectRecord[]> {
+  const result = await db.query<CanvasProjectRow>(
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.organizationId, input.userId],
+  );
+  return result.rows.map(canvasProjectFromRow);
+}
+
+async function createCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    userId: string;
+    title: string;
+    status: string;
+    now: Date;
+  },
+): Promise<CanvasProjectRecord> {
+  const normalizedTitle = normalizeCanvasProjectTitle(input.title);
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      INSERT INTO creator_canvas_projects (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        title,
+        status,
+        created_by_user_id,
+        updated_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $8)
+      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      null,
+      normalizedTitle,
+      normalizeCanvasProjectStatus(input.status),
+      input.userId,
+      input.now,
+    ],
+  );
+  return canvasProjectFromRow(row!);
+}
+
+async function findCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string; projectId: string },
+): Promise<CanvasProjectRecord | null> {
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.organizationId, input.userId, input.projectId],
+  );
+  return row ? canvasProjectFromRow(row) : null;
+}
+
+async function updateCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    userId: string;
+    projectId: string;
+    title?: string;
+    status?: string;
+    now: Date;
+  },
+): Promise<CanvasProjectRecord | null> {
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      UPDATE creator_canvas_projects
+      SET title = COALESCE($4, title),
+          status = COALESCE($5, status),
+          updated_by_user_id = $2,
+          updated_at = $6
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+    `,
+    [
+      input.organizationId,
+      input.userId,
+      input.projectId,
+      input.title ?? null,
+      input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
+      input.now,
+    ],
+  );
+  return row ? canvasProjectFromRow(row) : null;
+}
+
+function normalizeCanvasProjectStatus(value: unknown) {
+  const normalized = String(value ?? "draft").trim().toLowerCase();
+  if (normalized === "草稿" || normalized === "draft") return "draft";
+  if (normalized === "active" || normalized === "进行中") return "active";
+  if (normalized === "archived" || normalized === "归档") return "archived";
+  return "draft";
+}
+
+async function deleteCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string; projectId: string; now: Date },
+): Promise<boolean> {
+  const result = await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET deleted_at = $4,
+          updated_by_user_id = $2,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+    `,
+    [input.organizationId, input.userId, input.projectId, input.now],
+  );
+  return result.rowCount > 0;
 }
 
 function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
@@ -2245,6 +2415,47 @@ async function getEpisodeContext(
   };
 }
 
+async function resolveCanvasRunEpisodeId(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    requestedEpisodeId?: unknown;
+  },
+) {
+  const requested = readString(input.requestedEpisodeId);
+  if (requested) {
+    const episode = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM episodes
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+        LIMIT 1
+      `,
+      [input.organizationId, input.projectId, requested],
+    );
+    if (episode) {
+      return episode.id;
+    }
+  }
+  const fallback = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM episodes
+      WHERE organization_id = $1
+        AND project_id = $2
+      ORDER BY sequence ASC, created_at ASC
+      LIMIT 1
+    `,
+    [input.organizationId, input.projectId],
+  );
+  return fallback?.id ?? null;
+}
+
 async function resolveTaskContext(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -2687,6 +2898,62 @@ async function mapGenerationTaskResponse(
   };
 }
 
+async function recordCanvasHistoryFromGenerationResponse(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    responseBody: unknown;
+    userId: string;
+    now: Date;
+  },
+) {
+  const body = input.responseBody && typeof input.responseBody === "object"
+    ? input.responseBody as Record<string, unknown>
+    : {};
+  if (String(body.targetType ?? "") !== "canvas") {
+    return null;
+  }
+  const taskId = readString(body.taskId);
+  const nodeKey = readString(body.targetId);
+  if (!taskId || !nodeKey) {
+    return null;
+  }
+  const task = await queryOne<{
+    organization_id: string;
+    workspace_id: string | null;
+    project_id: string | null;
+  }>(
+    db,
+    `
+      SELECT organization_id, workspace_id, project_id
+      FROM tasks
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [taskId],
+  );
+  if (!task?.workspace_id || !task.project_id) {
+    return null;
+  }
+  const result = body.result && typeof body.result === "object"
+    ? body.result as Record<string, unknown>
+    : null;
+  const failure = body.failure && typeof body.failure === "object"
+    ? body.failure as Record<string, unknown>
+    : null;
+  return attachCanvasTaskResultToHistory(db, {
+    organizationId: task.organization_id,
+    workspaceId: task.workspace_id,
+    projectId: task.project_id,
+    nodeKey,
+    taskId,
+    mediaKind: readString(body.kind) || "image",
+    result,
+    failure,
+    userId: input.userId,
+    now: input.now,
+  });
+}
+
 function generationResultFromSnapshotAsset(
   asset: Record<string, unknown>,
   kind: string,
@@ -2774,6 +3041,16 @@ function readErrorFailureCode(error: unknown): string | undefined {
     : undefined;
 }
 
+function readErrorApiKeyEnv(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const value = (error as { apiKeyEnv?: unknown }).apiKeyEnv;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 function readErrorStorageObjectId(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
@@ -2825,23 +3102,24 @@ function generationFailureDisplayMessage(input: {
   }
   const providerMessage = String(input.providerMessage ?? "").trim();
   if (failureCode === "provider_failed" && providerMessage) {
-    return generationProviderFailureDisplayMessage(providerMessage) ||
-      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerMessage}`;
+    const translatedProviderMessage = generationProviderFailureDisplayMessage(providerMessage);
+    return translatedProviderMessage || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerMessage}`;
   }
   const providerErrorCode = String(input.providerErrorCode ?? "").trim();
   if (failureCode === "provider_failed" && providerErrorCode) {
-    return generationProviderFailureDisplayMessage(providerErrorCode) ||
-      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerErrorCode}`;
+    const translatedProviderErrorCode = generationProviderFailureDisplayMessage(providerErrorCode);
+    return translatedProviderErrorCode || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerErrorCode}`;
   }
   return generationFailureDisplayMessageByCode(failureCode);
 }
-
 function generationProviderMessageForClient(value: string | null | undefined): string | null {
   const message = String(value ?? "").trim();
   if (!message) {
     return null;
   }
-  return message;
+  return translateKnownGenerationFailureMessage(message) ||
+    generationProviderFailureDisplayMessage(message) ||
+    message;
 }
 
 function generationProviderFailureDisplayMessage(value: string): string {
@@ -2852,6 +3130,24 @@ function generationProviderFailureDisplayMessage(value: string): string {
   }
   if (code === "provider_submission_ambiguous") {
     return generationFailureDisplayMessageByCode("provider_submission_ambiguous");
+  }
+  if (/volcengine_ark_image_404|InvalidEndpointOrModel\.NotFound/i.test(code)) {
+    const model = /model or endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
+      /endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
+      "";
+    return model
+      ? `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\uff1a${model}\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002`
+      : "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  }
+  const volcengineImageStatus = /^volcengine_ark_image_(\d{3})/i.exec(code)?.[1];
+  if (volcengineImageStatus === "401" || volcengineImageStatus === "403") {
+    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u9274\u6743\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5 API \u5bc6\u94a5\u548c\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  }
+  if (volcengineImageStatus === "400") {
+    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u62d2\u7edd\u4e86\u8bf7\u6c42\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5\u63d0\u793a\u8bcd\u3001\u53c2\u8003\u56fe\u6216\u6a21\u578b\u53c2\u6570\u3002";
+  }
+  if (volcengineImageStatus && Number(volcengineImageStatus) >= 500) {
+    return `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u8fd4\u56de HTTP ${volcengineImageStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
   }
   if (code === "openai_images_empty_response") {
     return generationFailureDisplayMessageByCode("openai_images_empty_response");
@@ -4169,6 +4465,7 @@ async function createEpisodeGenerationTask(
       return { status: 200 as const, body: responseBody };
     } catch (error) {
       const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+      const apiKeyEnv = readErrorApiKeyEnv(error);
       await finalizeTaskAttempt(db, {
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -4209,6 +4506,7 @@ async function createEpisodeGenerationTask(
             providerMessage: error instanceof Error ? error.message : String(error),
           }),
           providerMessage: error instanceof Error ? error.message : String(error),
+          ...(apiKeyEnv ? { apiKeyEnv } : {}),
         },
         creditSummary: {
           released: estimatedCost,
@@ -4231,6 +4529,19 @@ async function createEpisodeGenerationTask(
         status: "succeeded",
         updatedAt: input.now,
       });
+
+      if (failureCode === "provider_api_key_missing" || failureCode === "provider_api_key_env_required") {
+        const message = generationFailureDisplayMessage({ failureCode });
+        return {
+          status: 502 as const,
+          body: envelopedError(502, failureCode, apiKeyEnv ? `${message} 缺失项：${apiKeyEnv}` : message, {
+            taskId: task.id,
+            workflowId: workflow.workflow.id,
+            apiKeyEnv,
+            creditReleased: estimatedCost,
+          }).body,
+        };
+      }
 
       return { status: 200 as const, body: responseBody };
     }
@@ -5129,7 +5440,7 @@ async function createEpisodeAssetRecord(
     return null;
   }
   const assetKey = `episode-${normalized.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
-  const description = String(input.body.description ?? defaultEpisodeAssetDescription(normalized.kind)).trim();
+  const description = String(input.body.description ?? "").trim();
   const snapshot = await createAssetVersionSnapshot(db, {
     organizationId: context.actor.organizationId,
     projectId: context.project.id,
@@ -10749,6 +11060,7 @@ export function createPhoneAuthDevServer(
       if (
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
+        pathname.startsWith("/api/canvas/") ||
         pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
@@ -10762,6 +11074,168 @@ export function createPhoneAuthDevServer(
             response,
             envelopedError(401, "unauthenticated", "session expired"),
           );
+        }
+
+        const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
+        if (request.method === "GET" && canvasNodeRunsMatch) {
+          const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
+          const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.projectView,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          return writeJson(response, enveloped(200, await listCanvasNodeRuns(db, {
+            organizationId: actor.organizationId,
+            canvasProjectId,
+            nodeKey,
+          })));
+        }
+
+        const canvasArtifactSelectMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/artifacts\/([^/]+)\/select$/);
+        if (request.method === "POST" && canvasArtifactSelectMatch) {
+          const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
+          const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
+          const body = (await readJsonBody(request)) as { selectionRole?: unknown };
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.projectEdit,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          try {
+            return writeJson(response, enveloped(200, {
+              artifact: await selectCanvasNodeArtifact(db, {
+                organizationId: actor.organizationId,
+                canvasProjectId,
+                artifactId,
+                selectionRole: typeof body.selectionRole === "string" ? body.selectionRole : "current",
+                userId: authenticated.user.id,
+                now: new Date(),
+              }),
+            }));
+          } catch (error) {
+            const status = canvasErrorToStatus(error);
+            return writeJson(response, envelopedError(status, error instanceof CanvasDocumentError ? error.code : "canvas_artifact_select_failed", error instanceof Error ? error.message : "canvas artifact select failed"));
+          }
+        }
+
+        const canvasNodeRunMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/run$/);
+        if (request.method === "POST" && canvasNodeRunMatch) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "idempotency key required"));
+          }
+          const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
+          const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          const node = canvas.document.nodes.find((item) => item.id === nodeKey);
+          if (!node) {
+            return writeJson(response, envelopedError(404, "canvas_node_not_found", "canvas node not found"));
+          }
+          const episodeId = await resolveCanvasRunEpisodeId(db, {
+            organizationId: actor.organizationId,
+            projectId: canvas.projectId,
+            requestedEpisodeId: body.episodeId,
+          });
+          if (!episodeId) {
+            return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
+          }
+          const mediaKind = String(body.kind ?? body.mediaKind ?? node.data?.mediaKind ?? "image") === "video" ? "video" : "image";
+          const run = await createCanvasNodeRun(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId!,
+            canvasProjectId,
+            nodeKey,
+            idempotencyKey,
+            status: "created",
+            mediaKind,
+            modelCode: typeof body.model === "string" ? body.model : typeof body.modelCode === "string" ? body.modelCode : null,
+            episodeId,
+            targetType: "canvas",
+            targetId: nodeKey,
+            inputSnapshot: {
+              ...body,
+              canvasProjectId,
+              projectId: canvas.projectId,
+              nodeKey,
+              nodeData: node.data ?? {},
+            },
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          const generationBody = {
+            ...body,
+            targetType: "canvas",
+            targetId: nodeKey,
+            canvasProjectId,
+            canvasNodeId: nodeKey,
+          };
+          const result = await createEpisodeGenerationTask(db, {
+            kind: mediaKind,
+            episodeId,
+            body: generationBody,
+            idempotencyKey,
+            authenticated,
+            runtime: storageRuntime,
+            env: runtimeEnv,
+            fetchImpl: options.fetchImpl,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
+          if (!result.body) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          }
+          const taskId = readString((result.body as Record<string, unknown>).taskId);
+          await markCanvasNodeRunQueued(db, {
+            organizationId: actor.organizationId,
+            runId: run.id,
+            taskId: taskId || null,
+            now: new Date(),
+          });
+          await recordCanvasHistoryFromGenerationResponse(db, {
+            responseBody: result.body,
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(result.status, {
+            ...result.body as Record<string, unknown>,
+            runId: run.id,
+            runNo: run.runNo,
+            canvasProjectId,
+            nodeKey,
+          }));
         }
 
         if (
@@ -11849,6 +12323,11 @@ export function createPhoneAuthDevServer(
           if (!task) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
+          await recordCanvasHistoryFromGenerationResponse(db, {
+            responseBody: task,
+            userId: authenticated.user.id,
+            now,
+          });
           return writeJson(response, enveloped(200, task));
         }
 
@@ -12045,9 +12524,80 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const projectCanvasMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/canvas$/);
+        if (projectCanvasMatch) {
+          const projectId = decodeURIComponent(projectCanvasMatch[1] ?? "");
+          if (request.method !== "GET" && request.method !== "PUT") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
+            now,
+          });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
+          try {
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, {
+                canvas: await getOrCreateProjectCanvas(db, {
+                  organizationId: actor.organizationId,
+                  workspaceId: actor.workspaceId,
+                  projectId,
+                  userId: authenticated.user.id,
+                  now,
+                }),
+              }));
+            }
+            const body = (await readJsonBody(request)) as {
+              clientRevision?: unknown;
+              serverRevision?: unknown;
+              document?: unknown;
+              events?: Array<Record<string, unknown>>;
+            };
+            return writeJson(response, enveloped(200, {
+              canvas: await saveProjectCanvas(db, {
+                organizationId: actor.organizationId,
+                workspaceId: actor.workspaceId,
+                projectId,
+                userId: authenticated.user.id,
+                clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
+                document: body.document,
+                events: Array.isArray(body.events) ? body.events : [],
+                now,
+              }),
+            }));
+          } catch (error) {
+            if (error instanceof CanvasConflictError) {
+              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+                serverRevision: error.serverRevision,
+                serverDocument: error.serverDocument as Record<string, unknown>,
+              }));
+            }
+            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
         if (pathname === "/api/creator/canvas-projects") {
-          const projects = await readCanvasProjects();
-          const ownedProjects = projects.filter((project) => project.ownerUserId === authenticated.user.id);
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
+            now: new Date(),
+          });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
+          const ownedProjects = await listCanvasProjects(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+          });
 
           if (request.method === "GET") {
             return writeJson(response, enveloped(200, {
@@ -12058,14 +12608,14 @@ export function createPhoneAuthDevServer(
           if (request.method === "POST") {
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const nextIndex = ownedProjects.length + 1;
-            const project: CanvasProjectRecord = {
-              id: `canvas-project-${randomUUID()}`,
+            const project = await createCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId,
+              userId: authenticated.user.id,
               title: normalizeCanvasProjectTitle(body.title, `画布项目 ${nextIndex}`),
-              createdAt: formatCanvasProjectDate(new Date()),
               status: String(body.status ?? "草稿").trim() || "草稿",
-              ownerUserId: authenticated.user.id,
-            };
-            await writeCanvasProjects([...projects, project]);
+              now: new Date(),
+            });
             return writeJson(response, enveloped(201, {
               project: serializeCanvasProject(project),
             }));
@@ -12075,10 +12625,17 @@ export function createPhoneAuthDevServer(
         const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
-          const projects = await readCanvasProjects();
-          const project = projects.find(
-            (item) => item.id === projectId && item.ownerUserId === authenticated.user.id,
-          );
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
+            now: new Date(),
+          });
+          const project = await findCanvasProjectRecord(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+            projectId,
+          });
 
           if (!project) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
@@ -12086,23 +12643,30 @@ export function createPhoneAuthDevServer(
 
           if (request.method === "PATCH") {
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
-            const updated: CanvasProjectRecord = {
-              ...project,
+            const updated = await updateCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              userId: authenticated.user.id,
+              projectId: project.id,
               title: Object.prototype.hasOwnProperty.call(body, "title")
                 ? normalizeCanvasProjectTitle(body.title, project.title)
-                : project.title,
+                : undefined,
               status: Object.prototype.hasOwnProperty.call(body, "status")
                 ? (String(body.status ?? project.status).trim() || project.status)
-                : project.status,
-            };
-            await writeCanvasProjects(projects.map((item) => (item.id === project.id ? updated : item)));
+                : undefined,
+              now: new Date(),
+            });
             return writeJson(response, enveloped(200, {
-              project: serializeCanvasProject(updated),
+              project: serializeCanvasProject(updated ?? project),
             }));
           }
 
           if (request.method === "DELETE") {
-            await writeCanvasProjects(projects.filter((item) => item.id !== project.id));
+            await deleteCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              userId: authenticated.user.id,
+              projectId: project.id,
+              now: new Date(),
+            });
             return writeJson(response, enveloped(200, {
               deletedProjectId: project.id,
             }));
@@ -13236,6 +13800,7 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "POST" && pathname === "/api/creator/shots") {
           const body = (await readJsonBody(request)) as {
+            projectId?: string | null;
             title?: string | null;
             description?: string | null;
             episodeId?: string | null;

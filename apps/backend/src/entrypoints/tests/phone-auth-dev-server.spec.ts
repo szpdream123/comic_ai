@@ -729,7 +729,8 @@ describe("phone auth dev server", () => {
   });
 
   it("creates, renames, and deletes canvas projects through HTTP routes", async () => {
-    const server = createPhoneAuthDevServer();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -748,6 +749,70 @@ describe("phone auth dev server", () => {
       });
       const created = await createResponse.json();
       const projectId = created.data.project.id;
+      const userRow = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1",
+        ["+8613800138277"],
+      );
+      const userId = userRow.rows[0]?.id;
+      assert.ok(userId);
+      await db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            aspect_ratio,
+            resolution,
+            phase,
+            created_by_user_id
+          )
+          VALUES (
+            '40000000-0000-4000-8000-000000000277',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            '普通项目不能进入画布项目列表',
+            '9:16',
+            '1080p',
+            'asset_review',
+            $1
+          )
+        `,
+        [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            title,
+            status,
+            created_by_user_id,
+            updated_by_user_id
+          )
+          VALUES (
+            '50000000-0000-4000-8000-000000000277',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            '40000000-0000-4000-8000-000000000277',
+            '普通项目绑定画布',
+            'active',
+            $1,
+            $1
+          )
+        `,
+        [userId],
+      );
+      const createdRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
+      const ordinaryProjectsAfterCanvasCreate = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const ordinaryProjects = await ordinaryProjectsAfterCanvasCreate.json();
 
       const renameResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
         method: "PATCH",
@@ -760,17 +825,39 @@ describe("phone auth dev server", () => {
         }),
       });
       const renamed = await renameResponse.json();
+      const renamedRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
 
       const listResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         headers: { cookie },
       });
       const listed = await listResponse.json();
+      const renameProjectLinkedCanvasResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/50000000-0000-4000-8000-000000000277`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            title: "不应被独立画布接口改名",
+          }),
+        },
+      );
+      const renameProjectLinkedCanvas = await renameProjectLinkedCanvasResponse.json();
 
       const deleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
         method: "DELETE",
         headers: { cookie },
       });
       const deleted = await deleteResponse.json();
+      const deletedRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
 
       const afterDeleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         headers: { cookie },
@@ -779,12 +866,27 @@ describe("phone auth dev server", () => {
 
       assert.equal(createResponse.status, 201);
       assert.equal(created.data.project.title, "迷雾世界-第一卷");
+      assert.equal(createdRow.rows[0]?.title, "迷雾世界-第一卷");
+      assert.equal(createdRow.rows[0]?.deleted_at, null);
+      assert.equal(ordinaryProjectsAfterCanvasCreate.status, 200);
+      assert.equal(
+        ordinaryProjects.data.projects.some((project) => project.id === projectId || project.name === "迷雾世界-第一卷"),
+        false,
+      );
       assert.equal(renameResponse.status, 200);
       assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
+      assert.equal(renamedRow.rows[0]?.title, "迷雾世界-第二卷");
       assert.equal(listResponse.status, 200);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
+      assert.equal(
+        listed.data.projects.some((project) => project.id === "50000000-0000-4000-8000-000000000277"),
+        false,
+      );
+      assert.equal(renameProjectLinkedCanvasResponse.status, 404);
+      assert.equal(renameProjectLinkedCanvas.errorCode, "canvas_project_not_found");
       assert.equal(deleteResponse.status, 200);
       assert.equal(deleted.data.deletedProjectId, projectId);
+      assert.notEqual(deletedRow.rows[0]?.deleted_at, null);
       assert.equal(afterDelete.data.projects.some((project) => project.id === projectId), false);
     } finally {
       await server.close();
@@ -3276,6 +3378,15 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ projectId }),
       });
       const deletedProject = await deleteProjectResponse.json();
+      const snapshotRowsAfterDelete = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM ai_generation_task_snapshots
+          WHERE organization_id = $1
+            AND task_id = $2
+        `,
+        ["10000000-0000-4000-8000-000000000001", taskId],
+      );
 
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
@@ -3284,6 +3395,7 @@ describe("phone auth dev server", () => {
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
+      assert.equal(Number(snapshotRowsAfterDelete.rows[0]?.count ?? -1), 0);
     } finally {
       await server.close();
     }
@@ -3700,6 +3812,23 @@ describe("phone auth dev server", () => {
       const createAssetEnvelope = await createAssetResponse.json();
       const assetId = createAssetEnvelope.data.asset.assetId;
 
+      const createBlankAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "空白角色",
+          }),
+        },
+      );
+      const createBlankAssetEnvelope = await createBlankAssetResponse.json();
+      const blankAssetId = createBlankAssetEnvelope.data.asset.assetId;
+
       const listAfterCreateResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`,
         { headers: { cookie } },
@@ -3756,12 +3885,22 @@ describe("phone auth dev server", () => {
       assert.equal(createAssetEnvelope.data.asset.assetType, "role");
       assert.equal(createAssetEnvelope.data.asset.name, "废土主角");
       assert.equal(createAssetEnvelope.data.asset.description, "初始角色设定");
+      assert.equal(createBlankAssetResponse.status, 200);
+      assert.equal(createBlankAssetEnvelope.data.asset.description, "");
       assert.equal(listAfterCreateResponse.status, 200);
-      assert.equal(listAfterCreateEnvelope.data.items.length, 1);
-      assert.equal(listAfterCreateEnvelope.data.items[0].assetId, assetId);
+      assert.equal(listAfterCreateEnvelope.data.items.length, 2);
+      assert.ok(listAfterCreateEnvelope.data.items.some((item: { assetId: string }) => item.assetId === assetId));
+      assert.equal(
+        listAfterCreateEnvelope.data.items.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
+        "",
+      );
       assert.equal(workbenchAfterCreateResponse.status, 200);
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 1);
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role[0].assetId, assetId);
+      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 2);
+      assert.ok(workbenchAfterCreateEnvelope.data.assetsByType.role.some((item: { assetId: string }) => item.assetId === assetId));
+      assert.equal(
+        workbenchAfterCreateEnvelope.data.assetsByType.role.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
+        "",
+      );
       assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.character[0].name, "废土主角");
       assert.equal(updateAssetResponse.status, 200);
       assert.equal(updateAssetEnvelope.data.asset.assetId, assetId);
@@ -3772,7 +3911,8 @@ describe("phone auth dev server", () => {
       assert.equal(deleteAssetResponse.status, 200);
       assert.equal(deleteAssetEnvelope.data.deleted, true);
       assert.equal(listAfterDeleteResponse.status, 200);
-      assert.deepEqual(listAfterDeleteEnvelope.data.items, []);
+      assert.equal(listAfterDeleteEnvelope.data.items.length, 1);
+      assert.equal(listAfterDeleteEnvelope.data.items[0].assetId, blankAssetId);
     } finally {
       await server.close();
     }
@@ -4780,11 +4920,19 @@ describe("phone auth dev server", () => {
 
   it("returns friendly display messages for GPT Image provider gateway failures", async () => {
     const db = await createDevDb();
+    const previousApiKey = process.env.GPT_IMAGE2_API_KEY;
+    process.env.GPT_IMAGE2_API_KEY = previousApiKey || "test-gpt-image-key";
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138012");
+      const readCreatedTask = async (response: Response) => {
+        const envelope = await response.json();
+        const taskId = envelope.data?.taskId ?? envelope.details?.taskId ?? envelope.data?.details?.taskId;
+        assert.ok(taskId, `generation task response should include a task id: ${JSON.stringify(envelope)}`);
+        return { ...(envelope.data ?? {}), taskId };
+      };
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
@@ -4830,7 +4978,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const ambiguousTask = (await ambiguousTaskResponse.json()).data;
+      const ambiguousTask = await readCreatedTask(ambiguousTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -4878,6 +5026,26 @@ describe("phone auth dev server", () => {
         `,
         [ambiguousTask.taskId, new Date("2026-06-03T07:02:01.000Z")],
       );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          ambiguousTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_submission_ambiguous",
+            providerStatus: "result_unknown",
+          }),
+          new Date("2026-06-03T07:02:01.000Z"),
+        ],
+      );
 
       const timeoutTaskResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
@@ -4896,7 +5064,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const timeoutTask = (await timeoutTaskResponse.json()).data;
+      const timeoutTask = await readCreatedTask(timeoutTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -4945,7 +5113,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const emptyResponseTask = (await emptyResponseTaskResponse.json()).data;
+      const emptyResponseTask = await readCreatedTask(emptyResponseTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -4995,7 +5163,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const fetchFailedTask = (await fetchFailedTaskResponse.json()).data;
+      const fetchFailedTask = await readCreatedTask(fetchFailedTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -5027,6 +5195,55 @@ describe("phone auth dev server", () => {
         ],
       );
 
+      const volcengineModelNotFoundTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-volcengine-model-not-found",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "volcengine model not found",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const volcengineModelNotFoundTask = await readCreatedTask(volcengineModelNotFoundTaskResponse);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [volcengineModelNotFoundTask.taskId, new Date("2026-06-03T07:06:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          volcengineModelNotFoundTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            providerMessage: "volcengine_ark_image_404:InvalidEndpointOrModel.NotFound:The model or endpoint doubao-seedream-4-0 does not exist or you do not have access to it.",
+          }),
+          new Date("2026-06-03T07:06:01.000Z"),
+        ],
+      );
+
       const ambiguousLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${ambiguousTask.taskId}`, {
         headers: { cookie },
       });
@@ -5043,6 +5260,10 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const fetchFailedEnvelope = await fetchFailedLookupResponse.json();
+      const volcengineModelNotFoundLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${volcengineModelNotFoundTask.taskId}`, {
+        headers: { cookie },
+      });
+      const volcengineModelNotFoundEnvelope = await volcengineModelNotFoundLookupResponse.json();
 
       assert.equal(ambiguousLookupResponse.status, 200);
       assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
@@ -5056,7 +5277,15 @@ describe("phone auth dev server", () => {
       assert.equal(fetchFailedEnvelope.data.failure.displayMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
       assert.equal(fetchFailedEnvelope.data.failure.providerMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
       assert.doesNotMatch(JSON.stringify(fetchFailedEnvelope.data.failure), /fetch failed/);
+      assert.equal(volcengineModelNotFoundLookupResponse.status, 200);
+      assert.equal(volcengineModelNotFoundEnvelope.data.failure.displayMessage, "火山方舟图片模型不可用或当前账号无权限：doubao-seedream-4-0。任务没有生成图片，积分已返还，请检查模型配置或供应商权限。");
+      assert.doesNotMatch(volcengineModelNotFoundEnvelope.data.failure.displayMessage, /InvalidEndpointOrModel/);
     } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.GPT_IMAGE2_API_KEY;
+      } else {
+        process.env.GPT_IMAGE2_API_KEY = previousApiKey;
+      }
       await server.close();
     }
   });

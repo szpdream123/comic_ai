@@ -165,11 +165,18 @@ test("admin user credit ledger keeps subaccount ledger scoped to the target user
 
     assert.deepEqual(
       result.data.map((entry) => entry.sourceType),
-      ["credit_reservation_allocation", "credit_reservation_allocation", "admin_manual_deduct", "admin_manual_grant"],
+      ["credit_reservation_allocation", "credit_reservation", "admin_manual_deduct", "admin_manual_grant"],
     );
     assert.deepEqual(
       result.data.map((entry) => entry.metadata.adjustmentScenario),
       [undefined, undefined, "correction", "compensation"],
+    );
+    assert.deepEqual(
+      result.data
+        .filter((entry) => ["credit_reservation", "credit_reservation_allocation"].includes(entry.sourceType))
+        .filter((entry) => ["reservation", "consume"].includes(entry.entryType))
+        .map((entry) => entry.reservationId),
+      ["97000000-0000-4000-8000-000000002002"],
     );
   } finally {
     await db.close();
@@ -668,7 +675,7 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           '2026-06-05T07:05:00.000Z'
         ),
         (
-          '98000000-0000-4000-8000-000000002003',
+          '98000000-0000-4000-8000-000000002006',
           '91000000-0000-4000-8000-000000002001',
           'consume',
           10,
@@ -775,6 +782,22 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
         created_at
       )
       VALUES
+        (
+          '98000000-0000-4000-8000-000000002003',
+          '91000000-0000-4000-8000-000000002001',
+          '97000000-0000-4000-8000-000000002002',
+          'reservation',
+          80,
+          -80,
+          80,
+          0,
+          'credit_reservation',
+          '97000000-0000-4000-8000-000000002002',
+          'Image generation failed and refunded',
+          '{"billingEvent":"reserved","taskId":"97000000-0000-4000-8000-000000002003"}'::jsonb,
+          NULL,
+          '2026-06-05T07:11:00.000Z'
+        ),
         (
           '98000000-0000-4000-8000-000000002004',
           '91000000-0000-4000-8000-000000002001',

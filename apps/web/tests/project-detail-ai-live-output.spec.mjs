@@ -85,6 +85,9 @@ test("loading AI storyboard preview shows the active asset stage response", () =
 test("project workspace renders action feedback as global status toast", () => {
   const successHtml = renderLoadingPreview("character", "{}", { toast: "已重命名为 新角色。" });
   const errorHtml = renderLoadingPreview("character", "{}", { toast: "删除失败：权限不足" });
+  const explicitErrorHtml = renderLoadingPreview("character", "{}", {
+    toast: { tone: "error", message: "供应商模型不可用，积分已返还。" },
+  });
 
   assert.match(successHtml, /id="workspace-status"/);
   assert.match(successHtml, /global-workbench-toast success/);
@@ -93,6 +96,9 @@ test("project workspace renders action feedback as global status toast", () => {
   assert.match(errorHtml, /global-workbench-toast error/);
   assert.match(errorHtml, /操作失败/);
   assert.match(errorHtml, /删除失败：权限不足/);
+  assert.match(explicitErrorHtml, /global-workbench-toast error/);
+  assert.match(explicitErrorHtml, /操作失败/);
+  assert.doesNotMatch(explicitErrorHtml, /操作成功/);
 });
 
 test("loading AI storyboard preview bounds live text and table rows", () => {

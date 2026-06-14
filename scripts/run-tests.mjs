@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ignoredDirectories = new Set([
@@ -12,6 +12,7 @@ const ignoredDirectories = new Set([
 ]);
 
 const args = process.argv.slice(2);
+loadDotEnvFile(join(process.cwd(), ".env"));
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
 const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 300_000);
@@ -159,6 +160,40 @@ function resolveTsxRuntimeArgs(runtime) {
   }
 
   return ["--loader", "tsx"];
+}
+
+function loadDotEnvFile(envFilePath) {
+  if (!existsSync(envFilePath)) {
+    return;
+  }
+
+  const content = readFileSync(envFilePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    if (!key || process.env[key] !== undefined) {
+      continue;
+    }
+
+    let value = line.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  }
 }
 
 function runCommand(command, testFile) {

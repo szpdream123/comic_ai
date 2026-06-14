@@ -3,6 +3,10 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import {
+  providerResponseError,
+  readProviderResponseDiagnostics,
+} from "./provider-response-diagnostics.ts";
 
 export class HttpProviderAdapter implements ProviderAdapter {
   constructor(
@@ -24,7 +28,8 @@ export class HttpProviderAdapter implements ProviderAdapter {
     });
 
     if (!response.ok) {
-      throw new Error(`provider_http_${response.status}`);
+      const { diagnostics } = await readProviderResponseDiagnostics(response);
+      throw providerResponseError(`provider_http_${response.status}`, diagnostics);
     }
 
     const payload = (await response.json()) as Partial<ProviderSubmissionResult>;

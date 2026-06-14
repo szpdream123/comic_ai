@@ -788,6 +788,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
     const ledgerScope = ledgerScopeForTarget(target);
+    const fetchLimit = Math.min(300, pageSize * 4);
     const result = await deps.db.query<LedgerRow>(
       `
         SELECT *
@@ -797,13 +798,14 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         ORDER BY created_at DESC, id ASC
         LIMIT $4
       `,
-      [target.organizationId, ...ledgerScope.params, pageSize],
+      [target.organizationId, ...ledgerScope.params, fetchLimit],
     );
+    const rows = coalesceUserCreditLedgerRows(result.rows).slice(0, pageSize);
     const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
-      data: result.rows.map(ledgerFromRow),
+      data: rows.map(ledgerFromRow),
       summary,
-      meta: { total: result.rows.length },
+      meta: { total: rows.length },
     };
   }
 
@@ -928,6 +930,8 @@ interface LedgerScope {
 interface LedgerRow {
   id: string;
   organization_id: string;
+  reservation_id: string | null;
+  allocation_id: string | null;
   entry_type: string;
   amount: number | string;
   available_delta: number | string;
@@ -1286,6 +1290,8 @@ function ledgerFromRow(row: LedgerRow) {
   return {
     id: row.id,
     organizationId: row.organization_id,
+    reservationId: row.reservation_id,
+    allocationId: row.allocation_id,
     entryType: row.entry_type,
     amount: Number(row.amount),
     availableDelta: Number(row.available_delta),
@@ -1297,6 +1303,40 @@ function ledgerFromRow(row: LedgerRow) {
     metadata: normalizeJson(row.metadata_json),
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function coalesceUserCreditLedgerRows(rows: LedgerRow[]): LedgerRow[] {
+  const reservationDeductionKeys = new Set<string>();
+  for (const row of rows) {
+    if (row.entry_type !== "reservation") {
+      continue;
+    }
+    const key = creditLedgerTaskDeductionKey(row);
+    if (key) {
+      reservationDeductionKeys.add(key);
+    }
+  }
+
+  return rows.filter((row) => {
+    const key = creditLedgerTaskDeductionKey(row);
+    if (row.entry_type === "consume" && key && reservationDeductionKeys.has(key)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function creditLedgerTaskDeductionKey(row: LedgerRow): string {
+  const metadata = normalizeJson(row.metadata_json);
+  const reservationId = String(row.reservation_id ?? "").trim();
+  if (reservationId) {
+    return `reservation:${reservationId}`;
+  }
+  const taskId = String(metadata.taskId ?? metadata.task_id ?? "").trim();
+  if (taskId) {
+    return `task:${taskId}`;
+  }
+  return "";
 }
 
 function normalizeJson(value: unknown): Record<string, unknown> {

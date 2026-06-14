@@ -159,6 +159,9 @@ describe("ai model configuration schema", () => {
       ]);
       assert.equal(result.rows[0]?.provider_protocol, "openai_images");
       assert.equal(result.rows[0]?.media_type, "image");
+      assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://code.shoestravel.xin");
+      assert.equal(result.rows[0]?.provider_config_json.endpoint, "/v1/images/generations");
+      assert.equal(result.rows[0]?.provider_config_json.editEndpoint, "/v1/images/edits");
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
       assert.deepEqual(result.rows[0]?.ui_config_json.supportedModes, [
         "text_to_image",
@@ -193,6 +196,80 @@ describe("ai model configuration schema", () => {
           poll_queue_name: "generation-poll-video",
         },
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds GPT Image 2 reference generation as an OpenAI Images compatible model", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        status: string;
+        task_modes_json: string[];
+        provider_config_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            display_name,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            status,
+            task_modes_json,
+            provider_config_json,
+            pricing_json,
+            limits_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE model_code = 'gpt-image-2-reference-cn'
+          LIMIT 1
+        `,
+      );
+
+      const model = result.rows[0];
+      assert.equal(model?.display_name, "GPT Image 2 参考生图");
+      assert.equal(model?.provider_name, "openai");
+      assert.equal(model?.provider_model, "gpt-image-2");
+      assert.equal(model?.provider_protocol, "openai_images");
+      assert.equal(model?.invocation_mode, "sync");
+      assert.equal(model?.media_type, "image");
+      assert.equal(model?.status, "active");
+      assert.ok(model?.task_modes_json.includes("image.reference_generate"));
+      assert.equal(model?.provider_config_json.baseURL, "https://code.shoestravel.xin");
+      assert.equal(model?.provider_config_json.endpoint, "/v1/images/generations");
+      assert.equal(model?.provider_config_json.editEndpoint, "/v1/images/edits");
+      assert.equal(model?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
+      assert.equal(model?.pricing_json.baseCredits, 99);
+      assert.equal(model?.limits_json.maxReferences, 8);
+      assert.deepEqual(model?.ui_config_json.supportedModes, ["multi_reference", "image_to_image"]);
+      assert.equal(model?.ui_config_json.providerDocUrl, "https://code.shoestravel.xin/custom/a99e495b4c5372d7");
+
+      const policies = await db.query<{ submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code = 'gpt-image-2-reference-cn'
+          LIMIT 1
+        `,
+      );
+      assert.equal(policies.rows[0]?.submit_queue_name, "generation-submit-image");
+      assert.equal(policies.rows[0]?.poll_queue_name, null);
     } finally {
       await db.close();
     }

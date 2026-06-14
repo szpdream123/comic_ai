@@ -107,6 +107,16 @@ test("credit ledger drawer renders flat credit usage rows", () => {
         metadata: { billingEvent: "consumed", modelCode: "nano_banana_2", taskId: "eb76876b-3d0d-49a5-8dc8-17b8200093a9" },
         createdAt: "2026-06-12T08:00:00.000Z",
       }, {
+        id: "ledger-3",
+        entryType: "reservation",
+        amount: 120,
+        availableDelta: -120,
+        sourceType: "generation_task",
+        sourceId: "task-3",
+        reason: "video generation",
+        metadata: { billingEvent: "reserved", mediaType: "video", taskId: "67aad2f0-0000-4000-8000-000000000003" },
+        createdAt: "2026-06-12T09:30:00.000Z",
+      }, {
         id: "ledger-2",
         entryType: "release",
         amount: 80,
@@ -140,6 +150,9 @@ test("credit ledger drawer renders flat credit usage rows", () => {
   assert.match(html, /data-full-text=/);
   assert.match(html, /credit-ledger-description-text/);
   assert.match(html, /-90/);
+  assert.match(html, /-120/);
+  assert.doesNotMatch(html, /\u5df2\u51bb\u7ed3\u79ef\u5206/);
+  assert.doesNotMatch(html, /\u4efb\u52a1\u51bb\u7ed3/);
   assert.match(html, /失败/);
   assert.match(html, /成功/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);

@@ -158,6 +158,7 @@ export async function processGptImageSubmitJob(
     return { status: "submitted" };
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+    const apiKeyEnv = readErrorApiKeyEnv(error);
     await failGptImageTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
       failureCode,
@@ -182,6 +183,7 @@ export async function processGptImageSubmitJob(
         displayMessage: failureCode,
         errorMessage: error instanceof Error ? error.message : String(error),
         providerMessage: error instanceof Error ? error.message : String(error),
+        ...(apiKeyEnv ? { apiKeyEnv } : {}),
       },
       creditSummary: {
         released: Number(row.amount_reserved ?? 0),
@@ -879,6 +881,12 @@ function parseArtifactFromProviderResponse(
 function readErrorFailureCode(error: unknown): string | undefined {
   return error && typeof error === "object" && typeof (error as { failureCode?: unknown }).failureCode === "string"
     ? String((error as { failureCode: string }).failureCode)
+    : undefined;
+}
+
+function readErrorApiKeyEnv(error: unknown): string | undefined {
+  return error && typeof error === "object" && typeof (error as { apiKeyEnv?: unknown }).apiKeyEnv === "string"
+    ? String((error as { apiKeyEnv: string }).apiKeyEnv)
     : undefined;
 }
 

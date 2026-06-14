@@ -361,9 +361,63 @@ describe("openai images provider adapter", () => {
         assert.match(error.message, /openai_images_empty_response/);
         assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
           httpStatus: 200,
+          statusText: null,
           contentType: "application/json",
+          requestId: null,
           responseBodyLength: 0,
           responseBodyPreview: "",
+        });
+        return true;
+      },
+    );
+  });
+
+  it("attaches redacted response diagnostics when relay returns HTTP errors", async () => {
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      model: "gpt-image-2",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "upstream overloaded",
+              code: "temporarily_unavailable",
+            },
+          }),
+          {
+            status: 503,
+            statusText: "Service Unavailable",
+            headers: {
+              "content-type": "application/json",
+              "x-request-id": "req_gateway_503",
+            },
+          },
+        )) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () =>
+        adapter.submit({
+          providerRequestId: "provider-request-http-error",
+          providerName: "openai-images",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-http-error:task-http-error",
+          payloadRef: "creator://payload-http-error",
+          payloadHash: "hash-http-error",
+          redactedPayload: {
+            prompt: "Vertical comic frame from a temporarily unavailable relay.",
+          },
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /openai_images_503/);
+        assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
+          httpStatus: 503,
+          statusText: "Service Unavailable",
+          contentType: "application/json",
+          requestId: "req_gateway_503",
+          responseBodyLength: 76,
+          responseBodyPreview: '{"error":{"message":"upstream overloaded","code":"temporarily_unavailable"}}',
         });
         return true;
       },
@@ -399,7 +453,9 @@ describe("openai images provider adapter", () => {
         assert.match(error.message, /openai_images_invalid_response/);
         assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
           httpStatus: 200,
+          statusText: null,
           contentType: "application/json",
+          requestId: null,
           responseBodyLength: 23,
           responseBodyPreview: '{"ok":true,"output":[]}',
         });
@@ -480,7 +536,13 @@ describe("openai images provider adapter", () => {
           },
           {},
         ),
-      /provider_api_key_missing/,
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "provider_api_key_missing");
+        assert.equal((error as { failureCode?: string }).failureCode, "provider_api_key_missing");
+        assert.equal((error as { apiKeyEnv?: string }).apiKeyEnv, "GPT_IMAGE2_API_KEY");
+        return true;
+      },
     );
   });
 

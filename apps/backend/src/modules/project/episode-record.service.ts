@@ -112,6 +112,32 @@ export async function createEpisodeForProject(
   return episodes.find((episode) => episode.id === id)!;
 }
 
+export async function createEpisodeForProjectWithId(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+    title: string;
+    createdByUserId: string;
+    now: Date;
+  },
+): Promise<EpisodeRecord> {
+  const sequence = await getNextEpisodeSequence(db, input);
+  await insertEpisode(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    id: input.episodeId,
+    title: input.title,
+    sequence,
+    status: "draft",
+    createdByUserId: input.createdByUserId,
+    now: input.now,
+  });
+  const episodes = await listEpisodesForProject(db, input);
+  return episodes.find((episode) => episode.id === input.episodeId)!;
+}
+
 export async function updateEpisodeForProject(
   db: SqlDatabase,
   input: {
