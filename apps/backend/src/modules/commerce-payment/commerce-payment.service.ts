@@ -41,6 +41,8 @@ import {
   type SignatureStatus,
 } from "./payment-provider-adapter.ts";
 
+const PAYMENT_INTENT_TTL_MS = 15 * 60 * 1000;
+
 interface AuthenticatedCommerceUser {
   sessionToken: string;
 }
@@ -161,6 +163,7 @@ interface PaymentReconciliationItemRow {
 interface CallbackOrderJoinRow extends BillingOrderRow {
   payment_intent_id: string;
   payment_intent_status: PaymentIntentStatus;
+  payment_intent_expires_at: Date | string;
   provider: PaymentProvider;
 }
 
@@ -630,6 +633,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         const paymentRisk = await paymentRiskForCallback(deps.db, {
           joined,
           body,
+          now: input.now,
         });
         const providerEventInsert = await insertProviderEventOnce(deps.db, {
           body,
@@ -1155,6 +1159,13 @@ async function insertCreatedPaymentIntent(
   },
 ): Promise<PaymentIntentRow> {
   const intentId = randomUUID();
+  const orderExpiresAt = new Date(input.order.expires_at);
+  const localExpiresAt = new Date(input.now.getTime() + PAYMENT_INTENT_TTL_MS);
+  const intentExpiresAt =
+    Number.isFinite(orderExpiresAt.getTime()) &&
+    orderExpiresAt.getTime() < localExpiresAt.getTime()
+      ? orderExpiresAt
+      : localExpiresAt;
   const initialPayloadHash = hashJson({
     orderId: input.order.id,
     provider: input.body.provider,
@@ -1219,7 +1230,7 @@ async function insertCreatedPaymentIntent(
         mode: input.body.productMode,
         actionKind: "pending_provider_submission",
       }),
-      input.order.expires_at,
+      intentExpiresAt,
       input.idempotencyRecord.id,
       input.idempotencyKey,
       input.now,
@@ -2033,6 +2044,7 @@ async function paymentRiskForCallback(
   input: {
     joined: CallbackOrderJoinRow;
     body: PaymentCallbackBody;
+    now: Date;
   },
 ): Promise<PaymentCallbackRisk | null> {
   const marksPaid = shouldMarkOrderPaid(input.body.eventType);
@@ -2040,6 +2052,16 @@ async function paymentRiskForCallback(
     marksPaid &&
     (input.joined.status !== "pending_payment" ||
       !["created", "submitted", "unknown"].includes(input.joined.payment_intent_status))
+  ) {
+    return {
+      riskType: "duplicate_trade",
+      severity: "critical",
+      conflict: "order_not_payable",
+    };
+  }
+  if (
+    marksPaid &&
+    isPaymentIntentPastExpiry(input.joined.payment_intent_expires_at, input.now)
   ) {
     return {
       riskType: "duplicate_trade",
@@ -2087,6 +2109,14 @@ async function paymentRiskForCallback(
   }
 
   return null;
+}
+
+function isPaymentIntentPastExpiry(value: Date | string | null | undefined, now: Date) {
+  if (!value) {
+    return false;
+  }
+  const expires = new Date(value);
+  return Number.isFinite(expires.getTime()) && expires.getTime() <= now.getTime();
 }
 
 async function findConflictingProviderTrade(
@@ -2170,6 +2200,7 @@ async function updatePaymentIntentForSuccessCallback(
           WHERE organization_id = $1
             AND id = $2
             AND status IN ('created', 'submitted', 'unknown')
+            AND expires_at > $4
           RETURNING *
         `,
         [
@@ -2257,6 +2288,7 @@ async function findCallbackOrder(
         bo.*,
         pi.id AS payment_intent_id,
         pi.status AS payment_intent_status,
+        pi.expires_at AS payment_intent_expires_at,
         pi.provider AS provider
       FROM payment_intents pi
       JOIN billing_orders bo

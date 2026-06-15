@@ -92,6 +92,7 @@ export async function repairQueuedGenerationTaskOutbox(
       targetType: readString(snapshot.targetType) || candidate.target_entity_type,
       targetId: readString(snapshot.targetId) || candidate.target_entity_id,
       providerExecutor: "seedance",
+      ...generationPriorityFromSnapshot(snapshot),
       availableAt: input.now,
     });
     repairedTaskIds.push(candidate.task_id);
@@ -257,4 +258,28 @@ function parseSnapshot(value: Record<string, unknown> | string) {
 
 function readString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function generationPriorityFromSnapshot(snapshot: Record<string, unknown>) {
+  if (snapshot.membershipPriority !== true) {
+    return {};
+  }
+  const queuePriority = readPositiveInteger(snapshot.queuePriority);
+  if (queuePriority === null) {
+    return {};
+  }
+
+  return {
+    membershipPriority: true,
+    queuePriority,
+    priorityReason: readString(snapshot.priorityReason) || "membership_priority",
+  };
+}
+
+function readPositiveInteger(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numberValue) || numberValue < 1) {
+    return null;
+  }
+  return numberValue;
 }

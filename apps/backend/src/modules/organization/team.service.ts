@@ -301,6 +301,10 @@ export async function getTeamOverview(
       limit: planLimits.seatLimit,
       remaining: Math.max(0, planLimits.seatLimit - usedSeats),
     },
+    team: {
+      activated: usedSeats > 0,
+      memberCount: usedSeats,
+    },
     concurrency: {
       singleAccountLimit: planLimits.singleAccountConcurrencyLimit,
     },

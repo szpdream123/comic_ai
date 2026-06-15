@@ -176,6 +176,40 @@ describe("createDevDb", () => {
     }
   });
 
+  it("repairs existing local Seedance model priority metadata", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;
+    const localDatabaseDir = await mkdtemp(join(tmpdir(), "comic-ai-local-db-"));
+
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.LOCAL_DATABASE_DIR = localDatabaseDir;
+
+      const db = await createDevDb();
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET capabilities_json = capabilities_json - 'modelFamily' - 'membershipPriorityEligible'
+          WHERE model_code = 'seedance-i2v-pro'
+        `,
+      );
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const model = await repairedDb.query<{ capabilities_json: Record<string, unknown> }>(
+        "SELECT capabilities_json FROM ai_model_configs WHERE model_code = 'seedance-i2v-pro'",
+      );
+      await repairedDb.close();
+
+      assert.equal(model.rows[0]?.capabilities_json.modelFamily, "seedance");
+      assert.equal(model.rows[0]?.capabilities_json.membershipPriorityEligible, true);
+    } finally {
+      restoreEnv("DATABASE_URL", previousDatabaseUrl);
+      restoreEnv("LOCAL_DATABASE_DIR", previousLocalDatabaseDir);
+      await rm(localDatabaseDir, { recursive: true, force: true });
+    }
+  });
+
   it("repairs existing local databases missing team collaboration tables", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousLocalDatabaseDir = process.env.LOCAL_DATABASE_DIR;

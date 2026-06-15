@@ -87,7 +87,7 @@ export function resolveApiUrl(url) {
   const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
     window.location.host ?? "",
   );
-  const localBackendPort = /^(?:431\d|4399)$/.test(window.location.port ?? "");
+  const localBackendPort = /^(?:431\d|4320|4322|4399)$/.test(window.location.port ?? "");
   const shouldUseDevBackend =
     window.location.protocol === "file:" ||
     (backendOwnedPath && localHttpHost && !localBackendPort);
@@ -705,6 +705,21 @@ export const creatorApi = {
 
   getBillingPackages() {
     return fetchJson("/api/billing/packages", { unwrapEnvelope: false });
+  },
+
+  getMembershipPlans() {
+    return fetchJson("/api/membership/plans", { unwrapEnvelope: false });
+  },
+
+  getMembershipStatus() {
+    return fetchJson("/api/membership/status", { unwrapEnvelope: false });
+  },
+
+  createMembershipOrder(input, options = {}) {
+    return postJsonWithIdempotency("/api/membership/orders", input, {
+      action: "membership.order.create",
+      idempotencyKey: options.idempotencyKey,
+    });
   },
 
   createBillingOrder(input, options = {}) {

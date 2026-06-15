@@ -66,6 +66,14 @@ interface MembershipSubscriptionRow {
   current_period_end_at: Date | string | null;
 }
 
+interface ActiveEntitlementRow {
+  entitlement_key: string;
+}
+
+interface TeamPlanLimitRow {
+  seat_limit: number | string;
+}
+
 export function createMembershipOrderService(deps: {
   db: SqlDatabase;
   workspaceId: string;
@@ -205,7 +213,7 @@ export async function createMembershipBillingOrder(input: {
             plan.currency,
             idempotencyRecord.id,
             input.idempotencyKey,
-            new Date(input.now.getTime() + 30 * 60 * 1000),
+            new Date(input.now.getTime() + 15 * 60 * 1000),
             input.now,
           ],
         );
@@ -266,22 +274,105 @@ async function getMembershipStatus(input: {
       `,
       [actor.organizationId],
     );
+    const activeEntitlements = await listActiveEntitlementKeys(input.db, {
+      organizationId: actor.organizationId,
+      now: input.now,
+    });
+    const subscriptionView = membershipSubscriptionView(subscription, input.now);
+    const teamPlanLimit = await queryOne<TeamPlanLimitRow>(
+      input.db,
+      `
+        SELECT seat_limit
+        FROM team_plan_limits
+        WHERE organization_id = $1
+        LIMIT 1
+      `,
+      [actor.organizationId],
+    );
 
     return {
       status: 200,
       body: {
         membership: {
-          status: subscription?.status ?? "none",
-          currentTier: subscription?.current_tier ?? null,
-          currentPeriodEndAt: subscription?.current_period_end_at
-            ? new Date(subscription.current_period_end_at).toISOString()
-            : null,
+          status: subscriptionView.status,
+          currentTier: subscriptionView.currentTier,
+          currentPeriodEndAt: subscriptionView.currentPeriodEndAt,
+          entitlements: {
+            priorityGeneration: activeEntitlements.has("priority_generation"),
+            teamAssetLibrary: activeEntitlements.has("team_asset_library"),
+            teamDashboard: activeEntitlements.has("team_dashboard"),
+            teamMemberManagement: activeEntitlements.has("team_member_management"),
+          },
+          team: {
+            seatLimit: activeEntitlements.has("team_member_management") && teamPlanLimit
+              ? Number(teamPlanLimit.seat_limit)
+              : null,
+          },
         },
       },
     };
   } catch (error) {
     return mapMembershipOrderError(error);
   }
+}
+
+function membershipSubscriptionView(
+  subscription: MembershipSubscriptionRow | null | undefined,
+  now: Date,
+) {
+  if (!subscription) {
+    return {
+      status: "none",
+      currentTier: null,
+      currentPeriodEndAt: null,
+    };
+  }
+
+  const currentPeriodEndAt = subscription.current_period_end_at
+    ? new Date(subscription.current_period_end_at)
+    : null;
+  const currentPeriodEndAtIso = currentPeriodEndAt
+    ? currentPeriodEndAt.toISOString()
+    : null;
+  const statusIsActive =
+    subscription.status === "experience_active" ||
+    subscription.status === "professional_active";
+  const periodIsActive =
+    currentPeriodEndAt !== null &&
+    Number.isFinite(currentPeriodEndAt.getTime()) &&
+    currentPeriodEndAt.getTime() > now.getTime();
+
+  if (statusIsActive && periodIsActive) {
+    return {
+      status: subscription.status,
+      currentTier: subscription.current_tier,
+      currentPeriodEndAt: currentPeriodEndAtIso,
+    };
+  }
+
+  return {
+    status: subscription.status === "none" ? "none" : "expired",
+    currentTier: null,
+    currentPeriodEndAt: currentPeriodEndAtIso,
+  };
+}
+
+async function listActiveEntitlementKeys(
+  db: SqlDatabase,
+  input: { organizationId: string; now: Date },
+) {
+  const result = await db.query<ActiveEntitlementRow>(
+    `
+      SELECT entitlement_key
+      FROM organization_entitlements
+      WHERE organization_id = $1
+        AND status = 'active'
+        AND (expires_at IS NULL OR expires_at > $2)
+    `,
+    [input.organizationId, input.now],
+  );
+
+  return new Set(result.rows.map((row) => row.entitlement_key));
 }
 
 async function findPurchasableMembershipPlan(

@@ -4172,6 +4172,7 @@ async function deleteProjectRecord(
   db: SqlDatabase,
   input: { organizationId: string; projectId: string },
 ) {
+  await releaseProjectCreditReservationLots(db, input);
   await db.query(
     `
       DELETE FROM credit_ledger_entries
@@ -4213,6 +4214,20 @@ async function deleteProjectRecord(
           OR attempt_id IN (
             SELECT id FROM task_attempts WHERE organization_id = $1 AND project_id = $2
           )
+        )
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query("DELETE FROM ai_generation_task_snapshots WHERE organization_id = $1 AND project_id = $2", [
+    input.organizationId,
+    input.projectId,
+  ]);
+  await db.query(
+    `
+      DELETE FROM credit_reservation_lot_allocations
+      WHERE organization_id = $1
+        AND reservation_id IN (
+          SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
         )
     `,
     [input.organizationId, input.projectId],
@@ -4385,6 +4400,75 @@ async function deleteProjectRecord(
     input.organizationId,
     input.projectId,
   ]);
+}
+
+async function releaseProjectCreditReservationLots(
+  db: SqlDatabase,
+  input: { organizationId: string; projectId: string },
+) {
+  const reserved = await db.query<{ reserved_amount: number | string }>(
+    `
+      SELECT COALESCE(sum(amount_reserved), 0)::int AS reserved_amount
+      FROM credit_reservations
+      WHERE organization_id = $1
+        AND project_id = $2
+        AND amount_reserved > 0
+    `,
+    [input.organizationId, input.projectId],
+  );
+  const reservedAmount = Number(reserved.rows[0]?.reserved_amount ?? 0);
+  if (reservedAmount <= 0) {
+    return;
+  }
+
+  await db.query(
+    `
+      WITH project_allocations AS (
+        SELECT
+          allocation.credit_lot_id,
+          sum(allocation.amount)::int AS allocated_amount
+        FROM credit_reservation_lot_allocations allocation
+        WHERE allocation.organization_id = $1
+          AND allocation.reservation_id IN (
+            SELECT id
+            FROM credit_reservations
+            WHERE organization_id = $1
+              AND project_id = $2
+              AND amount_reserved > 0
+          )
+        GROUP BY allocation.credit_lot_id
+      ),
+      releasable AS (
+        SELECT
+          lot.id,
+          LEAST(project_allocations.allocated_amount, lot.reserved_amount)::int AS amount
+        FROM credit_lots lot
+        JOIN project_allocations
+          ON project_allocations.credit_lot_id = lot.id
+        WHERE lot.organization_id = $1
+          AND lot.reserved_amount > 0
+      )
+      UPDATE credit_lots lot
+      SET available_amount = lot.available_amount + releasable.amount,
+          reserved_amount = lot.reserved_amount - releasable.amount,
+          updated_at = now()
+      FROM releasable
+      WHERE lot.organization_id = $1
+        AND lot.id = releasable.id
+        AND releasable.amount > 0
+    `,
+    [input.organizationId, input.projectId],
+  );
+  await db.query(
+    `
+      UPDATE organizations
+      SET credit_balance_cached = credit_balance_cached + $2,
+          credit_reserved_cached = GREATEST(0, credit_reserved_cached - $2),
+          updated_at = now()
+      WHERE id = $1
+    `,
+    [input.organizationId, reservedAmount],
+  );
 }
 
 async function episodeExistsForProject(

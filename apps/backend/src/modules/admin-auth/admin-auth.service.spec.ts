@@ -2,7 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
-import { allAdminPermissions, createAdminAuthService } from "./admin-auth.service.ts";
+import {
+  allAdminPermissions,
+  createAdminAuthService,
+  permissionsForRoles,
+} from "./admin-auth.service.ts";
+
+test("admin auth grants membership plan write to finance admins without system settings write", () => {
+  const permissions = permissionsForRoles(["finance_admin"]);
+
+  assert.ok(allAdminPermissions.includes("membership.plan.write"));
+  assert.equal(permissions.includes("membership.plan.write"), true);
+  assert.equal(permissions.includes("settings.write"), false);
+});
 
 test("admin auth grants risk export only through the super admin permission set", async () => {
   const db = await createMigratedTestDb();

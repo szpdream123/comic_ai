@@ -287,6 +287,18 @@ function resolveDisplayedCreditBalance(ui) {
   return 0;
 }
 
+function resolveMembershipPaymentState(ui) {
+  return {
+    pendingMembershipPlanId: ui.pendingMembershipPlanId ?? "",
+    provider: ui.pendingMembershipPaymentProvider ?? ui.lastPaymentIntent?.provider ?? "wechat_pay",
+    qrCreatedAt: ui.membershipPaymentQrCreatedAt ?? null,
+    qrExpiresAt: ui.membershipPaymentQrExpiresAt ?? ui.lastPaymentIntent?.expiresAt ?? null,
+    polling: Boolean(ui.membershipPaymentPolling),
+    pollFailureCount: Number(ui.membershipPaymentPollFailureCount ?? 0),
+    agreementAccepted: ui.membershipPaymentAgreementAccepted !== false,
+  };
+}
+
 function renderWorkbenchRail(activeNavTab) {
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
@@ -2496,9 +2508,12 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         libraryDetailView: ui.libraryDetailView,
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
         billingPackages: ui.billingPackages ?? [],
+        membershipPlans: ui.membershipPlans ?? [],
+        membershipStatus: ui.membershipStatus ?? null,
         billingOrder: ui.lastBillingOrder ?? null,
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
+        membershipPaymentState: resolveMembershipPaymentState(ui),
         projectName: detailState.project.name,
         assetsByType: ui.projectLibraryAssetsByType ?? ui.importedAssets ?? null,
         searchQuery: ui.libraryAssetSearchQuery ?? "",
@@ -2529,9 +2544,12 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
         billingPackages: ui.billingPackages ?? [],
+        membershipPlans: ui.membershipPlans ?? [],
+        membershipStatus: ui.membershipStatus ?? null,
         billingOrder: ui.lastBillingOrder ?? null,
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
+        membershipPaymentState: resolveMembershipPaymentState(ui),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
         createMemberModal: ui.createMemberModal ?? null,
         editMemberModal: ui.editMemberModal ?? null,

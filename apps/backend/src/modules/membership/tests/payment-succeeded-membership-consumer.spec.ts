@@ -62,12 +62,13 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
 
       assert.equal(result.kind, "applied");
       assert.equal(result.period.tier, "professional");
-      assert.equal(result.period.periodEndAt, "2026-07-08T08:05:00.000Z");
+      assert.equal(result.period.periodStartAt, "2026-06-08T08:00:00.000Z");
+      assert.equal(result.period.periodEndAt, "2026-07-08T08:00:00.000Z");
       assert.equal(subscription.rows[0]?.status, "professional_active");
       assert.equal(subscription.rows[0]?.current_tier, "professional");
       assert.equal(
         new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
-        "2026-07-08T08:05:00.000Z",
+        "2026-07-08T08:00:00.000Z",
       );
       assert.deepEqual(entitlements.rows, [
         { entitlement_key: "priority_generation", status: "active" },
@@ -158,6 +159,62 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       assert.equal(limits.rows[0]?.count, 0);
       assert.equal(new Date(giftLot.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
       assert.equal(giftLot.rows[0]?.metadata_json.tier, "experience");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("expires payment professional entitlements when an experience payment becomes current", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const professional = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030201",
+        paymentIntentId: "97000000-0000-4000-8000-000000030201",
+        providerEventId: "98000000-0000-4000-8000-000000030201",
+        outboxEventId: "99000000-0000-4000-8000-000000030201",
+        plan: professionalPlan(),
+        amountMinor: 500000,
+        paidAt: new Date("2026-06-08T08:00:00.000Z"),
+      });
+      const experience = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030202",
+        paymentIntentId: "97000000-0000-4000-8000-000000030202",
+        providerEventId: "98000000-0000-4000-8000-000000030202",
+        outboxEventId: "99000000-0000-4000-8000-000000030202",
+        plan: experiencePlan(),
+        amountMinor: 9900,
+        paidAt: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: professional.event,
+        now: new Date("2026-06-08T08:05:00.000Z"),
+      });
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: experience.event,
+        now: new Date("2026-06-09T08:05:00.000Z"),
+      });
+
+      const subscription = await db.query<{ status: string; current_tier: string | null }>(
+        "SELECT status, current_tier FROM organization_membership_subscriptions WHERE organization_id = $1",
+        [organizationId],
+      );
+      const activeProfessionalEntitlements = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM organization_entitlements
+          WHERE organization_id = $1
+            AND entitlement_key IN ('priority_generation', 'team_member_management')
+            AND status = 'active'
+            AND (expires_at IS NULL OR expires_at > $2)
+        `,
+        [organizationId, new Date("2026-06-09T08:05:00.000Z")],
+      );
+
+      assert.equal(subscription.rows[0]?.status, "experience_active");
+      assert.equal(subscription.rows[0]?.current_tier, "experience");
+      assert.equal(activeProfessionalEntitlements.rows[0]?.count, 0);
     } finally {
       await db.close();
     }

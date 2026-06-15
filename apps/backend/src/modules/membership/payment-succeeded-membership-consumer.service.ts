@@ -134,6 +134,7 @@ export async function consumePaymentSucceededMembershipActivation(
         }
 
         const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+        const paidAt = assertPaidAt(order.paid_at);
         const currentSameTier = await findCurrentSameTierSubscription(db, {
           organizationId: order.organization_id,
           tier: planSnapshot.tier,
@@ -142,7 +143,7 @@ export async function consumePaymentSucceededMembershipActivation(
           ? new Date(currentSameTier.current_period_end_at)
           : null;
         const window = calculateMembershipWindow({
-          paidAt: input.now,
+          paidAt,
           currentPeriodEndAt,
           periodUnit: planSnapshot.periodUnit,
           periodCount: planSnapshot.periodCount,
@@ -165,6 +166,12 @@ export async function consumePaymentSucceededMembershipActivation(
           planSnapshot,
           periodStartAt: window.periodStartAt,
           periodEndAt: window.periodEndAt,
+          now: input.now,
+        });
+
+        await expirePaymentProfessionalEntitlementsOutsidePlan(db, {
+          organizationId: order.organization_id,
+          entitlements: planSnapshot.tier === "professional" ? planSnapshot.entitlements : [],
           now: input.now,
         });
 
@@ -373,6 +380,41 @@ async function upsertSubscription(
       input.order.id,
       input.now,
     ],
+  );
+}
+
+async function expirePaymentProfessionalEntitlementsOutsidePlan(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    entitlements: string[];
+    now: Date;
+  },
+) {
+  const allowedEntitlements = new Set(
+    input.entitlements.filter((key) => professionalEntitlementKeys.has(key)),
+  );
+  const entitlementsToExpire = [...professionalEntitlementKeys]
+    .filter((key) => !allowedEntitlements.has(key));
+  if (entitlementsToExpire.length === 0) {
+    return;
+  }
+
+  await db.query(
+    `
+      UPDATE organization_entitlements
+      SET status = 'expired',
+          expires_at = CASE
+            WHEN expires_at IS NULL OR expires_at > $3 THEN $3
+            ELSE expires_at
+          END,
+          updated_at = $3
+      WHERE organization_id = $1
+        AND entitlement_key = ANY($2::text[])
+        AND status = 'active'
+        AND source = 'payment'
+    `,
+    [input.organizationId, entitlementsToExpire, input.now],
   );
 }
 
@@ -589,6 +631,17 @@ function assertMembershipPlanSnapshot(value: unknown): NormalizedMembershipPlanS
     seatLimit,
     entitlements: normalizeStringArray(snapshot.entitlements),
   };
+}
+
+function assertPaidAt(value: Date | string | null): Date {
+  if (!value) {
+    throw new Error("membership_order_missing_paid_at");
+  }
+  const paidAt = new Date(value);
+  if (!Number.isFinite(paidAt.getTime())) {
+    throw new Error("membership_order_invalid_paid_at");
+  }
+  return paidAt;
 }
 
 function stringField(value: Record<string, unknown>, key: string) {

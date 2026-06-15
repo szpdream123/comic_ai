@@ -88,6 +88,36 @@ describe("generation BullMQ publisher", () => {
     });
   });
 
+  it("applies membership queue priority from the generation outbox payload", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+    });
+    const event = generationTaskCreatedEvent({
+      taskId: "task-priority-1",
+      mediaType: "video",
+      queueName: "generation-submit-video",
+      membershipPriority: true,
+      queuePriority: 1,
+      priorityReason: "professional_membership_model_family_priority",
+    });
+
+    const job = buildGenerationBullMQJob(event, config);
+
+    assert.deepEqual(job.data, {
+      outboxEventId: "outbox-1",
+      organizationId: "org-1",
+      taskId: "task-priority-1",
+      workflowId: "workflow-1",
+      mediaType: "video",
+      modelCode: "seedance-i2v-pro",
+      providerExecutor: "seedance",
+      membershipPriority: true,
+      queuePriority: 1,
+      priorityReason: "professional_membership_model_family_priority",
+    });
+    assert.equal(job.options.priority, 1);
+  });
+
   it("builds a stable finalize job without reusing the submit queue", () => {
     const config = loadGenerationQueueConfig({
       GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",

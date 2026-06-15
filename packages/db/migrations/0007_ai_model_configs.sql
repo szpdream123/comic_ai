@@ -194,7 +194,7 @@ INSERT INTO ai_model_configs (
   'async_polling',
   'video',
   '["video.image_to_video"]'::jsonb,
-  '{"prompt":true,"firstFrame":true,"lastFrame":false,"audio":false,"asyncPolling":true}'::jsonb,
+  '{"prompt":true,"firstFrame":true,"lastFrame":false,"audio":false,"asyncPolling":true,"modelFamily":"seedance","membershipPriorityEligible":true}'::jsonb,
   '{"prompt":{"type":"string","maxLength":2000},"durationSec":{"enum":[5,10]},"resolution":{"enum":["720p","1080p","2K"]},"aspectRatio":{"enum":["16:9","9:16","1:1"]}}'::jsonb,
   '{"durationSec":5,"resolution":"1080p","aspectRatio":"9:16"}'::jsonb,
   '{"baseURL":"https://ark.cn-beijing.volces.com","createTaskEndpoint":"/api/v3/contents/generations/tasks","queryTaskEndpoint":"/api/v3/contents/generations/tasks/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY","timeoutMs":120000}'::jsonb,

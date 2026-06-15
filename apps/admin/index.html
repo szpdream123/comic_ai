@@ -592,6 +592,7 @@
         models: "模型配置",
         "model-workbench": "模型参数详情",
         users: "用户与积分",
+        membership: "会员权益",
         prompts: "提示词管理",
         risks: "风控与审计",
         settings: "系统设置",
@@ -607,6 +608,8 @@
         users: [],
         userFilters: { keyword: "", status: "all", accountType: "all" },
         userLoadError: "",
+        membershipPlans: [],
+        membershipLoadError: "",
         promptManagementMode: "script",
         scriptPromptPackageType: "genre",
         scriptPromptKeyword: "",
@@ -671,6 +674,7 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
+        if (path.includes("/membership")) return "membership";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
@@ -812,7 +816,7 @@
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
           state.page = routeFromPath();
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           renderShell();
         } catch {
           history.replaceState(null, "", "/admin/login");
@@ -825,7 +829,7 @@
         try {
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           history.replaceState(null, "", "/admin/dashboard");
           state.page = "dashboard";
           renderShell();
@@ -870,7 +874,7 @@
               }),
             });
             state.session = result.data;
-            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
+            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
             history.replaceState(null, "", "/admin/dashboard");
             state.page = "dashboard";
             renderShell();
@@ -894,6 +898,7 @@
                 ${navButton("models", "模型配置")}
                 ${navButton("model-workbench", "参数详情")}
                 ${navButton("users", "用户积分")}
+                ${navButton("membership", "会员权益")}
                 ${navButton("prompts", "提示词管理")}
                 ${navButton("risks", "风控审计")}
                 ${navButton("settings", "系统设置")}
@@ -964,6 +969,22 @@
         await loadUsers();
         renderShell();
         showToast("用户积分数据已刷新");
+      }
+
+      async function loadMembershipPlans() {
+        setPageLoading("membership", true);
+        try {
+          const result = await api("/api/admin/membership/plans");
+          state.membershipPlans = result.data?.plans || [];
+          state.membershipLoadError = "";
+          clearPageForbidden("membership");
+        } catch (error) {
+          setPageForbidden("membership", error);
+          state.membershipLoadError = error.payload?.error?.message || "会员套餐加载失败";
+          state.membershipPlans = [];
+        } finally {
+          setPageLoading("membership", false);
+        }
       }
 
       async function loadPromptManagement() {
@@ -1820,6 +1841,7 @@ scene：{{scene_json}}
           models: "/admin/models",
           "model-workbench": "/admin/models/new",
           users: "/admin/users",
+          membership: "/admin/membership",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           settings: "/admin/settings",
@@ -1843,6 +1865,7 @@ scene：{{scene_json}}
         if (state.page === "models") return modelsPage();
         if (state.page === "model-workbench") return modelWorkbenchPage();
         if (state.page === "users") return usersPage();
+        if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "settings") return settingsPage();
@@ -2277,6 +2300,210 @@ scene：{{scene_json}}
         return users.length
           ? users.map((user) => userRow(user)).join("")
           : `<tr><td colspan="6">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+      }
+
+      function renderMembershipPage() {
+        const plans = [...(state.membershipPlans || [])].sort((left, right) =>
+          membershipTierRank(left.tier) - membershipTierRank(right.tier) ||
+          membershipPeriodRank(left.periodUnit, left.periodCount) - membershipPeriodRank(right.periodUnit, right.periodCount) ||
+          String(left.code || "").localeCompare(String(right.code || "")),
+        );
+        const rows = plans.length
+          ? plans.map(renderMembershipPlanRow).join("")
+          : `<tr><td colspan="8">${state.membershipLoadError || "暂无会员套餐"}</td></tr>`;
+        return `<section class="section" id="membership-plans">
+          <div class="toolbar">
+            <div>
+              <h3>会员套餐</h3>
+              <div class="metric-note">仅维护售卖配置；支付确认、权益开通和赠送积分批次由后端服务处理。</div>
+            </div>
+            <div class="filters">
+              <button class="btn ghost" onclick="loadMembershipPlans().then(renderShell)">刷新</button>
+              <button class="btn primary" onclick="openMembershipPlanDrawer()" ${permissionAttrs("membership.plan.write")}>新增套餐</button>
+            </div>
+          </div>
+          <div class="table-wrap membership-plans dense">
+            <table>
+              <thead><tr><th>套餐</th><th>档位</th><th>周期</th><th>价格</th><th>赠送积分</th><th>席位</th><th>状态</th><th class="actions">操作</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>`;
+      }
+
+      function renderMembershipPlanRow(plan) {
+        const statusTone = plan.status === "active" ? "green" : plan.status === "archived" ? "warn" : "";
+        return `<tr>
+          <td>${escapeHtml(plan.displayName || "-")}<div class="metric-note">${escapeHtml(plan.code || "-")}</div></td>
+          <td><span class="tag ${plan.tier === "professional" ? "blue" : ""}">${membershipTierLabel(plan.tier)}</span></td>
+          <td>${membershipPeriodLabel(plan)}</td>
+          <td>${membershipMoney(plan.amountMinor, plan.currency)}</td>
+          <td>${Number(plan.giftCredits || 0).toLocaleString()}</td>
+          <td>${Number(plan.seatLimit || 1).toLocaleString()}</td>
+          <td><span class="tag ${statusTone}">${membershipStatusLabel(plan.status)}</span></td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑套餐" onclick="openMembershipPlanDrawer('${escapeAttribute(plan.id)}')" ${permissionAttrs("membership.plan.write")}>编</button></div></td>
+        </tr>`;
+      }
+
+      function membershipPlanById(planId) {
+        return (state.membershipPlans || []).find((plan) => String(plan.id) === String(planId)) || null;
+      }
+
+      function membershipTierRank(tier) {
+        return tier === "experience" ? 1 : tier === "professional" ? 2 : 9;
+      }
+
+      function membershipPeriodRank(unit, count) {
+        const unitRank = { day: 1, month: 2, quarter: 3, year: 4 }[unit] || 9;
+        return unitRank * 1000 + Number(count || 0);
+      }
+
+      function membershipTierLabel(tier) {
+        return { experience: "体验版", professional: "专业版" }[tier] || tier || "-";
+      }
+
+      function membershipStatusLabel(status) {
+        return { active: "启用", inactive: "停用", archived: "归档" }[status] || status || "-";
+      }
+
+      function membershipPeriodUnitLabel(unit) {
+        return { day: "天", month: "月", quarter: "季", year: "年" }[unit] || unit || "-";
+      }
+
+      function membershipPeriodLabel(plan) {
+        return `${Number(plan.periodCount || 1).toLocaleString()} ${membershipPeriodUnitLabel(plan.periodUnit)}`;
+      }
+
+      function membershipMoney(amountMinor, currency = "CNY") {
+        const amount = Number(amountMinor || 0) / 100;
+        return `${currency || "CNY"} ${amount.toFixed(2)}`;
+      }
+
+      function openMembershipPlanDrawer(planId = "") {
+        const existing = planId ? membershipPlanById(planId) : null;
+        const defaults = existing || {
+          code: "",
+          displayName: "",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 19900,
+          currency: "CNY",
+          giftCredits: 1000,
+          seatLimit: 5,
+          entitlements: ["team_member_management", "priority_generation"],
+          priorityRules: { modelFamilies: ["seedance"], queuePriority: 1 },
+          displayMetadata: {},
+          status: "active",
+          validFrom: "",
+          validUntil: "",
+        };
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑会员套餐" : "新增会员套餐"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="membership-plan-form">
+            <input type="hidden" name="id" value="${escapeAttribute(existing?.id || "")}" />
+            <div class="form-grid">
+              <label class="field"><span>套餐编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="professional_monthly" required /></label>
+              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版月卡" required /></label>
+              <label class="field"><span>档位</span><select name="tier">${optionPairs([["experience", "体验版"], ["professional", "专业版"]], defaults.tier)}</select></label>
+              <label class="field"><span>周期单位</span><select name="periodUnit">${optionPairs([["day", "天"], ["month", "月"], ["quarter", "季"], ["year", "年"]], defaults.periodUnit)}</select></label>
+              <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /></label>
+              <label class="field"><span>价格分</span><input name="amountMinor" type="number" min="1" step="1" value="${Number(defaults.amountMinor || 1)}" required /></label>
+              <label class="field"><span>赠送积分</span><input name="giftCredits" type="number" min="0" step="1" value="${Number(defaults.giftCredits || 0)}" required /></label>
+              <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="1" step="1" value="${Number(defaults.seatLimit || 1)}" required /></label>
+              <label class="field"><span>币种</span><select name="currency">${optionPairs([["CNY", "CNY"]], defaults.currency || "CNY")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
+            </div>
+            <label class="field"><span>权益 JSON</span><textarea name="entitlements" rows="3" required>${escapeHtml(JSON.stringify(defaults.entitlements || [], null, 2))}</textarea></label>
+            <label class="field"><span>优先级规则 JSON</span><textarea name="priorityRules" rows="4">${escapeHtml(JSON.stringify(defaults.priorityRules || {}, null, 2))}</textarea></label>
+            <label class="field"><span>展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
+            <div class="form-grid">
+              <label class="field"><span>有效开始</span><input name="validFrom" value="${escapeAttribute(defaults.validFrom || "")}" placeholder="2026-06-09T00:00:00.000Z" /></label>
+              <label class="field"><span>有效结束</span><input name="validUntil" value="${escapeAttribute(defaults.validUntil || "")}" placeholder="留空表示长期有效" /></label>
+            </div>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：上线专业版月卡价格"></textarea></label>
+            <div class="error-text" id="membership-plan-error"></div>
+            <button class="btn primary full" type="submit">保存会员套餐</button>
+          </form>
+        </aside>`;
+        document.getElementById("membership-plan-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("membership-plan-error");
+          error.textContent = "";
+          let payload;
+          try {
+            payload = membershipPlanPayloadFromForm(form);
+          } catch (err) {
+            error.textContent = err.message || "会员套餐配置不合法";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/membership/plans", {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-membership-plan-${payload.id || payload.code}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
+            await loadMembershipPlans();
+            closeDrawer();
+            renderShell();
+          }, "会员套餐已保存").catch(() => undefined);
+        });
+      }
+
+      function membershipPlanPayloadFromForm(form) {
+        const id = String(form.get("id") || "").trim();
+        const payload = {
+          code: String(form.get("code") || "").trim(),
+          displayName: String(form.get("displayName") || "").trim(),
+          tier: String(form.get("tier") || "professional"),
+          periodUnit: String(form.get("periodUnit") || "month"),
+          periodCount: Number(form.get("periodCount") || 1),
+          amountMinor: Number(form.get("amountMinor") || 0),
+          currency: String(form.get("currency") || "CNY"),
+          giftCredits: Number(form.get("giftCredits") || 0),
+          seatLimit: Number(form.get("seatLimit") || 1),
+          entitlements: parseJsonArrayTextarea(form, "entitlements"),
+          priorityRules: parseJsonTextarea(form, "priorityRules"),
+          displayMetadata: parseJsonTextarea(form, "displayMetadata"),
+          status: String(form.get("status") || "inactive"),
+          validFrom: String(form.get("validFrom") || "").trim() || null,
+          validUntil: String(form.get("validUntil") || "").trim() || null,
+          reason: String(form.get("reason") || "").trim(),
+        };
+        if (id) payload.id = id;
+        if (!payload.code || !payload.displayName || !payload.reason) {
+          throw new Error("套餐编码、展示名称和操作原因必填");
+        }
+        if (!Number.isInteger(payload.periodCount) || payload.periodCount < 1) {
+          throw new Error("周期数量必须是正整数");
+        }
+        if (!Number.isInteger(payload.amountMinor) || payload.amountMinor < 1) {
+          throw new Error("价格分必须是正整数");
+        }
+        if (!Number.isInteger(payload.giftCredits) || payload.giftCredits < 0) {
+          throw new Error("赠送积分必须是非负整数");
+        }
+        if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 1) {
+          throw new Error("席位上限必须是正整数");
+        }
+        return payload;
+      }
+
+      function parseJsonArrayTextarea(form, name) {
+        const raw = String(form.get(name) || "").trim();
+        if (!raw) return [];
+        const value = JSON.parse(raw);
+        if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+          throw new Error(`${name} 必须是字符串数组 JSON`);
+        }
+        return value;
+      }
+
+      function optionPairs(options, selected) {
+        return options.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
       }
 
       const scriptPromptTypes = [
@@ -4968,6 +5195,8 @@ scene：{{scene_json}}
       window.openUserStatusDrawer = openUserStatusDrawer;
       window.openTeamLimitDrawer = openTeamLimitDrawer;
       window.restoreTeamLimitDefault = restoreTeamLimitDefault;
+      window.loadMembershipPlans = loadMembershipPlans;
+      window.openMembershipPlanDrawer = openMembershipPlanDrawer;
       window.updatePromptManagementMode = updatePromptManagementMode;
       window.loadScriptPrompts = loadScriptPrompts;
       window.loadImagePromptStyles = loadImagePromptStyles;

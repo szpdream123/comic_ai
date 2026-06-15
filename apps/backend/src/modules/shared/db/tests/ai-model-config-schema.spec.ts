@@ -133,6 +133,7 @@ describe("ai model configuration schema", () => {
         provider_protocol: string;
         invocation_mode: string;
         media_type: string;
+        capabilities_json: Record<string, unknown>;
         provider_config_json: Record<string, unknown>;
         pricing_json: Record<string, unknown>;
       }>(
@@ -143,6 +144,7 @@ describe("ai model configuration schema", () => {
             provider_protocol,
             invocation_mode,
             media_type,
+            capabilities_json,
             provider_config_json,
             pricing_json
           FROM ai_model_configs
@@ -162,6 +164,8 @@ describe("ai model configuration schema", () => {
       assert.equal(result.rows[1]?.provider_model, "seedance-2-0-i2v");
       assert.equal(result.rows[1]?.invocation_mode, "async_polling");
       assert.equal(result.rows[1]?.media_type, "video");
+      assert.equal(result.rows[1]?.capabilities_json.modelFamily, "seedance");
+      assert.equal(result.rows[1]?.capabilities_json.membershipPriorityEligible, true);
       assert.equal(result.rows[1]?.provider_config_json.apiKeyEnv, "VOLCENGINE_ARK_API_KEY");
       assert.equal(result.rows[1]?.pricing_json.baseCredits, 120);
 

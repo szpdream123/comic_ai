@@ -412,6 +412,28 @@ describe("team service", { concurrency: false }, () => {
     }
   });
 
+  it("reports an entitled solo professional account as not team-activated until a subaccount exists", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { seatLimit: 5, credits: 1200 });
+      await seedTeamEntitlement(db);
+
+      const overview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.seats.used, 0);
+      assert.deepEqual(overview.team, {
+        activated: false,
+        memberCount: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("uses the admin runtime config as the default team subaccount limit", async () => {
     const db = await createMigratedTestDb();
     try {

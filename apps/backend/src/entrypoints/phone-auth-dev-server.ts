@@ -33,6 +33,7 @@ import { createAdminSystemSettingsService } from "../modules/admin-system-settin
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
+import { resolveMembershipGenerationPriority } from "../modules/membership/membership-priority.service.ts";
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
@@ -277,6 +278,11 @@ class GenerationRequestValidationError extends Error {
 interface AuthenticatedUser {
   id: string;
   phone: string;
+}
+
+interface DevTenantScope {
+  organizationId: string;
+  workspaceId: string;
 }
 
 export interface PhoneAuthDevServer {
@@ -891,6 +897,7 @@ async function retryTaskForBackendAdmin(input: {
       targetType: task.target_entity_type,
       targetId: task.target_entity_id,
       providerExecutor: readString(snapshot.providerExecutor) || "manual_retry",
+      ...generationPriorityFromSnapshot(snapshot),
       availableAt: input.now,
     }).catch(() => undefined);
 
@@ -1419,6 +1426,30 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
 
 function readString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function generationPriorityFromSnapshot(snapshot: Record<string, unknown>) {
+  if (snapshot.membershipPriority !== true) {
+    return {};
+  }
+  const queuePriority = readPositiveInteger(snapshot.queuePriority);
+  if (queuePriority === null) {
+    return {};
+  }
+
+  return {
+    membershipPriority: true,
+    queuePriority,
+    priorityReason: readString(snapshot.priorityReason) || "membership_priority",
+  };
+}
+
+function readPositiveInteger(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numberValue) || numberValue < 1) {
+    return null;
+  }
+  return numberValue;
 }
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -3144,6 +3175,18 @@ async function createEpisodeGenerationTask(
         ],
       }
     : modelExecution.parameters;
+  const generationPriority = await resolveMembershipGenerationPriority(db, {
+    organizationId: context.actor.organizationId,
+    modelCode: requestedModelCode,
+    now: input.now,
+  });
+  const generationPrioritySnapshot = generationPriority.enabled
+    ? {
+        membershipPriority: true,
+        queuePriority: generationPriority.priority,
+        priorityReason: generationPriority.reason,
+      }
+    : {};
   const requestSnapshot = {
     kind: input.kind,
     episodeId: input.episodeId,
@@ -3157,6 +3200,7 @@ async function createEpisodeGenerationTask(
     audioEnabled: Boolean(input.body.audioEnabled),
     musicEnabled: Boolean(input.body.musicEnabled),
     lipSyncEnabled: Boolean(input.body.lipSyncEnabled),
+    ...generationPrioritySnapshot,
   };
   const store = new SqlIdempotencyRecordStore(db);
   const started = await beginOrReplayCommand(store, {
@@ -3298,6 +3342,7 @@ async function createEpisodeGenerationTask(
       targetType: requestSnapshot.targetType,
       targetId: requestSnapshot.targetId,
       providerExecutor: modelExecution.providerExecutor,
+      ...generationPrioritySnapshot,
       availableAt: input.now,
     });
 
@@ -6384,7 +6429,15 @@ async function ensureDevWorkspaceAccess(
     "SELECT phone_e164 FROM users WHERE id = $1",
     [userId],
   );
-  const role = user?.phone_e164 === "+8613800138001" ? "owner_admin" : "creator";
+  if (user?.phone_e164 !== "+8613800138001") {
+    await ensurePersonalDevWorkspaceAccess(db, userId);
+    if (options.seedTeamEntitlements === false) {
+      await revokeDevSeedTeamEntitlements(db);
+    }
+    return;
+  }
+
+  const role = "owner_admin";
 
   await db.query(
     `
@@ -6400,6 +6453,7 @@ async function ensureDevWorkspaceAccess(
     `,
     [devOrganizationId, devInitialCreditBalance],
   );
+  await ensureDevInitialCreditLot(db);
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
@@ -6442,6 +6496,322 @@ async function ensureDevWorkspaceAccess(
       [randomUUID(), devOrganizationId, randomUUID(), randomUUID()],
     );
   }
+}
+
+async function ensurePersonalDevWorkspaceAccess(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const scope = personalDevTenantScope(userId);
+
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached)
+      VALUES ($1, 'Personal Creator Workspace', 'active', $2)
+      ON CONFLICT (id) DO UPDATE
+      SET status = 'active',
+          credit_balance_cached = CASE
+            WHEN organizations.credit_balance_cached <= 0
+            THEN $2
+            ELSE organizations.credit_balance_cached
+          END
+    `,
+    [scope.organizationId, devInitialCreditBalance],
+  );
+  await ensureDevInitialCreditLot(db, scope.organizationId);
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Personal Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
+    `,
+    [scope.workspaceId, scope.organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET role = 'owner_admin', status = 'active'
+    `,
+    [randomUUID(), scope.organizationId, scope.workspaceId, userId],
+  );
+}
+
+async function resolveDefaultWorkspaceForSession(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  authenticated: { sessionToken: string; user: AuthenticatedUser },
+  now: Date,
+): Promise<string> {
+  const membership = await queryOne<{ workspace_id: string }>(
+    db,
+    `
+      SELECT workspace_id
+      FROM memberships
+      WHERE user_id = $1
+        AND status = 'active'
+        AND workspace_id IS NOT NULL
+      ORDER BY
+        CASE WHEN workspace_id = $2 THEN 1 ELSE 0 END,
+        created_at DESC,
+        id DESC
+      LIMIT 1
+    `,
+    [authenticated.user.id, devWorkspaceId],
+  );
+  if (membership?.workspace_id) {
+    return membership.workspace_id;
+  }
+
+  await ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
+  return personalDevTenantScope(authenticated.user.id).workspaceId;
+}
+
+function personalDevTenantScope(userId: string): DevTenantScope {
+  const normalized = userId.replace(/-/g, "");
+  return {
+    organizationId: uuidFromHex(`a${normalized.slice(1, 32)}`),
+    workspaceId: uuidFromHex(`b${normalized.slice(1, 32)}`),
+  };
+}
+
+function uuidFromHex(hex: string) {
+  const value = hex.padEnd(32, "0").slice(0, 32);
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
+}
+
+async function ensureDevInitialCreditLot(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  organizationId = devOrganizationId,
+) {
+  const sourceId = "00000000-0000-4000-8000-000000000001";
+  const existingLot = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM credit_lots
+      WHERE organization_id = $1
+        AND source_type = 'dev_seed_initial_credits'
+        AND source_id = $2
+      LIMIT 1
+    `,
+    [organizationId, sourceId],
+  );
+  if (existingLot) {
+    return;
+  }
+
+  const organization = await queryOne<{ credit_balance_cached: number | string }>(
+    db,
+    "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+    [organizationId],
+  );
+  const currentBalance = Number(organization?.credit_balance_cached ?? 0);
+  const balanceWithoutImplicitSeed = Math.max(0, currentBalance - devInitialCreditBalance);
+  const now = new Date();
+
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = $2,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [organizationId, balanceWithoutImplicitSeed, now],
+    );
+    await grantCreditsInTransaction(db, {
+      organizationId,
+      amount: devInitialCreditBalance,
+      sourceType: "dev_seed_initial_credits",
+      sourceId,
+      reason: "dev initial credits",
+      createdByUserId: null,
+      metadata: { seededBy: "phone-auth-dev-server" },
+      now,
+    });
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+async function ensureDefaultMembershipPlan(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { now: Date },
+) {
+  const existingExperiencePlan = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM membership_plans
+      WHERE tier = 'experience'
+        AND status = 'active'
+        AND (valid_from IS NULL OR valid_from <= $1)
+        AND (valid_until IS NULL OR valid_until > $1)
+      LIMIT 1
+    `,
+    [input.now],
+  );
+  if (!existingExperiencePlan) {
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          status,
+          valid_from,
+          valid_until,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '95000000-0000-4000-8000-000000000002',
+          'experience_weekly',
+          '体验版',
+          'experience',
+          'day',
+          7,
+          9900,
+          'CNY',
+          300,
+          1,
+          $2::jsonb,
+          $3::jsonb,
+          $4::jsonb,
+          'active',
+          NULL,
+          NULL,
+          $1,
+          $1
+        )
+        ON CONFLICT (code) DO UPDATE
+        SET display_name = EXCLUDED.display_name,
+            tier = EXCLUDED.tier,
+            period_unit = EXCLUDED.period_unit,
+            period_count = EXCLUDED.period_count,
+            amount_minor = EXCLUDED.amount_minor,
+            currency = EXCLUDED.currency,
+            gift_credits = EXCLUDED.gift_credits,
+            seat_limit = EXCLUDED.seat_limit,
+            entitlements_json = EXCLUDED.entitlements_json,
+            priority_rules_json = EXCLUDED.priority_rules_json,
+            display_metadata_json = EXCLUDED.display_metadata_json,
+            status = 'active',
+            valid_from = NULL,
+            valid_until = NULL,
+            updated_at = EXCLUDED.updated_at
+      `,
+      [
+        input.now,
+        JSON.stringify(["priority_generation"]),
+        JSON.stringify({ modelFamilies: ["seedance-lite"] }),
+        JSON.stringify({ sortOrder: 10 }),
+      ],
+    );
+  }
+
+  const existingProfessionalPlan = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM membership_plans
+      WHERE tier = 'professional'
+        AND status = 'active'
+        AND (valid_from IS NULL OR valid_from <= $1)
+        AND (valid_until IS NULL OR valid_until > $1)
+      LIMIT 1
+    `,
+    [input.now],
+  );
+  if (existingProfessionalPlan) {
+    return;
+  }
+
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        valid_from,
+        valid_until,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '95000000-0000-4000-8000-000000000001',
+        'professional_monthly',
+        '专业版月卡',
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        50,
+        $2::jsonb,
+        $3::jsonb,
+        $4::jsonb,
+        'active',
+        NULL,
+        NULL,
+        $1,
+        $1
+      )
+      ON CONFLICT (code) DO UPDATE
+      SET display_name = EXCLUDED.display_name,
+          tier = EXCLUDED.tier,
+          period_unit = EXCLUDED.period_unit,
+          period_count = EXCLUDED.period_count,
+          amount_minor = EXCLUDED.amount_minor,
+          currency = EXCLUDED.currency,
+          gift_credits = EXCLUDED.gift_credits,
+          seat_limit = EXCLUDED.seat_limit,
+          entitlements_json = EXCLUDED.entitlements_json,
+          priority_rules_json = EXCLUDED.priority_rules_json,
+          display_metadata_json = EXCLUDED.display_metadata_json,
+          status = 'active',
+          valid_from = NULL,
+          valid_until = NULL,
+          updated_at = EXCLUDED.updated_at
+    `,
+    [
+      input.now,
+      JSON.stringify([
+        "priority_generation",
+        "team_asset_library",
+        "team_dashboard",
+        "team_member_management",
+      ]),
+      JSON.stringify({ modelFamilies: ["seedance"] }),
+      JSON.stringify({ sortOrder: 20 }),
+    ],
+  );
 }
 
 async function findAuthenticatedUser(
@@ -6552,6 +6922,30 @@ async function hasActiveOrganizationEntitlement(
   return Boolean(entitlement);
 }
 
+function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
+  const databaseUrl = runtimeEnv.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    return;
+  }
+  if (runtimeEnv.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE === "true") {
+    return;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("phone_auth_dev_server_invalid_database_url");
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+    return;
+  }
+
+  throw new Error("phone_auth_dev_server_remote_database_forbidden");
+}
+
 export function createPhoneAuthDevServer(
   options: PhoneAuthDevServerOptions = {},
 ): PhoneAuthDevServer {
@@ -6559,6 +6953,12 @@ export function createPhoneAuthDevServer(
     ...process.env,
     ...(options.env ?? {}),
   };
+  if (runtimeEnv.NODE_ENV === "production") {
+    throw new Error("phone_auth_dev_server_forbidden_in_production");
+  }
+  if (!options.db) {
+    assertSafeDevServerDatabaseUrl(runtimeEnv);
+  }
   const dbPromise = options.db
     ? Promise.resolve(options.db)
     : runtimeEnv.NODE_ENV === "test"
@@ -6661,14 +7061,16 @@ export function createPhoneAuthDevServer(
       }
 
       const db = await dbPromise;
-      const creatorApplication = createCreatorApplication({
-        db,
-        workspaceId: devWorkspaceId,
-        creatorApps,
-        creatorSqlStates,
-        storageRuntime,
-        signedUrlExpiresInSeconds,
-      });
+      const createCreatorApplicationForWorkspace = (workspaceId: string) =>
+        createCreatorApplication({
+          db,
+          workspaceId,
+          creatorApps,
+          creatorSqlStates,
+          storageRuntime,
+          signedUrlExpiresInSeconds,
+        });
+      const creatorApplication = createCreatorApplicationForWorkspace(devWorkspaceId);
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
       }
@@ -8795,11 +9197,13 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
+        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
 
         const membershipOrders = createMembershipOrderService({
           db,
-          workspaceId: devWorkspaceId,
+          workspaceId: currentWorkspaceId,
         });
+        await ensureDefaultMembershipPlan(db, { now: new Date() });
 
         if (request.method === "GET" && pathname === "/api/membership/plans") {
           return writeJson(response, {
@@ -8850,11 +9254,12 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
+        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
 
         await ensureDefaultCreditPackage(db, { now: new Date() });
         const commercePayment = createCommercePaymentService({
           db,
-          workspaceId: devWorkspaceId,
+          workspaceId: currentWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
           providerRegistry: devPaymentProviderRegistry,
           providerCallbackBaseUrl: request.headers.host
@@ -8966,6 +9371,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
+        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
 
         if (request.method === "POST" && pathname === "/api/storage/upload-sessions") {
           if (!process.env.DATABASE_URL?.trim()) {
@@ -9011,7 +9417,7 @@ export function createPhoneAuthDevServer(
           }
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : { workspaceId: devWorkspaceId }),
+            ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : { workspaceId: currentWorkspaceId }),
             now: new Date(),
           });
           if (isTeamAssetUploadPurpose(body.purpose)) {
@@ -9155,7 +9561,7 @@ export function createPhoneAuthDevServer(
           };
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           const completed = await completeUploadSession(db, {
@@ -9202,7 +9608,7 @@ export function createPhoneAuthDevServer(
           const uploadSessionId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           return writeJson(response, {
@@ -10334,6 +10740,8 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
+        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const creatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
 
         if (request.method === "GET" && pathname === "/api/creator/team/overview") {
           return writeJson(
@@ -10723,12 +11131,12 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            ...(projectId ? { projectId } : { workspaceId: devWorkspaceId }),
+            ...(projectId ? { projectId } : { workspaceId: currentWorkspaceId }),
             now,
           });
           const storageObject = await createScopedStorageObject(db, {
             organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? devWorkspaceId,
+            workspaceId: actor.workspaceId ?? currentWorkspaceId,
             projectId,
             bucket: "creator-uploads",
             objectName: upload.storageObjectKey,

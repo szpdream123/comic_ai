@@ -70,7 +70,7 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
       assert.equal(Number(membershipGiftLots.rows[0]?.available_amount), 3000);
       assert.equal(
         new Date(membershipGiftLots.rows[0]!.expires_at!).toISOString(),
-        "2026-07-08T08:05:00.000Z",
+        "2026-07-08T08:00:00.000Z",
       );
       assert.equal(organization.rows[0]?.credit_balance_cached, 3120);
     } finally {

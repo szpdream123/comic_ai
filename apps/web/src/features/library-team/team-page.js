@@ -18,6 +18,8 @@ export function renderTeamPage(context = {}) {
   const metrics = resolveTeamMetrics(context.stats ?? overview?.stats ?? overview?.metrics ?? overview, members);
   const createState = resolveCreateMemberState(overview);
   const canCreateMember = createState.canCreate;
+  const teamActivated = createState.teamActivated;
+  const showTeamDashboardActions = overview ? teamActivated : true;
   const createAction = createState.action;
   const createActionMessage = createState.message;
   const commercePrototypeNotice = team.error ? `团队数据加载失败：${team.error}` : "";
@@ -40,8 +42,8 @@ export function renderTeamPage(context = {}) {
         <header class="library-team-command-strip">
           <div class="library-team-command-copy">
             <p class="library-team-kicker">团队运行</p>
-            <h1 id="team-page-title">团队协作台</h1>
-            <p class="library-team-subcopy">用成员、项目范围和积分额度管理多人漫剧生产，保证资产沉淀在团队空间。</p>
+            <h1 id="team-page-title">${teamActivated ? "团队协作台" : "团队协作设置"}</h1>
+            <p class="library-team-subcopy">${teamActivated ? "用成员、项目范围和积分额度管理多人漫剧生产，保证资产沉淀在团队空间。" : "专业版已获得团队协作资格；创建第一个成员账号后，再进入团队管理和数据看板。"}</p>
             <dl class="library-team-command-meta" aria-label="团队关键状态">
               ${renderCommandChip("权益", createState.badgeLabel, canCreateMember ? "is-active" : "is-locked")}
               ${renderCommandChip("席位", metrics.seats)}
@@ -50,7 +52,7 @@ export function renderTeamPage(context = {}) {
           </div>
           <div class="library-team-command-actions">
             <button class="library-team-button" type="button" data-action="open-member-rules">规则说明</button>
-            <button class="library-team-button" type="button" data-action="open-team-dashboard">数据看板</button>
+            ${showTeamDashboardActions ? '<button class="library-team-button" type="button" data-action="open-team-dashboard">数据看板</button>' : ""}
             <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
           </div>
         </header>
@@ -59,12 +61,12 @@ export function renderTeamPage(context = {}) {
           <section class="library-team-metrics" aria-labelledby="team-metrics-title">
             <header>
               <div>
-                <p class="library-team-kicker">实时总览</p>
-                <h2 id="team-metrics-title">数据管理</h2>
+                <p class="library-team-kicker">${teamActivated ? "实时总览" : "协作准备"}</p>
+                <h2 id="team-metrics-title">${teamActivated ? "数据管理" : "权益与席位"}</h2>
               </div>
               <div class="library-team-section-actions">
                 <button class="library-team-icon-button library-team-refresh-icon" type="button" aria-label="刷新团队数据" data-action="refresh-team">刷新</button>
-                <button class="library-team-button" type="button" data-action="open-team-dashboard">查看详细数据看板</button>
+                ${showTeamDashboardActions ? '<button class="library-team-button" type="button" data-action="open-team-dashboard">查看详细数据看板</button>' : ""}
               </div>
             </header>
             <dl class="library-team-metric-grid">
@@ -127,9 +129,12 @@ export function renderTeamPage(context = {}) {
         ${renderPricingModal({
           open: context.pricingOpen === true,
           packages: context.billingPackages ?? null,
+          membershipPlans: context.membershipPlans ?? null,
+          membershipStatus: context.membershipStatus ?? null,
           billingOrder: context.billingOrder ?? null,
           paymentIntent: context.paymentIntent ?? null,
           paymentAction: context.paymentAction ?? null,
+          membershipPaymentState: context.membershipPaymentState ?? null,
         })}
         ${renderMemberRulesModal({ open: context.rulesOpen === true })}
         ${renderCreateMemberModal(createMemberModal)}
@@ -156,10 +161,13 @@ function resolveCreateMemberState(overview) {
   const limit = Number(seats.limit ?? seats.total ?? 0);
   const used = Number(seats.used ?? 0);
   const remaining = Number(seats.remaining ?? (limit > 0 ? Math.max(0, limit - used) : 0));
+  const memberCount = Number(overview?.team?.memberCount ?? used);
+  const teamActivated = overview?.team?.activated === true || memberCount > 0;
 
   if (!isEntitled) {
     return {
       canCreate: false,
+      teamActivated: false,
       reason: "entitlement",
       action: "open-pricing",
       message: "开通专业版后可创建团队成员账号。",
@@ -173,6 +181,7 @@ function resolveCreateMemberState(overview) {
   if (!canCreateByPermission) {
     return {
       canCreate: false,
+      teamActivated,
       reason: "permission",
       action: "show-library-placeholder",
       message: "当前账号没有创建成员权限，请联系主账号或团队管理员。",
@@ -186,6 +195,7 @@ function resolveCreateMemberState(overview) {
   if (limit > 0 && remaining <= 0) {
     return {
       canCreate: false,
+      teamActivated,
       reason: "seat_limit",
       action: "show-library-placeholder",
       message: "子账号数量已达上限，请联系客服调整团队子账号额度。",
@@ -198,13 +208,14 @@ function resolveCreateMemberState(overview) {
 
   return {
     canCreate: true,
-    reason: "",
+    teamActivated,
+    reason: teamActivated ? "" : "team_setup",
     action: "open-team-member-create",
     message: "",
-    badgeLabel: "已开通",
-    buttonLabel: "创建成员账号",
-    secondaryLabel: "创建成员账号",
-    statusText: "可创建成员账号",
+    badgeLabel: teamActivated ? "团队已启用" : "可开启",
+    buttonLabel: teamActivated ? "创建成员账号" : "创建第一个成员账号",
+    secondaryLabel: teamActivated ? "创建成员账号" : "开启团队协作",
+    statusText: teamActivated ? "可创建成员账号" : "已获得团队协作资格，尚未创建成员",
   };
 }
 
@@ -543,6 +554,19 @@ function renderDashboardEmptyRow(colspan, message, options = {}) {
 }
 
 function renderTeamGate(createState) {
+  if (createState.canCreate && createState.reason === "team_setup") {
+    return `
+      <section class="library-team-upgrade-gate is-entitled" aria-label="团队协作设置">
+        <div>
+          <p class="library-team-kicker">团队协作资格</p>
+          <h2>已获得团队协作资格</h2>
+          <p>当前仍按个人专业版使用。创建第一个成员账号后，再开启团队成员管理、项目范围分配和团队数据看板。</p>
+        </div>
+        <button class="library-team-button library-team-button-primary" type="button" data-action="open-team-member-create">创建第一个成员账号</button>
+      </section>
+    `;
+  }
+
   if (createState.canCreate) {
     return `
       <section class="library-team-upgrade-gate is-entitled" aria-label="团队专业版状态">
@@ -596,18 +620,19 @@ function renderTeamGate(createState) {
 
 function renderTeamPolicyPanel({ createState, metrics }) {
   const seatState = createState.statusText;
+  const isTeamSetup = createState.reason === "team_setup";
 
   return `
     <aside class="library-team-policy-panel" aria-label="席位与积分和权限摘要">
       <section class="library-team-policy-block">
         <p class="library-team-kicker">席位与积分</p>
-        <h2>团队额度</h2>
+        <h2>${isTeamSetup ? "可用团队额度" : "团队额度"}</h2>
         <dl class="library-team-mini-stats">
           ${renderMiniStat("席位", metrics.seats)}
           ${renderMiniStat("可分配积分", metrics.distributableCredits)}
           ${renderMiniStat("任务并发", metrics.concurrency)}
         </dl>
-        <p>${escapeHtml(seatState)}，积分统一由主账号购买，再按成员和项目需要分配。</p>
+        <p>${escapeHtml(seatState)}，${isTeamSetup ? "个人创作权益已生效；创建成员后再按成员和项目需要分配积分。" : "积分统一由主账号购买，再按成员和项目需要分配。"}</p>
         <button class="library-team-link-button compact" type="button" ${renderActionAttrs(createState.action, createState.message)}>
           ${escapeHtml(createState.secondaryLabel)}
         </button>

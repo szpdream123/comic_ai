@@ -172,6 +172,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   ) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0007_ai_model_configs.sql" });
   }
+  await ensureMembershipPriorityModelMetadata(db);
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0008_ai_generation_task_snapshots.sql" });
@@ -253,6 +254,34 @@ async function ensurePaymentProviderConstraints(db: SqlDatabase) {
     constraintName: "payment_reconciliation_runs_provider_check",
     allowedProviders: ["paylab", "wechat_pay", "alipay", "all"],
   });
+}
+
+async function ensureMembershipPriorityModelMetadata(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return;
+  }
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET capabilities_json =
+      capabilities_json
+      || CASE
+        WHEN capabilities_json->>'modelFamily' IS NULL
+        THEN '{"modelFamily":"seedance"}'::jsonb
+        ELSE '{}'::jsonb
+      END
+      || CASE
+        WHEN capabilities_json->>'membershipPriorityEligible' IS NULL
+        THEN '{"membershipPriorityEligible":true}'::jsonb
+        ELSE '{}'::jsonb
+      END,
+      updated_at = now()
+    WHERE model_code = 'seedance-i2v-pro'
+      AND (
+        capabilities_json->>'modelFamily' IS NULL
+        OR capabilities_json->>'membershipPriorityEligible' IS NULL
+      )
+  `);
 }
 
 async function ensureProviderConstraint(

@@ -12,7 +12,8 @@
     "test:admin:http:auth": "node --import tsx --test apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts --test-name-pattern \"admin shell|admin login|sessions|profile|password\"",
     "smoke:text-gateway": "node --import tsx scripts/run-text-model-gateway-smoke.mjs",
     "worker:generation-outbox": "node --import tsx scripts/run-generation-outbox-dispatcher.mjs",
-    "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs"
+    "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs",
+    "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1054.0",

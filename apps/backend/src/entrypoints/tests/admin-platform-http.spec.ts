@@ -2351,6 +2351,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         headers: { cookie },
       });
       const listPayload = await listResponse.json();
+      const meResponse = await fetch(`${server.origin}/api/admin/auth/me`, {
+        headers: { cookie },
+      });
+      const mePayload = await meResponse.json();
       const revisions = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM membership_plan_revisions WHERE plan_id = $1",
         [createPayload.plan?.id],
@@ -2376,6 +2380,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [createPayload.plan.id],
       );
       assert.deepEqual(listPayload.data.plans[0].priorityRules, { modelFamilies: ["seedance"] });
+      assert.equal(meResponse.status, 200);
+      assert.equal(mePayload.data.permissions.includes("membership.plan.write"), true);
+      assert.equal(mePayload.data.permissions.includes("settings.write"), false);
     } finally {
       await server.close();
     }

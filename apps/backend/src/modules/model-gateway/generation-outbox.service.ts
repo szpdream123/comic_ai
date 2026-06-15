@@ -13,6 +13,9 @@ export interface GenerationTaskCreatedOutboxInput {
   targetType: string;
   targetId: string;
   providerExecutor: string;
+  membershipPriority?: boolean;
+  queuePriority?: number | null;
+  priorityReason?: string | null;
   availableAt: Date;
 }
 
@@ -32,6 +35,22 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   db: SqlDatabase,
   input: GenerationTaskCreatedOutboxInput,
 ) {
+  const payload: Record<string, unknown> = {
+    workflowId: input.workflowId,
+    taskId: input.taskId,
+    mediaType: input.kind,
+    modelCode: input.modelCode,
+    queueName: input.queueName,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    providerExecutor: input.providerExecutor,
+  };
+  if (input.membershipPriority === true) {
+    payload.membershipPriority = true;
+    payload.queuePriority = input.queuePriority ?? 1;
+    payload.priorityReason = input.priorityReason ?? "membership_priority";
+  }
+
   const row = await queryOne<{
     id: string;
     event_type: string;
@@ -56,16 +75,7 @@ export async function appendGenerationTaskCreatedOutboxEvent(
     [
       randomUUID(),
       input.organizationId,
-      JSON.stringify({
-        workflowId: input.workflowId,
-        taskId: input.taskId,
-        mediaType: input.kind,
-        modelCode: input.modelCode,
-        queueName: input.queueName,
-        targetType: input.targetType,
-        targetId: input.targetId,
-        providerExecutor: input.providerExecutor,
-      }),
+      JSON.stringify(payload),
       input.availableAt,
     ],
   );

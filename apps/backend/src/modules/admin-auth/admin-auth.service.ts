@@ -34,6 +34,7 @@ export const allAdminPermissions = [
   "audit.read",
   "settings.read",
   "settings.write",
+  "membership.plan.write",
   "admin_account.read",
   "admin_account.write",
   "storyboard_prompt:view",
@@ -776,6 +777,7 @@ const rolePermissions: Record<string, AdminPermission[]> = {
     "audit.read",
     "settings.read",
     "settings.write",
+    "membership.plan.write",
     "admin_account.read",
     "admin_account.write",
     "storyboard_prompt:view",
@@ -814,6 +816,7 @@ const rolePermissions: Record<string, AdminPermission[]> = {
     "credit.adjust",
     "risk.read",
     "risk.review",
+    "membership.plan.write",
     "account.password",
   ],
   support_admin: [

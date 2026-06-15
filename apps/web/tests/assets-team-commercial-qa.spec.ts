@@ -1979,32 +1979,39 @@ describe("Worker C production workbench integration", () => {
     assertHasAction(dashboardHtml, "export-team-dashboard");
   });
 
-  it("passes real billing packages into the workbench pricing modal", () => {
+  it("passes real membership plans into the workbench pricing modal", () => {
     const html = renderWorkbenchTab("team", {
       pricingOpen: true,
       isLibraryPricingModalOpen: true,
-      billingPackages: [
+      membershipPlans: [
         {
-          id: "pkg-1",
-          code: "starter_120",
-          displayName: "Starter",
-          credits: 120,
-          amountMinor: 9900,
+          id: "plan-1",
+          code: "professional_monthly",
+          displayName: "专业版月卡",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          giftCredits: 3000,
+          amountMinor: 29900,
           currency: "CNY",
           status: "active",
         },
       ],
     });
 
-    assertIncludesText(html, "Starter");
-    assertIncludesText(html, "120");
-    assertHasAction(html, "purchase-billing-package");
+    assertIncludesText(html, "专业版月卡");
+    assertIncludesText(html, "3,000");
+    assertHasAction(html, "purchase-membership-plan");
   });
 
   it("passes the latest payment intent into the workbench pricing modal", () => {
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const html = renderWorkbenchTab("team", {
       pricingOpen: true,
       isLibraryPricingModalOpen: true,
+      membershipPaymentQrCreatedAt: new Date().toISOString(),
+      membershipPaymentQrExpiresAt: expiresAt,
+      membershipPaymentPolling: true,
       lastPaymentIntent: {
         id: "intent-1",
         orderId: "order-1",
@@ -2014,7 +2021,7 @@ describe("Worker C production workbench integration", () => {
         amountMinor: 9900,
         currency: "CNY",
         merchantOrderNo: "MOCK20260529001",
-        expiresAt: "2026-05-29T18:30:00.000Z",
+        expiresAt,
       },
       lastPaymentAction: {
         kind: "mock_qr",
@@ -2026,8 +2033,8 @@ describe("Worker C production workbench integration", () => {
     });
 
     assertIncludesText(html, "MOCK20260529001");
-    assertIncludesText(html, "submitted");
-    assertHasAction(html, "refresh-payment-intent");
+    assertIncludesText(html, "待支付");
+    assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
   });
 
   it("mounts non-editor library pages inside an internal scroll surface", () => {
@@ -2502,11 +2509,11 @@ describe("Worker C commercial gates", () => {
     const html = renderPricingModal({ open: true });
     assert.match(html, /data-modal="pricing"/);
     assertHasAction(html, "close-pricing");
-    assertHasAction(html, "purchase-billing-package");
-    assertHasAction(html, "request-enterprise-contact");
-    assert.match(html, /disabled/);
-    assert.match(html, /disabled/);
+    assert.match(html, /data-membership-empty-state/);
+    assert.doesNotMatch(html, /purchase-billing-package/);
   });
+
+});
 
 describe("Worker C permission rules", () => {
   it("exports data-driven permissions and renders the rules modal", () => {
@@ -2521,35 +2528,41 @@ describe("Worker C permission rules", () => {
     assert.match(html, /<table>/);
   });
 
-  it("renders billing packages from backend-shaped data when provided", () => {
+  it("renders membership plans from backend-shaped data when provided", () => {
     const html = renderPricingModal({
       open: true,
-      packages: [
+      membershipPlans: [
         {
-          id: "pkg-1",
-          code: "starter_120",
-          displayName: "Starter",
-          credits: 120,
-          amountMinor: 9900,
+          id: "plan-1",
+          code: "professional_monthly",
+          displayName: "专业版月卡",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          giftCredits: 3000,
+          amountMinor: 29900,
           currency: "CNY",
           status: "active",
         },
         {
-          id: "pkg-2",
-          code: "studio_600",
-          displayName: "Studio",
-          credits: 600,
-          amountMinor: 39900,
+          id: "plan-2",
+          code: "professional_yearly",
+          displayName: "专业版年卡",
+          tier: "professional",
+          periodUnit: "year",
+          periodCount: 1,
+          giftCredits: 36000,
+          amountMinor: 299900,
           currency: "CNY",
           status: "active",
         },
       ],
     });
 
-    assertIncludesText(html, "Starter");
-    assertIncludesText(html, "Studio");
-    assertIncludesText(html, "pkg-1");
-    assertHasAction(html, "purchase-billing-package");
+    assertIncludesText(html, "专业版月卡");
+    assertIncludesText(html, "专业版年卡");
+    assertIncludesText(html, "plan-1");
+    assertHasAction(html, "purchase-membership-plan");
   });
 
   it("renders the latest payment intent details inside the pricing modal", () => {
@@ -2567,7 +2580,7 @@ describe("Worker C permission rules", () => {
         amountMinor: 9900,
         currency: "CNY",
         merchantOrderNo: "MOCK20260529001",
-        expiresAt: "2026-05-29T18:30:00.000Z",
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       },
       paymentAction: {
         kind: "mock_qr",
@@ -2578,10 +2591,10 @@ describe("Worker C permission rules", () => {
       },
     });
 
-    assertIncludesText(html, "intent-1");
-    assertIncludesText(html, "order-1");
     assertIncludesText(html, "MOCK20260529001");
-    assertHasAction(html, "refresh-payment-intent");
+    assert.match(html, /data-modal="membership-payment"/);
+    assertIncludesText(html, "支付方式");
+    assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
   });
 });
 

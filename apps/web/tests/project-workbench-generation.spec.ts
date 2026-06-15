@@ -5219,6 +5219,398 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-action="open-create-member"/);
   });
 
+  it("opens membership pricing and creates a membership payment order", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({ isLibraryPricingModalOpen: false }),
+      api: {
+        async getMembershipPlans() {
+          calls.push("getMembershipPlans");
+          return {
+            data: {
+              plans: [{
+                id: "plan-pro-month",
+                code: "professional_monthly",
+                displayName: "专业版月卡",
+                tier: "professional",
+                periodUnit: "month",
+                periodCount: 1,
+                amountMinor: 19900,
+                currency: "CNY",
+                giftCredits: 1000,
+                seatLimit: 5,
+                displayMetadata: { badge: "推荐" },
+              }],
+            },
+          };
+        },
+        async getMembershipStatus() {
+          calls.push("getMembershipStatus");
+          return { membership: { status: "none" } };
+        },
+        async createMembershipOrder(input) {
+          calls.push(["createMembershipOrder", input]);
+          return { order: { id: "order-membership-1", orderNo: "MO-1" } };
+        },
+        async createPaymentIntent(input) {
+          calls.push(["createPaymentIntent", input]);
+          return {
+            paymentIntent: {
+              id: "intent-membership-1",
+              orderId: input.orderId,
+              amountMinor: 19900,
+              currency: "CNY",
+              provider: input.provider,
+              merchantOrderNo: "MO-1",
+              status: "pending",
+            },
+            payAction: { kind: "mock_qr", merchantOrderNo: "MO-1" },
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-pricing" } });
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+    assert.equal(workbench.ui.membershipPlans.length, 1);
+    assert.equal(workbench.ui.membershipStatus.status, "none");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "purchase-membership-plan",
+        planId: "plan-pro-month",
+        provider: "wechat_pay",
+      },
+    });
+
+    assert.deepEqual(calls, [
+      "getMembershipPlans",
+      "getMembershipStatus",
+      ["createMembershipOrder", { membershipPlanId: "plan-pro-month" }],
+      ["createPaymentIntent", {
+        orderId: "order-membership-1",
+        provider: "wechat_pay",
+        productMode: "native_qr",
+      }],
+    ]);
+    assert.equal(workbench.ui.lastBillingOrder.id, "order-membership-1");
+    assert.equal(workbench.ui.lastPaymentIntent.id, "intent-membership-1");
+    assert.match(workbench.ui.toast, /已创建会员支付意图/);
+  });
+
+  it("starts polling after membership payment intent creation and refreshes entitlements when paid", async () => {
+    const calls = [];
+    const scheduledPolls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({ isLibraryPricingModalOpen: true }),
+      paymentPollSetTimeout(callback, delayMs) {
+        scheduledPolls.push({ callback, delayMs });
+        return { delayMs };
+      },
+      paymentPollClearTimeout() {},
+      api: {
+        async createMembershipOrder(input) {
+          calls.push(["createMembershipOrder", input]);
+          return { order: { id: "order-membership-1", orderNo: "MO-1" } };
+        },
+        async createPaymentIntent(input) {
+          calls.push(["createPaymentIntent", input]);
+          return {
+            paymentIntent: {
+              id: "intent-membership-1",
+              orderId: input.orderId,
+              amountMinor: 19900,
+              currency: "CNY",
+              provider: input.provider,
+              merchantOrderNo: "MO-1",
+              status: "submitted",
+              expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            },
+            payAction: { kind: "mock_qr", merchantOrderNo: "MO-1" },
+          };
+        },
+        async getBillingOrder(orderId) {
+          calls.push(["getBillingOrder", orderId]);
+          return { order: { id: orderId, productType: "membership_plan", status: "paid" } };
+        },
+        async getPaymentIntent(paymentIntentId) {
+          calls.push(["getPaymentIntent", paymentIntentId]);
+          return { paymentIntent: { id: paymentIntentId, orderId: "order-membership-1", status: "succeeded" } };
+        },
+        async getMembershipPlans() {
+          calls.push("getMembershipPlans");
+          return { data: { plans: [] } };
+        },
+        async getMembershipStatus() {
+          calls.push("getMembershipStatus");
+          return { membership: { status: "professional_active", entitlements: { teamAssetLibrary: true } } };
+        },
+        async getTeamOverview() {
+          calls.push("getTeamOverview");
+          return { overview: { entitlements: { teamAssetLibrary: true } } };
+        },
+        async getTeamMembers() {
+          calls.push("getTeamMembers");
+          return { members: [] };
+        },
+        async getLibraryAssets() {
+          calls.push("getLibraryAssets");
+          return { assets: [], folders: [], categories: [], entitlement: { hasTeamAssetLibrary: true } };
+        },
+        async getProjects() {
+          calls.push("getProjects");
+          return { projects: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "purchase-membership-plan",
+        planId: "plan-pro-month",
+        provider: "wechat_pay",
+      },
+    });
+
+    assert.equal(scheduledPolls.length, 1);
+    assert.equal(scheduledPolls[0].delayMs, 2000);
+
+    await scheduledPolls[0].callback();
+
+    assert.ok(calls.some((call) => Array.isArray(call) && call[0] === "getPaymentIntent"));
+    assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+    assert.equal(workbench.ui.libraryEntitlement.hasTeamAssetLibrary, true);
+    assert.match(workbench.ui.toast, /会员已开通/);
+  });
+
+  it("can regenerate an expired membership payment qr code with a new order", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        isLibraryPricingModalOpen: true,
+        pendingMembershipPlanId: "plan-pro-month",
+        pendingMembershipPaymentProvider: "wechat_pay",
+        lastBillingOrder: { id: "old-order", orderNo: "OLD-1", status: "pending_payment" },
+        lastPaymentIntent: {
+          id: "old-intent",
+          orderId: "old-order",
+          merchantOrderNo: "OLD-1",
+          provider: "wechat_pay",
+          status: "expired",
+          expiresAt: "2026-06-09T12:00:00.000Z",
+        },
+      }),
+      paymentPollSetTimeout() {
+        return {};
+      },
+      paymentPollClearTimeout() {},
+      api: {
+        async createMembershipOrder(input) {
+          calls.push(["createMembershipOrder", input]);
+          return { order: { id: "new-order", orderNo: "NEW-1" } };
+        },
+        async createPaymentIntent(input) {
+          calls.push(["createPaymentIntent", input]);
+          return {
+            paymentIntent: {
+              id: "new-intent",
+              orderId: input.orderId,
+              merchantOrderNo: "NEW-1",
+              provider: input.provider,
+              status: "submitted",
+              amountMinor: 19900,
+              currency: "CNY",
+              expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            },
+            payAction: { kind: "mock_qr", merchantOrderNo: "NEW-1" },
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "regenerate-membership-payment-qr",
+        planId: "plan-pro-month",
+        provider: "wechat_pay",
+      },
+    });
+
+    assert.deepEqual(calls, [
+      ["createMembershipOrder", { membershipPlanId: "plan-pro-month" }],
+      ["createPaymentIntent", {
+        orderId: "new-order",
+        provider: "wechat_pay",
+        productMode: "native_qr",
+      }],
+    ]);
+    assert.equal(workbench.ui.lastBillingOrder.id, "new-order");
+    assert.equal(workbench.ui.lastPaymentIntent.id, "new-intent");
+    assert.match(workbench.ui.toast, /已重新生成支付二维码/);
+  });
+
+  it("refreshes a paid membership intent into active team entitlement surface", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        lastBillingOrder: { id: "order-membership-1" },
+        lastPaymentIntent: { id: "intent-membership-1", orderId: "order-membership-1" },
+      }),
+      api: {
+        async getBillingOrder(orderId) {
+          calls.push(["getBillingOrder", orderId]);
+          return { order: { id: orderId, productType: "membership_plan", status: "paid" } };
+        },
+        async getPaymentIntent(paymentIntentId) {
+          calls.push(["getPaymentIntent", paymentIntentId]);
+          return { paymentIntent: { id: paymentIntentId, orderId: "order-membership-1", status: "succeeded" } };
+        },
+        async getMembershipPlans() {
+          calls.push("getMembershipPlans");
+          return { data: { plans: [] } };
+        },
+        async getMembershipStatus() {
+          calls.push("getMembershipStatus");
+          return {
+            membership: {
+              status: "professional_active",
+              team: { seatLimit: 50 },
+              entitlements: { teamMemberManagement: true },
+            },
+          };
+        },
+        async getTeamOverview() {
+          calls.push("getTeamOverview");
+          return { overview: { memberCount: 1, seatLimit: 50 } };
+        },
+        async getTeamMembers() {
+          calls.push("getTeamMembers");
+          return { members: [{ userId: "member-1" }] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "refresh-payment-intent",
+        paymentIntentId: "intent-membership-1",
+        orderId: "order-membership-1",
+      },
+    });
+
+    assert.deepEqual(calls, [
+      ["getBillingOrder", "order-membership-1"],
+      ["getPaymentIntent", "intent-membership-1"],
+      "getMembershipPlans",
+      "getMembershipStatus",
+      "getTeamOverview",
+      "getTeamMembers",
+    ]);
+    assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+    assert.equal(workbench.ui.teamOverview.memberCount, 1);
+    assert.equal(workbench.ui.teamMembers[0].userId, "member-1");
+  });
+
+  it("keeps credit package payment refresh separate from membership entitlement refresh", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        lastBillingOrder: {
+          id: "order-credit-1",
+          productType: "credit_package",
+          status: "pending_payment",
+        },
+        lastPaymentIntent: {
+          id: "intent-credit-1",
+          orderId: "order-credit-1",
+          status: "submitted",
+        },
+      }),
+      api: {
+        async getBillingOrder(orderId) {
+          calls.push(["getBillingOrder", orderId]);
+          return {
+            order: {
+              id: orderId,
+              productType: "credit_package",
+              status: "paid",
+            },
+          };
+        },
+        async getPaymentIntent(paymentIntentId) {
+          calls.push(["getPaymentIntent", paymentIntentId]);
+          return {
+            paymentIntent: {
+              id: paymentIntentId,
+              orderId: "order-credit-1",
+              status: "succeeded",
+            },
+          };
+        },
+        async getMembershipPlans() {
+          calls.push("getMembershipPlans");
+          throw new Error("membership_refresh_should_not_run");
+        },
+        async getMembershipStatus() {
+          calls.push("getMembershipStatus");
+          throw new Error("membership_refresh_should_not_run");
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "refresh-payment-intent",
+        paymentIntentId: "intent-credit-1",
+        orderId: "order-credit-1",
+      },
+    });
+
+    assert.deepEqual(calls, [
+      ["getBillingOrder", "order-credit-1"],
+      ["getPaymentIntent", "intent-credit-1"],
+    ]);
+    assert.equal(workbench.ui.lastBillingOrder.status, "paid");
+    assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
+    assert.doesNotMatch(workbench.ui.toast, /会员已开通/);
+    assert.match(workbench.ui.toast, /支付状态已刷新/);
+  });
+
   it("sorts newest projects first and paginates after eight items", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({

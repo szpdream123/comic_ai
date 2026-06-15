@@ -31,6 +31,9 @@ export interface GenerationBullMQJob {
     artifactKind?: "image" | "video";
     storageBucket?: string | null;
     finalizeMode?: "retry_finalize" | "retry_persist_asset";
+    membershipPriority?: boolean;
+    queuePriority?: number;
+    priorityReason?: string;
   };
   options: JobsOptions;
 }
@@ -53,36 +56,52 @@ export function buildGenerationBullMQJob(
     readString(event.payload.queueName) ||
     (mediaType === "video" ? config.queues.submitVideo : config.queues.submitImage);
   const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit");
+  const queuePriority = readQueuePriority(event.payload.queuePriority);
+  const data: GenerationBullMQJob["data"] = {
+    outboxEventId: event.id,
+    organizationId: event.organizationId,
+    taskId,
+    workflowId,
+    mediaType,
+    modelCode: readString(event.payload.modelCode) || null,
+    providerExecutor: readString(event.payload.providerExecutor) || "model-gateway",
+  };
+  if (readBoolean(event.payload.membershipPriority) === true) {
+    data.membershipPriority = true;
+    if (queuePriority !== undefined) {
+      data.queuePriority = queuePriority;
+    }
+    const priorityReason = readString(event.payload.priorityReason);
+    if (priorityReason) {
+      data.priorityReason = priorityReason;
+    }
+  }
+  const options: JobsOptions = {
+    jobId,
+    attempts: 3,
+    backoff: {
+      type: "exponential",
+      delay: 1000,
+    },
+    removeOnComplete: {
+      age: 86400,
+      count: 10000,
+    },
+    removeOnFail: {
+      age: 604800,
+      count: 50000,
+    },
+  };
+  if (queuePriority !== undefined) {
+    options.priority = queuePriority;
+  }
 
   return {
     queueName,
     jobName: "generation.task.created",
     jobId,
-    data: {
-      outboxEventId: event.id,
-      organizationId: event.organizationId,
-      taskId,
-      workflowId,
-      mediaType,
-      modelCode: readString(event.payload.modelCode) || null,
-      providerExecutor: readString(event.payload.providerExecutor) || "model-gateway",
-    },
-    options: {
-      jobId,
-      attempts: 3,
-      backoff: {
-        type: "exponential",
-        delay: 1000,
-      },
-      removeOnComplete: {
-        age: 86400,
-        count: 10000,
-      },
-      removeOnFail: {
-        age: 604800,
-        count: 50000,
-      },
-    },
+    data,
+    options,
   };
 }
 
@@ -201,6 +220,18 @@ function readRequiredString(value: unknown, fieldName: string) {
 
 function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function readBoolean(value: unknown) {
+  return value === true;
+}
+
+function readQueuePriority(value: unknown): number | undefined {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numberValue) || numberValue < 1) {
+    return undefined;
+  }
+  return numberValue;
 }
 
 function readMediaType(value: unknown): "image" | "video" {

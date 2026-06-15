@@ -21,6 +21,12 @@ import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategor
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
+const MEMBERSHIP_PAYMENT_QR_TTL_MS = 15 * 60 * 1000;
+const MEMBERSHIP_PAYMENT_FAST_POLL_MS = 2000;
+const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
+const MEMBERSHIP_PAYMENT_FAST_WINDOW_MS = 60 * 1000;
+const MEMBERSHIP_PAYMENT_MAX_POLL_FAILURES = 3;
+const MEMBERSHIP_PAYMENT_COUNTDOWN_TICK_MS = 1000;
 
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
@@ -467,6 +473,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     librarySearchTimer: null,
     librarySearchRequestId: 0,
     librarySearchComposing: false,
+    membershipPaymentPollTimer: null,
+    membershipPaymentCountdownTimer: null,
     generationPollTimer: null,
     generationPollStartedAt: null,
     homeLiquidEther: null,
@@ -515,6 +523,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       teamDashboardStatusFilter: "all",
       selectedDashboardMemberId: null,
       billingPackages: [],
+      membershipPlans: [],
+      membershipStatus: null,
+      pendingMembershipPlanId: "",
+      pendingMembershipPaymentProvider: "wechat_pay",
+      membershipPaymentQrCreatedAt: null,
+      membershipPaymentQrExpiresAt: null,
+      membershipPaymentPolling: false,
+      membershipPaymentPollFailureCount: 0,
+      membershipPaymentAgreementAccepted: true,
       createMemberModal: null,
       editMemberModal: null,
       projectLibraryAssetsByType: null,
@@ -764,6 +781,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
+      actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
       actionTarget.matches?.(".asset-import-file-input") ||
       actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
@@ -807,6 +825,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.episodeCardMenuId = null;
     workbench.ui.projectCardMenuId = null;
     workbench.ui.isLibraryPricingModalOpen = false;
+    stopMembershipPaymentWatcher(workbench);
     workbench.ui.isMemberRulesModalOpen = false;
     workbench.ui.isTeamMemberCreateOpen = false;
     workbench.ui.teamMemberCreateNotice = "";
@@ -825,6 +844,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.target);
+
+    if (target?.matches?.('input[data-action="toggle-membership-payment-agreement"]')) {
+      void handleAction(workbench, target).catch((error) => {
+        workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+        render(workbench);
+      });
+      return;
+    }
 
     if (
       target?.matches?.("#team-member-role-input") ||
@@ -1738,6 +1765,454 @@ async function syncBillingPackages(workbench) {
   }
 }
 
+async function syncMembershipSurface(workbench) {
+  const [plansResult, statusResult] = await Promise.allSettled([
+    typeof workbench.api?.getMembershipPlans === "function"
+      ? workbench.api.getMembershipPlans()
+      : Promise.resolve({ data: { plans: [] } }),
+    typeof workbench.api?.getMembershipStatus === "function"
+      ? workbench.api.getMembershipStatus()
+      : Promise.resolve({ data: null }),
+  ]);
+  workbench.ui.membershipPlans = plansResult.status === "fulfilled" && Array.isArray(plansResult.value?.data?.plans)
+    ? plansResult.value.data.plans
+    : [];
+  workbench.ui.membershipStatus = statusResult.status === "fulfilled"
+    ? normalizeMembershipStatus(statusResult.value)
+    : null;
+}
+
+function normalizeMembershipStatus(payload) {
+  const value = payload?.data ?? payload;
+  if (value?.membership && typeof value.membership === "object") {
+    return value.membership;
+  }
+  if (value?.subscription && typeof value.subscription === "object") {
+    return value.subscription;
+  }
+  return value ?? null;
+}
+
+function isActiveMembershipStatus(membershipStatus) {
+  const status =
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "";
+  return status === "experience_active" || status === "professional_active";
+}
+
+function isSucceededPaymentIntent(paymentIntent, billingOrder) {
+  const intentStatus = String(paymentIntent?.status ?? "");
+  const orderStatus = String(billingOrder?.status ?? "");
+  return intentStatus === "succeeded" || intentStatus === "paid" || orderStatus === "paid";
+}
+
+function isExpiredPaymentIntent(paymentIntent) {
+  const intentStatus = String(paymentIntent?.status ?? "");
+  if (intentStatus === "expired" || intentStatus === "closed") {
+    return true;
+  }
+  const expiresAt = paymentIntent?.expiresAt ?? paymentIntent?.expires_at ?? null;
+  return isExpiredTimestamp(expiresAt);
+}
+
+function isExpiredTimestamp(value) {
+  if (!value) {
+    return false;
+  }
+  const expires = new Date(value);
+  return Boolean(Number.isFinite(expires.getTime()) && expires.getTime() <= Date.now());
+}
+
+function isExpiredMembershipPayment(workbench) {
+  return (
+    isExpiredPaymentIntent(workbench?.ui?.lastPaymentIntent) ||
+    isExpiredTimestamp(workbench?.ui?.membershipPaymentQrExpiresAt)
+  );
+}
+
+function formatMembershipPaymentRemainingTime(remainingMs) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(remainingMs) / 1000));
+  const minutes = `${Math.floor(totalSeconds / 60)}`.padStart(2, "0");
+  const seconds = `${totalSeconds % 60}`.padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function stopMembershipPaymentCountdown(workbench) {
+  const clearTimeoutFn =
+    workbench.paymentCountdownClearTimeout ??
+    (typeof window !== "undefined" && typeof window.clearTimeout === "function"
+      ? window.clearTimeout.bind(window)
+      : null);
+  if (workbench.membershipPaymentCountdownTimer) {
+    clearTimeoutFn?.(workbench.membershipPaymentCountdownTimer);
+    workbench.membershipPaymentCountdownTimer = null;
+  }
+}
+
+function markMembershipPaymentExpired(workbench) {
+  if (!workbench?.ui?.lastPaymentIntent || isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+  const intentStatus = String(workbench.ui.lastPaymentIntent?.status ?? "");
+  if (intentStatus === "expired" || intentStatus === "closed") {
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+  workbench.ui.lastPaymentIntent = {
+    ...workbench.ui.lastPaymentIntent,
+    status: "expired",
+  };
+  stopMembershipPaymentWatcher(workbench);
+  stopMembershipPaymentCountdown(workbench);
+  workbench.ui.toast = "支付二维码已失效，请重新生成二维码。";
+  render(workbench, { preserveLibraryScroll: true });
+}
+
+function syncMembershipPaymentCountdown(workbench) {
+  const countdown = workbench.root?.querySelector?.("[data-payment-countdown]");
+  if (!countdown) {
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+  const expiresAt = countdown.dataset?.expiresAt ?? workbench.ui?.membershipPaymentQrExpiresAt ?? null;
+  const expires = expiresAt ? new Date(expiresAt) : null;
+  if (!expires || !Number.isFinite(expires.getTime())) {
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+
+  const remainingMs = Math.max(0, expires.getTime() - Date.now());
+  countdown.textContent = remainingMs > 0
+    ? `${formatMembershipPaymentRemainingTime(remainingMs)} 后过期`
+    : "二维码已过期";
+  countdown.classList?.toggle?.("is-expiring", remainingMs > 0 && remainingMs <= 60 * 1000);
+  countdown.classList?.toggle?.("is-expired", remainingMs <= 0);
+  if (remainingMs <= 0) {
+    markMembershipPaymentExpired(workbench);
+    return;
+  }
+
+  const clearTimeoutFn =
+    workbench.paymentCountdownClearTimeout ??
+    (typeof window !== "undefined" && typeof window.clearTimeout === "function"
+      ? window.clearTimeout.bind(window)
+      : null);
+  if (workbench.membershipPaymentCountdownTimer) {
+    clearTimeoutFn?.(workbench.membershipPaymentCountdownTimer);
+  }
+  const setTimeoutFn =
+    workbench.paymentCountdownSetTimeout ??
+    (typeof window !== "undefined" && typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : null);
+  if (!setTimeoutFn) {
+    workbench.membershipPaymentCountdownTimer = null;
+    return;
+  }
+  workbench.membershipPaymentCountdownTimer = setTimeoutFn(() => {
+    workbench.membershipPaymentCountdownTimer = null;
+    syncMembershipPaymentCountdown(workbench);
+  }, MEMBERSHIP_PAYMENT_COUNTDOWN_TICK_MS);
+}
+
+function resolveMembershipPaymentExpiresAt(paymentIntent) {
+  const providerExpiresAt = paymentIntent?.expiresAt ?? paymentIntent?.expires_at ?? null;
+  const providerExpires = providerExpiresAt ? new Date(providerExpiresAt) : null;
+  const providerExpiresMs = providerExpires && Number.isFinite(providerExpires.getTime())
+    ? providerExpires.getTime()
+    : Number.POSITIVE_INFINITY;
+  const localExpiresMs = Date.now() + MEMBERSHIP_PAYMENT_QR_TTL_MS;
+  return new Date(Math.min(providerExpiresMs, localExpiresMs)).toISOString();
+}
+
+function setMembershipPaymentPendingState(workbench, { membershipPlanId, provider, order, paymentIntent, payAction }) {
+  stopMembershipPaymentWatcher(workbench);
+  stopMembershipPaymentCountdown(workbench);
+  workbench.ui.pendingMembershipPlanId = membershipPlanId;
+  workbench.ui.pendingMembershipPaymentProvider = provider;
+  workbench.ui.lastBillingOrder = order ?? null;
+  workbench.ui.lastPaymentIntent = paymentIntent ?? null;
+  workbench.ui.lastPaymentAction = payAction ?? null;
+  workbench.ui.membershipPaymentQrCreatedAt = new Date().toISOString();
+  workbench.ui.membershipPaymentQrExpiresAt = resolveMembershipPaymentExpiresAt(paymentIntent);
+  workbench.ui.membershipPaymentPollFailureCount = 0;
+  workbench.ui.membershipPaymentPolling = Boolean(paymentIntent);
+  workbench.ui.membershipPaymentAgreementAccepted = true;
+  startMembershipPaymentWatcher(workbench);
+}
+
+function stopMembershipPaymentWatcher(workbench) {
+  const clearTimeoutFn =
+    workbench.paymentPollClearTimeout ??
+    (typeof window !== "undefined" && typeof window.clearTimeout === "function"
+      ? window.clearTimeout.bind(window)
+      : null);
+  if (workbench.membershipPaymentPollTimer) {
+    clearTimeoutFn?.(workbench.membershipPaymentPollTimer);
+    workbench.membershipPaymentPollTimer = null;
+  }
+  if (workbench.ui) {
+    workbench.ui.membershipPaymentPolling = false;
+  }
+}
+
+function clearMembershipPaymentState(workbench) {
+  stopMembershipPaymentWatcher(workbench);
+  stopMembershipPaymentCountdown(workbench);
+  if (!workbench.ui) {
+    return;
+  }
+  workbench.ui.pendingMembershipPlanId = "";
+  workbench.ui.pendingMembershipPaymentProvider = "wechat_pay";
+  workbench.ui.lastBillingOrder = null;
+  workbench.ui.lastPaymentIntent = null;
+  workbench.ui.lastPaymentAction = null;
+  workbench.ui.membershipPaymentQrCreatedAt = null;
+  workbench.ui.membershipPaymentQrExpiresAt = null;
+  workbench.ui.membershipPaymentPollFailureCount = 0;
+  workbench.ui.membershipPaymentPolling = false;
+  workbench.ui.membershipPaymentAgreementAccepted = true;
+}
+
+function startMembershipPaymentWatcher(workbench) {
+  if (!workbench.ui?.lastPaymentIntent || !workbench.ui?.lastBillingOrder) {
+    stopMembershipPaymentWatcher(workbench);
+    return;
+  }
+  if (
+    isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder) &&
+    isActiveMembershipStatus(workbench.ui.membershipStatus)
+  ) {
+    stopMembershipPaymentWatcher(workbench);
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+  if (isExpiredMembershipPayment(workbench)) {
+    stopMembershipPaymentWatcher(workbench);
+    stopMembershipPaymentCountdown(workbench);
+    return;
+  }
+
+  const clearTimeoutFn =
+    workbench.paymentPollClearTimeout ??
+    (typeof window !== "undefined" && typeof window.clearTimeout === "function"
+      ? window.clearTimeout.bind(window)
+      : null);
+  if (workbench.membershipPaymentPollTimer) {
+    clearTimeoutFn?.(workbench.membershipPaymentPollTimer);
+  }
+
+  const createdAt = new Date(workbench.ui.membershipPaymentQrCreatedAt ?? Date.now()).getTime();
+  const elapsedMs = Number.isFinite(createdAt) ? Math.max(0, Date.now() - createdAt) : 0;
+  const delayMs = elapsedMs < MEMBERSHIP_PAYMENT_FAST_WINDOW_MS
+    ? MEMBERSHIP_PAYMENT_FAST_POLL_MS
+    : MEMBERSHIP_PAYMENT_SLOW_POLL_MS;
+  const setTimeoutFn =
+    workbench.paymentPollSetTimeout ??
+    (typeof window !== "undefined" && typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : null);
+  if (!setTimeoutFn) {
+    workbench.ui.membershipPaymentPolling = false;
+    workbench.membershipPaymentPollTimer = null;
+    return;
+  }
+  workbench.ui.membershipPaymentPolling = true;
+  workbench.membershipPaymentPollTimer = setTimeoutFn(() => {
+    workbench.membershipPaymentPollTimer = null;
+    return refreshMembershipPaymentStatus(workbench, { fromPoll: true });
+  }, delayMs);
+}
+
+async function refreshMembershipPaymentStatus(workbench, { fromPoll = false } = {}) {
+  const paymentIntentId = workbench.ui.lastPaymentIntent?.id ?? "";
+  const orderId = workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
+  if (!paymentIntentId || !orderId) {
+    stopMembershipPaymentWatcher(workbench);
+    return false;
+  }
+  if (!(await ensureMembershipPaymentLogin(workbench))) {
+    return false;
+  }
+
+  try {
+    await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
+    workbench.ui.membershipPaymentPollFailureCount = 0;
+    return handleRefreshedMembershipPaymentStatus(workbench, { fromPoll });
+  } catch (error) {
+    workbench.ui.membershipPaymentPollFailureCount = Number(workbench.ui.membershipPaymentPollFailureCount ?? 0) + 1;
+    if (!fromPoll || workbench.ui.membershipPaymentPollFailureCount >= MEMBERSHIP_PAYMENT_MAX_POLL_FAILURES) {
+      stopMembershipPaymentWatcher(workbench);
+      workbench.ui.toast = `支付状态确认失败：${friendlyError(error)}`;
+      render(workbench, { preserveLibraryScroll: true });
+      return false;
+    }
+    startMembershipPaymentWatcher(workbench);
+    return false;
+  }
+}
+
+async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = false } = {}) {
+  if (!isMembershipBillingOrder(workbench.ui.lastBillingOrder)) {
+    stopMembershipPaymentWatcher(workbench);
+    return false;
+  }
+
+  if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
+    await refreshMembershipEntitlementSurfaces(workbench);
+    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+      stopMembershipPaymentWatcher(workbench);
+      stopMembershipPaymentCountdown(workbench);
+      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
+      render(workbench, { preserveLibraryScroll: true });
+      return true;
+    }
+    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
+    startMembershipPaymentWatcher(workbench);
+    render(workbench, { preserveLibraryScroll: true });
+    return false;
+  }
+
+  if (isExpiredMembershipPayment(workbench)) {
+    stopMembershipPaymentWatcher(workbench);
+    stopMembershipPaymentCountdown(workbench);
+    workbench.ui.toast = "支付二维码已失效，请重新生成二维码。";
+    render(workbench, { preserveLibraryScroll: true });
+    return false;
+  }
+
+  if (fromPoll) {
+    startMembershipPaymentWatcher(workbench);
+  }
+  render(workbench, { preserveLibraryScroll: true });
+  return false;
+}
+
+async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId }) {
+  const [orderEnvelope, intentEnvelope] = await Promise.all([
+    workbench.api.getBillingOrder(orderId),
+    workbench.api.getPaymentIntent(paymentIntentId),
+  ]);
+  workbench.ui.lastBillingOrder = orderEnvelope?.order ?? workbench.ui.lastBillingOrder ?? null;
+  workbench.ui.lastPaymentIntent = intentEnvelope?.paymentIntent ?? workbench.ui.lastPaymentIntent ?? null;
+  workbench.ui.lastPaymentAction = intentEnvelope?.payAction ?? workbench.ui.lastPaymentAction ?? null;
+  return {
+    order: workbench.ui.lastBillingOrder,
+    paymentIntent: workbench.ui.lastPaymentIntent,
+    payAction: workbench.ui.lastPaymentAction,
+  };
+}
+
+function isMembershipBillingOrder(order) {
+  return (
+    order?.productType === "membership_plan" ||
+    order?.product_type === "membership_plan" ||
+    Boolean(order?.membershipPlanId ?? order?.membership_plan_id)
+  );
+}
+
+async function refreshMembershipEntitlementSurfaces(workbench) {
+  await syncMembershipSurface(workbench);
+  const refreshes = [];
+  if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+    refreshes.push(loadTeamSurface(workbench));
+  }
+  if (typeof workbench.api?.getLibraryAssets === "function") {
+    refreshes.push(refreshAssetLibraryEntitlementAfterMembership(workbench));
+  }
+  if (typeof workbench.api?.getProjects === "function") {
+    refreshes.push(refreshProjectLibraryIfAvailable(workbench));
+  }
+  await Promise.allSettled(refreshes);
+}
+
+async function refreshAssetLibraryEntitlementAfterMembership(workbench) {
+  const previousScope = workbench.ui.libraryTeamAssetScope;
+  const previousCategory = workbench.ui.libraryCategory;
+  workbench.ui.libraryTeamAssetScope = previousScope ?? "team";
+  workbench.ui.libraryCategory = previousCategory ?? "character";
+  try {
+    await syncAssetLibraryFromApi(workbench);
+  } finally {
+    if (previousScope === undefined) {
+      delete workbench.ui.libraryTeamAssetScope;
+    } else {
+      workbench.ui.libraryTeamAssetScope = previousScope;
+    }
+    if (previousCategory === undefined) {
+      delete workbench.ui.libraryCategory;
+    } else {
+      workbench.ui.libraryCategory = previousCategory;
+    }
+  }
+}
+
+async function createMembershipPaymentQr(workbench, { membershipPlanId, provider }) {
+  const orderResponse = await workbench.api.createMembershipOrder({
+    membershipPlanId,
+  });
+  const intentResponse = await workbench.api.createPaymentIntent({
+    orderId: orderResponse.order.id,
+    provider,
+    productMode: "native_qr",
+  });
+  setMembershipPaymentPendingState(workbench, {
+    membershipPlanId,
+    provider,
+    order: orderResponse.order ?? null,
+    paymentIntent: intentResponse?.paymentIntent ?? null,
+    payAction: intentResponse?.payAction ?? null,
+  });
+  return { orderResponse, intentResponse };
+}
+
+function hasActiveSessionUser(session) {
+  return Boolean(session?.user?.id || session?.user?.phone);
+}
+
+async function ensureMembershipPaymentLogin(workbench) {
+  if (!hasActiveSessionUser(workbench.session)) {
+    await invalidateMembershipPaymentForLogin(workbench);
+    return false;
+  }
+  if (typeof workbench.api?.getSession !== "function") {
+    return true;
+  }
+
+  try {
+    const session = await workbench.api.getSession();
+    if (!hasActiveSessionUser(session)) {
+      await invalidateMembershipPaymentForLogin(workbench);
+      return false;
+    }
+    workbench.session = session;
+    return true;
+  } catch (error) {
+    if (Number(error?.status ?? 0) === 401 || String(error?.errorCode ?? "") === "unauthenticated") {
+      await invalidateMembershipPaymentForLogin(workbench);
+      return false;
+    }
+    workbench.ui.toast = `登录状态确认失败：${friendlyError(error)}`;
+    render(workbench, { preserveLibraryScroll: true });
+    return false;
+  }
+}
+
+async function invalidateMembershipPaymentForLogin(workbench) {
+  const canRenderCurrentWorkbench = hasActiveSessionUser(workbench.session);
+  clearMembershipPaymentState(workbench);
+  if (workbench.ui) {
+    workbench.ui.toast = "请先登录后再开通会员，当前支付流程已失效。";
+  }
+  if (canRenderCurrentWorkbench) {
+    render(workbench, { preserveLibraryScroll: true });
+  }
+  await workbench.onLogout?.();
+}
+
 async function loadTeamSurface(workbench) {
   if (
     typeof workbench.api?.getTeamOverview !== "function" ||
@@ -2019,12 +2494,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-pricing") {
     workbench.ui.isLibraryPricingModalOpen = true;
-    await syncBillingPackages(workbench);
+    await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
     render(workbench);
     return;
   }
 
   if (action === "close-pricing") {
+    workbench.ui.isLibraryPricingModalOpen = false;
+    clearMembershipPaymentState(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-membership-payment") {
+    clearMembershipPaymentState(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
     render(workbench);
     return;
@@ -2045,6 +2528,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.toast = `商务联系请求已提交：${response.request?.id ?? "已受理"}。`;
     });
     render(workbench);
+    return;
+  }
+
+  if (action === "toggle-membership-payment-agreement") {
+    const accepted = target.checked !== false;
+    workbench.ui.membershipPaymentAgreementAccepted = accepted;
+    if (!accepted) {
+      stopMembershipPaymentWatcher(workbench);
+      stopMembershipPaymentCountdown(workbench);
+      workbench.ui.toast = "请勾选并同意付费会员服务协议后再扫码支付。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+    workbench.ui.toast = "已同意付费会员服务协议，可继续扫码支付。";
+    if (
+      workbench.ui.lastPaymentIntent &&
+      workbench.ui.lastBillingOrder &&
+      !isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder) &&
+      !isExpiredMembershipPayment(workbench)
+    ) {
+      startMembershipPaymentWatcher(workbench);
+    }
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
@@ -2096,6 +2602,62 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "purchase-membership-plan") {
+    const membershipPlanId = target.dataset.planId ?? "";
+    const provider = target.dataset.provider ?? "wechat_pay";
+    if (!membershipPlanId) {
+      workbench.ui.toast = "会员套餐信息缺失，请刷新后重试。";
+      render(workbench);
+      return;
+    }
+    if (!(await ensureMembershipPaymentLogin(workbench))) {
+      return;
+    }
+    if (workbench.ui.membershipPaymentAgreementAccepted === false) {
+      workbench.ui.toast = "请先勾选并同意付费会员服务协议后再开通会员。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+
+    await runAction(workbench, "正在创建会员支付订单...", async () => {
+      const { orderResponse, intentResponse } = await createMembershipPaymentQr(workbench, {
+        membershipPlanId,
+        provider,
+      });
+      const amountMinor = Number(intentResponse?.paymentIntent?.amountMinor ?? 0);
+      const amountLabel = amountMinor > 0 ? `¥${Math.round(amountMinor / 100)}` : "当前会员套餐";
+      workbench.ui.toast = `已生成会员支付二维码：${amountLabel}，订单号 ${intentResponse?.paymentIntent?.merchantOrderNo ?? orderResponse.order.orderNo}。`;
+    }, { successToast: "已创建会员支付意图，支付二维码已生成。" });
+    return;
+  }
+
+  if (action === "regenerate-membership-payment-qr") {
+    const membershipPlanId = target.dataset.planId ?? workbench.ui.pendingMembershipPlanId ?? "";
+    const provider = target.dataset.provider ?? workbench.ui.pendingMembershipPaymentProvider ?? "wechat_pay";
+    if (!membershipPlanId) {
+      workbench.ui.toast = "会员套餐信息缺失，请重新选择套餐。";
+      render(workbench);
+      return;
+    }
+    if (!(await ensureMembershipPaymentLogin(workbench))) {
+      return;
+    }
+    if (workbench.ui.membershipPaymentAgreementAccepted === false) {
+      workbench.ui.toast = "请先勾选并同意付费会员服务协议后再重新生成二维码。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+
+    await runAction(workbench, "正在重新生成支付二维码...", async () => {
+      await createMembershipPaymentQr(workbench, {
+        membershipPlanId,
+        provider,
+      });
+      workbench.ui.toast = "已重新生成支付二维码，请在 15 分钟内完成支付。";
+    }, { successToast: "已重新生成支付二维码。" });
+    return;
+  }
+
   if (action === "purchase-billing-package") {
     const packageId = target.dataset.packageId ?? "";
     const provider = target.dataset.provider ?? "wechat_pay";
@@ -2132,17 +2694,35 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    if (isMembershipBillingOrder(workbench.ui.lastBillingOrder) && !(await ensureMembershipPaymentLogin(workbench))) {
+      return;
+    }
 
-    await runAction(workbench, "正在刷新支付状态...", async () => {
-      const [orderEnvelope, intentEnvelope] = await Promise.all([
-        workbench.api.getBillingOrder(orderId),
-        workbench.api.getPaymentIntent(paymentIntentId),
-      ]);
-      workbench.ui.lastBillingOrder = orderEnvelope?.order ?? workbench.ui.lastBillingOrder ?? null;
-      workbench.ui.lastPaymentIntent = intentEnvelope?.paymentIntent ?? workbench.ui.lastPaymentIntent ?? null;
-      workbench.ui.lastPaymentAction = intentEnvelope?.payAction ?? workbench.ui.lastPaymentAction ?? null;
-      workbench.ui.toast = `支付状态已刷新：${workbench.ui.lastPaymentIntent?.status ?? "unknown"}。`;
-    });
+    workbench.ui.busy = true;
+    workbench.ui.toast = "正在刷新支付状态...";
+    render(workbench);
+    try {
+      await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
+      const isMembershipOrder = isMembershipBillingOrder(workbench.ui.lastBillingOrder);
+      const changedToPaid = isMembershipOrder
+        ? await handleRefreshedMembershipPaymentStatus(workbench)
+        : false;
+      const membershipPaymentIsAwaitingEntitlement =
+        isMembershipOrder &&
+        isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder);
+      if (
+        !changedToPaid &&
+        !membershipPaymentIsAwaitingEntitlement &&
+        !isExpiredPaymentIntent(workbench.ui.lastPaymentIntent)
+      ) {
+        workbench.ui.toast = `支付状态已刷新：${workbench.ui.lastPaymentIntent?.status ?? "unknown"}。`;
+      }
+    } catch (error) {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+    } finally {
+      workbench.ui.busy = false;
+      render(workbench);
+    }
     return;
   }
 
@@ -11883,6 +12463,8 @@ function applyPostRenderEffects(workbench) {
     }
     workbench.ui.episodeWorkbenchConversationScrollMode = null;
   }
+
+  syncMembershipPaymentCountdown(workbench);
 
   const pendingIds = workbench.ui.assetLibraryPendingFocusAssetIds ?? [];
   if (!pendingIds.length) {

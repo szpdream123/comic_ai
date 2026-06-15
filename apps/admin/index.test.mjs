@@ -199,6 +199,15 @@ test("admin user credit secondary drawers return to the action menu", () => {
   }
 });
 
+test("admin shell includes membership plan management page", async () => {
+  const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
+  assert.match(html, /membership-plans/);
+  assert.match(html, /loadMembershipPlans/);
+  assert.match(html, /openMembershipPlanDrawer/);
+  assert.match(html, /\/api\/admin\/membership\/plans/);
+  assert.match(html, /permissionAttrs\("membership\.plan\.write"\)/);
+});
+
 test("admin user credit exposes team limit configuration only for team users", () => {
   assert.match(script, /function openTeamLimitDrawer\(userId\)/);
   assert.match(script, /function renderTeamLimitDrawer/);
@@ -284,6 +293,7 @@ test("admin shell disables sensitive actions from session permissions", () => {
     "risk.export",
     "ops.task.retry",
     "settings.write",
+    "membership.plan.write",
     "admin_account.write",
     "storyboard_prompt:view",
     "storyboard_prompt:create",

@@ -414,7 +414,16 @@ function renderOfficialTeamLibrary(context) {
           }
       </div>
       ${detailAsset ? renderAssetDetailOverlay(detailAsset, context) : ""}
-      ${renderPricingModal({ open: context.pricingOpen === true })}
+      ${renderPricingModal({
+        open: context.pricingOpen === true,
+        membershipPlans: context.membershipPlans ?? null,
+        membershipStatus: context.membershipStatus ?? null,
+        packages: context.billingPackages ?? null,
+        billingOrder: context.billingOrder ?? null,
+        paymentIntent: context.paymentIntent ?? null,
+        paymentAction: context.paymentAction ?? null,
+        membershipPaymentState: context.membershipPaymentState ?? null,
+      })}
     </section>
   `;
 }

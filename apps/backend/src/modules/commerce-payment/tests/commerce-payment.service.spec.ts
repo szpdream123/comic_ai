@@ -102,6 +102,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(intentResponse.status, 200);
       assert.equal(intentResponse.body.paymentIntent.status, "submitted");
       assert.equal(intentResponse.body.paymentIntent.amountMinor, 9900);
+      assert.equal(intentResponse.body.paymentIntent.expiresAt, "2026-05-21T08:16:00.000Z");
       assert.equal(intentResponse.body.payAction.kind, "mock_qr");
 
       const callbackBody = {
@@ -1684,6 +1685,98 @@ describe("commerce payment service", { concurrency: false }, () => {
       } finally {
         await db.close();
       }
+    }
+  });
+
+  it("keeps a success callback for an expired payment intent in manual review without paying the order", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-expired-success",
+        now: new Date("2026-05-21T08:00:00.000Z"),
+      });
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        },
+        idempotencyKey: "intent-key-expired-success",
+        now: new Date("2026-05-21T08:01:00.000Z"),
+      });
+      await db.query(
+        "UPDATE payment_intents SET expires_at = $2 WHERE id = $1",
+        [
+          intentResponse.body.paymentIntent.id,
+          new Date("2026-05-21T08:15:00.000Z"),
+        ],
+      );
+
+      const callbackBody = {
+        provider: "wechat_pay" as const,
+        providerEventDedupKey: "wechat-notify-expired-success",
+        merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
+        providerTradeId: "wx-trade-expired-success",
+        eventType: "payment_succeeded" as const,
+        amountMinor: 9900,
+        currency: "CNY",
+        merchantId,
+      };
+      const callbackResponse = await service.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, callbackSecret),
+        },
+        now: new Date("2026-05-21T08:16:00.000Z"),
+      });
+
+      const orderRows = await db.query<{ status: string; paid_at: Date | null }>(
+        "SELECT status, paid_at FROM billing_orders WHERE id = $1",
+        [orderResponse.body.order.id],
+      );
+      const intentRows = await db.query<{ status: string; succeeded_at: Date | null }>(
+        "SELECT status, succeeded_at FROM payment_intents WHERE id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+      const outboxCount = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'payment.succeeded'",
+      );
+      const providerEvents = await db.query<{
+        processing_status: string;
+        failure_code: string | null;
+      }>(
+        "SELECT processing_status, failure_code FROM payment_provider_events WHERE payment_intent_id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.body.providerEvent.processingStatus, "manual_review_required");
+      assert.equal(callbackResponse.body.riskEvent?.riskType, "duplicate_trade");
+      assert.equal(orderRows.rows[0]?.status, "pending_payment");
+      assert.equal(orderRows.rows[0]?.paid_at, null);
+      assert.equal(intentRows.rows[0]?.status, "submitted");
+      assert.equal(intentRows.rows[0]?.succeeded_at, null);
+      assert.equal(outboxCount.rows[0]?.count, 0);
+      assert.deepEqual(providerEvents.rows, [
+        {
+          processing_status: "manual_review_required",
+          failure_code: "duplicate_trade",
+        },
+      ]);
+    } finally {
+      await db.close();
     }
   });
 

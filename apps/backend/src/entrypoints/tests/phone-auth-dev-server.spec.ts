@@ -8,6 +8,7 @@ describe.configure?.({ concurrency: 1 });
 
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
+import { resolveMembershipGenerationPriority } from "../../modules/membership/membership-priority.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
@@ -169,19 +170,59 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ membershipPlanId: planId }),
       });
       const order = await orderResponse.json();
+      const returnedPlan = plans.data.plans.find((plan: { id: string }) => plan.id === planId);
 
       assert.equal(plansResponse.status, 200);
-      assert.equal(plans.data.plans[0].id, planId);
+      assert.equal(returnedPlan?.id, planId);
       assert.equal(statusResponse.status, 200);
       assert.deepEqual(status.membership, {
         status: "none",
         currentTier: null,
         currentPeriodEndAt: null,
+        entitlements: {
+          priorityGeneration: false,
+          teamAssetLibrary: false,
+          teamDashboard: false,
+          teamMemberManagement: false,
+        },
+        team: {
+          seatLimit: null,
+        },
       });
       assert.equal(orderResponse.status, 200);
       assert.equal(order.order.productType, "membership_plan");
       assert.equal(order.order.membershipPlanId, planId);
       assert.equal(order.order.productSnapshot.code, "professional_monthly_http");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("seeds default experience and professional membership plans for local acceptance when none exists", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138002");
+
+      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
+        headers: { cookie },
+      });
+      const plans = await plansResponse.json();
+
+      assert.equal(plansResponse.status, 200);
+      const planByCode = new Map(plans.data.plans.map((plan: { code: string }) => [plan.code, plan]));
+
+      assert.equal(plans.data.plans.length, 2);
+      assert.equal(planByCode.get("experience_weekly").displayName, "体验版");
+      assert.equal(planByCode.get("experience_weekly").tier, "experience");
+      assert.equal(planByCode.get("experience_weekly").periodUnit, "day");
+      assert.equal(planByCode.get("experience_weekly").amountMinor, 9900);
+      assert.equal(planByCode.get("professional_monthly").displayName, "专业版月卡");
+      assert.equal(planByCode.get("professional_monthly").tier, "professional");
+      assert.equal(planByCode.get("professional_monthly").periodUnit, "month");
+      assert.equal(planByCode.get("professional_monthly").amountMinor, 29900);
     } finally {
       await server.close();
     }
@@ -249,8 +290,40 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const status = await statusResponse.json();
+      const paidOrder = await db.query<{ organization_id: string }>(
+        "SELECT organization_id FROM billing_orders WHERE id = $1",
+        [order.order.id],
+      );
+      const paidOrganizationId = paidOrder.rows[0]!.organization_id;
       const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = '10000000-0000-4000-8000-000000000001'",
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+        [paidOrganizationId],
+      );
+      const period = await db.query<{ id: string; period_end_at: Date | string }>(
+        "SELECT id, period_end_at FROM membership_periods WHERE plan_id = $1",
+        [planId],
+      );
+      const giftLots = await db.query<{
+        source_id: string;
+        available_amount: number | string;
+        expires_at: Date | string | null;
+        metadata_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT source_id, available_amount, expires_at, metadata_json
+          FROM credit_lots
+          WHERE organization_id = $1
+            AND source_type = 'membership_gift'
+        `,
+        [paidOrganizationId],
+      );
+      const outbox = await db.query<{ event_type: string; status: string }>(
+        `
+          SELECT event_type, status
+          FROM outbox_events
+          WHERE event_type IN ('payment.succeeded', 'membership.period.started')
+          ORDER BY event_type ASC
+        `,
       );
 
       assert.equal(orderResponse.status, 200);
@@ -260,9 +333,137 @@ describe("phone auth dev server", () => {
       assert.equal(statusResponse.status, 200);
       assert.equal(status.membership.status, "professional_active");
       assert.equal(status.membership.currentTier, "professional");
+      assert.equal(status.membership.entitlements.priorityGeneration, true);
+      assert.equal(status.membership.entitlements.teamMemberManagement, true);
+      assert.equal(status.membership.team.seatLimit, 50);
       assert.match(status.membership.currentPeriodEndAt, /^\d{4}-\d{2}-\d{2}T/);
       assert.equal(organization.rows[0]?.credit_balance_cached, 13000);
+      assert.equal(period.rows.length, 1);
+      assert.equal(giftLots.rows.length, 1);
+      assert.equal(giftLots.rows[0]?.source_id, period.rows[0]?.id);
+      assert.equal(Number(giftLots.rows[0]?.available_amount ?? 0), 3000);
+      assert.equal(
+        new Date(giftLots.rows[0]!.expires_at!).toISOString(),
+        new Date(period.rows[0]!.period_end_at).toISOString(),
+      );
+      assert.equal(giftLots.rows[0]?.metadata_json.tier, "professional");
+      assert.deepEqual(outbox.rows, [
+        { event_type: "membership.period.started", status: "processed" },
+        { event_type: "payment.succeeded", status: "processed" },
+      ]);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("does not let one phone account inherit another account's paid membership entitlements", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+      },
+    });
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = originalDatabaseUrl || "postgres://tenant-isolation-upload-gate.test/local";
+
+    try {
+      await server.listen(0);
+      const paidCookie = await login(server.origin, "13800138010");
+      const ordinaryCookie = await login(server.origin, "13800138011");
+      const planId = "95000000-0000-4000-8000-000000020103";
+      await seedMembershipPlan(db, {
+        id: planId,
+        code: "professional_monthly_tenant_isolation",
+      });
+
+      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-tenant-isolation-order",
+          cookie: paidCookie,
+        },
+        body: JSON.stringify({ membershipPlanId: planId }),
+      });
+      const order = await orderResponse.json();
+      const intentResponse = await fetch(`${server.origin}/api/billing/payment-intents`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-tenant-isolation-intent",
+          cookie: paidCookie,
+        },
+        body: JSON.stringify({
+          orderId: order.order.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        }),
+      });
+      const intent = await intentResponse.json();
+      const callbackBody = {
+        provider: "wechat_pay" as const,
+        providerEventDedupKey: "membership-tenant-isolation-paid",
+        merchantOrderNo: intent.paymentIntent.merchantOrderNo,
+        providerTradeId: "wx-membership-tenant-isolation-paid",
+        eventType: "payment_succeeded" as const,
+        amountMinor: intent.paymentIntent.amountMinor,
+        currency: "CNY",
+        merchantId: "comic-ai-dev-merchant",
+      };
+      const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, "dev-payment-secret"),
+        }),
+      });
+
+      const paidStatusResponse = await fetch(`${server.origin}/api/membership/status`, {
+        headers: { cookie: paidCookie },
+      });
+      const paidStatus = await paidStatusResponse.json();
+      const ordinaryStatusResponse = await fetch(`${server.origin}/api/membership/status`, {
+        headers: { cookie: ordinaryCookie },
+      });
+      const ordinaryStatus = await ordinaryStatusResponse.json();
+      const uploadResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "tenant-isolation-blocked-team-upload",
+          cookie: ordinaryCookie,
+        },
+        body: JSON.stringify({
+          projectId: null,
+          purpose: "team-assets/character",
+          fileName: "ordinary-user-blocked.png",
+          contentType: "image/png",
+          sizeBytes: 1024,
+        }),
+      });
+      const uploadBody = await uploadResponse.json();
+
+      assert.equal(orderResponse.status, 200);
+      assert.equal(intentResponse.status, 200);
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(paidStatusResponse.status, 200);
+      assert.equal(paidStatus.membership.status, "professional_active");
+      assert.equal(paidStatus.membership.entitlements.teamAssetLibrary, true);
+      assert.equal(ordinaryStatusResponse.status, 200);
+      assert.equal(ordinaryStatus.membership.status, "none");
+      assert.equal(ordinaryStatus.membership.entitlements.teamAssetLibrary, false);
+      assert.equal(uploadResponse.status, 403);
+      assert.equal(uploadBody.errorCode, "team_asset_library_entitlement_required");
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
       await server.close();
     }
   });
@@ -2704,6 +2905,21 @@ describe("phone auth dev server", () => {
         `,
         ["10000000-0000-4000-8000-000000000001", projectId, taskId],
       );
+      const lotAllocationRows = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM credit_reservation_lot_allocations
+          WHERE organization_id = $1
+            AND reservation_id IN (
+              SELECT id
+              FROM credit_reservations
+              WHERE organization_id = $1
+                AND project_id = $2
+                AND task_id = $3
+            )
+        `,
+        ["10000000-0000-4000-8000-000000000001", projectId, taskId],
+      );
 
       const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
         method: "DELETE",
@@ -2719,7 +2935,8 @@ describe("phone auth dev server", () => {
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(generationResponse.status, 200);
       assert.equal(Number(reservationRows.rows[0]?.count ?? 0) > 0, true);
-      assert.equal(deleteProjectResponse.status, 200);
+      assert.equal(Number(lotAllocationRows.rows[0]?.count ?? 0) > 0, true);
+      assert.equal(deleteProjectResponse.status, 200, JSON.stringify(deletedProject));
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
     } finally {
@@ -4730,6 +4947,17 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveProfessionalPriorityMembership(db);
+      const priorityCheck = await resolveMembershipGenerationPriority(db, {
+        organizationId: "10000000-0000-4000-8000-000000000001",
+        modelCode: "seedance-i2v-pro",
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+      assert.deepEqual(priorityCheck, {
+        enabled: true,
+        priority: 1,
+        reason: "professional_membership_model_family_priority",
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -4785,6 +5013,8 @@ describe("phone auth dev server", () => {
         },
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
+      assert.ok(videoTaskEnvelope.data, JSON.stringify(videoTaskEnvelope));
       const taskId = videoTaskEnvelope.data.taskId;
       const outbox = await db.query<{
         event_type: string;
@@ -4794,6 +5024,9 @@ describe("phone auth dev server", () => {
           modelCode?: string;
           mediaType?: string;
           queueName?: string;
+          membershipPriority?: boolean;
+          queuePriority?: number;
+          priorityReason?: string;
         };
       }>(
         "SELECT event_type, status, payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
@@ -4810,7 +5043,6 @@ describe("phone auth dev server", () => {
         [taskId],
       );
 
-      assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTaskEnvelope.data.status, "queued");
       assert.equal(providerCalls.length, 0);
       assert.equal(providerRequests.rows[0]?.count, 0);
@@ -4820,6 +5052,12 @@ describe("phone auth dev server", () => {
       assert.equal(outbox.rows[0]?.payload_json.modelCode, "seedance-i2v-pro");
       assert.equal(outbox.rows[0]?.payload_json.mediaType, "video");
       assert.equal(outbox.rows[0]?.payload_json.queueName, "generation-submit-video");
+      assert.equal(outbox.rows[0]?.payload_json.membershipPriority, true);
+      assert.equal(outbox.rows[0]?.payload_json.queuePriority, 1);
+      assert.equal(
+        outbox.rows[0]?.payload_json.priorityReason,
+        "professional_membership_model_family_priority",
+      );
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 135);
       assert.equal(reservation.rows[0]?.status, "active");
     } finally {
@@ -6010,6 +6248,47 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
+    assert.match(launcherScript, /NODE_ENV\s*===\s*"production"/);
+    assert.match(launcherScript, /Refusing to start phone-auth dev server/);
+    assert.match(launcherScript, /isSafeDevServerDatabaseUrl/);
+    assert.match(launcherScript, /ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE/);
+    assert.match(launcherScript, /non-local DATABASE_URL/);
+  });
+
+  it("refuses to construct the dev server in production mode", () => {
+    assert.throws(
+      () => createPhoneAuthDevServer({ env: { NODE_ENV: "production" } }),
+      /phone_auth_dev_server_forbidden_in_production/,
+    );
+  });
+
+  it("refuses to construct the dev server against a remote database by default", () => {
+    assert.throws(
+      () =>
+        createPhoneAuthDevServer({
+          env: {
+            NODE_ENV: "development",
+            DATABASE_URL: "postgres://comic-ai.example.com/prod",
+          },
+        }),
+      /phone_auth_dev_server_remote_database_forbidden/,
+    );
+  });
+
+  it("allows injected test databases while remote DATABASE_URL is present", () => {
+    const db = {
+      query: async () => ({ rows: [] }),
+      close: async () => undefined,
+    } as Awaited<ReturnType<typeof createDevDb>>;
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        NODE_ENV: "development",
+        DATABASE_URL: "postgres://comic-ai.example.com/prod",
+      },
+    });
+
+    return server.close();
   });
 
   it("gates team member creation behind the paid team entitlement", async () => {
@@ -6307,12 +6586,234 @@ async function seedMembershipPlan(
     [
       input.id,
       input.code,
-      JSON.stringify(["team_member_management", "priority_generation"]),
+      JSON.stringify([
+        "priority_generation",
+        "team_asset_library",
+        "team_dashboard",
+        "team_member_management",
+      ]),
       JSON.stringify({ modelFamilies: ["seedance"] }),
       JSON.stringify({ sortOrder: 20 }),
       new Date("2026-06-08T07:30:00.000Z"),
     ],
   );
+}
+
+async function seedActiveProfessionalPriorityMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const organizationId = "10000000-0000-4000-8000-000000000001";
+  const user = await db.query<{ id: string }>(
+    "SELECT id FROM users WHERE phone_e164 = '+8613800138000' LIMIT 1",
+  );
+  const userId = user.rows[0]?.id;
+  if (!userId) {
+    throw new Error("priority_membership_seed_user_missing");
+  }
+
+  const planId = "95000000-0000-4000-8000-000000020201";
+  const orderId = "96000000-0000-4000-8000-000000020201";
+  const periodId = "97000000-0000-4000-8000-000000020201";
+  const subscriptionId = "98000000-0000-4000-8000-000000020201";
+  const periodEndAt = "2026-07-08T08:00:00.000Z";
+  const planSnapshot = {
+    id: planId,
+    code: "professional_monthly_priority_http",
+    displayName: "Professional Monthly Priority HTTP",
+    tier: "professional",
+    periodUnit: "month",
+    periodCount: 1,
+    amountMinor: 29900,
+    currency: "CNY",
+    giftCredits: 3000,
+    seatLimit: 50,
+    entitlements: ["team_member_management", "priority_generation"],
+    priorityRules: { modelFamilies: ["seedance"] },
+    displayMetadata: { sortOrder: 20 },
+  };
+
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        50,
+        $4::jsonb,
+        $5::jsonb,
+        $6::jsonb,
+        'active',
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [
+      planId,
+      planSnapshot.code,
+      planSnapshot.displayName,
+      JSON.stringify(planSnapshot.entitlements),
+      JSON.stringify(planSnapshot.priorityRules),
+      JSON.stringify(planSnapshot.displayMetadata),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        product_type,
+        membership_plan_id,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'ORD-PRIORITY-HTTP',
+        'membership_plan',
+        $4,
+        $5::jsonb,
+        $5::jsonb,
+        3000,
+        29900,
+        'CNY',
+        'pending_payment',
+        '2026-06-08T08:30:00.000Z'
+      )
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [orderId, organizationId, userId, planId, JSON.stringify(planSnapshot)],
+  );
+  await db.query(
+    `
+      INSERT INTO organization_membership_subscriptions (
+        id,
+        organization_id,
+        status,
+        current_tier,
+        current_period_start_at,
+        current_period_end_at,
+        latest_order_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        'professional_active',
+        'professional',
+        '2026-06-08T08:00:00.000Z',
+        $3,
+        $4,
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+      ON CONFLICT (organization_id)
+      DO UPDATE SET
+        status = EXCLUDED.status,
+        current_tier = EXCLUDED.current_tier,
+        current_period_start_at = EXCLUDED.current_period_start_at,
+        current_period_end_at = EXCLUDED.current_period_end_at,
+        latest_order_id = EXCLUDED.latest_order_id,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [subscriptionId, organizationId, periodEndAt, orderId],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'professional',
+        '2026-06-08T08:00:00.000Z',
+        $5,
+        3000,
+        $6::jsonb,
+        'active',
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+      ON CONFLICT (organization_id, order_id) DO NOTHING
+    `,
+    [periodId, organizationId, orderId, planId, periodEndAt, JSON.stringify(planSnapshot)],
+  );
+
+  for (const [entitlementId, entitlementKey] of [
+    ["99000000-0000-4000-8000-000000020201", "priority_generation"],
+    ["99000000-0000-4000-8000-000000020202", "team_member_management"],
+  ] as const) {
+    await db.query(
+      `
+        INSERT INTO organization_entitlements (
+          id,
+          organization_id,
+          entitlement_key,
+          status,
+          source,
+          expires_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, 'active', 'payment', $4, '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
+        ON CONFLICT (organization_id, entitlement_key)
+        DO UPDATE SET
+          status = 'active',
+          source = 'payment',
+          expires_at = EXCLUDED.expires_at,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [entitlementId, organizationId, entitlementKey, periodEndAt],
+    );
+  }
 }
 
 async function prepareDirectUpload(

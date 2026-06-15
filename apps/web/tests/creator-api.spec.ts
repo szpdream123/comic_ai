@@ -187,6 +187,31 @@ test("billing read routes target explicit order and payment intent resources", a
   assert.equal(calls[1].options.credentials, "include");
 });
 
+test("creator api exposes membership plans, status, and order creation", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { ok: true } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getMembershipPlans();
+  await creatorApi.getMembershipStatus();
+  await creatorApi.createMembershipOrder(
+    { membershipPlanId: "plan-1" },
+    { idempotencyKey: "membership-order-key" },
+  );
+
+  assert.equal(calls[0].url, "/api/membership/plans");
+  assert.equal(calls[1].url, "/api/membership/status");
+  assert.equal(calls[2].url, "/api/membership/orders");
+  assert.equal(calls[2].options.method, "POST");
+  assert.equal(calls[2].options.headers["idempotency-key"], "membership-order-key");
+});
+
 test("generation queue health targets the admin ops queue endpoint", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -779,6 +804,51 @@ test("resolveApiUrl keeps same-origin URLs on alternate dev API ports", async ()
         "http://127.0.0.1:4311/api/projects/project-1/detail",
       );
       assert.equal(resolveApiUrl("/login.html"), "http://127.0.0.1:4311/login.html");
+    },
+  );
+});
+
+test("resolveApiUrl keeps same-origin URLs on the membership acceptance dev API port", async () => {
+  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
+
+  await withWindowLocation(
+    {
+      protocol: "http:",
+      host: "127.0.0.1:4320",
+      hostname: "127.0.0.1",
+      port: "4320",
+      origin: "http://127.0.0.1:4320",
+    },
+    () => {
+      assert.equal(
+        resolveApiUrl("/api/auth/session"),
+        "http://127.0.0.1:4320/api/auth/session",
+      );
+      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4320/app.html");
+    },
+  );
+});
+
+test("resolveApiUrl keeps same-origin URLs on additional membership acceptance dev API ports", async () => {
+  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
+
+  await withWindowLocation(
+    {
+      protocol: "http:",
+      host: "127.0.0.1:4322",
+      hostname: "127.0.0.1",
+      port: "4322",
+      origin: "http://127.0.0.1:4322",
+    },
+    () => {
+      assert.equal(
+        resolveApiUrl("/api/auth/session"),
+        "http://127.0.0.1:4322/api/auth/session",
+      );
+      assert.equal(
+        resolveApiUrl("/api/membership/plans"),
+        "http://127.0.0.1:4322/api/membership/plans",
+      );
     },
   );
 });
