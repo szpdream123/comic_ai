@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS storyboard_prompt_packages (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz NULL,
-  CHECK (package_type IN ('genre', 'emotion', 'camera', 'output', 'taboo')),
+  CHECK (package_type IN ('genre', 'emotion', 'taboo')),
   CHECK (status IN ('enabled', 'disabled')),
   CHECK (code ~ '^[a-z0-9_]+$')
 );
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS storyboard_prompt_templates (
   genre_package_id uuid NOT NULL REFERENCES storyboard_prompt_packages(id),
   emotion_package_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
   camera_package_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-  output_package_id uuid NOT NULL REFERENCES storyboard_prompt_packages(id),
+  output_package_id uuid NULL REFERENCES storyboard_prompt_packages(id),
   taboo_package_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
   is_default boolean NOT NULL DEFAULT false,
   sort_order integer NOT NULL DEFAULT 0,

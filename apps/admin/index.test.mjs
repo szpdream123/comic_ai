@@ -152,6 +152,12 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "default_grant",
     "ledgerResult.summary",
     "renderCreditSummary",
+    "creditLedgerDisplayChange",
+    "creditLedgerSourceLabel",
+    "积分变化",
+    "图片生成",
+    "视频生成",
+    "剧本生成",
     "balanceScope",
     "userFilters",
     "filteredUsers",
@@ -168,6 +174,106 @@ test("admin shell wires final design actions to real admin APIs", () => {
   }
 
   new vm.Script(script);
+});
+
+test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
+  for (const contract of [
+    "function resolveAdminApiUrl",
+    "backendOwnedPath",
+    "isAlternateDevPort",
+    '"http://127.0.0.1:4310"',
+    "fetch(resolveAdminApiUrl(path)",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("model editor defaults new configs to an identifiable image model template", () => {
+  assert.match(script, /modelEditorTemplateDefaults/);
+  assert.match(script, /applyModelEditorTemplate/);
+  assert.match(script, /Image model template/);
+  assert.match(script, /Video model template/);
+  assert.match(script, /mediaType: "image"/);
+  assert.match(script, /providerProtocol: "custom_http"/);
+  assert.match(script, /invocationMode: "sync"/);
+  assert.match(script, /"image\.generate"/);
+  assert.match(script, /"image\.edit"/);
+  assert.match(script, /"image\.reference_generate"/);
+  assert.match(script, /generation-submit-image/);
+  assert.match(script, /referenceImages/);
+  assert.match(script, /editInstruction/);
+  assert.match(script, /count/);
+  assert.match(script, /String\(form\.get\("mediaType"\) \|\| "image"\)/);
+  assert.match(script, /String\(form\.get\("invocationMode"\) \|\| "sync"\)/);
+});
+
+test("admin video models expose the four backend management categories", () => {
+  for (const categoryLabel of ["首帧视频", "首尾帧", "全能参考", "AI改视频"]) {
+    assert.match(script, new RegExp(categoryLabel));
+  }
+
+  for (const taskMode of [
+    "video.image_to_video",
+    "video.first_last_frame_to_video",
+    "video.reference_image_to_video",
+    "video.video_to_video",
+    "video.image_video_to_video",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(taskMode)));
+  }
+
+  assert.match(script, /VIDEO_MODEL_CATEGORIES/);
+  assert.match(script, /inferVideoCategory/);
+  assert.match(script, /modelMediaLabel\(model\)/);
+  assert.match(script, /name="videoCategory"/);
+  assert.match(script, /applyVideoCategoryToModelEditor/);
+  assert.match(script, /uiConfig\.videoCategory/);
+});
+
+test("model editor lets admins choose a secret reference for providerConfig apiKeyEnv", () => {
+  assert.match(script, /modelSecretReferenceOptions/);
+  assert.match(script, /modelApiKeyEnv/);
+  assert.match(script, /setModelEditorProviderConfigApiKeyEnv/);
+  assert.match(script, /modelApiKey/);
+  assert.match(script, /setModelEditorProviderConfigApiKey/);
+  assert.match(script, /state\.settings\.secretReferences/);
+  assert.match(script, /providerConfig\.apiKeyEnv/);
+  assert.match(script, /providerConfig\.apiKey/);
+  assert.match(script, /form\.elements\.providerConfig\.value = JSON\.stringify\(config, null, 2\)/);
+});
+
+test("model editor exposes base credit pricing as dedicated fields", () => {
+  assert.match(script, /name="pricingBaseCredits"/);
+  assert.match(script, /name="pricingUnit"/);
+  assert.match(script, /syncModelEditorPricingJson/);
+  assert.match(script, /pricing\.baseCredits = baseCredits/);
+  assert.match(script, /pricing\.unit = String\(form\.elements\.pricingUnit\.value/);
+});
+
+test("model status drawer refreshes model detail before launch checks", () => {
+  assert.match(script, /async function openModelStatusDrawer\(modelId, status\)/);
+  assert.match(script, /api\(`\/api\/admin\/models\/\$\{modelId\}`\)/);
+  assert.match(script, /state\.models\[modelIndex\] = model/);
+  assert.match(script, /const launchCheck = modelLaunchCheckUi\(model\)/);
+});
+
+test("model parameter builder displays known image parameters in Chinese", () => {
+  assert.match(script, /manualParameterVisible/);
+  assert.match(script, /parameter\.visible !== false/);
+  assert.match(script, /是否显示/);
+  assert.match(script, /modelParameterDisplayName/);
+  assert.match(script, /parameterTypeLabel/);
+  assert.match(script, /manualParameterLabel\.value = modelParameterDisplayName\(parameterKey, parameter\)/);
+  assert.match(script, /生成数量/);
+  assert.match(script, /正向提示词/);
+  assert.match(script, /质量档位/);
+  assert.match(script, /画面比例/);
+  assert.match(script, /反向提示词/);
+  assert.match(script, /编辑指令/);
+  assert.match(script, /参考图/);
+  assert.match(script, /整数/);
+  assert.match(script, /文本/);
+  assert.match(script, /选项/);
 });
 
 test("admin user credit table uses a single edit entry for row actions", () => {
@@ -347,6 +453,20 @@ test("admin login form shows submitting state while authenticating", () => {
   }
 });
 
+test("admin login form exposes remember-password option and local persistence hooks", () => {
+  for (const contract of [
+    "remember-password",
+    "记住账号密码",
+    "admin-login-remembered-credentials",
+    "saveRememberedLogin",
+    "readRememberedLogin",
+    "clearRememberedLogin",
+    "form.get(\"remember\")",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin shell provides submitting and success feedback for write actions", () => {
   for (const contract of [
     "runAdminMutation",
@@ -368,6 +488,7 @@ test("admin shell routes every sensitive write drawer through the mutation feedb
     "user-status-form",
     "credit-deduct-form",
     "runtime-config-form",
+    "legal-document-form",
     "config-rollback-form",
     "secret-reference-form",
     "secret-probe-form",
@@ -384,6 +505,91 @@ test("admin shell routes every sensitive write drawer through the mutation feedb
     const nextFunction = script.indexOf("function ", start + 1);
     const block = script.slice(start, nextFunction === -1 ? undefined : nextFunction);
     assert.match(block, /runAdminMutation/, `${formId} uses runAdminMutation`);
+  }
+});
+
+test("admin shell exposes editable legal agreement management in system settings", () => {
+  for (const contract of [
+    "legalDocumentConfigs",
+    "legalDocumentEditor",
+    "用户服务协议",
+    "隐私政策",
+    "agreement-rich-text",
+    "openLegalDocumentDrawer",
+    "legal-document-form",
+    "contenteditable",
+    "execCommand",
+    "serviceAgreement",
+    "privacyPolicy",
+    "service_agreement",
+    "privacy_policy",
+    "富文本",
+    "预览",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin shell exposes a standalone agreement management menu and list workflow", () => {
+  for (const contract of [
+    'data-page="agreements"',
+    "/admin/agreements",
+    "loadLegalDocuments",
+    "agreementsPage",
+    "legalDocumentsTable",
+    "legal-document-status",
+    "legal-document-type",
+    "toggleLegalDocumentStatus",
+    "deleteLegalDocument",
+    "/api/admin/legal-documents",
+    "新增协议",
+    "启用",
+    "停用",
+    "删除",
+    "协议类型",
+    "协议状态",
+    "预览",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin agreement editor exposes a richer toolbar and preserves selection for formatting", () => {
+  for (const contract of [
+    'data-legal-command="underline"',
+    'data-legal-command="strikeThrough"',
+    'data-legal-command="insertOrderedList"',
+    'data-legal-command="justifyCenter"',
+    'data-legal-command="unlink"',
+    'data-legal-block="h1"',
+    'data-legal-block="h3"',
+    'data-legal-block="p"',
+    "legal-document-toolbar-group",
+    "legal-document-toolbar-separator",
+    "data-legal-active-command",
+    "data-legal-active-block",
+    "savedSelection",
+    "restoreSelection",
+    "focusEditor",
+    "syncToolbarState",
+    "runEditorCommand",
+    "document.queryCommandState",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin agreement editor sanitizes legacy rich text wrappers and normalizes display blocks", () => {
+  for (const contract of [
+    'const blockTags = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "H1", "H2", "H3", "BLOCKQUOTE"])',
+    'const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "S", "H1", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "A"])',
+    'element.tagName === "SPAN" || element.tagName === "FONT"',
+    'element = replaceTag(element, "p")',
+    "initialContentHtml = sanitizeRichTextHtml",
+    ".legal-document-surface h1",
+    ".legal-document-surface blockquote",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
   }
 });
 
@@ -502,6 +708,7 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
     "生图题词",
     "人物提示词",
     "场景提示词",
+    "分镜提示词",
     "promptManagementTabs",
     "scriptPromptPackages",
     "imagePromptStyles",
@@ -577,6 +784,70 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
   }
 });
 
+test("admin prompt manager adds the shot prompt workflow tab", () => {
+  for (const contract of [
+    "shotPromptStage",
+    "shotPromptKeyword",
+    "shotPromptTemplates",
+    "loadShotPromptTemplates",
+    "admin-shot-prompt-templates",
+    "shotPromptStages",
+    "outline",
+    "shotPromptTemplatesPage",
+    "shotPromptPreview",
+    "openShotPromptTemplateDrawer",
+    "copyShotPromptTemplate",
+    "toggleShotPromptTemplateStatus",
+    "shot-prompt-template-form",
+    "admin-ui-shot-prompt-template",
+    "admin-ui-shot-prompt-copy",
+    "admin-ui-shot-prompt-status",
+    "{{script_scene}}",
+    "shot_outline_from_scene",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+  for (const deprecated of ["shot_panel_breakdown", "shot_camera_language", "shot_image_prompt", "stage: \"camera\"", "stage: \"image\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
+});
+
+test("admin prompt manager supports editing prop prompts and choosing defaults", () => {
+  for (const contract of [
+    "openPropPromptTemplateDrawer",
+    "copyPropPromptTemplate",
+    "togglePropPromptTemplateStatus",
+    "setPropPromptTemplateDefault",
+    "prop-prompt-template-form",
+    "admin-ui-prop-prompt-template",
+    "admin-ui-prop-prompt-copy",
+    "admin-ui-prop-prompt-status",
+    "admin-ui-prop-prompt-default",
+    "/api/admin/prop-prompt/templates",
+    "setCharacterPromptTemplateDefault",
+    "setScenePromptTemplateDefault",
+    "setShotPromptTemplateDefault",
+    "setScriptPromptPackageDefault",
+    "setImagePromptStyleDefault",
+    "设为默认",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+});
+
+test("admin image prompt default editor keeps the current default locked", () => {
+  for (const contract of [
+    "const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault)",
+    "name=\"is_default\" type=\"checkbox\" ${isLockedDefault ? \"checked disabled\" : \"\"}",
+    "is_default: isLockedDefault || form.get(\"is_default\") === \"on\"",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+});
+
+test("admin image prompt list accepts both flat and nested data payloads", () => {
+  for (const contract of [
+    "Array.isArray(result.data)",
+    "Array.isArray(result.data?.data)",
+    "result.data.data",
+    "is_default: true",
+    "isDefault: true",
+    "showToast(error.payload?.error?.message || \"默认提示词更新失败\")",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+});
+
 test("admin prompt manager lands the character prompt workflow menu", () => {
   for (const contract of [
     "characterPromptStage",
@@ -586,21 +857,10 @@ test("admin prompt manager lands the character prompt workflow menu", () => {
     "/api/admin/character-prompt/templates",
     "characterPromptStages",
     "extract",
-    "merge",
-    "grid",
-    "分块抽取",
-    "合并去重",
-    "九宫格生成",
-    "三段式人物提示词流水线",
-    "3000-8000 字",
-    "overlap 300-800 字",
     "characterPromptTemplatesPage",
     "characterPromptPreview",
-    "characterPromptWorkflowGuide",
     "composeCharacterPromptFromPreview",
     "/api/admin/character-prompt/compose",
-    "后端组装测试",
-    "填写变量 JSON，后端会识别并替换",
     "openCharacterPromptTemplateDrawer",
     "copyCharacterPromptTemplate",
     "toggleCharacterPromptTemplateStatus",
@@ -610,22 +870,8 @@ test("admin prompt manager lands the character prompt workflow menu", () => {
     "admin-ui-character-prompt-status",
     "{{chunk_id}}",
     "{{novel_chunk}}",
-    "{{all_chunk_character_json}}",
-    "{{character_profile_json}}",
-    "不要一次性塞进九宫格提示词",
-    "输出必须是合法 JSON",
-    "3x3九宫格角色设定图",
-    "完整人物外观",
-    "完整服装设计",
-    "完整武器配饰",
-    "cinematic realistic character design sheet",
-    "不要三视图不一致",
-    "不要廉价网游风",
-  ]) {
-    assert.match(script, new RegExp(escapeRegExp(contract)));
-  }
-
-  assert.doesNotMatch(script, /promptComingSoonPage\("人物提示词"/);
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+  for (const deprecated of ["novel_character_merge", "character_grid_sheet", "{{all_chunk_character_json}}", "{{character_profile_json}}", "cinematic realistic character design sheet", "stage: \"merge\"", "stage: \"grid\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
 });
 
 test("admin prompt manager lands the long novel scene prompt workflow menu", () => {
@@ -637,25 +883,11 @@ test("admin prompt manager lands the long novel scene prompt workflow menu", () 
     "/api/admin/scene-prompt/templates",
     "scenePromptStages",
     "split",
-    "extract",
-    "merge",
-    "detail",
-    "image",
-    "长篇分场景",
-    "场景要素抽取",
-    "场景库合并",
-    "场景设定拆解",
-    "场景生图提示词",
-    "长篇小说场景提示词流水线",
     "location_id",
     "visual_motifs",
     "continuity_notes",
     "{{novel_chapter}}",
-    "{{scene_json}}",
-    "{{scene_library_json}}",
-    "{{scene_detail_json}}",
     "scene_split_long_novel",
-    "scene_image_concept_art",
     "openScenePromptTemplateDrawer",
     "copyScenePromptTemplate",
     "toggleScenePromptTemplateStatus",
@@ -663,13 +895,8 @@ test("admin prompt manager lands the long novel scene prompt workflow menu", () 
     "admin-ui-scene-prompt-template",
     "admin-ui-scene-prompt-copy",
     "admin-ui-scene-prompt-status",
-    "前景、中景、远景",
-    "影视概念设定图",
-  ]) {
-    assert.match(script, new RegExp(escapeRegExp(contract)));
-  }
-
-  assert.doesNotMatch(script, /promptComingSoonPage\("场景提示词"/);
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+  for (const deprecated of ["scene_extract_elements", "scene_merge_library", "scene_detail_breakdown", "scene_image_concept_art", "{{scene_json}}", "{{scene_library_json}}", "{{scene_detail_json}}"]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
 });
 
 function escapeRegExp(value) {

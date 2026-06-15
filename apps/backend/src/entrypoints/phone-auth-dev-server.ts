@@ -1,12 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
+import net from "node:net";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import mammoth from "mammoth";
 
 import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
 import { appendAuditEvent } from "../modules/audit/audit.service.ts";
@@ -26,9 +28,17 @@ import {
   createAdminStoryboardPromptService,
   ensureDefaultStoryboardPromptData,
 } from "../modules/admin-storyboard-prompts/admin-storyboard-prompt.service.ts";
-import { createAdminCharacterPromptService } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
+import { createAdminCharacterPromptService, ensureDefaultCharacterPromptTemplates } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
 import { createAdminImagePromptService } from "../modules/admin-image-prompts/admin-image-prompt.service.ts";
-import { createAdminScenePromptService } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
+import { createAdminShotPromptService, ensureDefaultShotPromptTemplates } from "../modules/admin-shot-prompts/admin-shot-prompt.service.ts";
+import { createAdminScenePromptService, ensureDefaultScenePromptTemplates } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
+import { createAdminPropPromptService, ensureDefaultPropPromptTemplates } from "../modules/admin-scene-prompts/admin-prop-prompt.service.ts";
+import {
+  createAiStoryboardPreviewService,
+  createTextModelChatGateway,
+  type TextChatGatewayLike,
+} from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
+import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
@@ -51,13 +61,29 @@ import {
   findPersistentAuthSessionByToken,
   requestPersistentLoginCode,
   revokePersistentAuthSession,
+  verifyPersistentPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
+import { createAuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
   createCreatorApplication,
 } from "../modules/project/creator-application.service.ts";
+import {
+  attachCanvasTaskResultToHistory,
+  canvasErrorToStatus,
+  CanvasConflictError,
+  CanvasDocumentError,
+  createCanvasNodeRun,
+  findCanvasByCanvasProjectId,
+  getOrCreateProjectCanvas,
+  listCanvasNodeRuns,
+  markCanvasNodeRunQueued,
+  saveProjectCanvas,
+  selectCanvasNodeArtifact,
+} from "../modules/project/creator-canvas-record.service.ts";
+import { CanvasValidationError } from "../modules/project/creator-canvas-validation.ts";
 import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
@@ -78,6 +104,7 @@ import {
   buildSignedObjectUrls,
   createScopedStorageObject,
   deleteStorageObjectRecord,
+  findStorageObject,
   markStorageObjectAvailable,
   markStorageObjectFailed,
   type StorageObjectRecord,
@@ -114,6 +141,8 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
+import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import {
   markProviderRequestFailed,
@@ -167,7 +196,8 @@ const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
 const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const devInitialCreditBalance = 10000;
-const generationTaskTimeoutMs = 15 * 60 * 1000;
+const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
+const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",
@@ -181,21 +211,21 @@ const mockEpisodeImageUrls = [
 ] as const;
 const episodeUploadLimits = {
   image: {
-    label: "鍥剧墖",
+    label: "图片",
     maxBytes: 20 * 1024 * 1024,
     maxReferencesPerTask: 30,
     mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
   },
   video: {
-    label: "瑙嗛",
+    label: "视频",
     maxBytes: 500 * 1024 * 1024,
-    recommendedMaxDurationSeconds: 15 * 60,
+    recommendedMaxDurationSeconds: 3 * 60 * 60,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
   audio: {
-    label: "闊抽",
+    label: "音频",
     maxBytes: 100 * 1024 * 1024,
     mimeTypes: ["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a"],
     extensions: [".mp3", ".wav", ".m4a"],
@@ -217,6 +247,21 @@ const episodeUploadLimits = {
     ".tar",
     ".zip",
   ],
+};
+const scriptDocumentUploadLimits = {
+  document: {
+    label: "剧本文档",
+    maxBytes: 30 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/octet-stream",
+    ],
+    extensions: [".txt", ".docx"],
+  },
+  blockedExtensions: episodeUploadLimits.blockedExtensions.filter(
+    (extension) => ![".txt", ".docx"].includes(extension),
+  ),
 };
 
 const contentTypes: Record<string, string> = {
@@ -260,6 +305,23 @@ interface AuthHttpResponse<T> {
   cookies?: string[];
 }
 
+interface WeChatLoginConfig {
+  appId: string;
+  appSecret: string;
+  redirectUri: string;
+}
+
+interface WeChatAccessTokenResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  openid?: string;
+  scope?: string;
+  unionid?: string;
+  errcode?: number;
+  errmsg?: string;
+}
+
 class GenerationQueueJobOpsRouteError extends Error {
   constructor(readonly response: AuthHttpResponse<unknown>) {
     super("generation_queue_job_ops_failed");
@@ -277,7 +339,10 @@ class GenerationRequestValidationError extends Error {
 
 interface AuthenticatedUser {
   id: string;
-  phone: string;
+  phone: string | null;
+  creditBalance: number;
+  availableCredits: number;
+  reservedCredits: number;
 }
 
 interface DevTenantScope {
@@ -305,6 +370,7 @@ export interface PhoneAuthDevServerOptions {
   storageRuntime?: Partial<UploadSessionRuntime>;
   seedTeamEntitlements?: boolean;
   generationQueueJobOpsService?: GenerationQueueJobOpsService;
+  textChatGateway?: TextChatGatewayLike;
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -349,14 +415,29 @@ async function readMultipartFormData(
   return webRequest.formData();
 }
 
-const sessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
+const defaultSessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
 
-function sessionCookie(token: string): string {
-  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionCookieMaxAgeSeconds}`;
+function sessionCookie(token: string, maxAgeSeconds = defaultSessionCookieMaxAgeSeconds): string {
+  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+function sessionCookieMaxAgeSecondsFromSession(expiresAt: Date, now: Date): number {
+  return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 1000));
 }
 
 function clearSessionCookie(): string {
   return "auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+}
+
+function redirectWithSessionCookie(
+  response: ServerResponse,
+  location: string,
+  token: string,
+) {
+  response.statusCode = 302;
+  response.setHeader("location", location);
+  response.setHeader("set-cookie", sessionCookie(token));
+  response.end();
 }
 
 function requestIpAddress(request: {
@@ -456,6 +537,7 @@ function imagePromptStyleBody(body: Record<string, unknown>) {
     cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
     prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
     negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    is_default: Boolean(body.is_default ?? body.isDefault),
     sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
     status: String(body.status ?? "enabled"),
     remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
@@ -467,6 +549,42 @@ function scenePromptTemplateBody(body: Record<string, unknown>) {
     name: String(body.name ?? ""),
     code: String(body.code ?? ""),
     stage: String(body.stage ?? "detail"),
+    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
+    tags: stringArray(body.tags),
+    variables: stringArray(body.variables),
+    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
+    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
+    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
+    status: String(body.status ?? "enabled"),
+    is_default: Boolean(body.is_default ?? body.isDefault),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function propPromptTemplateBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    stage: String(body.stage ?? "extract"),
+    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
+    tags: stringArray(body.tags),
+    variables: stringArray(body.variables),
+    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
+    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
+    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
+    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
+    status: String(body.status ?? "enabled"),
+    is_default: Boolean(body.is_default ?? body.isDefault),
+    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  };
+}
+
+function shotPromptTemplateBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    code: String(body.code ?? ""),
+    stage: String(body.stage ?? "outline"),
     model_family: String(body.model_family ?? body.modelFamily ?? "general"),
     tags: stringArray(body.tags),
     variables: stringArray(body.variables),
@@ -753,6 +871,222 @@ function envelopedError(
       details,
     },
   };
+}
+
+interface CanvasProjectRecord {
+  id: string;
+  projectId: string | null;
+  title: string;
+  createdAt: string;
+  status: string;
+  ownerUserId: string;
+  organizationId: string;
+  workspaceId: string;
+}
+
+interface CanvasProjectRow {
+  id: string;
+  organization_id: string;
+  workspace_id: string;
+  project_id: string | null;
+  title: string;
+  status: string;
+  created_by_user_id: string | null;
+  created_at: Date | string;
+  server_revision?: number;
+  latest_document_id?: string | null;
+}
+
+function formatCanvasProjectDate(now = new Date()): string {
+  const date = now instanceof Date ? now : new Date(now);
+  const normalized = Number.isFinite(date.getTime()) ? date : new Date();
+  const year = normalized.getFullYear();
+  const month = String(normalized.getMonth() + 1).padStart(2, "0");
+  const day = String(normalized.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
+function normalizeCanvasProjectTitle(value: unknown, fallback = "画布项目"): string {
+  return String(value ?? fallback).trim().slice(0, 50) || fallback;
+}
+
+function serializeCanvasProject(project: CanvasProjectRecord) {
+  return {
+    id: project.id,
+    projectId: project.projectId,
+    title: project.title,
+    createdAt: project.createdAt,
+    status: project.status,
+  };
+}
+
+function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    createdAt: formatCanvasProjectDate(new Date(row.created_at)),
+    status: row.status,
+    ownerUserId: row.created_by_user_id ?? "",
+    organizationId: row.organization_id,
+    workspaceId: row.workspace_id,
+  };
+}
+
+async function listCanvasProjects(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string },
+): Promise<CanvasProjectRecord[]> {
+  const result = await db.query<CanvasProjectRow>(
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.organizationId, input.userId],
+  );
+  return result.rows.map(canvasProjectFromRow);
+}
+
+async function createCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    userId: string;
+    title: string;
+    status: string;
+    now: Date;
+  },
+): Promise<CanvasProjectRecord> {
+  const normalizedTitle = normalizeCanvasProjectTitle(input.title);
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      INSERT INTO creator_canvas_projects (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        title,
+        status,
+        created_by_user_id,
+        updated_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $8)
+      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      null,
+      normalizedTitle,
+      normalizeCanvasProjectStatus(input.status),
+      input.userId,
+      input.now,
+    ],
+  );
+  return canvasProjectFromRow(row!);
+}
+
+async function findCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string; projectId: string },
+): Promise<CanvasProjectRecord | null> {
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.organizationId, input.userId, input.projectId],
+  );
+  return row ? canvasProjectFromRow(row) : null;
+}
+
+async function updateCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    userId: string;
+    projectId: string;
+    title?: string;
+    status?: string;
+    now: Date;
+  },
+): Promise<CanvasProjectRecord | null> {
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      UPDATE creator_canvas_projects
+      SET title = COALESCE($4, title),
+          status = COALESCE($5, status),
+          updated_by_user_id = $2,
+          updated_at = $6
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+    `,
+    [
+      input.organizationId,
+      input.userId,
+      input.projectId,
+      input.title ?? null,
+      input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
+      input.now,
+    ],
+  );
+  return row ? canvasProjectFromRow(row) : null;
+}
+
+function normalizeCanvasProjectStatus(value: unknown) {
+  const normalized = String(value ?? "draft").trim().toLowerCase();
+  if (normalized === "草稿" || normalized === "draft") return "draft";
+  if (normalized === "active" || normalized === "进行中") return "active";
+  if (normalized === "archived" || normalized === "归档") return "archived";
+  return "draft";
+}
+
+async function deleteCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; userId: string; projectId: string; now: Date },
+): Promise<boolean> {
+  const result = await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET deleted_at = $4,
+          updated_by_user_id = $2,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND created_by_user_id = $2
+        AND id = $3
+        AND project_id IS NULL
+        AND deleted_at IS NULL
+    `,
+    [input.organizationId, input.userId, input.projectId, input.now],
+  );
+  return result.rowCount > 0;
+}
+
+function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
+  response.write(`event: ${event}\n`);
+  response.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 async function retryTaskForBackendAdmin(input: {
@@ -1155,6 +1489,129 @@ function paginateItems<T>(items: T[], page: number, pageSize: number) {
   };
 }
 
+class ScriptDocumentUploadError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function extractScriptInputFromUploadedDocument(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    sessionToken: string;
+    userId: string;
+    body: {
+      scriptUploadSessionId?: string | null;
+      scriptStorageObjectId?: string | null;
+      scriptFileName?: string | null;
+      scriptContentType?: string | null;
+    };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    fetchImpl: typeof fetch;
+  },
+) {
+  const uploadSessionId = String(input.body.scriptUploadSessionId ?? "").trim();
+  const requestedStorageObjectId = String(input.body.scriptStorageObjectId ?? "").trim();
+  if (!uploadSessionId && !requestedStorageObjectId) {
+    throw new ScriptDocumentUploadError(400, "script_document_required", "请先上传 docx/txt 剧本文档");
+  }
+
+  const session = uploadSessionId ? await findUploadSession(db, uploadSessionId) : undefined;
+  if (uploadSessionId && !session) {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (session?.status !== "uploaded") {
+    throw new ScriptDocumentUploadError(400, "script_document_not_ready", "剧本文档尚未上传完成，请稍后重试");
+  }
+  if (session?.createdByUserId && session.createdByUserId !== input.userId) {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (requestedStorageObjectId && session && session.storageObjectId !== requestedStorageObjectId) {
+    throw new ScriptDocumentUploadError(400, "script_document_mismatch", "剧本文档上传信息不一致，请重新上传");
+  }
+
+  const storageObjectId = requestedStorageObjectId || session?.storageObjectId || "";
+  const object = storageObjectId ? await findStorageObject(db, storageObjectId) : undefined;
+  if (!object || object.status !== "available") {
+    throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
+  }
+  if (session && object.organizationId !== session.organizationId) {
+    throw new ScriptDocumentUploadError(400, "script_document_mismatch", "剧本文档上传信息不一致，请重新上传");
+  }
+
+  const fileName = input.body.scriptFileName || session?.originalFileName || object.objectKey;
+  const extension = extname(fileName).toLowerCase();
+  if (![".txt", ".docx"].includes(extension)) {
+    throw new ScriptDocumentUploadError(400, "script_document_type_not_supported", "仅支持 docx 或 txt 剧本文档");
+  }
+
+  const bytes = await readUploadedStorageObjectBytes(db, {
+    sessionToken: input.sessionToken,
+    storageObjectId: object.id,
+    bucket: object.bucket,
+    objectKey: object.objectKey,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+    fetchImpl: input.fetchImpl,
+  });
+  const text = await extractTextFromScriptDocumentBytes(bytes, extension);
+  const normalized = text.replace(/^\uFEFF/, "").trim();
+  if (!normalized) {
+    throw new ScriptDocumentUploadError(400, "script_document_empty", "剧本文档内容为空，请检查文件后重新上传");
+  }
+  return normalized;
+}
+
+async function readUploadedStorageObjectBytes(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    sessionToken: string;
+    storageObjectId: string;
+    bucket: string;
+    objectKey: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    fetchImpl: typeof fetch;
+  },
+) {
+  const localPath = resolveLocalStorageObjectPath(input.bucket, input.objectKey);
+  try {
+    return await readFile(localPath);
+  } catch {
+    const urls = await buildSignedObjectUrls(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId: input.storageObjectId,
+      adapter: input.runtime.adapter,
+      now: input.now,
+      expiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    const response = await input.fetchImpl(urls.sourceUrl ?? urls.downloadUrl ?? urls.previewUrl);
+    if (!response.ok) {
+      throw new ScriptDocumentUploadError(502, "script_document_read_failed", "无法读取上传的剧本文档，请重新上传");
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+}
+
+async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
+  if (extension === ".txt") {
+    return bytes.toString("utf8");
+  }
+  if (extension === ".docx") {
+    const result = await mammoth.extractRawText({ buffer: bytes });
+    return result.value ?? "";
+  }
+  throw new ScriptDocumentUploadError(400, "script_document_type_not_supported", "仅支持 docx 或 txt 剧本文档");
+}
+
 function canonicalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => canonicalizeJson(item));
@@ -1290,14 +1747,173 @@ function isUuid(value: unknown) {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+async function resolveEpisodeStoryboardConversationId(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  episodeId: string,
+  rawStoryboardId: string,
+) {
+  const normalized = String(rawStoryboardId ?? "").trim();
+  if (isUuid(normalized)) {
+    return normalized;
+  }
+  const ordinalMatch = normalized.match(/^storyboard-(\d+)$/i) ?? normalized.match(/^(\d+)$/);
+  if (!ordinalMatch) {
+    return null;
+  }
+  const indexNo = Number(ordinalMatch[1]);
+  if (!Number.isInteger(indexNo) || indexNo < 1) {
+    return null;
+  }
+  const row = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+        FROM shots
+       WHERE episode_id = $1
+       ORDER BY sort_order ASC, created_at ASC, id ASC
+       OFFSET $2
+       LIMIT 1
+    `,
+    [episodeId, indexNo - 1],
+  );
+  return row?.id ?? null;
+}
+
+type StoryboardPromptPackageForPreview = {
+  id: string;
+  name: string;
+  package_type: string;
+  prompt_content: string;
+};
+
+type DefaultPromptTemplateForPreview = {
+  id: string;
+  name: string;
+  prompt_content: string;
+};
+
+async function findEnabledStoryboardPromptPackageForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  id: string,
+  packageType: "genre" | "emotion" | "taboo",
+) {
+  return queryOne<StoryboardPromptPackageForPreview>(
+    db,
+    `
+      SELECT id, name, package_type, prompt_content
+      FROM storyboard_prompt_packages
+      WHERE id = $1
+        AND package_type = $2
+        AND status = 'enabled'
+        AND deleted_at IS NULL
+    `,
+    [id, packageType],
+  );
+}
+
+async function findGlobalTabooStoryboardPromptPackagesForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const rows = await db.query<StoryboardPromptPackageForPreview>(
+    `
+      SELECT id, name, package_type, prompt_content
+      FROM storyboard_prompt_packages
+      WHERE package_type = 'taboo'
+        AND status = 'enabled'
+        AND (is_global_default = true OR is_default = true)
+        AND deleted_at IS NULL
+      ORDER BY sort_order DESC, updated_at DESC, id ASC
+    `,
+  );
+  return rows.rows;
+}
+
+async function findDefaultScenePromptTemplateForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  return queryOne<DefaultPromptTemplateForPreview>(
+    db,
+    `
+      SELECT id, name, prompt_content
+      FROM scene_prompt_templates
+      WHERE status = 'enabled'
+        AND is_default = true
+        AND deleted_at IS NULL
+      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      LIMIT 1
+    `,
+  );
+}
+
+async function findDefaultCharacterPromptTemplateForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  return queryOne<DefaultPromptTemplateForPreview>(
+    db,
+    `
+      SELECT id, name, prompt_content
+      FROM character_prompt_templates
+      WHERE status = 'enabled'
+        AND is_default = true
+        AND deleted_at IS NULL
+      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      LIMIT 1
+    `,
+  );
+}
+
+async function findDefaultShotPromptTemplateForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  return queryOne<DefaultPromptTemplateForPreview>(
+    db,
+    `
+      SELECT id, name, prompt_content
+      FROM shot_prompt_templates
+      WHERE status = 'enabled'
+        AND is_default = true
+        AND deleted_at IS NULL
+      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      LIMIT 1
+    `,
+  );
+}
+
+async function findDefaultPropPromptTemplateForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  return queryOne<DefaultPromptTemplateForPreview>(
+    db,
+    `
+      SELECT id, name, prompt_content
+      FROM prop_prompt_templates
+      WHERE status = 'enabled'
+        AND is_default = true
+        AND deleted_at IS NULL
+      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      LIMIT 1
+    `,
+  );
+}
+
 function getUploadExtension(fileName: unknown) {
   return extname(String(fileName ?? "").trim()).toLowerCase();
 }
 
-function getUploadLimitKind(contentType: unknown, fileName: unknown) {
+function resolveUploadLimitsForPurpose(purpose: unknown) {
+  return String(purpose ?? "").trim() === "script-documents"
+    ? scriptDocumentUploadLimits
+    : episodeUploadLimits;
+}
+
+function getUploadLimitKind(
+  contentType: unknown,
+  fileName: unknown,
+  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits = episodeUploadLimits,
+) {
   const normalizedContentType = String(contentType ?? "").split(";")[0]!.trim().toLowerCase();
   const extension = getUploadExtension(fileName);
-  for (const [kind, rule] of Object.entries(episodeUploadLimits)) {
+  for (const [kind, rule] of Object.entries(limits)) {
     if (kind === "blockedExtensions") {
       continue;
     }
@@ -1306,7 +1922,7 @@ function getUploadLimitKind(contentType: unknown, fileName: unknown) {
       "mimeTypes" in rule &&
       (rule.mimeTypes.includes(normalizedContentType) || rule.extensions.includes(extension))
     ) {
-      return kind as "image" | "video" | "audio";
+      return kind as "image" | "video" | "audio" | "document";
     }
   }
   return null;
@@ -1316,25 +1932,29 @@ function validateUploadPolicy(input: {
   fileName: unknown;
   contentType: unknown;
   sizeBytes?: unknown;
+  purpose?: unknown;
 }) {
   const extension = getUploadExtension(input.fileName);
   const normalizedContentType = String(input.contentType ?? "").split(";")[0]!.trim().toLowerCase();
-  if (!extension || episodeUploadLimits.blockedExtensions.includes(extension)) {
+  const uploadLimits = resolveUploadLimitsForPurpose(input.purpose);
+  if (!extension || uploadLimits.blockedExtensions.includes(extension)) {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "涓嶆敮鎸佷笂浼犺鏂囦欢绫诲瀷",
+      message: "\u4e0d\u652f\u6301\u7684\u6587\u4ef6\u7c7b\u578b\u6216\u6269\u5c55\u540d\u3002",
     };
   }
-  const kind = getUploadLimitKind(normalizedContentType, input.fileName);
+  const kind = getUploadLimitKind(normalizedContentType, input.fileName, uploadLimits);
   if (!kind) {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "浠呮敮鎸佸浘鐗囥€佽棰戞垨闊抽鏂囦欢",
+      message: String(input.purpose ?? "").trim() === "script-documents"
+        ? "仅支持 docx 或 txt 剧本文档。"
+        : "\u4ec5\u652f\u6301\u56fe\u7247\u3001\u89c6\u9891\u548c\u97f3\u9891\u6587\u4ef6\u3002",
     };
   }
-  const rule = episodeUploadLimits[kind];
+  const rule = uploadLimits[kind];
   if (!rule.mimeTypes.includes(normalizedContentType)) {
     return {
       ok: false as const,
@@ -1347,7 +1967,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_file_too_large",
-      message: `${rule.label}鏂囦欢瓒呰繃涓婁紶澶у皬闄愬埗`,
+      message: `${rule.label}閺傚洣娆㈢搾鍛扮箖娑撳﹣绱舵径褍鐨梽鎰煑`,
       details: {
         kind,
         maxBytes: rule.maxBytes,
@@ -1400,6 +2020,7 @@ function generationCostFromModelConfig(
 
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
+  const videoCategory = readString(modelConfig.uiConfig.videoCategory) || inferVideoModelCategory(modelConfig.taskModes);
   const schemaRatios = readEnumValues(modelConfig.parameterSchema.aspectRatio);
   const defaultRatios = readStringArray(modelConfig.defaultParams.aspectRatio);
   const schemaQuality =
@@ -1412,16 +2033,84 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
     mediaType: modelConfig.mediaType,
+    videoCategory,
+    videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
     providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
     pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
     supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
     supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
     supportedDurations,
+    parameterSchema: modelConfig.parameterSchema,
     defaultParams: modelConfig.defaultParams,
     displayBaseCost: generationCostFromModelConfig(0, modelConfig),
     disabled: modelConfig.status !== "active",
   };
+}
+
+async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+  const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
+  const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+  const imageModels = activeImageModels.length
+    ? activeImageModels.map(modelConfigToGenerationConfigModel)
+    : [
+        {
+          modelCode: "nano_banana_2",
+          modelLabel: "nano banana 2",
+          providerGroup: "Nano banana",
+          pipeline: "G",
+          supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
+          supportedRatios: ["16:9", "9:16", "1:1"],
+          supportedQuality: ["2K"],
+          displayBaseCost: 90,
+          disabled: false,
+        },
+      ];
+  const videoModels = activeVideoModels.length
+    ? activeVideoModels.map(modelConfigToGenerationConfigModel)
+    : [
+        {
+          modelCode: "video_mock_1",
+          modelLabel: "Video Mock",
+          providerGroup: "Mock",
+          pipeline: "mock",
+          supportedModes: ["video"],
+          supportedRatios: ["16:9", "9:16"],
+          supportedQuality: ["720p"],
+          displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
+          disabled: false,
+        },
+      ];
+  const defaultVideoModel =
+    videoModels.find((model) => model.videoCategory === "reference") ??
+    videoModels[0] ??
+    null;
+  return {
+    models: [
+      ...imageModels,
+      ...videoModels,
+    ],
+    presets: [],
+    uploadLimits: episodeUploadLimits,
+    defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
+    defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
+  };
+}
+
+function inferVideoModelCategory(taskModes: string[]) {
+  if (!taskModes.some((taskMode) => taskMode.startsWith("video."))) return "";
+  if (taskModes.includes("video.reference_image_to_video")) return "reference";
+  if (taskModes.includes("video.first_last_frame_to_video")) return "first_last_frame";
+  if (taskModes.includes("video.video_to_video") || taskModes.includes("video.image_video_to_video")) return "video_edit";
+  return "first_frame";
+}
+
+function videoCategoryLabel(videoCategory: string) {
+  if (videoCategory === "reference") return "全能参考";
+  if (videoCategory === "first_last_frame") return "首尾帧";
+  if (videoCategory === "video_edit") return "AI改视频";
+  if (videoCategory === "first_frame") return "首帧视频";
+  return "";
 }
 
 function readString(value: unknown): string {
@@ -1484,8 +2173,16 @@ function readRecordArray(value: unknown): Record<string, unknown>[] {
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.map((item) => readString(item)).filter(Boolean)
+    ? value.map((item) => readEnumValue(item)).filter(Boolean)
     : [];
+}
+
+function readEnumValue(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const option = value as Record<string, unknown>;
+    return readString(option.value) || readString(option.providerValue) || readString(option.label);
+  }
+  return readString(value);
 }
 
 function readArray(value: unknown): unknown[] {
@@ -1496,7 +2193,12 @@ function readEnumValues(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return [];
   }
-  return readStringArray((value as Record<string, unknown>).enum);
+  const schema = value as Record<string, unknown>;
+  const enumValues = readStringArray(schema.enum);
+  if (enumValues.length) {
+    return enumValues;
+  }
+  return readStringArray(schema.options);
 }
 
 function createSeedancePollAdapterFromModelConfig(
@@ -1668,6 +2370,49 @@ async function getOrganizationCreditBalance(
   return Number(row?.credit_balance_cached ?? 0);
 }
 
+async function getUserCreditBalance(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const row = await queryOne<{
+    available_credits: number | string | null;
+    reserved_credits: number | string | null;
+  }>(
+    db,
+    `
+      SELECT
+        COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0) AS available_credits,
+        CASE
+          WHEN tp.id IS NULL THEN COALESCE(o.credit_reserved_cached, 0)
+          ELSE COALESCE((
+            SELECT SUM(r.amount_reserved)
+            FROM credit_reservations r
+            WHERE r.organization_id = m.organization_id
+              AND r.status = 'active'
+              AND (
+                r.metadata_json->>'targetUserId' = u.id::text
+                OR r.metadata_json->>'targetMembershipId' = m.id::text
+              )
+          ), 0)
+        END AS reserved_credits
+      FROM users u
+      LEFT JOIN memberships m ON m.user_id = u.id AND m.status = 'active'
+      LEFT JOIN organizations o ON o.id = m.organization_id
+      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
+      WHERE u.id = $1
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    `,
+    [userId],
+  );
+  const availableCredits = Number(row?.available_credits ?? 0);
+  return {
+    availableCredits,
+    creditBalance: availableCredits,
+    reservedCredits: Number(row?.reserved_credits ?? 0),
+  };
+}
+
 async function getEpisodeContext(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -1723,9 +2468,50 @@ async function getEpisodeContext(
     actor,
     episode,
     project,
-    creditBalance: await getOrganizationCreditBalance(db, actor.organizationId),
+    creditBalance: (await getUserCreditBalance(db, input.userId)).creditBalance,
     userId: input.userId,
   };
+}
+
+async function resolveCanvasRunEpisodeId(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    requestedEpisodeId?: unknown;
+  },
+) {
+  const requested = readString(input.requestedEpisodeId);
+  if (requested) {
+    const episode = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM episodes
+        WHERE organization_id = $1
+          AND project_id = $2
+          AND id = $3
+        LIMIT 1
+      `,
+      [input.organizationId, input.projectId, requested],
+    );
+    if (episode) {
+      return episode.id;
+    }
+  }
+  const fallback = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM episodes
+      WHERE organization_id = $1
+        AND project_id = $2
+      ORDER BY sequence ASC, created_at ASC
+      LIMIT 1
+    `,
+    [input.organizationId, input.projectId],
+  );
+  return fallback?.id ?? null;
 }
 
 async function resolveTaskContext(
@@ -1906,6 +2692,8 @@ async function mapGenerationTaskResponse(
     provider_response_redacted_json: Record<string, unknown> | string | null;
     snapshot_failure_json: Record<string, unknown> | string | null;
     snapshot_result_assets_json: Record<string, unknown>[] | string | null;
+    snapshot_progress_stage: string | null;
+    snapshot_progress_percent: number | string | null;
     credit_balance_cached: number | string | null;
   }>(
     db,
@@ -1937,6 +2725,8 @@ async function mapGenerationTaskResponse(
         pr.status AS provider_request_status,
         pr.failure_code AS provider_failure_code,
         pr.response_redacted_json AS provider_response_redacted_json,
+        s.progress_stage AS snapshot_progress_stage,
+        s.progress_percent AS snapshot_progress_percent,
         s.failure_json AS snapshot_failure_json,
         s.result_assets_json AS snapshot_result_assets_json,
         o.credit_balance_cached
@@ -1992,6 +2782,7 @@ async function mapGenerationTaskResponse(
   const providerResponse = readJsonRecord(row.provider_response_redacted_json);
   const snapshotFailure = readJsonRecord(row.snapshot_failure_json);
   const snapshotResultAssets = readRecordArray(row.snapshot_result_assets_json);
+  const snapshotProgressPercent = Number(row.snapshot_progress_percent);
   const snapshotResultAsset =
     snapshotResultAssets.find((asset) => readString(asset.mediaKind) === kind) ??
     snapshotResultAssets[0] ??
@@ -2002,6 +2793,7 @@ async function mapGenerationTaskResponse(
     row.failure_code;
   const providerMessage =
     readString(snapshotFailure.providerMessage) ||
+    readString(snapshotFailure.errorMessage) ||
     readString(providerResponse.providerMessage) ||
     readString(providerResponse.errorMessage) ||
     readString(providerResponse.message) ||
@@ -2042,7 +2834,7 @@ async function mapGenerationTaskResponse(
           id: `${row.task_id}-audio-1`,
           type: "audio",
           kind: "audio",
-          name: "闂婃娊顣?1",
+          name: "闂傚﹥濞婇。?1",
           summary: String(lipSyncConfig.text ?? snapshot.prompt ?? "").trim().slice(0, 48),
           voiceId: lipSyncConfig.voiceId ?? null,
           voiceName: String(lipSyncConfig.voiceName ?? "").trim(),
@@ -2124,7 +2916,7 @@ async function mapGenerationTaskResponse(
           providerRequestId: row.provider_request_id,
           providerStatus,
           providerErrorCode,
-          providerMessage,
+          providerMessage: generationProviderMessageForClient(providerMessage),
           details:
             snapshotFailure.details &&
             typeof snapshotFailure.details === "object" &&
@@ -2141,6 +2933,12 @@ async function mapGenerationTaskResponse(
     prompt: snapshot.prompt ?? null,
     parameters: snapshot.parameters ?? {},
     timeoutAt: snapshot.timeoutAt ?? null,
+    progressStage: readString(row.snapshot_progress_stage) || null,
+    progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
+    snapshot: {
+      progressStage: readString(row.snapshot_progress_stage) || null,
+      progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
+    },
     cost: Number(row.amount_total ?? snapshot.cost ?? 0),
     credit: row.reservation_id
       ? {
@@ -2156,6 +2954,62 @@ async function mapGenerationTaskResponse(
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+async function recordCanvasHistoryFromGenerationResponse(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    responseBody: unknown;
+    userId: string;
+    now: Date;
+  },
+) {
+  const body = input.responseBody && typeof input.responseBody === "object"
+    ? input.responseBody as Record<string, unknown>
+    : {};
+  if (String(body.targetType ?? "") !== "canvas") {
+    return null;
+  }
+  const taskId = readString(body.taskId);
+  const nodeKey = readString(body.targetId);
+  if (!taskId || !nodeKey) {
+    return null;
+  }
+  const task = await queryOne<{
+    organization_id: string;
+    workspace_id: string | null;
+    project_id: string | null;
+  }>(
+    db,
+    `
+      SELECT organization_id, workspace_id, project_id
+      FROM tasks
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [taskId],
+  );
+  if (!task?.workspace_id || !task.project_id) {
+    return null;
+  }
+  const result = body.result && typeof body.result === "object"
+    ? body.result as Record<string, unknown>
+    : null;
+  const failure = body.failure && typeof body.failure === "object"
+    ? body.failure as Record<string, unknown>
+    : null;
+  return attachCanvasTaskResultToHistory(db, {
+    organizationId: task.organization_id,
+    workspaceId: task.workspace_id,
+    projectId: task.project_id,
+    nodeKey,
+    taskId,
+    mediaKind: readString(body.kind) || "image",
+    result,
+    failure,
+    userId: input.userId,
+    now: input.now,
+  });
 }
 
 function generationResultFromSnapshotAsset(
@@ -2245,6 +3099,16 @@ function readErrorFailureCode(error: unknown): string | undefined {
     : undefined;
 }
 
+function readErrorApiKeyEnv(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const value = (error as { apiKeyEnv?: unknown }).apiKeyEnv;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 function readErrorStorageObjectId(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
@@ -2287,75 +3151,139 @@ function generationFailureDisplayMessage(input: {
 }): string {
   const failureCode = String(input.failureCode ?? "").trim();
   const explicit = readString(input.snapshotFailure?.displayMessage);
+  const translatedExplicit = translateKnownGenerationFailureMessage(explicit);
+  if (translatedExplicit) {
+    return translatedExplicit;
+  }
   if (explicit && explicit !== failureCode && !/^[a-z0-9_:-]+$/i.test(explicit)) {
     return explicit;
   }
   const providerMessage = String(input.providerMessage ?? "").trim();
   if (failureCode === "provider_failed" && providerMessage) {
-    return generationProviderFailureDisplayMessage(providerMessage) ||
-      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerMessage}`;
+    const translatedProviderMessage = generationProviderFailureDisplayMessage(providerMessage);
+    return translatedProviderMessage || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerMessage}`;
   }
   const providerErrorCode = String(input.providerErrorCode ?? "").trim();
   if (failureCode === "provider_failed" && providerErrorCode) {
-    return generationProviderFailureDisplayMessage(providerErrorCode) ||
-      `妯″瀷渚涘簲鍟嗚繑鍥炲け璐ワ細${providerErrorCode}`;
+    const translatedProviderErrorCode = generationProviderFailureDisplayMessage(providerErrorCode);
+    return translatedProviderErrorCode || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerErrorCode}`;
   }
   return generationFailureDisplayMessageByCode(failureCode);
+}
+function generationProviderMessageForClient(value: string | null | undefined): string | null {
+  const message = String(value ?? "").trim();
+  if (!message) {
+    return null;
+  }
+  return translateKnownGenerationFailureMessage(message) ||
+    generationProviderFailureDisplayMessage(message) ||
+    message;
 }
 
 function generationProviderFailureDisplayMessage(value: string): string {
   const code = value.trim();
+  const translated = translateKnownGenerationFailureMessage(code);
+  if (translated) {
+    return translated;
+  }
   if (code === "provider_submission_ambiguous") {
-    return "Provider submission is ambiguous. Credits were refunded and the task requires retry or admin review.";
+    return generationFailureDisplayMessageByCode("provider_submission_ambiguous");
+  }
+  if (/volcengine_ark_image_404|InvalidEndpointOrModel\.NotFound/i.test(code)) {
+    const model = /model or endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
+      /endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
+      "";
+    return model
+      ? `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\uff1a${model}\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002`
+      : "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  }
+  const volcengineImageStatus = /^volcengine_ark_image_(\d{3})/i.exec(code)?.[1];
+  if (volcengineImageStatus === "401" || volcengineImageStatus === "403") {
+    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u9274\u6743\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5 API \u5bc6\u94a5\u548c\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  }
+  if (volcengineImageStatus === "400") {
+    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u62d2\u7edd\u4e86\u8bf7\u6c42\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5\u63d0\u793a\u8bcd\u3001\u53c2\u8003\u56fe\u6216\u6a21\u578b\u53c2\u6570\u3002";
+  }
+  if (volcengineImageStatus && Number(volcengineImageStatus) >= 500) {
+    return `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u8fd4\u56de HTTP ${volcengineImageStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
+  }
+  if (code === "openai_images_empty_response") {
+    return generationFailureDisplayMessageByCode("openai_images_empty_response");
+  }
+  if (code === "openai_images_invalid_json") {
+    return generationFailureDisplayMessageByCode("openai_images_invalid_json");
+  }
+  if (code === "openai_images_invalid_response") {
+    return generationFailureDisplayMessageByCode("openai_images_invalid_response");
+  }
+  if (code === "openai_images_timeout") {
+    return generationFailureDisplayMessageByCode("openai_images_timeout");
   }
   const openAiImagesStatus = /^openai_images_(\d{3})$/i.exec(code)?.[1];
   if (openAiImagesStatus === "504") {
-    return "GPT Image 2 provider timed out. Credits were refunded; retry later or check provider health.";
+    return generationFailureDisplayMessageByCode("openai_images_504");
   }
   if (openAiImagesStatus === "429") {
-    return "GPT Image 2 provider is rate limited. Credits were refunded; retry later.";
+    return "GPT Image 2 \u4f9b\u5e94\u5546\u9650\u6d41\uff08HTTP 429\uff09\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002";
   }
   if (openAiImagesStatus === "401" || openAiImagesStatus === "403") {
-    return "GPT Image 2 provider authentication failed. Check API key and provider permissions.";
+    return "GPT Image 2 \u4f9b\u5e94\u5546\u9274\u6743\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 API \u5bc6\u94a5\u548c\u4f9b\u5e94\u5546\u6743\u9650\u3002";
   }
   if (openAiImagesStatus === "400") {
-    return "GPT Image 2 provider rejected the request. Check prompt, references, or model parameters.";
+    return "GPT Image 2 \u4f9b\u5e94\u5546\u62d2\u7edd\u4e86\u8bf7\u6c42\uff0c\u8bf7\u68c0\u67e5\u63d0\u793a\u8bcd\u3001\u53c2\u8003\u56fe\u6216\u6a21\u578b\u53c2\u6570\u3002";
   }
   if (openAiImagesStatus && Number(openAiImagesStatus) >= 500) {
-    return `GPT Image 2 provider error HTTP ${openAiImagesStatus}. Credits were refunded; retry later.`;
+    return `GPT Image 2 \u4f9b\u5e94\u5546\u8fd4\u56de HTTP ${openAiImagesStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
   }
   return "";
 }
 
+function translateKnownGenerationFailureMessage(message: string | undefined): string {
+  const value = String(message ?? "").trim();
+  const messages: Record<string, string> = {
+    "Unexpected end of JSON input": generationFailureDisplayMessageByCode("openai_images_empty_response"),
+    "fetch failed": "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002",
+    "Generation task timed out. Credits were refunded.": generationFailureDisplayMessageByCode("task_timeout"),
+    "Provider returned a failure. Credits were refunded.": generationFailureDisplayMessageByCode("provider_failed"),
+    "Provider submission is ambiguous. Credits were refunded and the task requires retry or admin review.": generationFailureDisplayMessageByCode("provider_submission_ambiguous"),
+    "Provider submission is ambiguous. Credits were refunded and admin review may be needed.": generationFailureDisplayMessageByCode("provider_submission_ambiguous"),
+  };
+  return messages[value] ?? "";
+}
+
 function generationFailureDisplayMessageByCode(failureCode: string): string {
   const messages: Record<string, string> = {
-    task_timeout: "Generation task timed out. Credits were refunded.",
-    provider_failed: "Provider returned a failure. Credits were refunded.",
-    provider_submission_ambiguous: "Provider submission is ambiguous. Credits were refunded and admin review may be needed.",
-    openai_images_504: "GPT Image 2 provider timed out. Credits were refunded.",
-    provider_poll_timeout: "Provider result polling timed out. Credits were refunded.",
-    provider_result_unknown: "Provider result is unknown. Refresh later or contact admin review.",
-    provider_output_download_failed: "Provider output download failed. Credits were refunded.",
-    provider_output_upload_failed: "Provider output upload failed. Credits were refunded.",
-    provider_output_persist_failed: "Provider output was uploaded but asset persistence failed. Admin repair is required.",
-    provider_api_key_env_required: "Provider API key environment variable is not configured.",
-    provider_api_key_missing: "Provider API key is missing.",
-    provider_adapter_missing: "Provider adapter is unavailable.",
-    provider_circuit_open: "Provider circuit breaker is open. Retry later.",
-    worker_crashed_after_external_start: "Task was submitted externally but local worker stopped. Admin review is required.",
-    storage_put_object_required: "Platform storage upload capability is not enabled.",
-    model_not_configured: "Current model is not configured.",
-    model_disabled: "Current model is under maintenance.",
-    model_task_mode_unsupported: "Current model does not support this generation mode.",
-    model_media_type_mismatch: "Current model media type does not match the requested generation.",
-    model_reference_limit_exceeded: "Reference asset count exceeds model limits.",
-    model_reference_not_found: "Reference asset was not found or is inaccessible.",
-    model_reference_unavailable: "Reference asset is not ready.",
-    model_reference_mime_not_allowed: "Reference asset format is not supported by the model.",
-    model_prompt_too_long: "Prompt is too long.",
-    insufficient_credits: "Insufficient credits; task was not submitted to provider.",
+    task_timeout: "\u751f\u6210\u4efb\u52a1\u8d85\u8fc7\u5e73\u53f0\u7b49\u5f85\u65f6\u95f4\uff0c\u5df2\u6309\u5931\u8d25\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\u3002\u8bf7\u91cd\u65b0\u53d1\u8d77\u751f\u6210\u3002",
+    provider_failed: "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_submission_ambiguous: "\u6a21\u578b\u8bf7\u6c42\u5df2\u53d1\u51fa\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u660e\u786e\u63d0\u4ea4\u7ed3\u679c\u3002\u7cfb\u7edf\u5df2\u505c\u6b62\u7ee7\u7eed\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u4f9b\u5e94\u5546\u4fa7\u5b9e\u9645\u751f\u6210\u4e86\u7ed3\u679c\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
+    openai_images_timeout: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u8d85\u65f6\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u8017\u65f6\u3002",
+    openai_images_empty_response: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u4e3a\u7a7a\u6216\u88ab\u622a\u65ad\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u662f\u5426\u5b8c\u6574\u8fd4\u56de JSON\u3002",
+    openai_images_invalid_json: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u683c\u5f0f\u5f02\u5e38\uff0c\u540e\u7aef\u65e0\u6cd5\u89e3\u6790\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u662f\u5426\u8fd4\u56de\u6807\u51c6 JSON\u3002",
+    openai_images_invalid_response: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u4e2d\u6ca1\u6709\u53ef\u7528\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u8fd4\u56de\u5b57\u6bb5\u3002",
+    openai_images_504: "GPT Image 2 \u4e2d\u8f6c\u7ad9\u6216\u4f9b\u5e94\u5546\u54cd\u5e94\u8d85\u65f6\uff08HTTP 504\uff09\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u7a33\u5b9a\u6027\u3002",
+    provider_poll_timeout: "\u4f9b\u5e94\u5546\u7ed3\u679c\u8f6e\u8be2\u8d85\u65f6\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_result_unknown: "\u4f9b\u5e94\u5546\u7ed3\u679c\u72b6\u6001\u4e0d\u660e\u786e\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u770b\uff1b\u5982\u4f9b\u5e94\u5546\u4fa7\u5df2\u751f\u6210\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
+    provider_output_download_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0b\u8f7d\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u4fdd\u5b58\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_output_upload_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0a\u4f20\u5230\u5e73\u53f0\u5b58\u50a8\u5931\u8d25\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_output_persist_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u5df2\u4e0a\u4f20\uff0c\u4f46\u5e73\u53f0\u8d44\u4ea7\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\uff0c\u9700\u8981\u540e\u53f0\u4fee\u590d\u3002",
+    provider_api_key_env_required: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u73af\u5883\u53d8\u91cf\u672a\u914d\u7f6e\u3002",
+    provider_api_key_missing: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u7f3a\u5931\u3002",
+    provider_adapter_missing: "\u4f9b\u5e94\u5546\u9002\u914d\u5668\u4e0d\u53ef\u7528\u3002",
+    provider_circuit_open: "\u4f9b\u5e94\u5546\u7194\u65ad\u4fdd\u62a4\u5df2\u5f00\u542f\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    worker_crashed_after_external_start: "\u4efb\u52a1\u5df2\u63d0\u4ea4\u5230\u4f9b\u5e94\u5546\uff0c\u4f46\u672c\u5730 Worker \u4e2d\u9014\u505c\u6b62\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
+    storage_put_object_required: "\u5e73\u53f0\u5b58\u50a8\u4e0a\u4f20\u80fd\u529b\u672a\u542f\u7528\u3002",
+    model_not_configured: "\u5f53\u524d\u6a21\u578b\u672a\u914d\u7f6e\u3002",
+    model_disabled: "\u5f53\u524d\u6a21\u578b\u7ef4\u62a4\u4e2d\u3002",
+    model_task_mode_unsupported: "\u5f53\u524d\u6a21\u578b\u4e0d\u652f\u6301\u8fd9\u4e2a\u751f\u6210\u6a21\u5f0f\u3002",
+    model_media_type_mismatch: "\u5f53\u524d\u6a21\u578b\u5a92\u4f53\u7c7b\u578b\u4e0e\u8bf7\u6c42\u4e0d\u5339\u914d\u3002",
+    model_reference_limit_exceeded: "\u53c2\u8003\u7d20\u6750\u6570\u91cf\u8d85\u8fc7\u6a21\u578b\u9650\u5236\u3002",
+    model_reference_not_found: "\u53c2\u8003\u7d20\u6750\u4e0d\u5b58\u5728\u6216\u65e0\u6743\u8bbf\u95ee\u3002",
+    model_reference_unavailable: "\u53c2\u8003\u7d20\u6750\u8fd8\u672a\u51c6\u5907\u597d\u3002",
+    model_reference_mime_not_allowed: "\u53c2\u8003\u7d20\u6750\u683c\u5f0f\u4e0d\u53d7\u6a21\u578b\u652f\u6301\u3002",
+    model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
+    insufficient_credits: "\u79ef\u5206\u4e0d\u8db3\uff0c\u4efb\u52a1\u672a\u63d0\u4ea4\u7ed9\u4f9b\u5e94\u5546\u3002",
   };
-  return messages[failureCode] ?? `Generation task failed: ${failureCode || "unknown_failure"}`;
+  return messages[failureCode] ?? `鐢熸垚浠诲姟澶辫触锛?{failureCode || "unknown_failure"}`;
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -2667,8 +3595,12 @@ async function settleTimedOutEpisodeGenerationTask(
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
   const timeoutAt = snapshot.timeoutAt ? new Date(String(snapshot.timeoutAt)) : null;
+  const fallbackTimeoutMs =
+    readString(snapshot.kind) === "video"
+      ? videoGenerationTaskTimeoutMs
+      : imageGenerationTaskTimeoutMs;
   const createdAtTimeout = snapshot.requestedAt
-    ? new Date(new Date(String(snapshot.requestedAt)).getTime() + generationTaskTimeoutMs)
+    ? new Date(new Date(String(snapshot.requestedAt)).getTime() + fallbackTimeoutMs)
     : null;
   const effectiveTimeoutAt = timeoutAt && !Number.isNaN(timeoutAt.getTime()) ? timeoutAt : createdAtTimeout;
   if (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime()) {
@@ -2744,12 +3676,30 @@ async function repairTimedOutEpisodeGenerationTasks(
           OR (
             input_snapshot_json->>'timeoutAt' IS NULL
             AND input_snapshot_json->>'requestedAt' IS NOT NULL
-            AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '15 minutes')
+            AND (
+              (
+                input_snapshot_json->>'kind' = 'video'
+                AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '3 hours')
+              )
+              OR (
+                COALESCE(input_snapshot_json->>'kind', '') <> 'video'
+                AND (input_snapshot_json->>'requestedAt')::timestamptz < ($1::timestamptz - interval '15 minutes')
+              )
+            )
           )
           OR (
             input_snapshot_json->>'timeoutAt' IS NULL
             AND input_snapshot_json->>'requestedAt' IS NULL
-            AND created_at < ($1::timestamptz - interval '15 minutes')
+            AND (
+              (
+                task_type = 'episode_generate_video'
+                AND created_at < ($1::timestamptz - interval '3 hours')
+              )
+              OR (
+                task_type <> 'episode_generate_video'
+                AND created_at < ($1::timestamptz - interval '15 minutes')
+              )
+            )
           )
         )
       ORDER BY created_at ASC, id ASC
@@ -3106,8 +4056,8 @@ async function createEpisodeGenerationTask(
     fetchImpl?: typeof fetch;
     signedUrlExpiresInSeconds: number;
     now: Date;
-  },
-) {
+    },
+  ) {
   const context = await getEpisodeContext(db, {
     episodeId: input.episodeId,
     sessionToken: input.authenticated.sessionToken,
@@ -3130,6 +4080,15 @@ async function createEpisodeGenerationTask(
   const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig);
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
   const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
+  if (shouldUseBullMQDispatch) {
+    const queueReady = await isRedisReachable(generationQueueConfig.redisUrl, 500);
+    if (!queueReady) {
+      throw new GenerationRequestValidationError(
+        "generation_queue_unavailable",
+        "生成队列未启动：请先启动 Redis、generation-outbox 和 generation-worker。",
+      );
+    }
+  }
   const fallbackSubmitQueueName = input.kind === "video"
     ? generationQueueConfig.queues.submitVideo
     : generationQueueConfig.queues.submitImage;
@@ -3232,7 +4191,12 @@ async function createEpisodeGenerationTask(
     targetEntityType === "shot" && isUuid(requestSnapshot.targetId)
       ? requestSnapshot.targetId
       : input.episodeId;
-  const timeoutAt = new Date(input.now.getTime() + generationTaskTimeoutMs);
+  const snapshotTargetId =
+    requestSnapshot.targetType === "canvas" && !isUuid(requestSnapshot.targetId)
+      ? input.episodeId
+      : requestSnapshot.targetId;
+  const timeoutMs = input.kind === "video" ? videoGenerationTaskTimeoutMs : imageGenerationTaskTimeoutMs;
+  const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
     organizationId: context.actor.organizationId,
     workspaceId: context.actor.workspaceId!,
@@ -3264,6 +4228,28 @@ async function createEpisodeGenerationTask(
     ],
   });
   const task = workflow.tasks[0]!;
+  const baseBillingMetadata = {
+    targetUserId: context.userId,
+    targetMembershipId: context.actor.membershipId,
+    taskId: task.id,
+    workflowId: workflow.workflow.id,
+    projectId: context.project.id,
+    workspaceId: context.actor.workspaceId,
+    episodeId: input.episodeId,
+    mediaType: input.kind,
+    kind: input.kind,
+    modelCode: requestedModelCode,
+    providerExecutor: modelExecution.providerExecutor,
+    taskMode: modelExecution.taskMode,
+    targetType: requestSnapshot.targetType,
+    targetId: snapshotTargetId,
+    canvasNodeId: requestSnapshot.targetType === "canvas" ? requestSnapshot.targetId : undefined,
+    amount: estimatedCost,
+    requestedAt: input.now,
+    prompt: requestSnapshot.prompt,
+    parameters: requestSnapshot.parameters,
+    referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+  };
 
   await db.query(
     `
@@ -3294,10 +4280,12 @@ async function createEpisodeGenerationTask(
     sourceType: "episode_generation_task",
     sourceId: task.id,
     reason: `${input.kind} generation`,
-    metadata: {
-      episodeId: input.episodeId,
-      kind: input.kind,
-    },
+    metadata: buildGenerationBillingMetadata({
+      ...baseBillingMetadata,
+      billingEvent: "reserved",
+      outcome: "reserved",
+      settledAt: input.now,
+    }),
     createdByUserId: context.userId,
     now: input.now,
   });
@@ -3308,7 +4296,7 @@ async function createEpisodeGenerationTask(
     projectId: context.project.id,
     episodeId: input.episodeId,
     targetType: requestSnapshot.targetType,
-    targetId: requestSnapshot.targetId,
+    targetId: snapshotTargetId,
     workflowId: workflow.workflow.id,
     taskId: task.id,
     modelConfigId: modelConfig?.id ?? null,
@@ -3321,7 +4309,8 @@ async function createEpisodeGenerationTask(
       prompt: requestSnapshot.prompt,
       parameters: requestSnapshot.parameters,
       targetType: requestSnapshot.targetType,
-      targetId: requestSnapshot.targetId,
+      targetId: snapshotTargetId,
+      ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
       referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
     },
     creditSummary: {
@@ -3365,7 +4354,7 @@ async function createEpisodeGenerationTask(
     return { status: 200 as const, body: responseBody };
   }
 
-  if (modelExecution.providerExecutor === "gpt-image-2") {
+  if (modelExecution.providerExecutor === "gpt-image-2" || modelExecution.providerExecutor === "image-http") {
     const claim = await claimQueuedTask(db, {
       taskId: task.id,
       workerId: "episode-gpt-image-submit-worker",
@@ -3381,6 +4370,7 @@ async function createEpisodeGenerationTask(
       if (!modelConfig) {
         throw new Error("gpt_image_model_config_missing");
       }
+      const providerLabel = modelConfig.providerName || requestSnapshot.model || "image-provider";
       const payloadRef = `creator://episodes/${input.episodeId}/image/${task.id}`;
       const payloadHash = sha256(`${payloadRef}:${requestSnapshot.prompt}`);
       const adapter = createProviderAdapterFromModelConfig(
@@ -3500,10 +4490,16 @@ async function createEpisodeGenerationTask(
         taskId: task.id,
         attemptId: claim.attempt.id,
         providerRequestId,
-        metadata: {
-          provider: "gpt-image-2",
-          episodeId: input.episodeId,
-        },
+        metadata: buildGenerationBillingMetadata({
+          ...baseBillingMetadata,
+          attemptId: claim.attempt.id,
+          billingEvent: "consumed",
+          outcome: "consumed",
+          provider: providerLabel,
+          providerRequestId,
+          externalRequestId: submitted.request.externalRequestId,
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotSucceeded(db, {
@@ -3512,7 +4508,7 @@ async function createEpisodeGenerationTask(
         providerRequestId,
         resultAssets: [persisted],
         providerStatus: {
-          provider: "gpt-image-2",
+          provider: providerLabel,
           externalRequestId: submitted.request.externalRequestId,
         },
         creditSummary: {
@@ -3541,6 +4537,7 @@ async function createEpisodeGenerationTask(
       return { status: 200 as const, body: responseBody };
     } catch (error) {
       const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+      const apiKeyEnv = readErrorApiKeyEnv(error);
       await finalizeTaskAttempt(db, {
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -3557,11 +4554,17 @@ async function createEpisodeGenerationTask(
         taskId: task.id,
         attemptId: claim.attempt.id,
         providerRequestId,
-        metadata: {
-          provider: "gpt-image-2",
+        metadata: buildGenerationBillingMetadata({
+          ...baseBillingMetadata,
+          attemptId: claim.attempt.id,
+          billingEvent: "released",
+          outcome: "released",
+          provider: modelConfig?.providerName || requestSnapshot.model || "image-provider",
+          providerRequestId,
           failureCode,
           errorMessage: error instanceof Error ? error.message : String(error),
-        },
+          settledAt: input.now,
+        }),
         now: input.now,
       });
       await markGenerationTaskSnapshotFailed(db, {
@@ -3575,6 +4578,7 @@ async function createEpisodeGenerationTask(
             providerMessage: error instanceof Error ? error.message : String(error),
           }),
           providerMessage: error instanceof Error ? error.message : String(error),
+          ...(apiKeyEnv ? { apiKeyEnv } : {}),
         },
         creditSummary: {
           released: estimatedCost,
@@ -3597,6 +4601,19 @@ async function createEpisodeGenerationTask(
         status: "succeeded",
         updatedAt: input.now,
       });
+
+      if (failureCode === "provider_api_key_missing" || failureCode === "provider_api_key_env_required") {
+        const message = generationFailureDisplayMessage({ failureCode });
+        return {
+          status: 502 as const,
+          body: envelopedError(502, failureCode, apiKeyEnv ? `${message} 缺失项：${apiKeyEnv}` : message, {
+            taskId: task.id,
+            workflowId: workflow.workflow.id,
+            apiKeyEnv,
+            creditReleased: estimatedCost,
+          }).body,
+        };
+      }
 
       return { status: 200 as const, body: responseBody };
     }
@@ -3772,10 +4789,14 @@ async function createEpisodeGenerationTask(
     outcome: "consumed",
     taskId: task.id,
     attemptId: claim.attempt.id,
-    metadata: {
-      episodeId: input.episodeId,
-      kind: input.kind,
-    },
+    metadata: buildGenerationBillingMetadata({
+      ...baseBillingMetadata,
+      attemptId: claim.attempt.id,
+      billingEvent: "consumed",
+      outcome: "consumed",
+      provider: "mock",
+      settledAt: input.now,
+    }),
     now: input.now,
   });
   await markGenerationTaskSnapshotSucceeded(db, {
@@ -3822,6 +4843,136 @@ async function createEpisodeGenerationTask(
   });
 
   return { status: 200 as const, body: responseBody };
+}
+
+function buildGenerationBillingMetadata(input: {
+  billingEvent: "reserved" | "consumed" | "released" | "manual_review_required";
+  outcome: string;
+  taskId: string;
+  workflowId?: string | null;
+  projectId?: string | null;
+  workspaceId?: string | null;
+  episodeId?: string | null;
+  mediaType?: string | null;
+  kind?: string | null;
+  modelCode?: string | null;
+  providerExecutor?: string | null;
+  provider?: string | null;
+  taskMode?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  canvasNodeId?: string | null;
+  amount?: number | string | null;
+  requestedAt?: Date | string | null;
+  settledAt?: Date | string | null;
+  attemptId?: string | null;
+  providerRequestId?: string | null;
+  externalRequestId?: string | null;
+  prompt?: string | null;
+  parameters?: Record<string, unknown> | null;
+  referenceCount?: number | string | null;
+  failureCode?: string | null;
+  errorMessage?: string | null;
+  storageObjectKey?: string | null;
+}) {
+  const requestedAt = toIsoString(input.requestedAt);
+  const settledAt = toIsoString(input.settledAt);
+  const durationMs = requestedAt && settledAt
+    ? Math.max(0, new Date(settledAt).getTime() - new Date(requestedAt).getTime())
+    : null;
+  const prompt = String(input.prompt ?? "");
+  return removeUndefinedValues({
+    billingEvent: input.billingEvent,
+    outcome: input.outcome,
+    status: input.outcome,
+    taskId: input.taskId,
+    workflowId: input.workflowId,
+    projectId: input.projectId,
+    workspaceId: input.workspaceId,
+    episodeId: input.episodeId,
+    mediaType: input.mediaType,
+    kind: input.kind ?? input.mediaType,
+    modelCode: input.modelCode,
+    providerExecutor: input.providerExecutor,
+    provider: input.provider,
+    taskMode: input.taskMode,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    canvasNodeId: input.canvasNodeId,
+    amount: Number(input.amount ?? 0),
+    requestedAt,
+    settledAt,
+    durationMs,
+    attemptId: input.attemptId,
+    providerRequestId: input.providerRequestId,
+    externalRequestId: input.externalRequestId,
+    promptPreview: truncateForLedger(prompt, 180),
+    promptLength: prompt.length,
+    parameterSummary: summarizeGenerationParameters(input.parameters),
+    referenceCount: Number(input.referenceCount ?? 0),
+    failureCode: input.failureCode,
+    errorMessage: truncateForLedger(input.errorMessage ?? "", 240),
+    storageObjectKey: input.storageObjectKey,
+  });
+}
+
+function summarizeGenerationParameters(parameters: Record<string, unknown> | null | undefined) {
+  const source = parameters ?? {};
+  return removeUndefinedValues({
+    aspectRatio: readString(source.aspectRatio) ?? readString(source.ratio),
+    resolution: readString(source.resolution) ?? readString(source.quality),
+    duration: readString(source.duration) ?? readString(source.durationSeconds),
+    mode: readString(source.mode) ?? readString(source.taskMode),
+    referenceImages: readArray(source.referenceImages).length,
+    referenceAssetVersionIds: readArray(source.referenceAssetVersionIds).length,
+  });
+}
+
+function truncateForLedger(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function toIsoString(value: Date | string | null | undefined) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== ""),
+  ) as T;
+}
+
+function isRedisReachable(redisUrl: string, timeoutMs: number) {
+  return new Promise<boolean>((resolveReady) => {
+    let url: URL;
+    try {
+      url = new URL(redisUrl);
+    } catch {
+      resolveReady(false);
+      return;
+    }
+    const socket = net.createConnection({
+      host: url.hostname || "127.0.0.1",
+      port: url.port ? Number(url.port) : 6379,
+    });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolveReady(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolveReady(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolveReady(false);
+    });
+  });
 }
 
 function readGenerationReferenceAssetVersionIds(
@@ -3928,7 +5079,7 @@ async function resolveGenerationReferenceImages(
     ) {
       throw new GenerationRequestValidationError(
         "model_reference_mime_not_allowed",
-        "鍙傝€冪礌鏉愭牸寮忎笉绗﹀悎褰撳墠妯″瀷閰嶇疆",
+        "閸欏倽鈧啰绀岄弶鎰壐瀵繋绗夌粭锕€鎮庤ぐ鎾冲濡€崇€烽柊宥囩枂",
       );
     }
     const objectKey = readString(row.storage_object_key_from_object) || row.storage_object_key;
@@ -4150,12 +5301,12 @@ function normalizeEpisodeAssetType(value: string) {
 
 function defaultEpisodeAssetDescription(kind: "role" | "scene" | "prop") {
   if (kind === "role") {
-    return "鑷繁鐨勮鑹叉弿杩帮紝闅忔剰鏇存敼";
+    return "閼奉亜绻侀惃鍕潡閼瑰弶寮挎潻甯礉闂呭繑鍓伴弴瀛樻暭";
   }
   if (kind === "scene") {
-    return "杩欐槸鍒氭坊鍔犵殑鍦烘櫙閫夐」";
+    return "Scene description pending.";
   }
-  return "杩欐槸鍒氭坊鍔犵殑閬撳叿閫夐」";
+  return "Prop description pending.";
 }
 
 function matchesEpisodeScopedAsset(
@@ -4361,7 +5512,7 @@ async function createEpisodeAssetRecord(
     return null;
   }
   const assetKey = `episode-${normalized.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
-  const description = String(input.body.description ?? defaultEpisodeAssetDescription(normalized.kind)).trim();
+  const description = String(input.body.description ?? "").trim();
   const snapshot = await createAssetVersionSnapshot(db, {
     organizationId: context.actor.organizationId,
     projectId: context.project.id,
@@ -6814,6 +7965,210 @@ async function ensureDefaultMembershipPlan(
   );
 }
 
+function loadWeChatLoginConfig(env: NodeJS.ProcessEnv): WeChatLoginConfig | null {
+  const appId = env.WECHAT_LOGIN_APP_ID?.trim() ?? "";
+  const appSecret = env.WECHAT_LOGIN_APP_SECRET?.trim() ?? "";
+  const redirectUri = env.WECHAT_LOGIN_REDIRECT_URI?.trim() ?? "";
+
+  if (!appId || !appSecret || !redirectUri) {
+    return null;
+  }
+
+  return { appId, appSecret, redirectUri };
+}
+
+function buildWeChatAuthorizeUrl(config: WeChatLoginConfig, state: string): string {
+  const url = new URL("https://open.weixin.qq.com/connect/qrconnect");
+  url.searchParams.set("appid", config.appId);
+  url.searchParams.set("redirect_uri", config.redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", "snsapi_login");
+  url.searchParams.set("state", state);
+  return `${url.toString()}#wechat_redirect`;
+}
+
+async function exchangeWeChatCode(
+  config: WeChatLoginConfig,
+  code: string,
+  fetchImpl: typeof fetch,
+): Promise<WeChatAccessTokenResponse> {
+  const url = new URL("https://api.weixin.qq.com/sns/oauth2/access_token");
+  url.searchParams.set("appid", config.appId);
+  url.searchParams.set("secret", config.appSecret);
+  url.searchParams.set("code", code);
+  url.searchParams.set("grant_type", "authorization_code");
+
+  const response = await fetchImpl(url);
+  const payload = (await response.json()) as WeChatAccessTokenResponse;
+  if (!response.ok || payload.errcode || !payload.openid || !payload.access_token) {
+    return {
+      errcode: payload.errcode ?? response.status,
+      errmsg: payload.errmsg ?? "wechat_token_exchange_failed",
+    };
+  }
+
+  return payload;
+}
+
+async function findOrCreateUserByWeChat(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    appId: string;
+    openid: string;
+    unionid?: string | null;
+    now: Date;
+  },
+) {
+  const userByOpenid = await queryOne<{
+    id: string;
+    status: "active" | "disabled";
+  }>(
+    db,
+    `
+      SELECT id, status
+      FROM users
+      WHERE wechat_app_id = $1
+        AND wechat_openid = $2
+      LIMIT 1
+    `,
+    [input.appId, input.openid],
+  );
+
+  if (userByOpenid) {
+    await updateWeChatUserLogin(db, {
+      userId: userByOpenid.id,
+      appId: input.appId,
+      openid: input.openid,
+      unionid: input.unionid,
+      now: input.now,
+    });
+    return userByOpenid;
+  }
+
+  const normalizedUnionid = input.unionid?.trim() || null;
+  if (normalizedUnionid) {
+    const userByUnionid = await queryOne<{
+      id: string;
+      status: "active" | "disabled";
+    }>(
+      db,
+      `
+        SELECT id, status
+        FROM users
+        WHERE wechat_app_id = $1
+          AND wechat_unionid = $2
+        LIMIT 1
+      `,
+      [input.appId, normalizedUnionid],
+    );
+
+    if (userByUnionid) {
+      await updateWeChatUserLogin(db, {
+        userId: userByUnionid.id,
+        appId: input.appId,
+        openid: input.openid,
+        unionid: normalizedUnionid,
+        now: input.now,
+      });
+      return userByUnionid;
+    }
+  }
+
+  const created = await queryOne<{
+    id: string;
+    status: "active" | "disabled";
+  }>(
+    db,
+    `
+      INSERT INTO users (
+        id,
+        phone_e164,
+        status,
+        wechat_app_id,
+        wechat_openid,
+        wechat_unionid,
+        wechat_last_login_at,
+        last_login_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, NULL, 'active', $2, $3, $4, $5, $5, $5, $5)
+      RETURNING id, status
+    `,
+    [randomUUID(), input.appId, input.openid, normalizedUnionid, input.now],
+  );
+
+  return created!;
+}
+
+async function updateWeChatUserLogin(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    appId: string;
+    openid: string;
+    unionid?: string | null;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE users
+      SET wechat_app_id = $2,
+          wechat_openid = $3,
+          wechat_unionid = COALESCE($4, wechat_unionid),
+          wechat_last_login_at = $5,
+          last_login_at = $5,
+          updated_at = $5
+      WHERE id = $1
+    `,
+    [input.userId, input.appId, input.openid, input.unionid?.trim() || null, input.now],
+  );
+}
+
+async function createPersistentSessionForUser(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    now: Date;
+  },
+) {
+  const createdSession = await createAuthSession({
+    userId: input.userId,
+    now: input.now,
+  });
+
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      createdSession.session.id,
+      createdSession.session.userId,
+      createdSession.session.status,
+      createdSession.session.sessionTokenHash,
+      createdSession.session.sessionTokenHashVersion,
+      createdSession.session.expiresAt,
+      createdSession.session.lastSeenAt,
+      createdSession.session.revokedAt,
+      input.now,
+    ],
+  );
+
+  return createdSession;
+}
+
 async function findAuthenticatedUser(
   db: Awaited<ReturnType<typeof createDevDb>>,
   cookieHeader: string | undefined,
@@ -6834,19 +8189,23 @@ async function findAuthenticatedUser(
 
   const user = await queryOne<{
     id: string;
-    phone_e164: string;
+    phone_e164: string | null;
     status: "active" | "disabled";
   }>(db, "SELECT id, phone_e164, status FROM users WHERE id = $1", [session.userId]);
 
   if (!user || user.status !== "active") {
     return undefined;
   }
+  const credit = await getUserCreditBalance(db, user.id);
 
   return {
     sessionToken,
     user: {
       id: user.id,
       phone: user.phone_e164,
+      creditBalance: credit.creditBalance,
+      availableCredits: credit.availableCredits,
+      reservedCredits: credit.reservedCredits,
     },
   };
 }
@@ -6974,6 +8333,7 @@ export function createPhoneAuthDevServer(
   let repairSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   let repairSchedulerRunning = false;
   const debugChallengeCodes = new Map<string, string>();
+  const wechatLoginStates = new Map<string, { createdAt: number }>();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
@@ -7071,6 +8431,15 @@ export function createPhoneAuthDevServer(
           signedUrlExpiresInSeconds,
         });
       const creatorApplication = createCreatorApplicationForWorkspace(devWorkspaceId);
+      const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        gateway: new TextModelGatewayService({
+          db,
+          adapter: new OpenAICompatibleTextAdapter(),
+          env: runtimeEnv,
+        }),
+        organizationId: devOrganizationId,
+        workspaceId: devWorkspaceId,
+      });
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
       }
@@ -7752,6 +9121,228 @@ export function createPhoneAuthDevServer(
           auditOrganizationId: devOrganizationId,
           auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update scene prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/prop-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminPropPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listTemplates({
+            stage: url.searchParams.get("stage"),
+            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/prop-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminPropPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...propPromptTemplateBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create prop prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const propPromptTemplateCopyMatch = pathname.match(/^\/api\/admin\/prop-prompt\/templates\/([^/]+)\/copy$/);
+      if (request.method === "POST" && propPromptTemplateCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminPropPromptService({ db });
+        return writeJson(response, await service.copyTemplate({
+          id: decodeURIComponent(propPromptTemplateCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy prop prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const propPromptTemplateStatusMatch = pathname.match(/^\/api\/admin\/prop-prompt\/templates\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && propPromptTemplateStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminPropPromptService({ db });
+        return writeJson(response, await service.changeTemplateStatus({
+          id: decodeURIComponent(propPromptTemplateStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change prop prompt template status"),
+          now: new Date(),
+        }));
+      }
+
+      const propPromptTemplateMatch = pathname.match(/^\/api\/admin\/prop-prompt\/templates\/([^/]+)$/);
+      if (request.method === "PUT" && propPromptTemplateMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminPropPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...propPromptTemplateBody(body),
+          id: decodeURIComponent(propPromptTemplateMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update prop prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/shot-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createAdminShotPromptService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await service.listTemplates({
+            stage: url.searchParams.get("stage"),
+            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
+            keyword: url.searchParams.get("keyword"),
+            status: url.searchParams.get("status"),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/shot-prompt/templates") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminShotPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...shotPromptTemplateBody(body),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "create shot prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const shotPromptTemplateCopyMatch = pathname.match(/^\/api\/admin\/shot-prompt\/templates\/([^/]+)\/copy$/);
+      if (request.method === "POST" && shotPromptTemplateCopyMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request).catch(() => ({}))) as Record<string, unknown>;
+        const service = createAdminShotPromptService({ db });
+        return writeJson(response, await service.copyTemplate({
+          id: decodeURIComponent(shotPromptTemplateCopyMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "copy shot prompt template"),
+          now: new Date(),
+        }));
+      }
+
+      const shotPromptTemplateStatusMatch = pathname.match(/^\/api\/admin\/shot-prompt\/templates\/([^/]+)\/status$/);
+      if (request.method === "PATCH" && shotPromptTemplateStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminShotPromptService({ db });
+        return writeJson(response, await service.changeTemplateStatus({
+          id: decodeURIComponent(shotPromptTemplateStatusMatch[1]),
+          status: String(body.status ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "change shot prompt template status"),
+          now: new Date(),
+        }));
+      }
+
+      const shotPromptTemplateMatch = pathname.match(/^\/api\/admin\/shot-prompt\/templates\/([^/]+)$/);
+      if (request.method === "PUT" && shotPromptTemplateMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createAdminShotPromptService({ db });
+        return writeJson(response, await service.saveTemplate({
+          ...shotPromptTemplateBody(body),
+          id: decodeURIComponent(shotPromptTemplateMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          auditOrganizationId: devOrganizationId,
+          auditWorkspaceId: devWorkspaceId,
+          reason: String(body.reason ?? "update shot prompt template"),
           now: new Date(),
         }));
       }
@@ -8725,6 +10316,164 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/legal-documents") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.listLegalDocuments(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/legal-documents") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          type?: string;
+          title?: string;
+          contentHtml?: string;
+          versionLabel?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.createLegalDocument({
+            type: String(body.type ?? ""),
+            title: String(body.title ?? ""),
+            contentHtml: String(body.contentHtml ?? ""),
+            versionLabel: body.versionLabel ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentPatchMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)$/);
+      if (request.method === "PATCH" && adminLegalDocumentPatchMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          title?: string;
+          contentHtml?: string;
+          versionLabel?: string | null;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentPatchMatch[1]),
+            title: String(body.title ?? ""),
+            contentHtml: String(body.contentHtml ?? ""),
+            versionLabel: body.versionLabel ?? null,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentEnableMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)\/enable$/);
+      if (request.method === "POST" && adminLegalDocumentEnableMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          enabled?: boolean;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.enableLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentEnableMatch[1]),
+            enabled: body.enabled !== false,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminLegalDocumentDeleteMatch = pathname.match(/^\/api\/admin\/legal-documents\/([^/]+)$/);
+      if (request.method === "DELETE" && adminLegalDocumentDeleteMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.deleteLegalDocument({
+            id: decodeURIComponent(adminLegalDocumentDeleteMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminSecretProbeMatch = pathname.match(/^\/api\/admin\/secret-references\/([^/]+)\/probe$/);
       if (request.method === "POST" && adminSecretProbeMatch) {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
@@ -8930,6 +10679,14 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/public/legal-documents") {
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.getPublicLegalDocuments(),
+        });
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
         const result = await requestPersistentLoginCode(db, {
@@ -8967,17 +10724,112 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/auth/wechat/start") {
+        const config = loadWeChatLoginConfig(runtimeEnv);
+        if (!config) {
+          return writeJson(response, {
+            status: 503,
+            body: { enabled: false, error: "wechat_login_not_configured" },
+          });
+        }
+
+        const state = randomBytes(32).toString("hex");
+        wechatLoginStates.set(state, { createdAt: Date.now() });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            enabled: true,
+            appId: config.appId,
+            redirectUri: config.redirectUri,
+            scope: "snsapi_login",
+            state,
+            authorizeUrl: buildWeChatAuthorizeUrl(config, state),
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/auth/wechat/callback") {
+        const config = loadWeChatLoginConfig(runtimeEnv);
+        if (!config) {
+          return writeJson(response, {
+            status: 503,
+            body: { error: "wechat_login_not_configured" },
+          });
+        }
+
+        const code = url.searchParams.get("code")?.trim() ?? "";
+        const state = url.searchParams.get("state")?.trim() ?? "";
+        const stateRecord = wechatLoginStates.get(state);
+        wechatLoginStates.delete(state);
+
+        if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "wechat_state_invalid" },
+          });
+        }
+
+        if (!code) {
+          return writeJson(response, {
+            status: 400,
+            body: { error: "wechat_code_required" },
+          });
+        }
+
+        const tokenPayload = await exchangeWeChatCode(
+          config,
+          code,
+          options.fetchImpl ?? fetch,
+        );
+
+        if (!tokenPayload.openid || tokenPayload.errcode) {
+          return writeJson(response, {
+            status: 502,
+            body: {
+              error: "wechat_token_exchange_failed",
+              providerCode: tokenPayload.errcode ?? null,
+            },
+          });
+        }
+
+        const now = new Date();
+        const user = await findOrCreateUserByWeChat(db, {
+          appId: config.appId,
+          openid: tokenPayload.openid,
+          unionid: tokenPayload.unionid,
+          now,
+        });
+
+        if (user.status !== "active") {
+          return writeJson(response, {
+            status: 403,
+            body: { error: "user_disabled" },
+          });
+        }
+
+        await ensureDevWorkspaceAccess(db, user.id, options);
+        const session = await createPersistentSessionForUser(db, {
+          userId: user.id,
+          now,
+        });
+
+        return redirectWithSessionCookie(response, "/app.html#project", session.token);
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/verify") {
         const body = (await readJsonBody(request)) as {
           challengeId: string;
           phone: string;
           code: string;
+          remember?: boolean;
         };
+        const now = new Date();
         const verified = await verifyPersistentLoginChallenge(db, {
           challengeId: body.challengeId,
           phone: body.phone,
           code: body.code,
-          now: new Date(),
+          now,
+          remember: body.remember !== false,
         });
 
         if (verified.kind !== "verified") {
@@ -9023,7 +10875,58 @@ export function createPhoneAuthDevServer(
               expiresAt: verified.session.expiresAt.toISOString(),
             },
           },
-          cookies: [sessionCookie(verified.token)],
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/auth/password/login") {
+        const body = (await readJsonBody(request)) as {
+          account: string;
+          password: string;
+          remember?: boolean;
+        };
+        const now = new Date();
+
+        let verified: Awaited<ReturnType<typeof verifyPersistentPasswordLogin>>;
+        try {
+          verified = await verifyPersistentPasswordLogin(db, {
+            account: String(body.account ?? ""),
+            password: String(body.password ?? ""),
+            now,
+            remember: body.remember !== false,
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message === "invalid_phone") {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "invalid_phone" },
+            });
+          }
+          throw error;
+        }
+
+        if (verified.kind !== "verified") {
+          return writeJson(response, {
+            status: verified.kind === "user_disabled" ? 403 : 401,
+            body: { error: verified.kind },
+          });
+        }
+
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            user: {
+              id: verified.user.id,
+              phone: verified.user.phone,
+            },
+            session: {
+              id: verified.session.id,
+              expiresAt: verified.session.expiresAt.toISOString(),
+            },
+          },
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
         });
       }
 
@@ -9053,6 +10956,70 @@ export function createPhoneAuthDevServer(
               id: session!.id,
               expiresAt: session!.expiresAt.toISOString(),
             },
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/creator/storyboard-prompt/packages") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+        const service = createAdminStoryboardPromptService({ db });
+        const result = await service.listPackages({
+          packageType: url.searchParams.get("package_type"),
+          keyword: url.searchParams.get("keyword"),
+          status: url.searchParams.get("status") ?? "enabled",
+          pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
+        });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            packages: result.data,
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/creator/project-styles") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+        const service = createAdminImagePromptService({ db });
+        const result = await service.listStyles({
+          category: url.searchParams.get("category"),
+          modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
+          keyword: url.searchParams.get("keyword"),
+          status: url.searchParams.get("status") ?? "enabled",
+          pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
+        });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            styles: result.data.map((style) => ({
+              id: style.id,
+              name: style.name,
+              code: style.code,
+              coverImageUrl: style.coverImageUrl,
+              cover_image_url: style.cover_image_url,
+              status: style.status,
+              sortOrder: style.sort_order,
+              sort_order: style.sort_order,
+            })),
           },
         });
       }
@@ -9403,6 +11370,7 @@ export function createPhoneAuthDevServer(
             fileName: body.fileName,
             contentType: body.contentType,
             sizeBytes: body.sizeBytes ?? null,
+            purpose: body.purpose,
           });
           if (!uploadPolicy.ok) {
             return writeJson(
@@ -9516,6 +11484,7 @@ export function createPhoneAuthDevServer(
             fileName: session.originalFileName,
             contentType: request.headers["content-type"] ?? session.contentType,
             sizeBytes: bytes.byteLength,
+            purpose: session.purpose,
           });
           if (!uploadPolicy.ok) {
             response.statusCode = uploadPolicy.errorCode === "upload_file_too_large" ? 413 : 400;
@@ -9643,6 +11612,8 @@ export function createPhoneAuthDevServer(
       if (
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
+        pathname.startsWith("/api/canvas/") ||
+        pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
         const authenticated = await findAuthenticatedUser(
@@ -9655,6 +11626,168 @@ export function createPhoneAuthDevServer(
             response,
             envelopedError(401, "unauthenticated", "session expired"),
           );
+        }
+
+        const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
+        if (request.method === "GET" && canvasNodeRunsMatch) {
+          const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
+          const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.projectView,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          return writeJson(response, enveloped(200, await listCanvasNodeRuns(db, {
+            organizationId: actor.organizationId,
+            canvasProjectId,
+            nodeKey,
+          })));
+        }
+
+        const canvasArtifactSelectMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/artifacts\/([^/]+)\/select$/);
+        if (request.method === "POST" && canvasArtifactSelectMatch) {
+          const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
+          const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
+          const body = (await readJsonBody(request)) as { selectionRole?: unknown };
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.projectEdit,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          try {
+            return writeJson(response, enveloped(200, {
+              artifact: await selectCanvasNodeArtifact(db, {
+                organizationId: actor.organizationId,
+                canvasProjectId,
+                artifactId,
+                selectionRole: typeof body.selectionRole === "string" ? body.selectionRole : "current",
+                userId: authenticated.user.id,
+                now: new Date(),
+              }),
+            }));
+          } catch (error) {
+            const status = canvasErrorToStatus(error);
+            return writeJson(response, envelopedError(status, error instanceof CanvasDocumentError ? error.code : "canvas_artifact_select_failed", error instanceof Error ? error.message : "canvas artifact select failed"));
+          }
+        }
+
+        const canvasNodeRunMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/run$/);
+        if (request.method === "POST" && canvasNodeRunMatch) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "idempotency key required"));
+          }
+          const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
+          const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? undefined,
+            canvasProjectId,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          const node = canvas.document.nodes.find((item) => item.id === nodeKey);
+          if (!node) {
+            return writeJson(response, envelopedError(404, "canvas_node_not_found", "canvas node not found"));
+          }
+          const episodeId = await resolveCanvasRunEpisodeId(db, {
+            organizationId: actor.organizationId,
+            projectId: canvas.projectId,
+            requestedEpisodeId: body.episodeId,
+          });
+          if (!episodeId) {
+            return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
+          }
+          const mediaKind = String(body.kind ?? body.mediaKind ?? node.data?.mediaKind ?? "image") === "video" ? "video" : "image";
+          const run = await createCanvasNodeRun(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId!,
+            canvasProjectId,
+            nodeKey,
+            idempotencyKey,
+            status: "created",
+            mediaKind,
+            modelCode: typeof body.model === "string" ? body.model : typeof body.modelCode === "string" ? body.modelCode : null,
+            episodeId,
+            targetType: "canvas",
+            targetId: nodeKey,
+            inputSnapshot: {
+              ...body,
+              canvasProjectId,
+              projectId: canvas.projectId,
+              nodeKey,
+              nodeData: node.data ?? {},
+            },
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          const generationBody = {
+            ...body,
+            targetType: "canvas",
+            targetId: nodeKey,
+            canvasProjectId,
+            canvasNodeId: nodeKey,
+          };
+          const result = await createEpisodeGenerationTask(db, {
+            kind: mediaKind,
+            episodeId,
+            body: generationBody,
+            idempotencyKey,
+            authenticated,
+            runtime: storageRuntime,
+            env: runtimeEnv,
+            fetchImpl: options.fetchImpl,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
+          if (!result.body) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          }
+          const taskId = readString((result.body as Record<string, unknown>).taskId);
+          await markCanvasNodeRunQueued(db, {
+            organizationId: actor.organizationId,
+            runId: run.id,
+            taskId: taskId || null,
+            now: new Date(),
+          });
+          await recordCanvasHistoryFromGenerationResponse(db, {
+            responseBody: result.body,
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(result.status, {
+            ...result.body as Record<string, unknown>,
+            runId: run.id,
+            runNo: run.runNo,
+            canvasProjectId,
+            nodeKey,
+          }));
         }
 
         if (
@@ -9678,7 +11811,7 @@ export function createPhoneAuthDevServer(
               envelopedError(
                 result.status,
                 String(body.error ?? "project_detail_failed"),
-                "椤圭洰璇︽儏鍔犺浇澶辫触",
+                "妞ゅ湱娲扮拠锔藉剰閸旂姾娴囨径杈Е",
               ),
             );
           }
@@ -9736,7 +11869,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_create_failed"), "鍓ч泦鍒涘缓澶辫触"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_create_failed"), "閸撗囨肠閸掓稑缂撴径杈Е"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -9771,7 +11904,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_update_failed"), "鍓ч泦鏇存柊澶辫触"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_update_failed"), "閸撗囨肠閺囧瓨鏌婃径杈Е"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -9800,7 +11933,7 @@ export function createPhoneAuthDevServer(
             const legacyBody = result.body as Record<string, unknown>;
             return writeJson(
               response,
-              envelopedError(result.status, String(legacyBody.error ?? "episode_delete_failed"), "鍓ч泦鍒犻櫎澶辫触"),
+              envelopedError(result.status, String(legacyBody.error ?? "episode_delete_failed"), "閸撗囨肠閸掔娀娅庢径杈Е"),
             );
           }
           return writeJson(response, enveloped(200, result.body));
@@ -9825,7 +11958,7 @@ export function createPhoneAuthDevServer(
             [episodeId],
           );
           if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "鍓ч泦涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
           }
           const result = await creatorApplication.getProjectDetail({
             user: {
@@ -9836,7 +11969,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
           }
           const detail = normalizeProjectDetailForEpisodeContract(result.body as Record<string, unknown>);
           const project = detail.project as Record<string, unknown>;
@@ -9928,7 +12061,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!items) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
@@ -9949,7 +12082,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             return writeJson(response, envelopedError(400, result.error, "Asset name is required"));
@@ -9973,7 +12106,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             const message =
@@ -10008,7 +12141,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result?.asset) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10029,7 +12162,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10052,7 +12185,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             const status = result.error === "asset_library_duplicate" ? 409 : 400;
@@ -10079,7 +12212,7 @@ export function createPhoneAuthDevServer(
             [episodeId],
           );
           if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const result = await creatorApplication.getProjectDetail({
             user: {
@@ -10090,10 +12223,47 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
           }
           const detail = result.body as Record<string, unknown>;
           const shots = Array.isArray(detail.shots) ? detail.shots : [];
+          const shotIds = shots
+            .map((shot) => shot && typeof shot === "object" ? (shot as Record<string, unknown>).id : null)
+            .filter((shotId): shotId is string => typeof shotId === "string" && shotId.length > 0);
+          const draftRows = shotIds.length
+            ? await db.query<{
+                target_id: string;
+                prompt: string;
+                mode: "image" | "video" | "lip_sync";
+                payload_json: Record<string, unknown> | null;
+                updated_at: Date | string;
+              }>(
+                `
+                  SELECT target_id, prompt, mode, payload_json, updated_at
+                    FROM episode_generation_drafts
+                   WHERE episode_id = $1
+                     AND target_type = 'storyboard'
+                     AND target_id = ANY($2::uuid[])
+                `,
+                [episodeId, shotIds],
+              )
+            : { rows: [] };
+          const draftsByShotId = new Map<string, Array<{
+            prompt: string;
+            mode: "image" | "video" | "lip_sync";
+            payload: Record<string, unknown>;
+            updatedAt: Date | string;
+          }>>();
+          for (const draft of draftRows.rows) {
+            const drafts = draftsByShotId.get(draft.target_id) ?? [];
+            drafts.push({
+              prompt: draft.prompt ?? "",
+              mode: draft.mode,
+              payload: draft.payload_json ?? {},
+              updatedAt: draft.updated_at,
+            });
+            draftsByShotId.set(draft.target_id, drafts);
+          }
           const items = shots
             .map((shot) => shot && typeof shot === "object" ? shot as Record<string, unknown> : {})
             .filter((shot) => shot.episodeId === episodeId)
@@ -10105,6 +12275,8 @@ export function createPhoneAuthDevServer(
                 ? videoVersions.find((version) => version?.id === currentVideoFileId) ?? null
                 : null;
               return {
+                id: shot.id ?? null,
+                shotId: shot.id ?? null,
                 storyboardId: shot.id ?? null,
                 episodeId,
                 indexNo: index + 1,
@@ -10130,6 +12302,7 @@ export function createPhoneAuthDevServer(
                 imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
                 videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
                 assetRefs: Array.isArray(shot.references) ? shot.references : [],
+                generationDrafts: typeof shot.id === "string" ? draftsByShotId.get(shot.id) ?? [] : [],
                 sortOrder: shot.sortOrder ?? index,
               };
             });
@@ -10154,6 +12327,22 @@ export function createPhoneAuthDevServer(
 
         if (
           request.method === "GET" &&
+          pathname === "/api/generation-config"
+        ) {
+          const credit = await getUserCreditBalance(db, authenticated.user.id);
+          return writeJson(
+            response,
+            enveloped(200, {
+              ...(await buildGenerationConfigModelCatalog(db)),
+              creditBalance: credit.creditBalance,
+              availableCredits: credit.availableCredits,
+              reservedCredits: credit.reservedCredits,
+            }),
+          );
+        }
+
+        if (
+          request.method === "GET" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.endsWith("/generation-config")
         ) {
@@ -10166,13 +12355,10 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!context) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "鍓ч泦涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
           }
-          const seedanceEnabled = isEnabled(runtimeEnv.SEEDANCE_PROVIDER_ENABLED);
           const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
-          const seedanceModelConfig = seedanceEnabled
-            ? await findActiveAiModelConfigByCode(db, "seedance-i2v-pro")
-            : undefined;
+          const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
           const imageModels = activeImageModels.length
             ? activeImageModels.map(modelConfigToGenerationConfigModel)
             : [
@@ -10188,30 +12374,36 @@ export function createPhoneAuthDevServer(
                   disabled: false,
                 },
               ];
-          const videoModel = seedanceEnabled && seedanceModelConfig
-            ? modelConfigToGenerationConfigModel(seedanceModelConfig)
-            : {
-                modelCode: "video_mock_1",
-                modelLabel: "鍥哄畾瑙嗛 Mock",
-                providerGroup: "Mock",
-                pipeline: "mock",
-                supportedModes: ["video"],
-                supportedRatios: ["16:9", "9:16"],
-                supportedQuality: ["720p"],
-                displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
-                disabled: false,
-              };
+          const videoModels = activeVideoModels.length
+            ? activeVideoModels.map(modelConfigToGenerationConfigModel)
+            : [
+              {
+                  modelCode: "video_mock_1",
+                  modelLabel: "固定视频 Mock",
+                  providerGroup: "Mock",
+                  pipeline: "mock",
+                  supportedModes: ["video"],
+                  supportedRatios: ["16:9", "9:16"],
+                  supportedQuality: ["720p"],
+                  displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
+                  disabled: false,
+                },
+              ];
+          const defaultVideoModel =
+            videoModels.find((model) => model.videoCategory === "reference") ??
+            videoModels[0] ??
+            null;
           return writeJson(
             response,
             enveloped(200, {
               models: [
                 ...imageModels,
-                videoModel,
+                ...videoModels,
               ],
               presets: [],
               uploadLimits: episodeUploadLimits,
               defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
-              defaultVideoModelCode: videoModel.modelCode,
+              defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
               creditBalance: context.creditBalance,
             }),
           );
@@ -10224,7 +12416,7 @@ export function createPhoneAuthDevServer(
         ) {
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
-            return writeJson(response, envelopedError(400, "idempotency_key_required", "缂哄皯 Idempotency-Key"));
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "缂傚搫鐨?Idempotency-Key"));
           }
           const episodeId = decodeURIComponent(pathname.split("/").at(3) ?? "");
           const kind = pathname.endsWith("/generation/video-tasks") ? "video" : "image";
@@ -10243,18 +12435,18 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             });
             if (!result.body) {
-              return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+              return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
             }
             return writeJson(response, enveloped(result.status, result.body));
           } catch (error) {
             if (error instanceof IdempotencyConflictError) {
-              return writeJson(response, envelopedError(409, error.code, "骞傜瓑閿凡鐢ㄤ簬涓嶅悓璇锋眰"));
+              return writeJson(response, envelopedError(409, error.code, "request conflict"));
             }
             if (error instanceof IdempotencyProcessingError) {
               return writeJson(response, envelopedError(202, error.code, "request is still processing"));
             }
             if (error instanceof InsufficientCreditsError) {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "绉垎涓嶈冻"));
+              return writeJson(response, envelopedError(402, "insufficient_credits", "缁夘垰鍨庢稉宥堝喕"));
             }
             throw error;
           }
@@ -10276,7 +12468,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             return writeJson(response, envelopedError(400, result.error, "uploaded file cannot be bound to this target"));
@@ -10304,7 +12496,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             return writeJson(response, envelopedError(400, result.error, "media file is not valid for this operation"));
@@ -10324,7 +12516,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(assetId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_asset_conversation_target", "invalid asset conversation target"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -10339,7 +12531,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10352,11 +12544,14 @@ export function createPhoneAuthDevServer(
         ) {
           const parts = pathname.split("/");
           const episodeId = decodeURIComponent(parts.at(3) ?? "");
-          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
-          if (!isUuid(episodeId) || !isUuid(storyboardId)) {
+          const rawStoryboardId = decodeURIComponent(parts.at(5) ?? "");
+          const storyboardId = isUuid(episodeId)
+            ? await resolveEpisodeStoryboardConversationId(db, episodeId, rawStoryboardId)
+            : null;
+          if (!isUuid(episodeId) || !storyboardId) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "invalid storyboard conversation target"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -10371,7 +12566,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10388,7 +12583,7 @@ export function createPhoneAuthDevServer(
           if (!isUuid(episodeId) || !isUuid(assetId)) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_asset_conversation_target", "璧勪骇瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_asset_conversation_target", "invalid asset conversation target"),
             );
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -10400,7 +12595,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10413,11 +12608,14 @@ export function createPhoneAuthDevServer(
         ) {
           const parts = pathname.split("/");
           const episodeId = decodeURIComponent(parts.at(3) ?? "");
-          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
-          if (!isUuid(episodeId) || !isUuid(storyboardId)) {
+          const rawStoryboardId = decodeURIComponent(parts.at(5) ?? "");
+          const storyboardId = isUuid(episodeId)
+            ? await resolveEpisodeStoryboardConversationId(db, episodeId, rawStoryboardId)
+            : null;
+          if (!isUuid(episodeId) || !storyboardId) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "invalid storyboard conversation target"),
             );
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -10429,7 +12627,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10476,12 +12674,15 @@ export function createPhoneAuthDevServer(
         ) {
           const parts = pathname.split("/");
           const episodeId = decodeURIComponent(parts.at(3) ?? "");
-          const storyboardId = decodeURIComponent(parts.at(5) ?? "");
+          const rawStoryboardId = decodeURIComponent(parts.at(5) ?? "");
           const taskId = decodeURIComponent(parts.at(8) ?? "");
-          if (!isUuid(episodeId) || !isUuid(storyboardId) || !taskId.trim()) {
+          const storyboardId = isUuid(episodeId)
+            ? await resolveEpisodeStoryboardConversationId(db, episodeId, rawStoryboardId)
+            : null;
+          if (!isUuid(episodeId) || !storyboardId || !taskId.trim()) {
             return writeJson(
               response,
-              envelopedError(400, "invalid_storyboard_conversation_target", "鍒嗛暅瀵硅瘽鐩爣鏃犳晥"),
+              envelopedError(400, "invalid_storyboard_conversation_target", "invalid storyboard conversation target"),
             );
           }
           const mediaMode: AssetConversationMediaMode =
@@ -10497,7 +12698,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10520,7 +12721,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             const status = result.error === "file_in_use" ? 409 : 400;
@@ -10553,7 +12754,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
             return writeJson(response, envelopedError(400, result.error, "media file is not valid for this operation"));
@@ -10577,7 +12778,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "鍙鍑虹殑鍘熻棰戜笉瀛樺湪"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
         }
@@ -10595,7 +12796,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!context) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const taskRows = await db.query<{ id: string }>(
             `
@@ -10646,7 +12847,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!taskContext) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const now = new Date();
           await settleTimedOutEpisodeGenerationTask(db, {
@@ -10672,8 +12873,13 @@ export function createPhoneAuthDevServer(
             now,
           });
           if (!task) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
+          await recordCanvasHistoryFromGenerationResponse(db, {
+            responseBody: task,
+            userId: authenticated.user.id,
+            now,
+          });
           return writeJson(response, enveloped(200, task));
         }
 
@@ -10699,7 +12905,7 @@ export function createPhoneAuthDevServer(
             if (!isUuid(episodeId) || (targetType !== "asset" && targetType !== "storyboard") || !targetId) {
               return writeJson(
                 response,
-                envelopedError(400, "invalid_generation_draft_target", "鑽夌鐩爣鏃犳晥"),
+                envelopedError(400, "invalid_generation_draft_target", "invalid generation draft target"),
               );
             }
             const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -10724,7 +12930,7 @@ export function createPhoneAuthDevServer(
             request.method === "GET" &&
             pathname.startsWith("/api/generation-tasks/")
           ) {
-          return writeJson(response, envelopedError(404, "resource_not_found", "璧勬簮涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎"));
+          return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
         }
       }
 
@@ -10769,6 +12975,17 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
+          const adminUsers = createAdminUserService({ db });
+          return writeJson(response, {
+            status: 200,
+            body: await adminUsers.listUserCreditLedger({
+              userId: authenticated.user.id,
+              pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+            }),
+          });
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/team/members") {
           const body = (await readJsonBody(request)) as {
             teamAccount?: string | null;
@@ -10793,14 +13010,24 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/creator/state") {
+          const stateResponse = await creatorApplication.getState({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+          });
+          const credit = await getUserCreditBalance(db, authenticated.user.id);
           return writeJson(
             response,
-            await creatorApplication.getState({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
+            {
+              ...stateResponse,
+              body: {
+                ...(stateResponse.body && typeof stateResponse.body === "object" ? stateResponse.body : {}),
+                creditBalance: credit.creditBalance,
+                availableCredits: credit.availableCredits,
+                reservedCredits: credit.reservedCredits,
               },
-            }),
+            },
           );
         }
 
@@ -10851,6 +13078,155 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const projectCanvasMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/canvas$/);
+        if (projectCanvasMatch) {
+          const projectId = decodeURIComponent(projectCanvasMatch[1] ?? "");
+          if (request.method !== "GET" && request.method !== "PUT") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
+            now,
+          });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
+          try {
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, {
+                canvas: await getOrCreateProjectCanvas(db, {
+                  organizationId: actor.organizationId,
+                  workspaceId: actor.workspaceId,
+                  projectId,
+                  userId: authenticated.user.id,
+                  now,
+                }),
+              }));
+            }
+            const body = (await readJsonBody(request)) as {
+              clientRevision?: unknown;
+              serverRevision?: unknown;
+              document?: unknown;
+              events?: Array<Record<string, unknown>>;
+            };
+            return writeJson(response, enveloped(200, {
+              canvas: await saveProjectCanvas(db, {
+                organizationId: actor.organizationId,
+                workspaceId: actor.workspaceId,
+                projectId,
+                userId: authenticated.user.id,
+                clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
+                document: body.document,
+                events: Array.isArray(body.events) ? body.events : [],
+                now,
+              }),
+            }));
+          } catch (error) {
+            if (error instanceof CanvasConflictError) {
+              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+                serverRevision: error.serverRevision,
+                serverDocument: error.serverDocument as Record<string, unknown>,
+              }));
+            }
+            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
+        if (pathname === "/api/creator/canvas-projects") {
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
+            now: new Date(),
+          });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
+          const ownedProjects = await listCanvasProjects(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+          });
+
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              projects: ownedProjects.map(serializeCanvasProject),
+            }));
+          }
+
+          if (request.method === "POST") {
+            const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
+            const nextIndex = ownedProjects.length + 1;
+            const project = await createCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId,
+              userId: authenticated.user.id,
+              title: normalizeCanvasProjectTitle(body.title, `画布项目 ${nextIndex}`),
+              status: String(body.status ?? "草稿").trim() || "草稿",
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(201, {
+              project: serializeCanvasProject(project),
+            }));
+          }
+        }
+
+        const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
+        if (canvasProjectMatch) {
+          const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: devWorkspaceId,
+            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
+            now: new Date(),
+          });
+          const project = await findCanvasProjectRecord(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+            projectId,
+          });
+
+          if (!project) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
+            const updated = await updateCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              userId: authenticated.user.id,
+              projectId: project.id,
+              title: Object.prototype.hasOwnProperty.call(body, "title")
+                ? normalizeCanvasProjectTitle(body.title, project.title)
+                : undefined,
+              status: Object.prototype.hasOwnProperty.call(body, "status")
+                ? (String(body.status ?? project.status).trim() || project.status)
+                : undefined,
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, {
+              project: serializeCanvasProject(updated ?? project),
+            }));
+          }
+
+          if (request.method === "DELETE") {
+            await deleteCanvasProjectRecord(db, {
+              organizationId: actor.organizationId,
+              userId: authenticated.user.id,
+              projectId: project.id,
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, {
+              deletedProjectId: project.id,
+            }));
+          }
+        }
+
         if (
           request.method === "GET" &&
           pathname.startsWith("/api/creator/projects/") &&
@@ -10889,6 +13265,143 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const scriptReaderSectionsMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/script-reader-sections(?:\/([^/]+))?$/);
+        if (scriptReaderSectionsMatch) {
+          const projectId = decodeURIComponent(scriptReaderSectionsMatch[1] ?? "");
+          const sectionId = scriptReaderSectionsMatch[2]
+            ? decodeURIComponent(scriptReaderSectionsMatch[2])
+            : "";
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+
+          if (request.method === "GET" && !sectionId) {
+            return writeJson(
+              response,
+              await creatorApplication.listScriptReaderSections({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                scriptId: url.searchParams.get("scriptId"),
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "POST" && !sectionId) {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              body?: string | null;
+              scriptInputText?: string | null;
+              scriptId?: string | null;
+              createNewScript?: boolean | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.createScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (!isUuid(sectionId)) {
+            return writeJson(response, envelopedError(400, "invalid_section_id", "section id is invalid"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              body?: string | null;
+              status?: "draft" | "ready" | "archived" | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.updateScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                sectionId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "DELETE") {
+            return writeJson(
+              response,
+              await creatorApplication.deleteScriptReaderSection({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                sectionId,
+                now: new Date(),
+              }),
+            );
+          }
+        }
+
+        const scriptCardMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/scripts\/([^/]+)$/);
+        if (scriptCardMatch) {
+          const projectId = decodeURIComponent(scriptCardMatch[1] ?? "");
+          const scriptId = decodeURIComponent(scriptCardMatch[2] ?? "");
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          if (!isUuid(scriptId)) {
+            return writeJson(response, envelopedError(400, "invalid_script_id", "script id is invalid"));
+          }
+
+          if (request.method === "PATCH") {
+            const body = (await readJsonBody(request)) as {
+              title?: string | null;
+              coverImageUrl?: string | null;
+              uploadSessionId?: string | null;
+              storageObjectId?: string | null;
+            };
+            return writeJson(
+              response,
+              await creatorApplication.updateScriptCard({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                scriptId,
+                body,
+                now: new Date(),
+              }),
+            );
+          }
+
+          if (request.method === "DELETE") {
+            return writeJson(
+              response,
+              await creatorApplication.deleteScriptCard({
+                user: {
+                  id: authenticated.user.id,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                scriptId,
+                now: new Date(),
+              }),
+            );
+          }
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/project/select") {
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
@@ -10906,6 +13419,282 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const aiStoryboardPreviewCommitMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-storyboard-preview\/commit$/);
+        if (request.method === "POST" && aiStoryboardPreviewCommitMatch) {
+          const projectId = decodeURIComponent(aiStoryboardPreviewCommitMatch[1]);
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          const body = (await readJsonBody(request)) as {
+            episodeTitle?: string | null;
+            commitPayload?: {
+              scriptText?: string | null;
+              scenes?: Array<Record<string, unknown>> | null;
+              characters?: Array<Record<string, unknown>> | null;
+              props?: Array<Record<string, unknown>> | null;
+              storyboards?: Array<Record<string, unknown>> | null;
+            } | null;
+          };
+          return writeJson(
+            response,
+            await creatorApplication.commitAiStoryboardPreview({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              projectId,
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
+        const aiStoryboardPreviewMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-storyboard-preview$/);
+        const aiScriptAnalysisMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-script-analysis$/);
+        if (request.method === "POST" && aiScriptAnalysisMatch) {
+          const projectId = decodeURIComponent(aiScriptAnalysisMatch[1]);
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as {
+            scriptText?: string | null;
+            packages?: {
+              genrePackageId?: string | null;
+              emotionPackageId?: string | null;
+            } | null;
+          };
+          const scriptText = String(body.scriptText ?? "").trim();
+          const genrePackageId = String(body.packages?.genrePackageId ?? "");
+          const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
+          if (!scriptText) {
+            return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
+          }
+          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+            return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
+          }
+
+          await ensureDefaultStoryboardPromptData(db);
+          const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
+            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+          ]);
+          if (!genrePackage || !emotionPackage) {
+            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          }
+
+          const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
+          response.statusCode = 200;
+          response.setHeader("content-type", "text/event-stream; charset=utf-8");
+          response.setHeader("cache-control", "no-cache, no-transform");
+          response.setHeader("connection", "keep-alive");
+          response.flushHeaders?.();
+          try {
+            for await (const event of analysisService.generateScriptStream({
+              projectId,
+              createdByUserId: authenticated.user.id,
+              scriptText,
+              packages: {
+                genrePrompt: genrePackage.prompt_content,
+                emotionPrompt: emotionPackage.prompt_content,
+                tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+              },
+            })) {
+              writeSseEvent(response, event.type, event);
+            }
+            response.end();
+          } catch (error) {
+            writeSseEvent(response, "error", {
+              error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+            });
+            response.end();
+          }
+          return;
+        }
+
+        if (request.method === "POST" && aiStoryboardPreviewMatch) {
+          const projectId = decodeURIComponent(aiStoryboardPreviewMatch[1]);
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as {
+            scriptText?: string | null;
+            packages?: {
+              genrePackageId?: string | null;
+              emotionPackageId?: string | null;
+            } | null;
+          };
+          const scriptText = String(body.scriptText ?? "").trim();
+          const genrePackageId = String(body.packages?.genrePackageId ?? "");
+          const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
+          if (!scriptText) {
+            return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
+          }
+          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+            return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
+          }
+
+          await Promise.all([
+            ensureDefaultStoryboardPromptData(db),
+            ensureDefaultScenePromptTemplates(db),
+            ensureDefaultCharacterPromptTemplates(db),
+            ensureDefaultPropPromptTemplates(db),
+            ensureDefaultShotPromptTemplates(db),
+          ]);
+          const [
+            genrePackage,
+            emotionPackage,
+            tabooPackages,
+            sceneTemplate,
+            characterTemplate,
+            propTemplate,
+            shotTemplate,
+          ] = await Promise.all([
+            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+            findDefaultScenePromptTemplateForPreview(db),
+            findDefaultCharacterPromptTemplateForPreview(db),
+            findDefaultPropPromptTemplateForPreview(db),
+            findDefaultShotPromptTemplateForPreview(db),
+          ]);
+          if (!genrePackage || !emotionPackage) {
+            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          }
+          if (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate) {
+            return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
+          }
+
+          const previewInput = {
+            projectId,
+            createdByUserId: authenticated.user.id,
+            scriptText,
+            packages: {
+              genrePrompt: genrePackage.prompt_content,
+              emotionPrompt: emotionPackage.prompt_content,
+              tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+            },
+            templates: {
+              scenePrompt: sceneTemplate.prompt_content,
+              characterPrompt: characterTemplate.prompt_content,
+              propPrompt: propTemplate.prompt_content,
+              shotPrompt: shotTemplate.prompt_content,
+            },
+          };
+          const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });
+          const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("stream") === "1";
+          if (wantsStream) {
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.flushHeaders?.();
+            try {
+              for await (const event of previewService.generatePreviewStream(previewInput)) {
+                if (event.type === "complete") {
+                  writeSseEvent(response, "complete", {
+                    ...event.preview,
+                    selectedPackages: {
+                      genre: { id: genrePackage.id, name: genrePackage.name },
+                      emotion: { id: emotionPackage.id, name: emotionPackage.name },
+                      taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
+                    },
+                  });
+                } else {
+                  writeSseEvent(response, event.type, event);
+                }
+              }
+              response.end();
+            } catch (error) {
+              writeSseEvent(response, "error", {
+                error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
+              });
+              response.end();
+            }
+            return;
+          }
+
+          const preview = await previewService.generatePreview(previewInput);
+          return writeJson(response, enveloped(200, {
+            ...preview,
+            selectedPackages: {
+              genre: { id: genrePackage.id, name: genrePackage.name },
+              emotion: { id: emotionPackage.id, name: emotionPackage.name },
+              taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
+            },
+          }));
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/scripts/import-document") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            title?: string | null;
+            scriptInput?: string | null;
+            scriptUploadSessionId?: string | null;
+            scriptStorageObjectId?: string | null;
+            scriptFileName?: string | null;
+            scriptContentType?: string | null;
+          };
+          if (body.scriptUploadSessionId || body.scriptStorageObjectId) {
+            try {
+              body.scriptInput = await extractScriptInputFromUploadedDocument(db, {
+                sessionToken: authenticated.sessionToken,
+                userId: authenticated.user.id,
+                body,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+            } catch (error) {
+              if (error instanceof ScriptDocumentUploadError) {
+                return writeJson(response, envelopedError(error.status, error.code, error.message));
+              }
+              throw error;
+            }
+          }
+          return writeJson(
+            response,
+            await creatorApplication.importScriptDocument({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body: {
+                title: body.title,
+                scriptInput: String(body.scriptInput ?? ""),
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/scripts") {
+          return writeJson(
+            response,
+            await creatorApplication.listWorkspaceScripts({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+            }),
+          );
+        }
+
         if (request.method === "POST" && pathname === "/api/creator/project/create") {
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
@@ -10913,9 +13702,37 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             name: string;
-            scriptInput: string;
+            scriptInput?: string;
             aspectRatio: string;
             resolution: string;
+            scriptUploadSessionId?: string | null;
+            scriptStorageObjectId?: string | null;
+            scriptFileName?: string | null;
+            scriptContentType?: string | null;
+          };
+          if (body.scriptUploadSessionId || body.scriptStorageObjectId) {
+            try {
+              body.scriptInput = await extractScriptInputFromUploadedDocument(db, {
+                sessionToken: authenticated.sessionToken,
+                userId: authenticated.user.id,
+                body,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+            } catch (error) {
+              if (error instanceof ScriptDocumentUploadError) {
+                return writeJson(response, envelopedError(error.status, error.code, error.message));
+              }
+              throw error;
+            }
+          }
+          const createProjectBody = {
+            name: body.name,
+            scriptInput: String(body.scriptInput ?? ""),
+            aspectRatio: body.aspectRatio,
+            resolution: body.resolution,
           };
           return writeJson(
             response,
@@ -10924,7 +13741,7 @@ export function createPhoneAuthDevServer(
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
-              body,
+              body: createProjectBody,
               idempotencyKey,
               now: new Date(),
             }),
@@ -11262,7 +14079,7 @@ export function createPhoneAuthDevServer(
           const roleFilter = queryUrl.searchParams.get("role") ?? "all";
           const statusFilter = queryUrl.searchParams.get("status") ?? "all";
           const dashboardTab = queryUrl.searchParams.get("tab") ?? "member-consumption";
-          const dateShortcut = queryUrl.searchParams.get("dateShortcut") ?? "浠婂ぉ";
+          const dateShortcut = queryUrl.searchParams.get("dateShortcut") ?? "today";
           const members = Array.isArray((memberResponse.body as Record<string, unknown>).members)
             ? ((memberResponse.body as Record<string, unknown>).members as Array<Record<string, unknown>>)
             : [];
@@ -11537,6 +14354,7 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "POST" && pathname === "/api/creator/shots") {
           const body = (await readJsonBody(request)) as {
+            projectId?: string | null;
             title?: string | null;
             description?: string | null;
             episodeId?: string | null;

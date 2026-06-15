@@ -1,8 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
 
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
 import { applySqlMigrations } from "./migrations.ts";
@@ -14,82 +12,107 @@ export interface DevDatabase extends SqlDatabase {
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    return createLocalDevDb();
+    throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");
   }
 
   const pool = new Pool({
     connectionString,
   });
+  const configuredSchemaName = process.env.DATABASE_SCHEMA?.trim();
+  const autoTestSchemaName = !configuredSchemaName && isTestRuntime()
+    ? `test_${randomUUID().replaceAll("-", "_")}`
+    : undefined;
+  const schemaName = configuredSchemaName || autoTestSchemaName;
 
   try {
-    await ensureFoundationSchema(pool);
+    if (schemaName) {
+      await prepareSchema(pool, schemaName);
+    }
+    const db = createPostgresDatabase(pool, schemaName);
+    await ensureFoundationSchema(db);
+    if (autoTestSchemaName) {
+      return withSchemaCleanup(db, autoTestSchemaName);
+    }
+    return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
-    console.warn(
-      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
+    throw new Error(
+      `PostgreSQL database initialization failed. ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
-    return createLocalDevDb();
   }
-
-  return createPooledDevDatabase(pool);
 }
 
-export function createPooledDevDatabaseForTests(pool: PooledDevDatabasePool): DevDatabase {
-  return createPooledDevDatabase(pool);
-}
-
-function createPooledDevDatabase(pool: PooledDevDatabasePool): DevDatabase {
-  let activeTransactionClient: PooledDevDatabaseClient | null = null;
+export function createPostgresDatabase(pool: Pool, schemaName?: string): DevDatabase {
+  let transactionClient: PoolClient | null = null;
 
   return {
     async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
-      const command = transactionCommand(sql);
-
-      if (command === "begin" && !activeTransactionClient) {
-        const client = await pool.connect();
+      const command = transactionSqlCommand(sql);
+      if (transactionClient) {
         try {
-          const result = await client.query<T>(sql, params);
-          activeTransactionClient = client;
-          return { rows: result.rows as T[] };
-        } catch (error) {
-          client.release();
-          throw error;
-        }
-      }
-
-      if (activeTransactionClient) {
-        const client = activeTransactionClient;
-        try {
-          const result = await client.query<T>(sql, params);
-          return { rows: result.rows as T[] };
+          const result = await transactionClient.query(sql, params);
+          if (command === "commit" || command === "rollback") {
+            transactionClient.release();
+            transactionClient = null;
+          }
+          return {
+            rows: result.rows as T[],
+          };
         } catch (error) {
           if (command === "commit" || command === "rollback") {
-            activeTransactionClient = null;
-            client.release();
+            transactionClient.release();
+            transactionClient = null;
           }
           throw error;
-        } finally {
-          if (
-            (command === "commit" || command === "rollback") &&
-            activeTransactionClient === client
-          ) {
-            activeTransactionClient = null;
-            client.release();
-          }
         }
       }
 
-      const result = await pool.query<T>(sql, params);
-      return { rows: result.rows as T[] };
+      if (command === "begin") {
+        transactionClient = await pool.connect();
+        try {
+          await setSearchPathIfNeeded(transactionClient, schemaName);
+          const result = await transactionClient.query(sql, params);
+          return {
+            rows: result.rows as T[],
+          };
+        } catch (error) {
+          transactionClient.release();
+          transactionClient = null;
+          throw error;
+        }
+      }
+
+      if (!schemaName) {
+        const result = await pool.query(sql, params);
+        return {
+          rows: result.rows as T[],
+        };
+      }
+
+      const client = await pool.connect();
+      try {
+        await setSearchPathIfNeeded(client, schemaName);
+        const result = await client.query(sql, params);
+        return {
+          rows: result.rows as T[],
+        };
+      } finally {
+        client.release();
+      }
     },
     async close() {
-      if (activeTransactionClient) {
-        activeTransactionClient.release();
-        activeTransactionClient = null;
+      if (transactionClient) {
+        transactionClient.release();
+        transactionClient = null;
       }
       await pool.end();
     },
   };
+}
+
+export function createPooledDevDatabaseForTests(pool: PooledDevDatabasePool): DevDatabase {
+  return createPostgresDatabase(pool as unknown as Pool);
 }
 
 interface PooledDevDatabasePool {
@@ -103,35 +126,50 @@ interface PooledDevDatabaseClient {
   release(): void;
 }
 
-type TransactionCommand = "begin" | "commit" | "rollback" | "rollback_to_savepoint" | "other";
+async function setSearchPathIfNeeded(client: PoolClient, schemaName?: string) {
+  if (!schemaName) {
+    return;
+  }
+  await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
+}
 
-function transactionCommand(sql: string): TransactionCommand {
-  const normalized = sql.trim().replace(/;+$/, "").trim().replace(/\s+/g, " ").toUpperCase();
-  if (normalized === "BEGIN" || normalized.startsWith("BEGIN ")) return "begin";
-  if (normalized === "COMMIT") return "commit";
-  if (normalized === "ROLLBACK") return "rollback";
-  if (normalized.startsWith("ROLLBACK TO SAVEPOINT")) return "rollback_to_savepoint";
+function transactionSqlCommand(sql: string) {
+  const normalized = sql.trim().replace(/;+$/, "").trim().replace(/\s+/g, " ").toLowerCase();
+  if (normalized === "begin" || normalized.startsWith("begin ") || normalized === "start transaction") {
+    return "begin";
+  }
+  if (normalized === "commit") {
+    return "commit";
+  }
+  if (normalized === "rollback") {
+    return "rollback";
+  }
   return "other";
 }
 
-async function createLocalDevDb(): Promise<DevDatabase> {
-  const configuredLocalDir = process.env.LOCAL_DATABASE_DIR?.trim();
+async function prepareSchema(pool: Pool, schemaName: string) {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`);
+}
+
+function withSchemaCleanup(db: DevDatabase, schemaName: string): DevDatabase {
+  const close = db.close.bind(db);
+  return {
+    async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
+      return db.query<T>(sql, params);
+    },
+    async close() {
+      try {
+        await db.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
+      } finally {
+        await close();
+      }
+    },
+  };
+}
+
+function isTestRuntime() {
   const callerFile = process.argv[1]?.replaceAll("\\", "/") ?? "";
-  const runningFromSpecFile = /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
-  const ephemeralLocalDir = !configuredLocalDir &&
-      (process.env.NODE_ENV === "test" || runningFromSpecFile)
-    ? `.local/dev-db/test-${randomUUID()}`
-    : null;
-  const localDbPath = resolve(
-    process.cwd(),
-    configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
-  );
-  await mkdir(dirname(localDbPath), { recursive: true });
-  const { PGlite } = await import("@electric-sql/pglite");
-  const db = new PGlite(localDbPath) as DevDatabase;
-  await ensureFoundationSchema(db);
-  console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
-  return db;
+  return process.env.NODE_ENV === "test" || /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
 }
 
 export async function ensureFoundationSchema(db: SqlDatabase) {
@@ -149,12 +187,41 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0009_sms_send_records_backfill.sql" });
   }
 
+  if (!(await columnExists(db, "users", "wechat_openid"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0024_wechat_login_user_fields.sql" });
+  }
+
   if (!(await tableExists(db, "storage_upload_sessions"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
   }
 
+  if ((await tableExists(db, "scripts")) && !(await columnExists(db, "scripts", "deleted_at"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0023_script_card_metadata.sql" });
+  }
+
+  if (!(await tableExists(db, "script_reader_sections"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0022_script_reader_sections.sql" });
+  }
+
   if (!(await tableExists(db, "episode_generation_drafts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+  } else if (
+    (await episodeGenerationDraftColumnsExist(db)) &&
+    ((await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+      "organization_id",
+      "episode_id",
+      "target_type",
+      "target_id",
+    ])) ||
+      !(await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+        "organization_id",
+        "episode_id",
+        "target_type",
+        "target_id",
+        "mode",
+      ])))
+  ) {
+    await ensureEpisodeGenerationDraftModeConstraint(db);
   }
 
   if (!(await tableExists(db, "episode_asset_conversation_threads"))) {
@@ -171,6 +238,21 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "ai_model_config_revisions"))
   ) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0007_ai_model_configs.sql" });
+  } else {
+    if (!(await seedanceModelConfigsCurrent(db))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0020_seedance_video_model_configs.sql" });
+    }
+    if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0021_aliyun_bailian_happyhorse_video_model.sql" });
+    }
+    if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0025_jimeng_image_model_configs.sql" });
+    }
+    if (!(await gptImageReferenceModelConfigsCurrent(db))) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0027_gpt_image_reference_model_config.sql" });
+    }
+    await ensureHappyHorseResolutionConfig(db);
+    await ensureVideoModelCategories(db);
   }
   await ensureMembershipPriorityModelMetadata(db);
 
@@ -180,6 +262,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (
     !(await tableExists(db, "organization_entitlements")) ||
+    !(await tableExists(db, "library_assets")) ||
+    !(await tableExists(db, "library_asset_versions")) ||
     !(await tableExists(db, "team_member_groups")) ||
     !(await tableExists(db, "team_member_profiles")) ||
     !(await tableExists(db, "team_project_assignments")) ||
@@ -188,6 +272,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "team_plan_limits"))
   ) {
     await ensureLegacyTenantUniqueConstraints(db);
+    await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
 
@@ -223,10 +308,24 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
+  } else {
+    if (!(await columnExists(db, "storyboard_prompt_packages", "cover_image_url"))) {
+      await db.query("ALTER TABLE storyboard_prompt_packages ADD COLUMN cover_image_url text NULL");
+    }
+    if (await needsStoryboardPromptCleanup(db)) {
+      await applySqlMigrations(db, process.cwd(), { fromName: "0017_remove_deprecated_prompt_categories.sql" });
+    }
   }
 
   if (!(await tableExists(db, "image_prompt_styles"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0012_image_prompt_styles.sql" });
+  } else {
+    if (!(await columnExists(db, "image_prompt_styles", "cover_image_url"))) {
+      await db.query("ALTER TABLE image_prompt_styles ADD COLUMN cover_image_url text NULL");
+    }
+    if (!(await columnExists(db, "image_prompt_styles", "is_default"))) {
+      await db.query("ALTER TABLE image_prompt_styles ADD COLUMN is_default boolean NOT NULL DEFAULT false");
+    }
   }
 
   if (!(await tableExists(db, "character_prompt_templates"))) {
@@ -236,6 +335,59 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   if (!(await tableExists(db, "scene_prompt_templates"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0015_scene_prompt_templates.sql" });
   }
+
+  if (!(await tableExists(db, "shot_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0016_shot_prompt_templates.sql" });
+  }
+
+  if (!(await tableExists(db, "prop_prompt_templates"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0018_prop_prompt_templates.sql" });
+  }
+
+  if (!(await tableExists(db, "creator_canvas_projects"))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0026_creator_canvas_projects.sql" });
+  } else {
+    await ensureStandaloneCanvasProjectSchema(db);
+  }
+}
+
+async function ensureStandaloneCanvasProjectSchema(db: SqlDatabase) {
+  await db.query("ALTER TABLE creator_canvas_projects ALTER COLUMN project_id DROP NOT NULL");
+  if (await creatorCanvasProjectIndexCurrent(db)) {
+    return;
+  }
+
+  await db.query("SELECT pg_advisory_lock(hashtext('creator_canvas_projects_project_uidx_repair'))");
+  try {
+    if (await creatorCanvasProjectIndexCurrent(db)) {
+      return;
+    }
+    await db.query("DROP INDEX IF EXISTS creator_canvas_projects_project_uidx");
+    await db.query(
+      `
+        CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_projects_project_uidx
+        ON creator_canvas_projects (organization_id, project_id)
+        WHERE deleted_at IS NULL AND project_id IS NOT NULL
+      `,
+    );
+  } finally {
+    await db.query("SELECT pg_advisory_unlock(hashtext('creator_canvas_projects_project_uidx_repair'))");
+  }
+}
+
+async function creatorCanvasProjectIndexCurrent(db: SqlDatabase) {
+  const result = await db.query<{ indexdef: string }>(
+    `
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'creator_canvas_projects'
+        AND indexname = 'creator_canvas_projects_project_uidx'
+      LIMIT 1
+    `,
+  );
+  const indexDef = result.rows[0]?.indexdef ?? "";
+  return /\bdeleted_at IS NULL\b/i.test(indexDef) && /\bproject_id IS NOT NULL\b/i.test(indexDef);
 }
 
 async function ensurePaymentProviderConstraints(db: SqlDatabase) {
@@ -500,6 +652,55 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
   `);
 }
 
+async function ensureLibraryAssetTables(db: SqlDatabase) {
+  await executeSchemaPatch(db, `
+    CREATE TABLE IF NOT EXISTS library_assets (
+      id uuid PRIMARY KEY,
+      scope text NOT NULL CHECK (scope IN ('official', 'team', 'personal')),
+      organization_id uuid NULL REFERENCES organizations(id),
+      workspace_id uuid NULL REFERENCES workspaces(id),
+      created_by_user_id uuid NULL REFERENCES users(id),
+      asset_type text NOT NULL CHECK (asset_type IN ('character', 'scene', 'prop', 'image', 'video')),
+      category text NOT NULL CHECK (category IN ('character', 'scene', 'prop', 'image', 'video')),
+      folder text NOT NULL,
+      name text NOT NULL,
+      description text NULL,
+      tags_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+      status text NOT NULL CHECK (status IN ('active', 'archived')),
+      requires_pro_entitlement boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (
+        (scope = 'official' AND organization_id IS NULL AND workspace_id IS NULL AND created_by_user_id IS NULL)
+        OR (scope = 'team' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL)
+        OR (scope = 'personal' AND organization_id IS NOT NULL AND workspace_id IS NOT NULL AND created_by_user_id IS NOT NULL)
+      ),
+      FOREIGN KEY (organization_id, workspace_id)
+        REFERENCES workspaces (organization_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS library_assets_scope_idx
+      ON library_assets (scope, organization_id, workspace_id, category, folder, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS library_asset_versions (
+      id uuid PRIMARY KEY,
+      library_asset_id uuid NOT NULL REFERENCES library_assets(id),
+      version_number integer NOT NULL CHECK (version_number >= 1),
+      storage_object_key text NOT NULL,
+      preview_url text NULL,
+      mime_type text NOT NULL,
+      width integer NOT NULL CHECK (width >= 1),
+      height integer NOT NULL CHECK (height >= 1),
+      metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (library_asset_id, version_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS library_asset_versions_asset_idx
+      ON library_asset_versions (library_asset_id, version_number DESC);
+  `);
+}
+
 async function executeSchemaPatch(db: SqlDatabase, sql: string) {
   const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
   if (typeof exec === "function") {
@@ -507,9 +708,63 @@ async function executeSchemaPatch(db: SqlDatabase, sql: string) {
     return;
   }
 
-  for (const statement of sql.split(/;\s*(?:\r?\n|$)/).map((part) => part.trim()).filter(Boolean)) {
-    await db.query(`${statement};`);
+  await db.query(sql);
+}
+
+async function ensureEpisodeGenerationDraftModeConstraint(db: SqlDatabase) {
+  const legacyConstraints = await uniqueConstraintNamesForColumns(db, "episode_generation_drafts", [
+    "organization_id",
+    "episode_id",
+    "target_type",
+    "target_id",
+  ]);
+
+  for (const constraintName of legacyConstraints) {
+    await db.query(`ALTER TABLE episode_generation_drafts DROP CONSTRAINT ${quoteIdentifier(constraintName)}`);
   }
+
+  if (
+    !(await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
+      "organization_id",
+      "episode_id",
+      "target_type",
+      "target_id",
+      "mode",
+    ]))
+  ) {
+    await db.query(`
+      ALTER TABLE episode_generation_drafts
+      ADD CONSTRAINT episode_generation_drafts_mode_unique
+      UNIQUE (organization_id, episode_id, target_type, target_id, mode)
+    `);
+  }
+}
+
+async function needsStoryboardPromptCleanup(db: SqlDatabase) {
+  if (!(await tableExists(db, "storyboard_prompt_templates"))) return false;
+
+  const columnCheck = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'storyboard_prompt_templates'
+        AND column_name = 'output_package_id'
+    `,
+  );
+  if (columnCheck.rows[0]?.is_nullable === "NO") return true;
+
+  const deprecatedPackages = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM storyboard_prompt_packages
+        WHERE package_type IN ('camera', 'output')
+          AND deleted_at IS NULL
+      ) AS exists
+    `,
+  );
+  return deprecatedPackages.rows[0]?.exists === true;
 }
 
 async function tableExists(db: SqlDatabase, tableName: string) {
@@ -518,7 +773,7 @@ async function tableExists(db: SqlDatabase, tableName: string) {
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.tables
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
       ) AS exists
     `,
@@ -528,13 +783,153 @@ async function tableExists(db: SqlDatabase, tableName: string) {
   return tableCheck.rows[0]?.exists === true;
 }
 
+async function aiModelConfigExists(db: SqlDatabase, modelCode: string) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM ai_model_configs
+        WHERE model_code = $1
+      ) AS exists
+    `,
+    [modelCode],
+  );
+
+  return result.rows[0]?.exists === true;
+}
+
+async function seedanceModelConfigsCurrent(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ count: number }>(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM ai_model_configs
+      WHERE status = 'active'
+        AND (
+          (model_code = 'Doubao-Seedance-2.0-fast' AND provider_model = 'doubao-seedance-2-0-fast-260128')
+          OR (model_code = 'Doubao-Seedance-2.0' AND provider_model = 'doubao-seedance-2-0-260128')
+          OR (model_code = 'doubao-seedance-1-0-pro-250528' AND provider_model = 'doubao-seedance-1-0-pro-250528')
+        )
+    `,
+  );
+
+  return result.rows[0]?.count === 3;
+}
+
+async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ count: number }>(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM ai_model_configs
+      WHERE status = 'active'
+        AND (
+          (
+            model_code = 'gpt-image-2-cn'
+            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
+            AND provider_config_json->>'endpoint' = '/v1/images/generations'
+            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+          )
+          OR (
+            model_code = 'gpt-image-2-reference-cn'
+            AND provider_protocol = 'openai_images'
+            AND provider_model = 'gpt-image-2'
+            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
+            AND provider_config_json->>'endpoint' = '/v1/images/generations'
+            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+          )
+        )
+    `,
+  );
+
+  return result.rows[0]?.count === 2;
+}
+
+async function ensureVideoModelCategories(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return;
+  }
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["Doubao-Seedance-2.0-fast", "doubao-seedance-1-0-pro-250528"], "first_frame", "首帧视频"]);
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["Doubao-Seedance-2.0"], "first_last_frame", "首尾帧"]);
+
+  await db.query(`
+    UPDATE ai_model_configs
+    SET ui_config_json = jsonb_set(
+          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
+          '{videoCategoryLabel}',
+          to_jsonb($3::text),
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = ANY($1::text[])
+  `, [["happyhorse-1.0-r2v"], "reference", "全能参考"]);
+}
+
+async function ensureHappyHorseResolutionConfig(db: SqlDatabase) {
+  await db.query(`
+    UPDATE ai_model_configs
+    SET parameter_schema_json = jsonb_set(
+          COALESCE(parameter_schema_json, '{}'::jsonb),
+          '{resolution,options}',
+          '["720P"]'::jsonb,
+          true
+        ),
+        default_params_json = jsonb_set(
+          COALESCE(default_params_json, '{}'::jsonb),
+          '{resolution}',
+          to_jsonb('720P'::text),
+          true
+        ),
+        limits_json = jsonb_set(
+          COALESCE(limits_json, '{}'::jsonb),
+          '{supportedResolutions}',
+          '["720P"]'::jsonb,
+          true
+        ),
+        updated_at = now()
+    WHERE model_code = 'happyhorse-1.0-r2v'
+  `);
+}
+
 async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {
   const constraintCheck = await db.query<{ exists: boolean }>(
     `
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.table_constraints
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
           AND constraint_name = $2
       ) AS exists
@@ -545,13 +940,79 @@ async function constraintExists(db: SqlDatabase, tableName: string, constraintNa
   return constraintCheck.rows[0]?.exists === true;
 }
 
+async function uniqueConstraintForColumnsExists(db: SqlDatabase, tableName: string, columnNames: string[]) {
+  const constraintCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = current_schema()
+          AND rel.relname = $1
+          AND con.contype = 'u'
+          AND (
+            SELECT array_agg(att.attname::text ORDER BY keys.ordinality)
+            FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ordinality)
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
+          ) = $2::text[]
+      ) AS exists
+    `,
+    [tableName, columnNames],
+  );
+
+  return constraintCheck.rows[0]?.exists === true;
+}
+
+async function uniqueConstraintNamesForColumns(db: SqlDatabase, tableName: string, columnNames: string[]) {
+  const constraints = await db.query<{ constraint_name: string }>(
+    `
+      SELECT con.conname AS constraint_name
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = current_schema()
+        AND rel.relname = $1
+        AND con.contype = 'u'
+        AND (
+          SELECT array_agg(att.attname::text ORDER BY keys.ordinality)
+          FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ordinality)
+          JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
+        ) = $2::text[]
+    `,
+    [tableName, columnNames],
+  );
+
+  return constraints.rows.map((row) => row.constraint_name);
+}
+
+function quoteIdentifier(identifier: string) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+async function episodeGenerationDraftColumnsExist(db: SqlDatabase) {
+  const requiredColumns = ["organization_id", "episode_id", "target_type", "target_id", "mode"];
+  const columnCheck = await db.query<{ count: string | number }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'episode_generation_drafts'
+        AND column_name = ANY($1::text[])
+    `,
+    [requiredColumns],
+  );
+
+  return Number(columnCheck.rows[0]?.count ?? 0) === requiredColumns.length;
+}
+
 async function columnExists(db: SqlDatabase, tableName: string, columnName: string) {
   const columnCheck = await db.query<{ exists: boolean }>(
     `
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.columns
-        WHERE table_schema = 'public'
+        WHERE table_schema = current_schema()
           AND table_name = $1
           AND column_name = $2
       ) AS exists

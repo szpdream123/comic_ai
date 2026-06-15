@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
+    "dev": "node scripts/run-creator-dev-stack.mjs",
+    "dev:creator": "node scripts/run-creator-dev-stack.mjs",
     "dev:phone-auth": "node --import tsx scripts/run-phone-auth-dev-server.mjs",
     "admin:bootstrap": "node --import tsx scripts/bootstrap-admin-account.mjs",
     "admin:qa": "node scripts/admin-browser-qa.mjs",
@@ -16,18 +18,19 @@
     "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs"
   },
   "dependencies": {
+    "@antv/x6": "^3.1.7",
     "@aws-sdk/client-s3": "^3.1054.0",
     "@aws-sdk/s3-request-presigner": "^3.1054.0",
     "bullmq": "^5.78.0",
     "cos-js-sdk-v5": "^1.10.1",
     "ioredis": "^5.10.1",
+    "mammoth": "^1.12.0",
     "openai": "^6.39.1",
     "qcloud-cos-sts": "^3.1.3",
     "tencentcloud-sdk-nodejs-sms": "^4.1.240",
     "three": "^0.184.0"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.4.5",
     "pg": "^8.21.0",
     "tsx": "^4.22.1"
   }

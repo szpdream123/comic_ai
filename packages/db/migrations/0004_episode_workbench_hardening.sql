@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS episode_generation_drafts (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id, id),
-  UNIQUE (organization_id, episode_id, target_type, target_id),
+  UNIQUE (organization_id, episode_id, target_type, target_id, mode),
   FOREIGN KEY (organization_id, workspace_id)
     REFERENCES workspaces (organization_id, id),
   FOREIGN KEY (organization_id, project_id)

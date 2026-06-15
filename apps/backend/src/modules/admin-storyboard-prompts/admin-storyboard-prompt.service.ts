@@ -45,7 +45,7 @@ interface StoryboardPromptTemplateRow {
   genre_package_id: string;
   emotion_package_ids: JsonValue;
   camera_package_ids: JsonValue;
-  output_package_id: string;
+  output_package_id: string | null;
   taboo_package_ids: JsonValue;
   is_default: boolean;
   sort_order: number | string;
@@ -163,6 +163,14 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
         now,
       }),
     );
+    if (input.is_default) {
+      await clearPackageTypeDefaults({
+        id,
+        packageType: input.package_type,
+        actorAdminAccountId: input.actorAdminAccountId,
+        now,
+      });
+    }
     await recordPackageVersion({
       packageId: id,
       actorAdminAccountId: input.actorAdminAccountId,
@@ -212,7 +220,7 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     await ensureDefaultStoryboardPromptData(deps.db);
     if (!input.name.trim() || !input.code.trim()) return error(400, "storyboard_prompt_template_required", "模板名称和编码必填");
     if (!/^[a-z0-9_]+$/.test(input.code.trim())) return error(400, "invalid_storyboard_prompt_code", "编码只能包含小写字母、数字和下划线");
-    if (!input.genre_package_id || !input.output_package_id) return error(400, "storyboard_prompt_template_packages_required", "组合模板必须选择题材包和输出格式包");
+    if (!input.genre_package_id) return error(400, "storyboard_prompt_template_packages_required", "???????????");
     const id = input.id || randomUUID();
     await deps.db.query(
       `
@@ -247,8 +255,8 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
         input.base_prompt?.trim() || defaultStoryboardBasePrompt,
         input.genre_package_id,
         JSON.stringify(input.emotion_package_ids || []),
-        JSON.stringify(input.camera_package_ids || []),
-        input.output_package_id,
+        JSON.stringify([]),
+        input.output_package_id || null,
         JSON.stringify(input.taboo_package_ids || []),
         Boolean(input.is_default),
         Number(input.sort_order || 0),
@@ -258,6 +266,13 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
         input.now,
       ],
     );
+    if (input.is_default) {
+      await clearTemplateDefaults({
+        id,
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      });
+    }
     await audit(input, "admin.storyboard_prompt.template.saved", "storyboard_prompt_template", id);
     const row = await queryOne<StoryboardPromptTemplateRow>(deps.db, "SELECT * FROM storyboard_prompt_templates WHERE id = $1", [id]);
     return { status: 200, body: { data: row ? templateFromRow(row) : { id } } };
@@ -318,8 +333,6 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     };
     await append("genre", input.genre_package_id, "题材包");
     await append("emotion", input.emotion_package_ids, "情绪包");
-    await append("camera", input.camera_package_ids, "镜头包");
-    await append("output", input.output_package_id, "输出格式包");
     await append("taboo", input.taboo_package_ids, "通用禁忌包");
     const extraRequest = input.variables?.extra_request || input.extra_request;
     if (extraRequest) sections.push({ type: "extra", title: "用户额外要求", content: String(extraRequest) });
@@ -347,6 +360,33 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
       `,
       [randomUUID(), input.packageId, Number(versionRow?.next_version || 1), JSON.stringify(packageFromRow(row)), input.reason, input.actorAdminAccountId, input.now],
+    );
+  }
+
+  async function clearPackageTypeDefaults(input: { id: string; packageType: string; actorAdminAccountId: string; now: Date }) {
+    await deps.db.query(
+      `
+        UPDATE storyboard_prompt_packages
+        SET is_default = false, updated_by_admin_id = $3, updated_at = $4
+        WHERE deleted_at IS NULL
+          AND package_type = $2
+          AND id <> $1
+          AND is_default = true
+      `,
+      [input.id, input.packageType, input.actorAdminAccountId, input.now],
+    );
+  }
+
+  async function clearTemplateDefaults(input: { id: string; actorAdminAccountId: string; now: Date }) {
+    await deps.db.query(
+      `
+        UPDATE storyboard_prompt_templates
+        SET is_default = false, updated_by_admin_id = $2, updated_at = $3
+        WHERE deleted_at IS NULL
+          AND id <> $1
+          AND is_default = true
+      `,
+      [input.id, input.actorAdminAccountId, input.now],
     );
   }
 
@@ -387,8 +427,6 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
 }
 
 export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
-  const existing = await queryOne<{ count: string | number }>(db, "SELECT COUNT(*) AS count FROM storyboard_prompt_packages WHERE deleted_at IS NULL");
-  if (Number(existing?.count || 0) > 0) return;
   for (const item of defaultStoryboardPromptPackages) {
     await db.query(
       `
@@ -442,8 +480,8 @@ export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
         defaultStoryboardBasePrompt,
         template.genre_package_id,
         JSON.stringify(template.emotion_package_ids),
-        JSON.stringify(template.camera_package_ids),
-        template.output_package_id,
+        JSON.stringify([]),
+        template.output_package_id || null,
         JSON.stringify(template.taboo_package_ids),
         Boolean(template.is_default),
         Number(template.sort_order || 0),
@@ -494,7 +532,7 @@ interface SaveTemplateInput extends AdminMutationInput {
   genre_package_id: string;
   emotion_package_ids?: string[];
   camera_package_ids?: string[];
-  output_package_id: string;
+  output_package_id?: string | null;
   taboo_package_ids?: string[];
   is_default?: boolean;
   sort_order?: number;
@@ -520,7 +558,7 @@ function validatePackagePayload(input: SavePackageInput) {
   if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
     return error(400, "invalid_storyboard_prompt_code", "编码只能包含小写字母、数字和下划线");
   }
-  if (!["genre", "emotion", "camera", "output", "taboo"].includes(input.package_type)) {
+  if (!["genre", "emotion", "taboo"].includes(input.package_type)) {
     return error(400, "invalid_storyboard_prompt_type", "提示词包类型不支持");
   }
   if (!input.prompt_content?.trim() || input.prompt_content.trim().length < 20) {
@@ -600,7 +638,7 @@ function templateFromRow(row: StoryboardPromptTemplateRow) {
     genre_package_id: row.genre_package_id,
     emotion_package_ids: arrayFromJson(row.emotion_package_ids),
     camera_package_ids: arrayFromJson(row.camera_package_ids),
-    output_package_id: row.output_package_id,
+    output_package_id: row.output_package_id || "",
     taboo_package_ids: arrayFromJson(row.taboo_package_ids),
     is_default: Boolean(row.is_default),
     sort_order: Number(row.sort_order || 0),
@@ -648,20 +686,15 @@ const defaultStoryboardPromptPackages = [
   pkg("emotion", "女频情感", "female_emotional", "突出关系拉扯、误会、情绪递进和细腻反应。多用眼神、停顿、沉默、微表情和情绪反差推动剧情。", 95, [], [], { max_select_count: 3 }),
   pkg("emotion", "高燃爽感", "high_burn_refreshing", "每组分镜都要推动冲突升级，强化羞辱、压迫、反击、震惊、揭露身份等爽点。小高潮要密集，结尾保留强钩子。", 80, [], [], { max_select_count: 3 }),
   pkg("emotion", "悬疑压迫", "suspense_pressure", "整体情绪紧张、克制、疑点重重。重点表现异常细节、人物试探、信息遮挡和真相逼近。", 75, [], [], { max_select_count: 3 }),
-  pkg("camera", "短剧快节奏", "short_drama_fast", "开头 3-5 个镜头必须有强钩子。每个镜头控制在 3-5 秒，少空镜，少解释，快速进入冲突。每 10-15 个镜头出现一次小高潮，结尾保留悬念或反转。", 100, [], [], { applicable_scene: ["短剧", "AI视频"], is_recommended: true }),
-  pkg("camera", "电影感分镜", "cinematic_storyboard", "使用景别、机位、运镜、光线和构图表现情绪。重要场面可使用推镜、慢动作、低机位、环绕、特写和背光，增强画面质感和戏剧张力。", 95, [], [], { applicable_scene: ["短剧", "漫剧", "AI视频"], is_recommended: true }),
-  pkg("camera", "AI视频友好", "ai_video_friendly", "每个镜头只写一个主要动作。画面提示词必须包含人物、表情、动作、服装、场景、光线、镜头角度。避免多人复杂动作堆在一个镜头里，避免抽象描述。", 90, [], [], { applicable_scene: ["AI视频"], is_recommended: true }),
-  pkg("output", "标准分镜表", "storyboard_table", "请按分镜表输出，每条包含：镜号、时长、场景、人物、景别、机位/运镜、画面内容、人物动作、台词/旁白、音效/音乐、AI画面提示词、负面提示词、转场方式。", 100, [], [], { output_type: "table", is_default: true }),
-  pkg("output", "结构化 JSON", "storyboard_json", "请输出 JSON 数组，每个元素包含 shot_no、duration、scene、characters、shot_size、camera_move、visual_content、character_action、dialogue、voiceover、sound_effect、image_prompt、negative_prompt、transition。不得输出 JSON 以外的解释文字。", 90, [], [], { output_type: "json" }),
   pkg("taboo", "通用质量禁忌", "common_quality_taboo", "避免魔改原著核心设定；避免角色性格崩坏；避免大段解释性旁白；避免一个镜头塞入多个复杂动作；避免前后服装、场景、道具不一致；避免无意义空镜和重复对白。", 100, [], [], { is_global_default: true }),
   pkg("taboo", "角色一致性禁忌", "character_consistency_taboo", "避免角色姓名、身份、年龄、外貌、服装、性格前后不一致。每次角色首次出场都要保持和原文设定一致，后续镜头不得随意更换称呼、关系和视觉特征。", 90, [], [], { is_global_default: true }),
   pkg("taboo", "AI画面负向约束", "ai_image_negative_taboo", "避免多手指、畸形肢体、错乱五官、文字水印、低清晰度、过曝、人物融合、背景穿帮、服装突变和道具消失。画面提示词要具体、可视化、可生成。", 80, [], []),
 ];
 
 const defaultStoryboardPromptTemplates = [
-  template("玄幻热血短剧", "xuanhuan_hotblood_short", "xuanhuan_xiuxian", ["male_hotblood", "high_burn_refreshing"], ["short_drama_fast", "ai_video_friendly"], "storyboard_table", ["common_quality_taboo", "character_consistency_taboo", "ai_image_negative_taboo"], 100, true),
-  template("都市情感拉扯", "romance_emotion_pull", "ceo_sweet_romance", ["female_emotional"], ["cinematic_storyboard", "ai_video_friendly"], "storyboard_table", ["common_quality_taboo", "character_consistency_taboo"], 90),
-  template("悬疑漫画分镜", "suspense_comic_panels", "suspense_detective", ["suspense_pressure"], ["cinematic_storyboard"], "storyboard_json", ["common_quality_taboo", "character_consistency_taboo"], 80),
+  template("??????", "xuanhuan_hotblood_short", "xuanhuan_xiuxian", ["male_hotblood", "high_burn_refreshing"], ["common_quality_taboo", "character_consistency_taboo", "ai_image_negative_taboo"], 100, true),
+  template("??????", "romance_emotion_pull", "ceo_sweet_romance", ["female_emotional"], ["common_quality_taboo", "character_consistency_taboo"], 90),
+  template("??????", "suspense_comic_panels", "suspense_detective", ["suspense_pressure"], ["common_quality_taboo", "character_consistency_taboo"], 80),
 ];
 
 function pkg(packageType: string, name: string, code: string, promptContent: string, sortOrder: number, tags: string[], keyPoints: string[], extra: Record<string, unknown> = {}) {
@@ -678,7 +711,7 @@ function pkg(packageType: string, name: string, code: string, promptContent: str
   };
 }
 
-function template(name: string, code: string, genreCode: string, emotionCodes: string[], cameraCodes: string[], outputCode: string, tabooCodes: string[], sortOrder: number, isDefault = false) {
+function template(name: string, code: string, genreCode: string, emotionCodes: string[], tabooCodes: string[], sortOrder: number, isDefault = false) {
   const idFor = (packageCode: string) => stableUuid(`storyboard-prompt-package:${packageCode}`);
   return {
     id: stableUuid(`storyboard-prompt-template:${code}`),
@@ -686,8 +719,8 @@ function template(name: string, code: string, genreCode: string, emotionCodes: s
     code,
     genre_package_id: idFor(genreCode),
     emotion_package_ids: emotionCodes.map(idFor),
-    camera_package_ids: cameraCodes.map(idFor),
-    output_package_id: idFor(outputCode),
+    camera_package_ids: [],
+    output_package_id: null,
     taboo_package_ids: tabooCodes.map(idFor),
     sort_order: sortOrder,
     is_default: isDefault,

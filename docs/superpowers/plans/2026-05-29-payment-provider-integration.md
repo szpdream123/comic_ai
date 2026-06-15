@@ -6,7 +6,7 @@
 
 **Architecture:** `Commerce/Payment` keeps owning billing orders, payment intents, callback facts, risk, and `payment.succeeded` outbox. Provider-specific behavior moves behind `PaymentProviderAdapter`; local fallback adapters stay deterministic, and `PayLabAdapter` is available from runtime config without changing the platform domain model.
 
-**Tech Stack:** Node.js, TypeScript via `tsx`, `node:test`, PGlite foundation migration, existing `CommercePaymentService`.
+**Tech Stack:** Node.js, TypeScript via `tsx`, `node:test`, PostgreSQL foundation migration, existing `CommercePaymentService`.
 
 ---
 

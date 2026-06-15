@@ -1,5 +1,5 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js";
+import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1";
 import { renderExportPanel } from "./export-panel.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
@@ -11,16 +11,28 @@ import { getProjectDetailState } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
+import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
+import {
+  buildCanvasSidebarItems,
+  resolveCanvasModelOptions,
+  resolveCanvasNodeTemplates,
+} from "./canvas/canvas-state.js";
 
-const PROJECT_STATUS_OPTIONS = ["草稿", "进行中", "已交付"];
-const PROJECTS_PER_PAGE = 12;
+const PROJECT_GALLERY_ROWS_PER_PAGE = 3;
+const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
+const PROJECT_GALLERY_MAX_COLUMNS = 12;
+const CANVAS_VIDEO_GENERATION_MODES = [
+  { id: "first-frame", label: "首帧生视频" },
+  { id: "first-last-frame", label: "首尾帧生视频" },
+  { id: "reference-video", label: "全能参考" },
+];
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
+  { id: "tools", label: "画布", icon: "wand" },
   { id: "script", label: "剧本", icon: "book" },
   { id: "project", label: "项目", icon: "clapperboard" },
   { id: "library", label: "资产库", icon: "archive" },
-  { id: "tools", label: "工具箱", icon: "wand" },
   { id: "team", label: "团队", icon: "users" },
 ];
 
@@ -156,7 +168,7 @@ export function renderProjectDetail(context = {}) {
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
-  const creditBalance = resolveDisplayedCreditBalance(ui);
+  const creditBalance = resolveDisplayedCreditBalance(ui, session);
 
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
     return `
@@ -172,19 +184,26 @@ export function renderProjectDetail(context = {}) {
         show: ui.isScriptModalOpen,
         uploadNotice: ui.uploadNotice,
         hasProject: Boolean(state.project),
-        defaultScript: ui.defaultScript ?? "",
+        defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
         busy: ui.busy,
-        submitAction: ui.scriptSubmitAction ?? "create-project",
-        submitLabel: ui.scriptSubmitLabel ?? "确认上传",
+        submitAction: ui.scriptSubmitAction ?? "import-script-document",
+        submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+        mode: ui.scriptModalMode ?? "full",
+        lookControlsHtml: renderScriptManualLookControls(ui),
+        scriptUploadFileName: ui.scriptUploadFileName ?? "",
       })}
       ${renderProjectCreateModal({
         show: ui.isCreateModalOpen,
         busy: ui.busy,
         defaultName: ui.createProjectName ?? "",
         selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-        selectedProjectType: ui.createProjectType ?? "anime",
+        selectedProjectType: ui.createProjectType ?? "animation",
+        projectStyles: ui.projectStyles ?? [],
+        isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
+      ${renderSingleEpisodeAiPreview(ui)}
+      ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
 
@@ -199,27 +218,37 @@ export function renderProjectDetail(context = {}) {
         show: ui.isScriptModalOpen,
         uploadNotice: ui.uploadNotice,
         hasProject: Boolean(state.project),
-        defaultScript: ui.defaultScript ?? "",
+        defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
         busy: ui.busy,
-        submitAction: ui.scriptSubmitAction ?? "create-project",
-        submitLabel: ui.scriptSubmitLabel ?? "确认上传",
+        submitAction: ui.scriptSubmitAction ?? "import-script-document",
+        submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+        mode: ui.scriptModalMode ?? "full",
+        lookControlsHtml: renderScriptManualLookControls(ui),
+        scriptUploadFileName: ui.scriptUploadFileName ?? "",
       })}
       ${renderProjectCreateModal({
         show: ui.isCreateModalOpen,
         busy: ui.busy,
         defaultName: ui.createProjectName ?? "",
         selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-        selectedProjectType: ui.createProjectType ?? "anime",
+        selectedProjectType: ui.createProjectType ?? "animation",
+        projectStyles: ui.projectStyles ?? [],
+        isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
+      ${renderSingleEpisodeAiPreview(ui)}
+      ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
 
+  const toolsModeClass = activeNavTab === "tools"
+    ? ` tools-mode ${ui.canvasProjectView === "detail" ? "tools-canvas-detail-mode" : "tools-canvas-list-mode"}`
+    : "";
   return `
     <section class="production-workbench">
       ${renderWorkbenchRail(activeNavTab)}
 
-      <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}">
+      <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
         ${renderGlobalStatusbar(session, { creditBalance })}
         ${renderMainPanel({ state, ui, session, detailState, progress, activeNavTab })}
       </section>
@@ -230,17 +259,22 @@ export function renderProjectDetail(context = {}) {
         show: ui.isScriptModalOpen,
         uploadNotice: ui.uploadNotice,
       hasProject: Boolean(state.project),
-      defaultScript: ui.defaultScript ?? "",
+      defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
       busy: ui.busy,
-      submitAction: ui.scriptSubmitAction ?? "create-project",
-      submitLabel: ui.scriptSubmitLabel ?? "确认上传",
+      submitAction: ui.scriptSubmitAction ?? "import-script-document",
+      submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+      mode: ui.scriptModalMode ?? "full",
+      lookControlsHtml: renderScriptManualLookControls(ui),
+      scriptUploadFileName: ui.scriptUploadFileName ?? "",
     })}
     ${renderProjectCreateModal({
       show: ui.isCreateModalOpen,
       busy: ui.busy,
       defaultName: ui.createProjectName ?? "",
       selectedAspectRatio: ui.createAspectRatio ?? "9:16",
-      selectedProjectType: ui.createProjectType ?? "anime",
+      selectedProjectType: ui.createProjectType ?? "animation",
+      projectStyles: ui.projectStyles ?? [],
+      isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
       notice: ui.createProjectNotice ?? "",
     })}
     ${renderOriginalScriptModal({
@@ -248,31 +282,596 @@ export function renderProjectDetail(context = {}) {
       draft: ui.originalScriptDraft,
       busy: ui.busy,
     })}
+    ${renderSingleEpisodeAiPreview(ui)}
     ${renderProjectRenameModal({
       show: Boolean(ui.renameProjectId),
       value: ui.renameProjectName ?? "",
       notice: ui.renameProjectNotice ?? "",
     })}
     ${renderProjectDeleteModal({
-      show: Boolean(ui.deleteProjectId),
+      show: Boolean(ui.deleteProjectId) || ui.deleteProjectMode === "bulk",
+      mode: ui.deleteProjectMode === "bulk" ? "bulk" : "single",
+      count: Array.isArray(ui.deleteProjectIds) ? ui.deleteProjectIds.length : 0,
       projectName:
         ui.projectLibrary?.find((project) => project.id === ui.deleteProjectId)?.name ?? "",
     })}
+    ${renderCanvasProjectRenameModal({
+      show: Boolean(ui.renameCanvasProjectId),
+      value: ui.renameCanvasProjectName ?? "",
+      notice: ui.renameCanvasProjectNotice ?? "",
+    })}
+    ${renderCanvasProjectDeleteModal({
+      show: Boolean(ui.deleteCanvasProjectId),
+      projectName:
+        ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
+    })}
     ${renderGenerationQueueJobConfirmModal(ui)}
+    ${renderCreditLedgerDrawer(ui)}
+    ${renderAccountSettingsDrawer(ui, session)}
   `;
 }
 
-function renderWorkspaceStatusToast(message, extraClassName = "") {
+function renderCreditLedgerDrawer(ui = {}) {
+  if (!ui.creditLedgerOpen) {
+    return "";
+  }
+  const rows = Array.isArray(ui.creditLedgerRows) ? ui.creditLedgerRows : [];
+  const summary = ui.creditLedgerSummary ?? {};
+  const loading = ui.creditLedgerLoading === true;
+  const error = String(ui.creditLedgerError ?? "").trim();
+  return `
+    <div class="credit-ledger-backdrop" data-action="close-credit-ledger" aria-hidden="true"></div>
+    <aside class="credit-ledger-drawer" role="dialog" aria-modal="true" aria-labelledby="credit-ledger-title">
+      <header class="credit-ledger-header">
+        <div>
+          <p class="credit-ledger-kicker">Credit Ledger</p>
+          <h2 id="credit-ledger-title">积分明细</h2>
+          <p>每一次充值、生成扣减与返还都会记录在这里。</p>
+        </div>
+        <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+      </header>
+      <section class="credit-ledger-summary" aria-label="积分概览">
+        ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
+        ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
+      </section>
+      <div class="credit-ledger-toolbar">
+        <span>${escapeHtml(String(ui.creditLedgerMeta?.total ?? rows.length))} 条最近记录</span>
+        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
+      </div>
+      ${error ? `<p class="credit-ledger-notice error">${escapeHtml(error)}</p>` : ""}
+      <div class="credit-ledger-scroll">
+        ${loading && !rows.length ? renderCreditLedgerLoadingRows() : ""}
+        ${!loading && !rows.length && !error ? `
+          <div class="credit-ledger-empty">
+            <strong>暂无积分记录</strong>
+            <span>充值或生成任务发生后，这里会显示每一次变动。</span>
+          </div>
+        ` : ""}
+        ${rows.length ? `
+          <table class="credit-ledger-table">
+            <thead>
+              <tr>
+                <th>任务ID</th>
+                <th>类型</th>
+                <th>说明</th>
+                <th>可用变化</th>
+                <th>失败|成功</th>
+                <th>来源</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(renderCreditLedgerRow).join("")}
+            </tbody>
+          </table>
+        ` : ""}
+      </div>
+    </aside>
+  `;
+}
+
+function renderCreditLedgerMetric(label, value, tone) {
+  return `
+    <article class="credit-ledger-metric ${tone}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatCreditNumber(value))}</strong>
+    </article>
+  `;
+}
+
+function renderCreditLedgerRow(row = {}) {
+  const entry = normalizeCreditLedgerEntry(row);
+  return `
+    <tr>
+      <td>${renderCreditLedgerTaskId(entry.taskId)}</td>
+      <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
+      <td>${renderCreditLedgerDescription(entry)}</td>
+      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
+      <td><span class="credit-ledger-type ${entry.result === "失败" ? "consume" : entry.result === "成功" ? "grant" : "neutral"}">${escapeHtml(entry.result)}</span></td>
+      <td><span class="credit-ledger-source">${escapeHtml(entry.source)}</span></td>
+      <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
+    </tr>
+  `;
+}
+
+function renderCreditLedgerDescription(entry = {}) {
+  const title = String(entry.title ?? "").trim();
+  const detail = String(entry.detail ?? "").trim();
+  const text = [title, detail].filter(Boolean).join(" ");
+  if (!text) {
+    return `<span class="credit-ledger-description empty">-</span>`;
+  }
+  return `<span class="credit-ledger-description" data-full-text="${escapeAttr(text)}" tabindex="0"><span class="credit-ledger-description-text">${escapeHtml(text)}</span></span>`;
+}
+
+function renderCreditLedgerTaskId(taskId) {
+  const fullId = String(taskId ?? "").trim();
+  if (!fullId) {
+    return `<code class="credit-ledger-task-id empty">-</code>`;
+  }
+  return `<code class="credit-ledger-task-id" data-full-id="${escapeAttr(fullId)}" tabindex="0">${escapeHtml(fullId.slice(0, 6))}</code>`;
+}
+
+function normalizeCreditLedgerEntry(row = {}) {
+  const type = String(row.entryType ?? "");
+  const metadata = normalizeLedgerMetadata(row.metadata);
+  const labels = {
+    grant: ["充值/发放", "grant"],
+    consume: ["生成扣减", "consume"],
+    reservation: ["生成扣减", "consume"],
+    reserve: ["生成扣减", "consume"],
+    release: ["释放返还", "release"],
+  };
+  const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
+  const amount = Number(row.amount ?? 0);
+  const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
+  const reason = String(row.reason ?? metadata.reason ?? "").trim();
+  const model = creditLedgerModelLabel(metadata);
+  const task = String(metadata.taskId ?? metadata.task_id ?? row.sourceId ?? "").trim();
+  const event = String(metadata.billingEvent ?? metadata.outcome ?? metadata.status ?? "").trim();
+  const eventLabel = ledgerBillingEventLabel(event);
+  const duration = formatLedgerDuration(metadata.durationMs ?? metadata.duration_ms);
+  const promptPreview = String(metadata.promptPreview ?? metadata.prompt_preview ?? "").trim();
+  const failureCode = String(metadata.failureCode ?? metadata.failure_code ?? "").trim();
+  const errorMessage = String(metadata.errorMessage ?? metadata.error_message ?? "").trim();
+  const source = creditLedgerSourceLabel(row, metadata);
+  const content = promptPreview ? `内容：${promptPreview}` : "";
+  const failure = creditLedgerFailureLabel(failureCode, errorMessage);
+  const result = creditLedgerResultLabel({ event, failure });
+  const description = failure
+    ? `失败：${failure}`
+    : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
+  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || label;
+  return {
+    label,
+    tone,
+    amount: type === "consume" ? -Math.abs(amount) : amount,
+    availableDelta,
+    createdAt: row.createdAt,
+    taskId: task || String(row.sourceId ?? "").trim(),
+    title,
+    detail: description,
+    result,
+    source,
+  };
+}
+
+function normalizeLedgerMetadata(metadata) {
+  if (metadata && typeof metadata === "object") {
+    return metadata;
+  }
+  if (typeof metadata !== "string" || !metadata.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function creditLedgerSourceLabel(row = {}, metadata = {}) {
+  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  if (targetType === "canvas") {
+    if (mediaType === "video") {
+      return "画布视频生成";
+    }
+    return "画布图片生成";
+  }
+  if (sourceType === "episode_generation_task") {
+    return mediaType === "video" ? "分镜视频生成" : "分镜图片生成";
+  }
+  if (sourceType === "payment_order") {
+    return "订单充值";
+  }
+  if (sourceType.includes("admin") || sourceType.includes("manual")) {
+    return "人工调整";
+  }
+  if (mediaType === "video") {
+    return "视频生成";
+  }
+  if (mediaType === "image") {
+    return "图片生成";
+  }
+  return "积分账本";
+}
+
+function creditLedgerModelLabel(metadata = {}) {
+  const explicit = String(metadata.modelLabel ?? metadata.model_label ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const code = String(metadata.modelCode ?? metadata.model_code ?? metadata.providerExecutor ?? metadata.provider ?? "").trim();
+  const normalized = code.toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.includes("jimeng")) {
+    return normalized.includes("video") ? "即梦视频模型" : "即梦图片模型";
+  }
+  if (normalized.includes("seedance")) {
+    return "豆包视频模型";
+  }
+  if (normalized.includes("gpt")) {
+    return "OpenAI 图片模型";
+  }
+  if (normalized.includes("liblib")) {
+    return "哩布哩布模型";
+  }
+  if (normalized.includes("kling")) {
+    return "可灵模型";
+  }
+  if (normalized.includes("wan") || normalized.includes("qwen")) {
+    return "通义生成模型";
+  }
+  return `模型 ${code}`;
+}
+
+function translateCreditLedgerReason(reason, metadata = {}) {
+  const normalized = String(reason ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "image generation") {
+    return targetType === "canvas" ? "画布图片生成" : "图片生成";
+  }
+  if (normalized === "video generation") {
+    return targetType === "canvas" ? "画布视频生成" : "视频生成";
+  }
+  if (normalized === "reservation allocation released") {
+    return mediaType === "video" ? "视频生成积分返还" : "图片生成积分返还";
+  }
+  if (normalized === "reservation allocation consumed") {
+    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
+  }
+  if (normalized.includes("reservation") || normalized.includes("reserve")) {
+    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
+  }
+  return reason;
+}
+
+function creditLedgerFailureLabel(code, message) {
+  const normalizedCode = String(code ?? "").trim();
   const normalizedMessage = String(message ?? "").trim();
+  const labels = {
+    task_timeout: "任务超时，积分已返还",
+    provider_poll_timeout: "模型处理超时，积分已返还",
+    provider_failed: "模型处理失败，积分已返还",
+    provider_submission_failed: "发送模型失败，积分已返还",
+    provider_submission_ambiguous: "模型接收状态不明确，已进入失败处理",
+    provider_output_download_failed: "模型结果下载失败，积分已返还",
+    provider_output_upload_failed: "结果保存失败，积分已返还",
+    provider_output_persist_failed: "结果入库失败，积分已返还",
+    provider_result_unknown: "模型结果状态未知，积分已返还",
+    worker_crashed_after_external_start: "后台处理意外中断，积分已返还",
+    generation_queue_unavailable: "生成队列未启动，未继续扣减",
+  };
+  const translated = labels[normalizedCode];
+  if (translated && normalizedMessage) {
+    return `${translated}（${normalizedMessage}）`;
+  }
+  if (translated) {
+    return translated;
+  }
+  if (normalizedMessage) {
+    return normalizedMessage;
+  }
+  return normalizedCode ? `失败代码：${normalizedCode}` : "";
+}
+
+function creditLedgerResultLabel({ event, failure } = {}) {
+  const normalized = String(event ?? "").toLowerCase();
+  if (failure || normalized.includes("failed") || normalized.includes("timeout")) {
+    return "失败";
+  }
+  if (["consumed", "released", "succeeded", "reserved"].includes(normalized)) {
+    return "成功";
+  }
+  return "-";
+}
+
+function ledgerBillingEventLabel(value) {
+  const labels = {
+    reserved: "已扣减",
+    consumed: "已扣减",
+    released: "已返还",
+    manual_review_required: "待复核",
+    failed: "失败",
+    succeeded: "成功",
+  };
+  return labels[value] ?? "";
+}
+
+function formatLedgerDuration(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "";
+  }
+  if (numeric < 1000) {
+    return `${Math.round(numeric)}ms`;
+  }
+  return `${Math.round(numeric / 100) / 10}s`;
+}
+
+function shortLedgerId(value) {
+  const text = String(value ?? "").trim();
+  if (text.length <= 12) {
+    return text;
+  }
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function renderCreditLedgerLoadingRows() {
+  return `
+    <div class="credit-ledger-loading">
+      <span></span><span></span><span></span>
+    </div>
+  `;
+}
+
+function formatCreditNumber(value) {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString("zh-CN") : "0";
+}
+
+function formatSignedCredit(value) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric) || numeric === 0) {
+    return "0";
+  }
+  return `${numeric > 0 ? "+" : "-"}${Math.abs(Math.round(numeric)).toLocaleString("zh-CN")}`;
+}
+
+function formatLedgerDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderAccountSettingsDrawer(ui = {}, session = {}) {
+  if (!ui.accountSettingsOpen) {
+    return "";
+  }
+
+  const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session);
+  const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
+  const dirty = ui.accountSettingsDirty === true;
+  const saving = ui.busy && ui.accountSettingsOpen;
+  const notice = String(ui.accountSettingsNotice ?? "").trim();
+
+  return `
+    <div class="account-settings-backdrop" data-action="close-account-settings" aria-hidden="true"></div>
+    <aside class="account-settings-drawer" role="dialog" aria-modal="true" aria-labelledby="account-settings-title">
+      <header class="account-settings-header">
+        <div>
+          <p class="account-settings-kicker">Account Console</p>
+          <h2 id="account-settings-title">账号设置</h2>
+          <p class="account-settings-subtitle">管理你的公开信息、登录安全与消息偏好。</p>
+        </div>
+        <button class="account-settings-close" type="button" data-action="close-account-settings" aria-label="关闭账号设置">×</button>
+      </header>
+
+      <section class="account-settings-hero">
+        <div class="account-settings-avatar" aria-hidden="true">${escapeHtml(resolveAccountSettingsAvatarLabel(form, session))}</div>
+        <div class="account-settings-hero-copy">
+          <strong>${escapeHtml(form.displayName || "未命名创作者")}</strong>
+          <span>${escapeHtml(form.phone || "未绑定手机号")}</span>
+          <span>${escapeHtml(form.planLabel)}</span>
+        </div>
+      </section>
+
+      <div class="account-settings-scroll">
+        <section class="account-settings-card">
+          <div class="account-settings-card-head">
+            <span>基础资料</span>
+            <em>Profile</em>
+          </div>
+          <label class="account-settings-field">
+            <span>显示昵称</span>
+            <input
+              type="text"
+              value="${escapeAttr(form.displayName)}"
+              maxlength="40"
+              placeholder="请输入显示昵称"
+              data-action="change-account-settings-field"
+              data-field="displayName"
+            />
+          </label>
+          <label class="account-settings-field readonly">
+            <span>绑定手机号</span>
+            <div class="account-settings-static-field">
+              <input type="text" value="${escapeAttr(form.phone)}" readonly />
+              <button type="button" data-action="account-settings-placeholder" data-message="手机号更换功能将在后续版本开放。">更换</button>
+            </div>
+          </label>
+        </section>
+
+        <section class="account-settings-card">
+          <div class="account-settings-card-head">
+            <span>账号安全</span>
+            <em>Security</em>
+          </div>
+          <div class="account-settings-security-row">
+            <div>
+              <strong>修改密码</strong>
+              <span>更新登录密码，保护你的创作资产与团队协作空间。</span>
+            </div>
+            <button type="button" data-action="toggle-account-settings-password">
+              ${passwordExpanded ? "收起" : "修改密码"}
+            </button>
+          </div>
+          ${
+            passwordExpanded
+              ? `
+                <div class="account-settings-password-grid">
+                  <label class="account-settings-field">
+                    <span>当前密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.currentPassword)}"
+                      placeholder="请输入当前密码"
+                      data-action="change-account-settings-field"
+                      data-field="currentPassword"
+                    />
+                  </label>
+                  <label class="account-settings-field">
+                    <span>新密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.newPassword)}"
+                      placeholder="至少 8 位"
+                      data-action="change-account-settings-field"
+                      data-field="newPassword"
+                    />
+                  </label>
+                  <label class="account-settings-field">
+                    <span>确认新密码</span>
+                    <input
+                      type="password"
+                      value="${escapeAttr(form.confirmPassword)}"
+                      placeholder="再次输入新密码"
+                      data-action="change-account-settings-field"
+                      data-field="confirmPassword"
+                    />
+                  </label>
+                </div>
+              `
+              : ""
+          }
+        </section>
+
+      </div>
+
+      <footer class="account-settings-footer">
+        <div class="account-settings-footer-copy">
+          <strong>${dirty ? "有未保存的更改" : "当前更改已同步"}</strong>
+          <span>${escapeHtml(notice || "保存后会立即在当前工作台生效。")}</span>
+        </div>
+        <div class="account-settings-footer-actions">
+          <button type="button" class="ghost" data-action="close-account-settings">取消</button>
+          <button type="button" class="primary" data-action="submit-account-settings" ${saving ? "disabled" : ""}>保存更改</button>
+        </div>
+      </footer>
+    </aside>
+  `;
+}
+
+function normalizeAccountSettingsForm(form = {}, session = {}) {
+  const user = session?.user ?? {};
+  const notifications = form.notifications ?? {};
+  return {
+    displayName: String(form.displayName ?? user.displayName ?? ""),
+    phone: String(form.phone ?? user.phone ?? ""),
+    email: String(form.email ?? user.email ?? ""),
+    currentPassword: String(form.currentPassword ?? ""),
+    newPassword: String(form.newPassword ?? ""),
+    confirmPassword: String(form.confirmPassword ?? ""),
+    notifications: {
+      projectUpdates: notifications.projectUpdates !== false,
+      renderComplete: notifications.renderComplete !== false,
+      marketing: notifications.marketing === true,
+    },
+    planLabel: String(form.planLabel ?? user.planLabel ?? "当前方案 · 创作者版"),
+  };
+}
+
+function resolveAccountSettingsAvatarLabel(form, session = {}) {
+  const preferred = String(form.displayName || session?.user?.displayName || session?.user?.phone || "我").trim();
+  return [...preferred].slice(0, 2).join("");
+}
+
+function renderWorkspaceStatusToast(message, extraClassName = "") {
+  const toast = normalizeWorkspaceToast(message);
+  const normalizedMessage = toast.message;
   if (!normalizedMessage) {
     return "";
   }
-  const className = extraClassName ? `workbench-toast ${extraClassName}` : "workbench-toast";
-  return `<p id="workspace-status" class="${className}" role="status">${escapeHtml(normalizedMessage)}</p>`;
+  const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
+  const title = tone === "error" ? "操作失败" : "操作成功";
+  const className = extraClassName
+    ? `workbench-toast global-workbench-toast ${tone} ${extraClassName}`
+    : `workbench-toast global-workbench-toast ${tone}`;
+  return `
+    <div id="workspace-status" class="${className}" role="status" aria-live="polite">
+      <strong>${title}</strong>
+      <span>${escapeHtml(normalizedMessage)}</span>
+    </div>
+  `;
 }
 
-function resolveDisplayedCreditBalance(ui) {
+function normalizeWorkspaceToast(message) {
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    const normalizedMessage = String(message.message ?? message.text ?? "").trim();
+    const tone = String(message.tone ?? "").trim().toLowerCase();
+    return {
+      message: normalizedMessage,
+      tone: tone === "error" || tone === "success" ? tone : "",
+    };
+  }
+  return { message: String(message ?? "").trim(), tone: "" };
+}
+
+function resolveWorkspaceToastTone(message) {
+  const normalizedMessage = String(message ?? "").toLowerCase();
+  const errorMarkers = [
+    "失败",
+    "错误",
+    "未找到",
+    "不可",
+    "不能",
+    "无法",
+    "缺少",
+    "请先",
+    "请输入",
+    "请选择",
+    "failed",
+    "failure",
+    "error",
+    "denied",
+  ];
+  return errorMarkers.some((marker) => normalizedMessage.includes(marker)) ? "error" : "success";
+}
+
+function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
+    session?.user?.availableCredits,
+    session?.user?.creditBalance,
+    session?.user?.credits,
+    session?.availableCredits,
+    session?.creditBalance,
     ui.creditBalance,
     ui.episodeGenerationConfig?.creditBalance,
     ui.episodeWorkbenchContext?.creditBalance,
@@ -375,7 +974,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         imageGenerationResult: ui.imageGenerationResult ?? null,
         videoGenerationResult: ui.videoGenerationResult ?? null,
         mediaMode: ui.episodeMediaMode ?? "image",
-        videoMode: ui.videoGenerationMode ?? "first-frame",
+        videoMode: ui.videoGenerationMode ?? "reference-video",
         imageMode: ui.imageGenerationMode ?? "single-image",
         generationControls: {
           videoDurationSec: ui.videoDurationSec,
@@ -388,6 +987,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           imageResolution: ui.imageResolution,
           imageAspectRatio: ui.imageAspectRatio,
           multiImageStrategy: ui.multiImageStrategy,
+          parameterValues: ui.generationParameterValues ?? null,
           uploadLimits: ui.episodeGenerationConfig?.uploadLimits ?? null,
         },
         episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
@@ -397,6 +997,8 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
           activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
           isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+          imageGenerationMode: ui.imageGenerationMode ?? "single-image",
+          videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
           museBoardMode: ui.museBoardMode ?? "operation",
           museScopeMode: ui.museScopeMode ?? "storyboard",
           musePromptMenu: ui.musePromptMenu ?? null,
@@ -417,6 +1019,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
         storyboardVideoDeleteTarget: ui.storyboardVideoDeleteTarget ?? null,
+        generationResultDeleteTarget: ui.generationResultDeleteTarget ?? null,
         episodeAssetCreateModal: ui.episodeAssetCreateModal ?? null,
         assetInspector: ui.assetInspector ?? null,
         episodeWorkbenchAttachments: ui.episodeWorkbenchAttachments ?? [],
@@ -430,6 +1033,10 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         episodeBatchModal: ui.episodeBatchModal ?? null,
         assetImportModal: ui.assetImportModal ?? null,
         assetImportModalTab: ui.assetImportModalTab ?? "local",
+        episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
+        episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
+        episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
+        episodeAssetLibraryQuery: ui.episodeAssetLibraryQuery ?? "",
         assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
         assetImportDrafts: ui.assetImportDrafts ?? [],
         assetImportSelection: ui.assetImportSelection ?? [],
@@ -933,17 +1540,9 @@ function renderEpisodeHubMenu(episode) {
 }
 
 function renderSingleEpisodeModal(ui) {
-  const aspectOptions = [
-    { value: "16:9", label: "水平" },
-    { value: "9:16", label: "垂直" },
-    { value: "1:1", label: "自定义" },
-  ];
-  const modelOptions = [
-    { value: "veo-3.1", label: "多参模式（Veo3.1）" },
-    { value: "seedance-2.0", label: "主体固定模式（seeDance2.0）" },
-  ];
-  const selectedAspect = ui.singleEpisodeAspectRatio ?? "9:16";
-  const selectedModel = ui.singleEpisodeModel ?? "seedance-2.0";
+  const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
+  const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
+  const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -961,46 +1560,514 @@ function renderSingleEpisodeModal(ui) {
         </label>
         <div class="single-episode-toolbar single-episode-toolbar-replica">
           <div class="single-episode-toolbar-left">
-            <div class="single-episode-aspect-group">
-              ${aspectOptions
-                .map(
-                  (option) => `
-                    <button
-                      class="single-episode-aspect-chip ${selectedAspect === option.value ? "active" : ""}"
-                      type="button"
-                      data-action="set-single-episode-aspect"
-                      data-aspect="${option.value}"
-                    >
-                      <strong>${option.label}</strong>
-                    </button>
-                  `,
-                )
+            <div class="single-episode-look-controls">
+              ${SINGLE_EPISODE_LOOK_TYPES
+                .map((option) => renderSingleEpisodeLookSelect({
+                  option,
+                  activeType: activeLookPanel,
+                  packages,
+                  selectedPackageIds,
+                }))
                 .join("")}
             </div>
-            <label class="single-episode-model-field">
-              <select id="single-episode-model-select">
-                ${modelOptions
-                  .map(
-                    (option) => `
-                      <option value="${option.value}" ${selectedModel === option.value ? "selected" : ""}>${option.label}</option>
-                    `,
-                  )
-                  .join("")}
-              </select>
-            </label>
-          </div>
+            </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode">创建空白章节</button>
             <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">AI 智能分镜</button>
           </div>
         </div>
-        <div class="single-episode-status-row">
-          <p class="modal-inline-status">${escapeHtml(ui.singleEpisodeNotice ?? "")}</p>
-          <button class="secondary-action single-episode-cancel" type="button" data-action="close-single-episode-modal">取消</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderSingleEpisodeAiPreview(ui) {
+  const preview = ui.singleEpisodeAiPreview ?? { status: "idle", data: null, error: "" };
+  if (!preview || preview.status === "idle") {
+    return "";
+  }
+  if (preview.source === "manual-script-analysis") {
+    return renderManualScriptAnalysisPreview(preview);
+  }
+  if (preview.status === "loading") {
+    return `
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜">
+        <div class="single-episode-ai-overlay-top">
+          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <div class="single-episode-ai-top-status" aria-live="polite">
+            <p>AI Storyboard</p>
+            <h3>${resolveSingleEpisodeAiLoadingTitle(preview.activeStage)}</h3>
+          </div>
+          <div class="single-episode-ai-overlay-actions">
+            <button class="single-episode-ai-create" type="button" disabled>创建章节</button>
+            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+          </div>
+        </div>
+        <div class="single-episode-ai-loading-bar"><span></span></div>
+        <div class="single-episode-ai-preview loading" aria-live="polite">
+          ${renderSingleEpisodeAiLiveOutput(preview)}
+          ${renderSingleEpisodeAiLiveTables(preview)}
+        </div>
+      </section>
+    `;
+  }
+  if (preview.status === "error") {
+    return `
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜生成失败">
+        <div class="single-episode-ai-overlay-top">
+          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <div class="single-episode-ai-overlay-actions">
+            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+          </div>
+        </div>
+        <div class="single-episode-ai-preview error" aria-live="polite">
+          <div class="single-episode-ai-preview-head">
+            <div>
+              <p>AI Storyboard</p>
+              <h3>生成失败</h3>
+            </div>
+          </div>
+          <p class="single-episode-ai-error">${escapeHtml(preview.error || "请稍后重试")}</p>
+        </div>
+      </section>
+    `;
+  }
+  const previewPayload = preview.data?.displayTables ? preview.data : preview;
+  const tables = previewPayload?.displayTables ?? {};
+  return `
+    <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
+      <div class="single-episode-ai-overlay-top">
+        <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+        <div class="single-episode-ai-overlay-actions">
+          <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
+          <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+        </div>
+      </div>
+      <div class="single-episode-ai-preview ready">
+        <div class="single-episode-ai-preview-head">
+          <div>
+          <p>AI Storyboard</p>
+          <h3>AI智能分镜</h3>
+        </div>
+        </div>
+        <div class="single-episode-ai-table-stack">
+          ${["script", "characters", "scenes", "props", "storyboards"]
+            .map((key) => renderSingleEpisodeAiTable(tables[key], key))
+            .join("")}
         </div>
       </div>
     </section>
   `;
+}
+
+function renderManualScriptAnalysisPreview(preview) {
+  const isLoading = preview.status === "loading";
+  const isError = preview.status === "error";
+  const title = isError ? "分析失败" : isLoading ? "DeepSeek 正在分析剧本" : "DeepSeek 剧本分析结果";
+  const saveDisabled = isLoading || isError || !resolveManualScriptAnalysisText(preview).trim();
+  return `
+    <section class="single-episode-ai-overlay manual-script-analysis-overlay" role="dialog" aria-modal="true" aria-label="DeepSeek 剧本分析">
+      <div class="single-episode-ai-overlay-top manual-script-analysis-top">
+        <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+        <div class="single-episode-ai-top-status" aria-live="polite">
+          <p>DeepSeek Script</p>
+          <h3>${escapeHtml(title)}</h3>
+        </div>
+        <div class="single-episode-ai-overlay-actions">
+          <button
+            class="single-episode-ai-create manual-script-analysis-save"
+            type="button"
+            data-action="save-manual-script-analysis"
+            ${saveDisabled ? "disabled" : ""}
+          >保存剧本</button>
+          <button
+            class="single-episode-ai-create manual-script-analysis-regenerate"
+            type="button"
+            data-action="regenerate-manual-script-analysis"
+            ${isLoading ? "disabled" : ""}
+          >重新生成</button>
+          <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+        </div>
+      </div>
+      ${isLoading ? `<div class="single-episode-ai-loading-bar"><span></span></div>` : ""}
+      <div class="single-episode-ai-preview manual-script-analysis-preview ${escapeAttr(preview.status)}" aria-live="polite">
+        ${isError
+          ? `<p class="single-episode-ai-error">${escapeHtml(preview.error || "请稍后重试")}</p>`
+          : renderManualScriptAnalysisOutput(preview)}
+      </div>
+    </section>
+  `;
+}
+
+function renderManualScriptAnalysisOutput(preview) {
+  const text = formatSingleEpisodeAiLiveText(resolveManualScriptAnalysisText(preview), { maxChars: 30000 });
+  return `
+    <article class="manual-script-analysis-output">
+      <header>
+        <strong>剧本</strong>
+        <span>${preview.status === "loading" ? "实时返回中" : "已完成"}</span>
+      </header>
+      <pre>${escapeHtml(text || "等待 DeepSeek 返回剧本内容...")}</pre>
+    </article>
+  `;
+}
+
+function resolveManualScriptAnalysisText(preview) {
+  return String(
+    preview?.scriptRawText ||
+    preview?.scriptText ||
+    preview?.data?.scriptText ||
+    "",
+  );
+}
+
+function resolveSingleEpisodeAiLoadingTitle(stage) {
+  const normalized = String(stage ?? "");
+  if (normalized === "scene") return "场景提示词生成中";
+  if (normalized === "character") return "角色提示词生成中";
+  if (normalized === "prop") return "道具提示词生成中";
+  if (normalized === "shot" || normalized === "prompt") return "分镜提示词生成中";
+  if (normalized === "complete") return "列表化数据生成中";
+  return "剧本生成中";
+}
+
+function renderSingleEpisodeAiLiveOutput(preview) {
+  const liveOutput = resolveSingleEpisodeAiLiveOutput(preview);
+  return `
+    <article class="single-episode-ai-live-output">
+      <header>
+        <strong>${escapeHtml(liveOutput.title)}</strong>
+        <span>实时回显</span>
+      </header>
+      <pre>${escapeHtml(formatSingleEpisodeAiLiveText(liveOutput.text, { maxChars: 12000 }) || liveOutput.emptyText)}</pre>
+    </article>
+  `;
+}
+
+function formatSingleEpisodeAiLiveText(rawText, options = {}) {
+  const maxChars = Number(options.maxChars ?? 0);
+  const raw = truncateSingleEpisodeAiPreviewText(String(rawText ?? ""), maxChars);
+  if (!raw.trim()) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const values = [];
+    collectSingleEpisodeAiLiveValues(parsed, values);
+    return values.join("\n").trim();
+  } catch {
+    return raw
+      .replace(/\\n/g, "\n")
+      .replace(/"[^"]+"\s*:/g, "")
+      .replace(/[{}\[\],]/g, "\n")
+      .replace(/^["\s]+|["\s]+$/gm, "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+}
+
+function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
+  const text = String(value ?? "");
+  if (!maxChars || text.length <= maxChars) {
+    return text;
+  }
+  return `…已截断，仅展示最近 ${maxChars} 字符…\n${text.slice(-maxChars)}`;
+}
+
+function collectSingleEpisodeAiLiveValues(value, output) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSingleEpisodeAiLiveValues(item, output));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, item]) => {
+      if (/id$/i.test(key)) {
+        return;
+      }
+      collectSingleEpisodeAiLiveValues(item, output);
+    });
+    return;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text) {
+      output.push(text);
+    }
+    return;
+  }
+  if (typeof value === "number") {
+    output.push(String(value));
+  }
+}
+
+function resolveSingleEpisodeAiLiveOutput(preview) {
+  const stage = String(preview?.activeStage ?? "script");
+  const stageConfig = {
+    script: { label: "剧本", empty: "等待 DeepSeek 返回剧本数据..." },
+    scene: { label: "场景", empty: "等待 DeepSeek 返回场景数据..." },
+    character: { label: "角色", empty: "等待 DeepSeek 返回角色数据..." },
+    prop: { label: "道具", empty: "等待 DeepSeek 返回道具数据..." },
+    shot: { label: "分镜", empty: "等待 DeepSeek 返回分镜数据..." },
+    prompt: { label: "分镜", empty: "等待 DeepSeek 返回分镜数据..." },
+  };
+  const config = stageConfig[stage] ?? stageConfig.script;
+  if (stage === "script") {
+    return {
+      title: `DeepSeek ${config.label}实时返回`,
+      text: String(preview?.scriptRawText ?? preview?.scriptText ?? ""),
+      emptyText: config.empty,
+    };
+  }
+  const assetStage = stage === "prompt" ? "shot" : stage;
+  const step = Array.isArray(preview?.assetPromptSteps)
+    ? preview.assetPromptSteps.find((item) => String(item?.stage ?? "") === assetStage)
+    : null;
+  return {
+    title: `DeepSeek ${config.label}实时返回`,
+    text: String(step?.responseText ?? step?.rawResponseText ?? ""),
+    emptyText: config.empty,
+  };
+}
+
+function renderSingleEpisodeAiLiveTables(preview) {
+  const tables = preview?.data?.displayTables ?? preview?.displayTables ?? {};
+  return `
+    <div class="single-episode-ai-table-stack live">
+      ${["script", "characters", "scenes", "props", "storyboards"]
+        .map((key) => renderSingleEpisodeAiTable(tables[key], key, { previewMode: "live" }))
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSingleEpisodeAiTable(table, key, options = {}) {
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const visibleRows = options.previewMode === "live" ? rows.slice(0, 8) : rows;
+  const hiddenRowCount = rows.length - visibleRows.length;
+  const title = table?.title ?? AI_PREVIEW_TABLE_TITLES[key] ?? "结果";
+  const columns = resolveSingleEpisodeAiTableColumns(table, key);
+  if (key === "script") {
+    return renderSingleEpisodeAiScriptText(table);
+  }
+  return `
+    <article class="single-episode-ai-table-card ${escapeAttr(key)}">
+      <header>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${rows.length} 条</span>
+      </header>
+      <div class="single-episode-ai-table-wrap">
+        <table>
+          <thead>
+            <tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+          </thead>
+          <tbody>
+            ${
+              visibleRows.length
+                ? visibleRows.map((row) => renderSingleEpisodeAiTableRow(row, key, columns, options)).join("")
+                : `<tr><td colspan="${Math.max(columns.length, 1)}">暂无数据</td></tr>`
+            }
+            ${hiddenRowCount > 0 ? `<tr><td colspan="${Math.max(columns.length, 1)}">实时预览仅展示前 ${visibleRows.length} 条，完整结果生成后显示。</td></tr>` : ""}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function resolveSingleEpisodeAiTableColumns(table, key) {
+  if (key === "storyboards" && Array.isArray(table?.columns) && table.columns.length) {
+    return table.columns;
+  }
+  const fixedColumns = {
+    characters: ["角色名称（角色名称/服装描述）", "角色描述（仅含年龄、国籍、性别、服装、脸部特征、细节特征）"],
+    scenes: ["场景名称（角色名称/天气和时间描述）", "场景描述（仅含空间结构、建筑风格、建筑细节、光影规则、氛围基调、关键道具）"],
+    props: ["道具名称", "道具描述（仅含外观、颜色、细节特征）"],
+    storyboards: ["镜号", "分镜剧情", "对话/旁白", "时长", "时间段", "转场", "景别/运镜", "静态图片提示词", "动态视频提示词（多镜头序列，每一分镜镜头总时长≤15s）", "分镜详细字段"],
+  };
+  if (fixedColumns[key]) {
+    return fixedColumns[key];
+  }
+  return Array.isArray(table?.columns) ? table.columns : [];
+}
+
+function renderSingleEpisodeAiScriptText(table) {
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const text = rows
+    .map((row) => [row.scriptContent, row.dialogue].filter(Boolean).join("\n"))
+    .filter(Boolean)
+    .join("\n\n");
+  return `
+    <article class="single-episode-ai-script-text">
+      <header>
+        <strong>${escapeHtml(table?.title ?? "剧本")}</strong>
+        <span>${rows.length} 段</span>
+      </header>
+      <div>${escapeHtml(text || "暂无剧本文字")}</div>
+    </article>
+  `;
+}
+
+function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}) {
+  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const valuesByKey = {
+    script: [row.beatNo, row.scriptContent, row.characters, row.sceneHint, row.propHints, row.dialogue],
+    scenes: [row.sceneName, row.sceneDescription],
+    characters: [row.characterName, row.characterDescription],
+    props: [row.propName, row.propDescription],
+    storyboards: columns.length === chapterStoryboardColumns.length && columns.every((column, index) => column === chapterStoryboardColumns[index])
+      ? [row.plot, row.dialogue, row.imagePrompt, row.videoPrompt]
+      : [row.shotNo, row.plot, row.dialogue, row.durationSec, row.timeRange, row.transition, row.shotDirection, row.imagePrompt, row.videoPrompt, row.shotDetails],
+  };
+  const values = valuesByKey[key] ?? Object.values(row ?? {});
+  const maxCellChars = options.previewMode === "live" ? 900 : 0;
+  return `<tr>${values.map((value) => `<td>${escapeHtml(truncateSingleEpisodeAiPreviewText(value ?? "", maxCellChars))}</td>`).join("")}</tr>`;
+}
+
+const AI_PREVIEW_TABLE_TITLES = {
+  script: "剧本",
+  scenes: "场景",
+  characters: "角色",
+  props: "道具",
+  storyboards: "分镜",
+};
+
+const SINGLE_EPISODE_LOOK_TYPES = [
+  { type: "genre", label: "题材看点", title: "题材", empty: "暂无启用的题材包", limit: 3 },
+  { type: "emotion", label: "情绪看点", title: "情绪", empty: "暂无启用的情绪包", limit: 3 },
+];
+
+function renderScriptManualLookControls(ui = {}) {
+  const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
+  const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
+  const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
+  const manualOptions = SINGLE_EPISODE_LOOK_TYPES.map((option) => ({
+    ...option,
+    label: option.type === "genre" ? "题材包" : "情绪包",
+  }));
+  return `
+    <div class="single-episode-look-controls script-manual-look-control-row">
+      ${manualOptions
+        .map((option) => renderSingleEpisodeLookSelect({
+          option,
+          activeType: activeLookPanel,
+          packages,
+          selectedPackageIds,
+        }))
+        .join("")}
+    </div>
+  `;
+}
+
+function renderSingleEpisodeLookSelect({ option, activeType, packages = [], selectedPackageIds = {} }) {
+  const type = option.type;
+  const isOpen = activeType === type;
+  const selectedIds = new Set(selectedPackageIds[type] ?? []);
+  const items = packages
+    .filter((item) => resolvePackageType(item) === type && item.status !== "disabled")
+    .slice(0, 48);
+  const summary = resolveSingleEpisodeLookSummary(items, selectedIds);
+
+  return `
+    <section class="single-episode-look-select ${isOpen ? "open" : ""}" aria-label="${escapeAttr(option.label)}">
+      <div class="single-episode-look-label">
+        <span>${escapeHtml(option.label)}</span>
+        <i aria-hidden="true">?</i>
+      </div>
+      <button
+        class="single-episode-look-trigger"
+        type="button"
+        data-action="toggle-single-episode-look-panel"
+        data-look-type="${escapeAttr(type)}"
+        aria-expanded="${isOpen ? "true" : "false"}"
+      >
+        <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
+        <b aria-hidden="true">${isOpen ? "⌃" : "⌄"}</b>
+      </button>
+      ${isOpen ? renderSingleEpisodeLookDropdown({ option, items, selectedIds }) : ""}
+    </section>
+  `;
+}
+
+function renderSingleEpisodeLookDropdown({ option, items, selectedIds }) {
+  const type = option.type;
+  return `
+    <div class="single-episode-look-dropdown" role="listbox" aria-label="${escapeAttr(option.title)}">
+      <header>
+        <strong>${escapeHtml(option.title)}</strong>
+      </header>
+      <div class="single-episode-look-grid">
+        <button
+          class="single-episode-look-chip ${selectedIds.size === 0 ? "active" : ""}"
+          type="button"
+          data-action="toggle-single-episode-look-package"
+          data-look-type="${escapeAttr(type)}"
+          data-package-id="auto"
+          aria-pressed="${selectedIds.size === 0 ? "true" : "false"}"
+        >
+          自动适配
+        </button>
+        ${
+          items.length
+            ? items.map((item) => {
+              const selected = selectedIds.has(item.id);
+              return `
+                <button
+                  class="single-episode-look-chip ${selected ? "active" : ""}"
+                  type="button"
+                  data-action="toggle-single-episode-look-package"
+                  data-look-type="${escapeAttr(type)}"
+                  data-package-id="${escapeAttr(item.id)}"
+                  aria-pressed="${selected ? "true" : "false"}"
+                >
+                  ${escapeHtml(item.name)}
+                </button>
+              `;
+            }).join("")
+            : `<p class="single-episode-look-empty">${escapeHtml(option.empty)}</p>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function resolveSingleEpisodeLookSummary(items, selectedIds) {
+  const names = items
+    .filter((item) => selectedIds.has(item.id))
+    .map((item) => item.name)
+    .filter(Boolean);
+  return names.length ? names.join("，") : "自动适配，自动适配";
+}
+
+function normalizeOpenSingleEpisodeLookType(value) {
+  return SINGLE_EPISODE_LOOK_TYPES.some((item) => item.type === value) ? value : "";
+}
+
+function normalizeSingleEpisodeLookSelections(value = {}) {
+  return {
+    genre: Array.isArray(value.genre) ? value.genre.map(String) : [],
+    emotion: Array.isArray(value.emotion) ? value.emotion.map(String) : [],
+  };
+}
+
+function normalizeStoryboardPromptPackages(packages = []) {
+  return Array.isArray(packages)
+    ? packages
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: String(item.id ?? item.code ?? item.name ?? ""),
+          name: String(item.name ?? item.label ?? item.code ?? ""),
+          package_type: String(item.package_type ?? item.packageType ?? ""),
+          status: String(item.status ?? "enabled"),
+        }))
+        .filter((item) => item.id && item.name)
+    : [];
+}
+
+function resolvePackageType(item) {
+  return String(item?.package_type ?? item?.packageType ?? "");
 }
 
 function getEpisodeHubEntries(state, ui) {
@@ -1496,7 +2563,10 @@ export function renderAssetImportModal(ui) {
   const assetKind = ui.assetImportModal ?? "character";
   const assetLabel = getAssetModalLabel(assetKind, ui.projectOtherAssetMediaType ?? "video");
   const isEpisodeWorkbenchLibraryModal =
-    ui.projectPanelMode === "episode-workbench" && assetKind !== "other";
+    ui.projectPanelMode === "episode-workbench" &&
+    assetKind !== "other" &&
+    ui.assetImportModalSource !== "official" &&
+    ui.assetImportModalSource !== "team";
 
   if (isEpisodeWorkbenchLibraryModal) {
     return renderEpisodeWorkbenchAssetImportModal(ui, assetKind);
@@ -1526,24 +2596,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
     { id: "scene", label: "场景" },
     { id: "prop", label: "道具" },
   ];
-  const episodeBackedAssets =
-    assetKind === "character"
-      ? (ui.importedAssets?.character ?? []).map((asset) => ({
-          id: asset.id,
-          name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-          preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-        }))
-      : assetKind === "scene"
-        ? (ui.importedAssets?.scene ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-          }))
-        : (ui.importedAssets?.prop ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.preview ?? asset.latestVersion?.previewUrl ?? "",
-          }));
+  const episodeBackedAssets = resolveEpisodeWorkbenchModalAssets(ui, assetKind);
   const projectLibraryBackedAssets =
     assetKind === "character"
       ? (ui.projectLibraryAssetsByType?.character ?? []).map((asset) => ({
@@ -1682,6 +2735,71 @@ function normalizeEpisodeWorkbenchImportAssets(assets = []) {
     name: asset.name ?? asset.label ?? "未命名资产",
     preview: resolveApiUrl(asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? ""),
   }));
+}
+
+function resolveEpisodeWorkbenchModalAssets(ui, assetKind) {
+  const sources = [
+    ui.importedAssets?.[assetKind],
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.episodeWorkbenchContext, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.episodeWorkbenchContext?.data, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetSources(ui.projectDetail, assetKind),
+  ];
+  const assets = [];
+  const seen = new Set();
+  for (const source of sources) {
+    for (const asset of normalizeEpisodeWorkbenchAssetSource(source)) {
+      const id = String(asset?.id ?? asset?.assetId ?? "").trim();
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      assets.push({
+        id,
+        name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
+        preview:
+          asset.previewUrl ??
+          asset.preview ??
+          asset.fixedImageUrl ??
+          asset.latestVersion?.previewUrl ??
+          "",
+      });
+    }
+  }
+  return assets;
+}
+
+function resolveEpisodeWorkbenchModalAssetSources(container, assetKind) {
+  if (!container || typeof container !== "object") {
+    return [];
+  }
+  return [
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.assetsByType, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.assets, assetKind),
+    ...resolveEpisodeWorkbenchModalAssetKindSources(container.episodeAssets, assetKind),
+  ];
+}
+
+function resolveEpisodeWorkbenchModalAssetKindSources(assetsByType, assetKind) {
+  if (!assetsByType || typeof assetsByType !== "object") {
+    return [];
+  }
+  const keys =
+    assetKind === "character"
+      ? ["character", "characters", "role", "roles"]
+      : assetKind === "scene"
+        ? ["scene", "scenes"]
+        : ["prop", "props"];
+  return keys.map((key) => assetsByType[key]).filter(Boolean);
+}
+
+function normalizeEpisodeWorkbenchAssetSource(source) {
+  if (Array.isArray(source)) {
+    return source;
+  }
+  if (source && typeof source === "object" && Array.isArray(source.items)) {
+    return source.items;
+  }
+  return [];
 }
 
 function normalizeAssetImportPageSize(value) {
@@ -2483,9 +3601,9 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "script") {
-    return `
+    return renderScrollableWorkbenchSurface("script", `
       ${renderScriptManagementPage({ state, ui })}
-    `;
+    `);
   }
 
   if (activeNavTab === "library") {
@@ -2531,8 +3649,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "tools") {
     return `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
-      ${renderToolsPanel({ state, ui })}
+      ${renderToolsPanel(ui, state)}
       ${renderWorkspaceStatusToast(ui.toast)}
     `;
   }
@@ -2629,9 +3746,13 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       calibrationOverrideReason: ui.calibrationOverrideReason ?? "",
       imageGenerationResult: ui.imageGenerationResult ?? null,
       videoGenerationResult: ui.videoGenerationResult ?? null,
-      assetImportModal: ui.assetImportModal ?? null,
-      assetImportModalTab: ui.assetImportModalTab ?? "local",
-      assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
+        assetImportModal: ui.assetImportModal ?? null,
+        assetImportModalTab: ui.assetImportModalTab ?? "local",
+        episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
+        episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
+        episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
+        episodeAssetLibraryQuery: ui.episodeAssetLibraryQuery ?? "",
+        assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
       assetImportDrafts: ui.assetImportDrafts ?? [],
       assetImportSelection: ui.assetImportSelection ?? [],
       assetImportPage: ui.assetImportPage ?? 1,
@@ -2641,7 +3762,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
       projectDetail: ui.projectDetail ?? null,
       mediaMode: ui.episodeMediaMode ?? "image",
-      videoMode: ui.videoGenerationMode ?? "first-frame",
+      videoMode: ui.videoGenerationMode ?? "reference-video",
       imageMode: ui.imageGenerationMode ?? "single-image",
       generationControls: {
         videoDurationSec: ui.videoDurationSec,
@@ -2654,6 +3775,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         imageResolution: ui.imageResolution,
         imageAspectRatio: ui.imageAspectRatio,
         multiImageStrategy: ui.multiImageStrategy,
+        parameterValues: ui.generationParameterValues ?? null,
       },
       episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
       generationUiState: {
@@ -2662,6 +3784,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
         activeGenerationFrameMenu: ui.activeGenerationFrameMenu ?? null,
         isGenerationConsoleCollapsed: Boolean(ui.isGenerationConsoleCollapsed),
+        imageGenerationMode: ui.imageGenerationMode ?? "single-image",
+        videoGenerationMode: ui.videoGenerationMode ?? "reference-video",
         promptMentionMenuOpen: Boolean(ui.promptMentionMenuOpen),
         promptMentionQuery: ui.promptMentionQuery ?? "",
         promptMentionSuggestions: ui.promptMentionSuggestions ?? [],
@@ -2701,257 +3825,1456 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
-function renderToolsPanel({ state, ui }) {
-  const uploadLimits = ui.episodeGenerationConfig?.uploadLimits ?? {};
-  const image = uploadLimits.image ?? {};
-  const video = uploadLimits.video ?? {};
-  const audio = uploadLimits.audio ?? {};
-  const blockedExtensions = Array.isArray(uploadLimits.blockedExtensions) ? uploadLimits.blockedExtensions : [];
-  const exportHistory = Array.isArray(ui.exportHistory) ? ui.exportHistory : [];
-  const latestExport = exportHistory[0] ?? null;
-  const hasReadyStoryboardVideo = (ui.storyboards ?? []).some(
-    (storyboard) =>
-      storyboard?.selectedVideoStatus === "ready" ||
-      storyboard?.currentVideoStatus === "ready" ||
-      storyboard?.videoStatus === "ready",
-  );
-  const timeoutMinutes = 15;
-  const pollSeconds = 25;
-
+function renderToolsPanel(ui = {}, state = {}) {
+  if (ui.canvasProjectView !== "detail") {
+    return renderCanvasProjectGallery(ui);
+  }
+  const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
+    projectId: ui.selectedProjectCardId ?? "",
+    episodeId: ui.selectedEpisodeId ?? "",
+  });
+  const nodes = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [];
+  const viewport = canvasDocument.viewport ?? {};
+  const zoomPercent = Math.round(Number(viewport.zoom ?? 1) * 100);
+  const viewportStyle = canvasViewportStyle(viewport);
+  const gridStyle = canvasGridStyle(viewport);
+  const sidebarMode = ui.canvasSidebarMode === "assets" ? "assets" : "nodes";
+  const canvasAssets = Array.isArray(ui.canvasAssets) ? ui.canvasAssets : [];
+  const sidebarItems = buildCanvasSidebarItems(canvasDocument, {
+    mode: sidebarMode,
+    assets: canvasAssets,
+  });
+  const nodeTemplates = resolveCanvasNodeTemplates(ui.episodeGenerationConfig);
+  const selectedNode =
+    nodes.find((node) => node.id === ui.selectedCanvasNodeId) ??
+    null;
+  const selectedModelOptionHtml = renderCanvasModelOptions(ui.episodeGenerationConfig, selectedNode);
+  const selectedCanvasModelControls = renderCanvasModelParameterControls({
+    generationConfig: ui.episodeGenerationConfig,
+    node: selectedNode,
+    parameterValues: resolveCanvasNodeParameterValues(selectedNode, ui),
+    openMenu: ui.openGenerationSelectMenu,
+  });
+  const selectedCanvasModel = resolveSelectedCanvasModel(ui.episodeGenerationConfig, selectedNode);
+  const generatingCanvasNodeId = String(ui.canvasGeneratingNodeId ?? "");
+  const selectedNodeGenerating = selectedNode?.id && selectedNode.id === generatingCanvasNodeId;
+  const addMenuOpen = ui.canvasAddMenuOpen === true;
+  const contextMenu = ui.canvasContextMenu && typeof ui.canvasContextMenu === "object"
+    ? ui.canvasContextMenu
+    : null;
+  const scriptPicker = resolveCanvasScriptPicker(ui, state);
   return `
-    <section class="overview-strip" aria-label="工具箱总览">
-      ${renderMetric("轮询频率", `${pollSeconds} 秒`)}
-      ${renderMetric("超时判定", `${timeoutMinutes} 分钟`)}
-      ${renderMetric("当前积分", resolveDisplayedCreditBalance(ui))}
-      ${renderMetric("导出状态", hasReadyStoryboardVideo ? "可导出原视频" : "等待分镜视频就绪")}
-    </section>
-    <section class="episode-overview" aria-label="工具箱工作台">
-      <article class="episode-launch-card">
-        <p class="section-kicker">上传约束</p>
-        <h2>直传云存储前的本地校验</h2>
-        <p>浏览器先按后端返回的限制校验文件，再直传对象存储；业务后端仅负责准备上传会话、校验完成状态和绑定资源。</p>
-        <ul class="project-empty-points">
-          <li>图片：${renderUploadLimitLine(image, true)}</li>
-          <li>视频：${renderUploadLimitLine(video, false)}</li>
-          <li>音频：${renderUploadLimitLine(audio, false)}</li>
-          <li>禁止上传：${blockedExtensions.length ? blockedExtensions.join("、") : "以后端策略为准"}</li>
-        </ul>
-      </article>
-      <article class="episode-list-card">
-        <div class="episode-list-header">
-          <div>
-            <p class="section-kicker">任务规则</p>
-            <h2>生成、扣费与超时处理</h2>
-          </div>
+    <section class="canvas-workspace" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}">
+      <aside class="canvas-sidebar" aria-label="画布侧栏">
+        <header class="canvas-sidebar-tabs" role="tablist" aria-label="画布资源切换">
+          <button class="canvas-sidebar-tab ${sidebarMode === "nodes" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "nodes" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="nodes">画布</button>
+          <button class="canvas-sidebar-tab ${sidebarMode === "assets" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "assets" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="assets">资产</button>
+          <button class="canvas-sidebar-book" type="button" aria-label="打开画布说明">${renderCanvasIcon("book")}</button>
+        </header>
+        <div class="canvas-sidebar-filter">
+          <button class="canvas-filter-label" type="button">
+            <span>${sidebarMode === "assets" ? "项目素材" : "画布元素"}</span>
+            <i aria-hidden="true">${renderCanvasIcon("sort")}</i>
+          </button>
+          <button class="canvas-filter-select" type="button">${sidebarMode === "assets" ? "可拖入" : "全部"}⌄</button>
+          <button class="canvas-search" type="button" aria-label="搜索">${renderCanvasIcon("search")}</button>
         </div>
-        <div class="asset-library-empty">
-          <h3>当前链路按真实规则运行</h3>
-          <p>创建任务先预扣积分；成功后结转消耗；失败、超时或修复判定失败时返还预留积分。前端每 ${pollSeconds} 秒轮询一次，超过 15 分钟标记失败。</p>
-          <ul class="project-empty-points">
-            <li>图片默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultImageModelCode ?? "nano_banana_2")}</li>
-            <li>视频默认模型：${escapeHtml(ui.episodeGenerationConfig?.defaultVideoModelCode ?? "video_mock_1")}</li>
-            <li>跨域拦截：非白名单来源返回 403，并使用统一错误信封</li>
-            <li>固定回写：当前阶段图片与视频结果仍走真实任务写回，只是素材来源固定</li>
-          </ul>
+        <div class="canvas-element-list" aria-label="画布节点列表">
+          ${sidebarItems.length
+            ? sidebarItems.map((item) => renderCanvasSidebarItem(item, item.id === selectedNode?.id)).join("")
+            : `<p class="canvas-empty-copy">${sidebarMode === "assets" ? "暂无可用素材，先在资产库导入角色、场景或参考图。" : "暂无画布节点。"}</p>`}
+          <section class="canvas-template-section" aria-label="节点模板">
+            <header>
+              <span>节点模板</span>
+              <small>${nodeTemplates.length} 个</small>
+            </header>
+            <div class="canvas-template-grid">
+              ${nodeTemplates.map((template) => renderCanvasTemplateButton(template)).join("")}
+            </div>
+          </section>
         </div>
-      </article>
-    </section>
-    <section class="episode-overview" aria-label="导出与诊断">
-      <article class="episode-list-card">
-        <div class="episode-list-header">
-          <div>
-            <p class="section-kicker">导出诊断</p>
-            <h2>原视频导出</h2>
-          </div>
+        <footer class="canvas-sidebar-footer">
+          <button class="canvas-collapse" type="button" aria-label="收起侧栏">${renderCanvasIcon("collapse")}</button>
+          <span>${sidebarMode === "assets" ? `共 ${sidebarItems.length} 素材` : `共 ${nodes.length} 节点`}</span>
+        </footer>
+      </aside>
+      <main class="canvas-stage ${viewport.gridVisible === false ? "is-grid-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
+        <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
+          ${renderCanvasIcon("collapse")}<span>项目</span>
+        </button>
+        <div class="canvas-x6-mount" data-canvas-x6-mount aria-label="可拖拽连线画布"></div>
+        <div class="canvas-flow" aria-label="AI 节点工作流" style="${escapeAttr(viewportStyle)}">
+          ${renderLiblibCanvasEdges(canvasDocument)}
+          ${nodes.map((node) => renderLiblibCanvasNode(node, {
+            selected: node.id === selectedNode?.id,
+            activeTextToolbar: ui.editingCanvasTextNodeId === node.id,
+            canvasDocument,
+            generatingNodeId: generatingCanvasNodeId,
+          })).join("")}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
         </div>
-        <div class="asset-library-empty">
-          <h3>${hasReadyStoryboardVideo ? "已满足导出前提" : "尚未满足导出前提"}</h3>
-          <p>${hasReadyStoryboardVideo ? "导出直接导出原视频，不做额外画质限制。" : "至少需要一个已就绪的分镜视频，导出预览才会展示真实下载入口。"}</p>
-          <ul class="project-empty-points">
-            <li>最近导出任务：${escapeHtml(latestExport?.statusLabel ?? latestExport?.status ?? "暂无记录")}</li>
-            <li>最近导出格式：${escapeHtml(latestExport?.formatLabel ?? latestExport?.format ?? "原视频")}</li>
-            <li>最近导出时间：${escapeHtml(latestExport?.createdAtLabel ?? latestExport?.createdAt ?? "暂无记录")}</li>
-            <li>批量能力：当前仅保留入口，不真正提交批量任务</li>
-          </ul>
-        </div>
-      </article>
-      <article class="episode-launch-card">
-        <p class="section-kicker">后续接入位</p>
-        <h2>保留可替换接口，不伪装成功能</h2>
-        <p>真实生成服务接入后，只替换任务执行与结果来源；前端调用、任务状态、写库与资源绑定契约保持不变。</p>
-      </article>
-    </section>
-    ${renderGenerationQueueOpsPanel(ui.generationQueueHealth)}
-  `;
-}
 
-function renderGenerationQueueOpsPanel(snapshot) {
-  const hasSnapshot = Boolean(snapshot);
-  const queues = Array.isArray(snapshot?.queues) ? snapshot.queues : [];
-  const failedJobs = queues.flatMap((queue) =>
-    (Array.isArray(queue.failedJobs) ? queue.failedJobs : []).map((job) => ({
-      queue,
-      job,
-    })),
-  );
+        ${addMenuOpen ? `
+          <aside class="canvas-add-menu" aria-label="添加节点">
+            <p>节点模板</p>
+            ${nodeTemplates.map((template) => `
+              <button type="button" data-action="add-canvas-template" data-template-id="${escapeAttr(template.id)}" data-node-kind="${escapeAttr(template.type)}">
+                ${renderCanvasIcon(template.type)}${escapeHtml(template.title)}
+                ${template.group === "编排" ? "<span>NEW</span>" : ""}
+              </button>
+            `).join("")}
+          </aside>
+        ` : ""}
 
-  return `
-    <section class="episode-overview generation-queue-ops" aria-label="BullMQ 队列运维">
-      <article class="episode-list-card generation-queue-overview">
-        <div class="episode-list-header">
-          <div>
-            <p class="section-kicker">BullMQ 队列</p>
-            <h2>生成队列健康</h2>
-          </div>
-          <button class="secondary-action compact" type="button" data-action="refresh-generation-queues">刷新</button>
+        ${contextMenu ? renderCanvasContextMenu(contextMenu, { episodeGenerationConfig: ui.episodeGenerationConfig }) : ""}
+
+        ${scriptPicker ? renderCanvasScriptPicker(scriptPicker) : ""}
+
+        <div class="canvas-zoom-tools" aria-label="画布视图工具">
+          <button class="${viewport.gridVisible === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-grid" aria-label="网格视图">${renderCanvasIcon("grid")}</button>
+          <button type="button" data-action="set-canvas-viewport" data-viewport-patch="zoom-out" aria-label="缩小">${renderCanvasIcon("minus")}</button>
+          <button type="button" data-action="set-canvas-viewport" data-viewport-patch="zoom-in" aria-label="放大">${renderCanvasIcon("plus")}</button>
+          <button class="${viewport.snapEnabled === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-snap" aria-label="吸附">${renderCanvasIcon("link")}</button>
+          <strong>${escapeHtml(String(zoomPercent))}%</strong>
         </div>
-        <div class="asset-library-empty">
-          <h3>${escapeHtml(queueHealthTitle(snapshot))}</h3>
-          <p>Redis：${escapeHtml(snapshot?.redis?.status ?? "unknown")} · Prefix：${escapeHtml(snapshot?.queuePrefix ?? "未配置")}</p>
-        </div>
-        <div class="generation-queue-list">
-          ${
-            queues.length
-              ? queues.map(renderGenerationQueueRow).join("")
-              : `<div class="generation-queue-empty">${hasSnapshot ? "当前没有队列数据。" : "点击刷新读取 Redis 与 BullMQ 队列状态。"}</div>`
-          }
-        </div>
-      </article>
-      <article class="episode-launch-card generation-queue-failed-jobs">
-        <p class="section-kicker">失败样本</p>
-        <h2>按 jobId 运维</h2>
-        ${
-          failedJobs.length
-            ? failedJobs.map(({ queue, job }) => renderGenerationQueueFailedJob(queue, job)).join("")
-            : `<p>${hasSnapshot ? "当前没有 failed job 样本。" : "刷新后显示可重试或移除的 failed job 样本。"}</p>`
-        }
-      </article>
+      </main>
     </section>
   `;
 }
 
-function renderGenerationQueueRow(queue) {
-  const counts = queue?.counts ?? {};
+function renderCanvasProjectGallery(ui = {}) {
+  const projects = normalizeCanvasProjectCards(ui);
   return `
-    <div class="generation-queue-row">
-      <div>
-        <strong>${escapeHtml(queue?.name ?? "unknown")}</strong>
-        <span>${escapeHtml(queue?.role ?? "queue")} · ${escapeHtml(queue?.status ?? "unknown")}</span>
+    <section class="canvas-project-gallery" aria-label="画布项目列表">
+      <header class="canvas-project-gallery-head">
+        <h1>全部画布(${escapeHtml(String(projects.length))})</h1>
+        <div class="canvas-project-gallery-controls">
+          <button class="canvas-project-filter" type="button">
+            <span>项目状态</span>
+            <i aria-hidden="true">⌄</i>
+          </button>
+          <label class="canvas-project-search">
+            ${renderCanvasIcon("search")}
+            <input type="search" placeholder="请输入项目名称" aria-label="请输入项目名称" />
+          </label>
+        </div>
+      </header>
+      <div class="canvas-project-card-grid">
+        ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
-      <div class="generation-queue-counts">
-        <span>等待 ${numberOrZero(counts.waiting)}</span>
-        <span>延迟 ${numberOrZero(counts.delayed)}</span>
-        <span>执行 ${numberOrZero(counts.active)}</span>
-        <span>失败 ${numberOrZero(counts.failed)}</span>
+      <div class="canvas-project-aurora" aria-hidden="true"></div>
+      <button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
+        <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
+        创建画布
+      </button>
+    </section>
+  `;
+}
+
+function normalizeCanvasProjectCards(ui = {}) {
+  const fallback = [{ id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" }];
+  const projects = Array.isArray(ui.canvasProjects) && ui.canvasProjects.length ? ui.canvasProjects : fallback;
+  return projects.map((project, index) => ({
+    id: String(project?.id ?? `canvas-project-${index + 1}`),
+    title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
+    createdAt: String(project?.createdAt ?? "2026/06/10"),
+    status: String(project?.status ?? "草稿"),
+  }));
+}
+
+function renderCanvasProjectCard(project = {}, menuOpen = false) {
+  return `
+    <article class="canvas-project-card">
+      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+        <span class="canvas-project-cover" aria-hidden="true">
+          <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
+        </span>
+      </button>
+      <div class="canvas-project-card-copy">
+        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+          <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
+        </button>
+        <div class="canvas-project-card-row">
+          <small>创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
+          <span class="canvas-project-card-actions">
+            <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}编辑">编辑</button>
+            ${menuOpen ? renderCanvasProjectMenu(project) : ""}
+          </span>
+        </div>
       </div>
+    </article>
+  `;
+}
+
+function renderCanvasProjectMenu(project = {}) {
+  return `
+    <div class="canvas-project-card-menu" role="menu" aria-label="画布操作">
+      <button class="canvas-project-card-menu-item" type="button" data-action="rename-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">重命名</button>
+      <button class="canvas-project-card-menu-item danger" type="button" data-action="delete-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">删除</button>
     </div>
   `;
 }
 
-function renderGenerationQueueFailedJob(queue, job) {
-  const queueName = String(queue?.name ?? "");
-  const jobId = String(job?.id ?? "");
-  const taskId = String(job?.data?.taskId ?? "");
-  const failureCode = String(job?.data?.failureCode ?? job?.data?.failure_code ?? "");
+function renderCanvasSidebarItem(item, active = false) {
+  const action = item.type === "asset" ? "add-canvas-template" : "select-canvas-node";
+  const dataAttrs = item.type === "asset"
+    ? `data-template-id="template-upload" data-node-kind="upload" data-asset-id="${escapeAttr(item.id)}"`
+    : `data-node-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.kind)}"`;
   return `
-    <div class="generation-queue-failed-job">
-      <strong>${escapeHtml(job?.name ?? "unknown job")}</strong>
-      <span>${escapeHtml(jobId)} · attempts ${numberOrZero(job?.attemptsMade)}</span>
-      <p>${escapeHtml(job?.failureReason ?? "无失败原因")}</p>
-      <div class="generation-queue-job-actions">
-        ${renderGenerationQueueJobButton("retry", "重试", queueName, jobId)}
-        ${renderGenerationQueueJobButton("remove", "移除", queueName, jobId)}
-        ${renderGenerationStagedRetryButton("retry_finalize", "重试保存", taskId, failureCode)}
-        ${renderGenerationStagedRetryButton("retry_persist_asset", "补写资产", taskId, failureCode)}
+    <button class="canvas-element-item ${escapeAttr(item.kind)} ${item.type === "asset" ? "asset" : ""} ${active ? "active" : ""}" type="button" data-action="${action}" ${dataAttrs}>
+      <span class="canvas-element-icon" aria-hidden="true">${item.url ? `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />` : renderCanvasIcon(item.kind)}</span>
+      <span class="canvas-element-copy">
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.meta)}</small>
+      </span>
+      <i>${escapeHtml(item.status)}</i>
+    </button>
+  `;
+}
+
+function renderCanvasTemplateButton(template) {
+  return `
+    <button class="canvas-template-button ${escapeAttr(template.type)}" type="button" data-action="add-canvas-template" data-template-id="${escapeAttr(template.id)}" data-node-kind="${escapeAttr(template.type)}">
+      <span aria-hidden="true">${renderCanvasIcon(template.type)}</span>
+      <strong>${escapeHtml(template.title)}</strong>
+      <small>${escapeHtml(template.description)}</small>
+    </button>
+  `;
+}
+
+function renderLiblibCanvasEdges(document = {}) {
+  const nodes = Array.isArray(document.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const edges = Array.isArray(document.edges) ? document.edges : [];
+  const edgePaths = edges
+    .map((edge) => {
+      const sourceNode = nodeMap.get(edge.sourceNodeId);
+      const targetNode = nodeMap.get(edge.targetNodeId);
+      if (!sourceNode || !targetNode) {
+        return "";
+      }
+      const source = canvasPortAnchor(sourceNode, "out");
+      const target = canvasPortAnchor(targetNode, "in");
+      const delta = Math.max(110, Math.abs(target.x - source.x) * 0.48);
+      const d = `M ${source.x} ${source.y} C ${source.x + delta} ${source.y}, ${target.x - delta} ${target.y}, ${target.x} ${target.y}`;
+      const active = edge?.data?.status === "running" || edge?.data?.status === "preview" || edge?.data?.status === "queued";
+      return `
+        <g
+          class="canvas-flow-edge ${active ? "active" : ""}"
+          data-canvas-edge-id="${escapeAttr(edge.id ?? "")}"
+          data-source-node-id="${escapeAttr(edge.sourceNodeId ?? "")}"
+          data-source-port-id="${escapeAttr(edge.sourcePortId ?? "")}"
+          data-target-node-id="${escapeAttr(edge.targetNodeId ?? "")}"
+          data-target-port-id="${escapeAttr(edge.targetPortId ?? "")}"
+        >
+          <path class="canvas-flow-edge-hit" d="${escapeAttr(d)}" />
+          <path class="canvas-flow-edge-line" d="${escapeAttr(d)}" />
+          <path class="canvas-flow-edge-glow" d="${escapeAttr(d)}" />
+        </g>
+      `;
+    })
+    .join("");
+  return `
+    <svg class="canvas-lib-edge-layer" viewBox="-3200 -2400 6400 4800" aria-hidden="true">
+      ${edgePaths}
+    </svg>
+  `;
+}
+
+function renderLiblibCanvasNode(node, options = {}) {
+  if (node?.type === "script") {
+    return renderLiblibTextNode(node, options);
+  }
+  if (node?.type === "upload") {
+    return renderLiblibUploadNode(node, options);
+  }
+  if (node?.type === "send") {
+    return renderLiblibGenerationNode(node, options);
+  }
+  if (node?.type === "video") {
+    return renderLiblibGenerationNode({
+      ...node,
+      data: {
+        ...(node.data ?? {}),
+        mediaKind: "video",
+      },
+    }, options);
+  }
+  if (node?.type === "image") {
+    return renderLiblibGenerationNode({
+      ...node,
+      data: {
+        ...(node.data ?? {}),
+        mediaKind: "image",
+      },
+    }, options);
+  }
+  return renderLiblibTextNode(node, options);
+}
+
+function renderLiblibUploadNode(node, { selected = false } = {}) {
+  const title = node?.data?.title && !String(node.data.title).includes("�")
+    ? node.data.title
+    : "上传";
+  const mediaKind = node?.data?.mediaKind === "video" ? "video" : "image";
+  const mediaUrl = node?.data?.url ?? node?.data?.previewUrl ?? node?.data?.src ?? "";
+  const fileName = node?.data?.fileName ?? node?.data?.name ?? "";
+  const status = node?.data?.status ?? "empty";
+  const style = canvasNodePositionStyle(node, { width: 360, height: 220 });
+  return `
+    <article
+      class="canvas-lib-node canvas-upload-node ${selected ? "selected" : ""}"
+      data-action="select-canvas-node"
+      data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-kind="upload"
+      style="${escapeAttr(style)}"
+    >
+      <header class="canvas-lib-node-title">
+        ${renderCanvasIcon("upload")}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}">
+        <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+        ${mediaUrl ? `
+          <span class="canvas-upload-preview">
+            ${mediaKind === "video"
+              ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
+              : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
+          </span>
+          <span class="canvas-upload-meta">
+            <strong>${escapeHtml(fileName || (mediaKind === "video" ? "视频素材" : "图片素材"))}</strong>
+            <small>${status === "uploading" ? "上传中" : "已选择"}</small>
+          </span>
+        ` : `
+          <span class="canvas-upload-empty-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
+          <span class="canvas-upload-empty-text">上传图片或视频</span>
+        `}
+        <input class="canvas-upload-file-input" type="file" accept="image/*,video/*" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
+      </button>
+    </article>
+  `;
+}
+
+function renderLiblibGenerationNode(node, { selected = false, canvasDocument = null, generatingNodeId = "" } = {}) {
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const title = mediaKind === "video" ? "视频生成" : "图片生成";
+  const promptLabel = mediaKind === "video" ? "输入提示词生成视频" : "输入提示词生成图片";
+  const style = canvasNodePositionStyle(node, mediaKind === "video" ? { width: 420, height: 378 } : { width: 420, height: 378 });
+  const mediaUrl = resolveCanvasGenerationNodeMediaUrl(node, mediaKind);
+  const progress = resolveCanvasGenerationNodeProgress(node);
+  const progressStage = resolveCanvasGenerationNodeStage(node);
+  const progressTaskId = resolveCanvasGenerationNodeTaskId(node);
+  const isGenerating = String(node?.id ?? "") === String(generatingNodeId ?? "");
+  return `
+    <article
+      class="canvas-lib-node canvas-generation-node ${mediaKind} ${selected ? "selected" : ""} ${isGenerating ? "is-generating" : ""}"
+      ${isGenerating ? 'aria-disabled="true"' : 'data-action="select-canvas-node"'}
+      data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-kind="${escapeAttr(node?.type ?? "send")}"
+      style="${escapeAttr(style)}"
+    >
+      <header class="canvas-lib-node-title">
+        ${renderCanvasIcon(mediaKind)}
+        <strong>${title}</strong>
+      </header>
+      <div class="canvas-generation-preview">
+        <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+        <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+        ${mediaUrl ? `
+          ${renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating)}
+        ` : isGenerating ? "" : `
+          <div class="canvas-generation-empty">
+            ${renderCanvasIcon(mediaKind)}
+            <strong>${promptLabel}</strong>
+          </div>
+        `}
+        ${isGenerating ? renderCanvasGenerationProgress(progress, progressStage, progressTaskId) : ""}
       </div>
+    </article>
+  `;
+}
+
+function renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating = false) {
+  const resultClass = `canvas-generation-result ${isGenerating ? "is-generating" : ""}`;
+  if (mediaKind === "video") {
+    const fileName = resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl);
+    return `
+      <div class="${resultClass}">
+        <video class="canvas-generation-video" src="${escapeAttr(mediaUrl)}" controls playsinline preload="metadata"></video>
+        <div class="canvas-generation-result-actions">
+          <a class="canvas-generation-result-action" href="${escapeAttr(mediaUrl)}" download="${escapeAttr(fileName)}" target="_blank" rel="noopener" aria-label="下载生成视频" title="下载生成视频">
+            ${renderCanvasIcon("download")}
+            <span>下载</span>
+          </a>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="${resultClass}">
+      <img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />
     </div>
   `;
 }
 
-function renderGenerationQueueJobButton(action, label, queueName, jobId) {
+function resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl = "") {
+  const data = node?.data ?? {};
+  const baseName = String(
+    data.fileName ??
+    data.name ??
+    data.title ??
+    data.lastTaskId ??
+    node?.id ??
+    (mediaKind === "video" ? "canvas-video" : "canvas-image"),
+  ).trim();
+  const safeBaseName = (baseName || (mediaKind === "video" ? "canvas-video" : "canvas-image"))
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/\.[a-z0-9]{2,5}$/i, "")
+    .slice(0, 80);
+  const extensionMatch = String(mediaUrl ?? "").split(/[?#]/)[0].match(/\.([a-z0-9]{2,5})$/i);
+  const extension = extensionMatch?.[1] ?? (mediaKind === "video" ? "mp4" : "png");
+  return `${safeBaseName}.${extension}`;
+}
+
+function renderCanvasGenerationProgress(progress, stage = "", taskId = "") {
+  const percent = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+  const stageLabel = canvasGenerationStageLabel(stage, percent);
+  const shortTaskId = shortCanvasTaskId(taskId);
   return `
-    <button
-      class="secondary-action compact"
-      type="button"
-      data-action="operate-generation-queue-job"
-      data-queue-name="${escapeAttr(queueName)}"
-      data-job-id="${escapeAttr(jobId)}"
-      data-job-action="${escapeAttr(action)}"
-    >${escapeHtml(label)}</button>
+    <div class="canvas-generation-progress" aria-label="生成进度 ${percent}%">
+      <span class="canvas-generation-progress-kicker">任务已发送</span>
+      <span class="canvas-generation-progress-label">生成中 ${percent}%</span>
+      ${shortTaskId ? `<span class="canvas-generation-progress-task" title="${escapeAttr(taskId)}">任务ID ${escapeHtml(shortTaskId)}</span>` : ""}
+      <span class="canvas-generation-progress-stage">${escapeHtml(stageLabel)}</span>
+      <span class="canvas-generation-progress-track"><i style="width:${percent}%"></i></span>
+    </div>
   `;
 }
 
-function renderGenerationStagedRetryButton(action, label, taskId, failureCode) {
-  if (!taskId || !shouldShowGenerationStagedRetry(action, failureCode)) {
+function resolveCanvasGenerationNodeProgress(node) {
+  const rawValue = node?.data?.generationProgress ?? node?.data?.progress;
+  const value = Number(rawValue);
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  const status = String(node?.data?.status ?? "").toLowerCase();
+  if (status === "running") return 55;
+  if (status === "queued") return 12;
+  return 0;
+}
+
+function resolveCanvasGenerationNodeStage(node) {
+  return String(node?.data?.generationStage ?? node?.data?.progressStage ?? node?.data?.progress_stage ?? node?.data?.stage ?? "").trim();
+}
+
+function resolveCanvasGenerationNodeTaskId(node) {
+  const data = node?.data ?? {};
+  const value = data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? data.platform?.tasks?.[0]?.taskId ?? "";
+  return String(value ?? "").trim();
+}
+
+function shortCanvasTaskId(taskId) {
+  const value = String(taskId ?? "").trim();
+  if (!value) return "";
+  return value.length > 14 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
+}
+
+function canvasGenerationStageLabel(stage, percent) {
+  const normalized = String(stage ?? "").trim().toLowerCase();
+  if (["queue_unavailable", "queue_stalled", "queued_unprocessed"].includes(normalized)) return "生成队列未处理，请检查 Redis、outbox 和 worker";
+  if (["queued", "submitted", "created"].includes(normalized)) return "任务已入库，等待队列投递到模型";
+  if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return "模型已接收，正在排队";
+  if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return "模型正在生成画面";
+  if (["provider_succeeded", "provider_completed"].includes(normalized)) return "模型已返回，正在整理结果";
+  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return "正在保存结果到素材库";
+  if (["completed", "succeeded"].includes(normalized) || percent >= 100) return "生成完成，正在刷新画布";
+  return percent <= 12 ? "任务已发送，等待进度回传" : "正在同步生成状态";
+}
+
+function resolveCanvasGenerationNodeMediaUrl(node, mediaKind) {
+  const data = node?.data ?? {};
+  const candidates = mediaKind === "video"
+    ? [data.videoUrl, data.resultVideoUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl, data.thumbnailUrl]
+    : [data.previewUrl, data.resultUrl, data.url, data.imageUrl, data.assetUrl, data.thumbnailUrl];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function resolveCanvasUploadReferences(document, targetNodeId) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === targetNodeId)
+    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document))
+    .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
+    .filter((item) => item.url);
+}
+
+function resolveCanvasReferenceImagesForNode(node, document = {}) {
+  const direct = resolveCanvasReferenceImage(node);
+  if (direct.url) {
+    return [direct];
+  }
+  if (!(node?.type === "image" || node?.data?.mediaKind === "image")) {
+    return [];
+  }
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((item) => [item.id, item]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === node.id)
+    .map((edge) => resolveCanvasReferenceImage(nodeMap.get(edge.sourceNodeId)))
+    .filter((item) => item.url);
+}
+
+function resolveCanvasReferenceImage(node) {
+  if (!node) {
+    return { id: "", name: "", url: "" };
+  }
+  if (node.type === "upload" && (node.data?.mediaKind ?? "image") !== "video") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? "参考图"),
+      url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
+    };
+  }
+  if (node.type === "image" || node.data?.mediaKind === "image") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考图"),
+      url: String(
+        node.data?.previewUrl ??
+        node.data?.url ??
+        node.data?.src ??
+        node.data?.imageUrl ??
+        node.data?.resultUrl ??
+        node.data?.assetUrl ??
+        node.data?.thumbnailUrl ??
+        "",
+      ),
+    };
+  }
+  return { id: "", name: "", url: "" };
+}
+
+function renderCanvasGenerationReferences(references = []) {
+  return `
+    <div class="canvas-generation-references" aria-label="连接的参考图片">
+      ${references.map((item) => `
+        <span class="canvas-generation-reference-thumb" title="${escapeAttr(item.name)}">
+          <img src="${escapeAttr(item.url)}" alt="" loading="lazy" />
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderLiblibTextNode(node, { selected = false, activeTextToolbar = false } = {}) {
+  const title = resolveCanvasTextNodeTitle(node);
+  const hasContent = Boolean(String(node?.data?.textHtml ?? node?.data?.text ?? "").trim());
+  const inlineText = activeTextToolbar || hasContent;
+  const style = canvasNodePositionStyle(node, { width: 310, height: 300 });
+  return `
+    <article
+      class="canvas-lib-node canvas-text-node ${inlineText ? "is-text-editing" : ""} ${activeTextToolbar ? "is-toolbar-active" : ""} ${selected ? "selected" : ""}"
+      ${inlineText ? "" : 'data-action="select-canvas-node"'}
+      data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-id="${escapeAttr(node?.id ?? "")}"
+      data-node-kind="${escapeAttr(node?.type ?? "script")}"
+      style="${escapeAttr(style)}"
+    >
+      <header class="canvas-lib-node-title">
+        ${renderCanvasIcon("text")}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <div class="canvas-text-card">
+        <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+        <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+        ${inlineText ? renderInlineCanvasTextEditor(node, { toolbar: activeTextToolbar }) : `
+          <div class="canvas-text-glyph" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </div>
+          <div class="canvas-text-tries">
+            <span>尝试:</span>
+            <button type="button" data-action="edit-canvas-text-node" data-node-id="${escapeAttr(node?.id ?? "")}">${renderCanvasIcon("text")}自己编写内容</button>
+            <button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeAttr(node?.id ?? "")}">${renderCanvasIcon("book")}剧本</button>
+          </div>
+        `}
+        ${inlineText ? `<span class="canvas-node-resize-handle" data-canvas-node-resize-handle data-node-id="${escapeAttr(node?.id ?? "")}" aria-hidden="true"></span>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}) {
+  const nodeId = node?.id ?? "";
+  const html = node?.data?.textHtml ? String(node.data.textHtml) : canvasTextToHtml(node?.data?.text ?? "");
+  const title = resolveCanvasTextNodeTitle(node);
+  const toolbarItems = [
+    ["clear-format", "clear-format"],
+    ["heading-1", "H1"],
+    ["heading-2", "H2"],
+    ["heading-3", "H3"],
+    ["paragraph", "paragraph"],
+    ["bold", "B"],
+    ["italic", "italic"],
+    ["bullet", "list"],
+    ["numbered", "ordered-list"],
+    ["divider", "divider"],
+  ];
+  return `
+    ${showToolbar ? `<div class="canvas-text-format-toolbar" aria-label="文本格式工具条">
+      ${toolbarItems.map(([command, label]) => `
+        <button type="button" data-action="format-canvas-text-node" data-node-id="${escapeAttr(nodeId)}" data-format-command="${escapeAttr(command)}" aria-label="${escapeAttr(label)}" onmousedown="event.preventDefault()">${renderCanvasToolbarLabel(label)}</button>
+      `).join("")}
+    </div>` : ""}
+    <div class="canvas-inline-editor-title" data-canvas-node-drag-handle data-node-id="${escapeAttr(nodeId)}" aria-hidden="true">${renderCanvasIcon("text")}<span>${escapeHtml(title)}</span></div>
+    <div
+      class="canvas-inline-richtext"
+      role="textbox"
+      contenteditable="true"
+      aria-label="节点内容"
+      data-canvas-text-input
+      data-node-id="${escapeAttr(nodeId)}"
+      data-placeholder="输入内容..."
+    >${sanitizeCanvasTextHtml(html)}</div>
+  `;
+}
+
+function resolveCanvasTextNodeTitle(node) {
+  const source = String(node?.data?.source ?? "");
+  return node?.type === "script" || source === "project_script" || source === "project_script_episode"
+    ? "剧本源"
+    : "文本源";
+}
+
+function renderCanvasToolbarLabel(label) {
+  const icons = {
+    "clear-format": '<span class="canvas-toolbar-clear-mark"></span>',
+    italic: '<span class="canvas-toolbar-italic" aria-hidden="true">I</span>',
+    paragraph: '<span class="canvas-toolbar-paragraph">¶</span>',
+    list: '<span class="canvas-toolbar-list"><i></i><i></i><i></i></span>',
+    "ordered-list": '<span class="canvas-toolbar-ordered"><i></i><i></i><i></i></span>',
+    divider: '<span class="canvas-toolbar-divider-line"></span>',
+    copy: renderCanvasIcon("copy"),
+    fullscreen: renderCanvasIcon("fullscreen"),
+  };
+  return icons[label] ?? escapeHtml(label);
+}
+
+function canvasTextToHtml(text) {
+  const value = String(text ?? "");
+  if (!value.trim()) {
     return "";
   }
+  return value
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function sanitizeCanvasTextHtml(html) {
+  const value = String(html ?? "");
+  return value
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, "")
+    .replace(/\sstyle\s*=\s*(['"]).*?\1/gi, "")
+    .replace(/javascript:/gi, "");
+}
+
+function firstCanvasPortId(node, direction) {
+  const ports = direction === "inputs" ? node?.data?.ports?.inputs : node?.data?.ports?.outputs;
+  return Array.isArray(ports) ? ports[0]?.id ?? "" : "";
+}
+
+function canvasVisualNodeSize(node) {
+  if (Number.isFinite(Number(node?.size?.width)) && Number.isFinite(Number(node?.size?.height))) {
+    return {
+      width: Number(node.size.width),
+      height: Number(node.size.height),
+    };
+  }
+  if (node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
+    return { width: 310, height: 300 };
+  }
+  return { width: 420, height: 378 };
+}
+
+function canvasPortAnchor(node, direction) {
+  const size = canvasVisualNodeSize(node);
+  const x = Number(node?.position?.x ?? 0);
+  const y = Number(node?.position?.y ?? 0);
+  return {
+    x: Math.round(direction === "out" ? x + size.width + 30 : x - 30),
+    y: Math.round(y + (size.height / 2)),
+  };
+}
+
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+  if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
+    return "";
+  }
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel });
+}
+
+function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return null;
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  return modelOptions.find((model) => model.modelCode === selectedModelCode)?.raw ?? null;
+}
+
+function renderCanvasModelOptions(generationConfig = {}, node = null) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return "";
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  if (!modelOptions.length) {
+    return `<option value="${escapeAttr(selectedModelCode)}">${escapeHtml(selectedModelCode || "后台未配置模型")}</option>`;
+  }
+  return modelOptions
+    .map((model) => `
+      <option value="${escapeAttr(model.modelCode)}" ${model.modelCode === selectedModelCode ? "selected" : ""}>${escapeHtml(model.modelLabel)}</option>
+    `)
+    .join("");
+}
+
+function renderCanvasModelParameterControls({ generationConfig = {}, node = null, parameterValues = {}, openMenu = "" } = {}) {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return "";
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  const selectedModel = modelOptions.find((model) => model.modelCode === selectedModelCode)?.raw ?? null;
+  return buildCanvasParameterControls({
+    selectedModel,
+    mediaKind,
+    parameterValues,
+    openMenu,
+    nodeId: node?.id ?? "",
+  });
+}
+
+function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image", parameterValues = {}, openMenu = "", nodeId = "" } = {}) {
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
+    ? selectedModel.parameterSchema
+    : {};
+  const entries = Object.entries(schema)
+    .filter(([key, parameter]) => shouldRenderCanvasParameterControl(key, parameter));
+  if (entries.length) {
+    return entries
+      .map(([key, parameter]) => {
+        const options = canvasOptionPairsFromParameter(parameter);
+        if (!options.length) {
+          return "";
+        }
+        const value = resolveCanvasParameterValue(key, {
+          parameter,
+          options,
+          selectedModel,
+          parameterValues,
+          mediaKind,
+        });
+        return renderCanvasParameterMenu(
+          key,
+          canvasParameterLabel(value, options),
+          openMenu,
+          options,
+          parameter?.label ?? key,
+          nodeId,
+        );
+      })
+      .filter(Boolean)
+      .join("");
+  }
+  const isVideo = mediaKind === "video";
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const ratioOptions = canvasOptionPairsFromValues(selectedModel?.supportedRatios, isVideo ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"]);
+  const qualityOptions = canvasOptionPairsFromValues(selectedModel?.supportedQuality, isVideo ? ["1080p"] : ["2K"]);
+  const durationOptions = canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
+  const ratio = firstCanvasParameterValue(parameterValues.aspectRatio, parameterValues.imageAspectRatio, defaults.aspectRatio, ratioOptions[0]?.[0]);
+  const quality = firstCanvasParameterValue(
+    isVideo ? parameterValues.resolution : parameterValues.quality,
+    isVideo ? parameterValues.videoResolution : parameterValues.imageResolution,
+    defaults.resolution,
+    defaults.quality,
+    qualityOptions[0]?.[0],
+  );
+  const duration = firstCanvasParameterValue(parameterValues.durationSec, parameterValues.videoDurationSec, defaults.durationSec, durationOptions[0]?.[0]);
+  return [
+    renderCanvasParameterMenu("aspectRatio", ratio, openMenu, ratioOptions, "比例", nodeId),
+    renderCanvasParameterMenu(isVideo ? "resolution" : "quality", quality, openMenu, qualityOptions, isVideo ? "清晰度" : "画质", nodeId),
+    isVideo ? renderCanvasParameterMenu("durationSec", `${duration}秒`, openMenu, durationOptions, "时长", nodeId) : "",
+  ].filter(Boolean).join("");
+}
+
+function shouldRenderCanvasParameterControl(key, parameter) {
+  if (parameter?.visible === false) {
+    return false;
+  }
+  if (["prompt", "negativePrompt", "referenceImages", "editInstruction"].includes(key)) {
+    return false;
+  }
+  return canvasOptionPairsFromParameter(parameter).length > 0;
+}
+
+function canvasOptionPairsFromParameter(parameter) {
+  const rawOptions = Array.isArray(parameter?.options)
+    ? parameter.options
+    : Array.isArray(parameter?.enum)
+      ? parameter.enum
+      : [];
+  return rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const value = String(item.value ?? item.providerValue ?? item.label ?? "").trim();
+        const label = String(item.label ?? item.name ?? value).trim();
+        return value ? [value, label || value] : null;
+      }
+      const value = String(item ?? "").trim();
+      return value ? [value, value] : null;
+    })
+    .filter(Boolean);
+}
+
+function canvasOptionPairsFromValues(values, fallback = [], labeler = (value) => value) {
+  const source = Array.isArray(values) && values.length ? values : fallback;
+  return source
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .map((value) => [value, String(labeler(value))]);
+}
+
+function resolveCanvasParameterValue(key, { parameter, options, selectedModel, parameterValues, mediaKind }) {
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const candidates = [
+    parameterValues?.[key],
+    key === "aspectRatio" ? parameterValues?.imageAspectRatio : undefined,
+    key === "quality" && mediaKind !== "video" ? parameterValues?.imageResolution : undefined,
+    key === "resolution" ? (mediaKind === "video" ? parameterValues?.videoResolution : parameterValues?.imageResolution) : undefined,
+    key === "durationSec" ? parameterValues?.videoDurationSec : undefined,
+    defaults[key],
+    options[0]?.[0],
+  ];
+  const optionValues = new Set(options.map(([value]) => String(value)));
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "" && optionValues.has(String(candidate))) {
+      return String(candidate);
+    }
+  }
+  return String(options[0]?.[0] ?? "");
+}
+
+function firstCanvasParameterValue(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== null && candidate !== "") {
+      return String(candidate);
+    }
+  }
+  return "";
+}
+
+function canvasParameterLabel(value, options) {
+  return options.find(([optionValue]) => String(optionValue) === String(value))?.[1] ?? String(value ?? "");
+}
+
+function resolveCanvasNodeParameterValues(node = null, ui = {}) {
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  return {
+    ...(ui.generationParameterValues ?? {}),
+    ...(data.parameterValues && typeof data.parameterValues === "object" ? data.parameterValues : {}),
+    ...data,
+  };
+}
+
+function renderCanvasParameterMenu(field, label, openMenu, options, title = "", nodeId = "") {
+  if (!options.length) {
+    return "";
+  }
+  const open = openMenu === `canvas:${field}`;
   return `
-    <button
-      class="secondary-action compact"
-      type="button"
-      data-action="operate-generation-staged-retry"
-      data-task-id="${escapeAttr(taskId)}"
-      data-staged-action="${escapeAttr(action)}"
-    >${escapeHtml(label)}</button>
+    <span class="canvas-parameter-wrap">
+      <button type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
+      ${open ? `<span class="canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
+    </span>
   `;
 }
 
-function shouldShowGenerationStagedRetry(action, failureCode) {
-  if (action === "retry_persist_asset") {
-    return failureCode === "provider_output_persist_failed";
-  }
-  return failureCode === "provider_output_download_failed" || failureCode === "provider_output_upload_failed";
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
+  const cost = resolveCanvasModelCredits(selectedModel, mediaKind);
+  const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
+  const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
+    ? resolveCanvasUploadReferences(canvasDocument, node?.id)
+    : [];
+  return `
+    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
+      ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
+      <div class="canvas-editor-reference-row">
+        <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
+        ${renderCanvasConnectedTextReference(connectedTextFragments)}
+        ${renderCanvasGenerationReferences(connectedUploadReferences)}
+      </div>
+      <textarea
+        aria-label="提示词"
+        data-canvas-prompt-input
+        data-node-id="${escapeAttr(node?.id ?? "")}"
+        placeholder="${escapeAttr(placeholder)}"
+      >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
+      <footer class="canvas-editor-controls">
+        <select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">
+          ${modelOptionHtml}
+        </select>
+        ${parameterControlHtml}
+        <button class="canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">✦ ${cost} 生成</button>
+      </footer>
+    </aside>
+  `;
 }
 
-function queueHealthTitle(snapshot) {
-  if (!snapshot) {
-    return "尚未加载队列状态";
+function resolveCanvasModelCredits(model, mediaKind = "image") {
+  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
+    ? model.pricing
+    : {};
+  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
+    ? model.pricingJson
+    : {};
+  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
+    ? model.pricing_json
+    : {};
+  const candidates = [
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    pricingJson.baseCredits,
+    pricingJson.credits,
+    pricingJson.cost,
+    pricingJson.price,
+    pricingSnakeJson.baseCredits,
+    pricingSnakeJson.credits,
+    pricingSnakeJson.cost,
+    pricingSnakeJson.price,
+    model?.displayBaseCost,
+    model?.baseCredits,
+    model?.credits,
+    model?.creditCost,
+    model?.cost,
+    model?.price,
+    model?.priceCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return String(Math.round(value));
+    }
   }
-  if (snapshot.status === "healthy") {
-    return "队列健康";
-  }
-  if (snapshot.status === "degraded") {
-    return "队列部分降级";
-  }
-  return "队列不可用";
+  return mediaKind === "video" ? "4500" : "90";
 }
 
-function numberOrZero(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
+function renderCanvasVideoModeTabs(activeMode, nodeId) {
+  return `
+    <div class="canvas-editor-tabs video-mode-tabs" role="tablist" aria-label="视频生成模式">
+      ${CANVAS_VIDEO_GENERATION_MODES.map((mode) => `
+        <button class="${mode.id === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${mode.id === activeMode ? "true" : "false"}" data-action="set-canvas-video-generation-mode" data-node-id="${escapeAttr(nodeId)}" data-mode="${escapeAttr(mode.id)}">${escapeHtml(mode.label)}</button>
+      `).join("")}
+    </div>
+  `;
 }
 
-function renderUploadLimitLine(rule = {}, includeReferenceLimit = false) {
-  const parts = [];
-  if (rule.maxBytes) {
-    parts.push(formatBytes(rule.maxBytes));
-  }
-  if (includeReferenceLimit && rule.maxReferencesPerTask) {
-    parts.push(`单任务最多 ${rule.maxReferencesPerTask} 张参考图`);
-  }
-  if (rule.recommendedMaxDurationSeconds) {
-    parts.push(`建议时长不超过 ${Math.round(rule.recommendedMaxDurationSeconds / 60)} 分钟`);
-  }
-  if (Array.isArray(rule.extensions) && rule.extensions.length) {
-    parts.push(rule.extensions.join(" / "));
-  }
-  return parts.length ? parts.join("，") : "以后端策略为准";
+function resolveCanvasVideoGenerationMode(node) {
+  const mode = String(node?.data?.videoGenerationMode ?? node?.data?.videoMode ?? "").trim();
+  return CANVAS_VIDEO_GENERATION_MODES.some((item) => item.id === mode) ? mode : "first-frame";
 }
 
-function formatBytes(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return "0 B";
+function canvasModelMatchesVideoMode(model, mode) {
+  const category = String(model?.videoCategory ?? model?.video_category ?? "").trim();
+  if (category) {
+    return canvasVideoCategoryMatchesMode(category, mode);
   }
-  const units = ["B", "KB", "MB", "GB"];
-  let size = numeric;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
+  const supportedModes = Array.isArray(model?.supportedModes)
+    ? model.supportedModes.map((item) => normalizeCanvasModeToken(item)).filter(Boolean)
+    : [];
+  if (!supportedModes.length) {
+    return true;
   }
-  const rounded = size >= 10 || unitIndex === 0 ? Math.round(size) : Math.round(size * 10) / 10;
-  return `${rounded} ${units[unitIndex]}`;
+  const aliases = canvasVideoModeAliases(mode);
+  return supportedModes.some((item) => aliases.has(item));
+}
+
+function canvasVideoCategoryMatchesMode(videoCategory, mode) {
+  const category = normalizeCanvasModeToken(videoCategory);
+  const normalizedMode = normalizeCanvasModeToken(mode);
+  if (normalizedMode === "reference_video") return category === "reference";
+  if (normalizedMode === "first_frame" || normalizedMode === "image_to_video") return category === "first_frame";
+  if (normalizedMode === "first_last_frame") return category === "first_last_frame";
+  return false;
+}
+
+function canvasVideoModeAliases(mode) {
+  const normalized = normalizeCanvasModeToken(mode);
+  const aliases = new Set([normalized]);
+  if (normalized === "first_frame") {
+    aliases.add("image_to_video");
+    aliases.add("video_first_frame");
+    aliases.add("video_image_to_video");
+  } else if (normalized === "first_last_frame") {
+    aliases.add("video_first_last_frame");
+  } else if (normalized === "reference_video") {
+    aliases.add("reference");
+    aliases.add("video_reference");
+    aliases.add("reference_image_to_video");
+    aliases.add("video_reference_image_to_video");
+  }
+  return aliases;
+}
+
+function normalizeCanvasModeToken(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[.\-]/g, "_");
+}
+
+function resolveConnectedCanvasTextFragments(document = {}, nodeId = "") {
+  const normalizedNodeId = String(nodeId ?? "");
+  if (!normalizedNodeId) {
+    return [];
+  }
+  const nodes = Array.isArray(document.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const edges = Array.isArray(document.edges) ? document.edges : [];
+  return edges
+    .filter((edge) => edge.targetNodeId === normalizedNodeId)
+    .map((edge) => nodeMap.get(edge.sourceNodeId))
+    .filter((node) => node && (node.type === "script" || node.type === "director" || node.data?.mediaKind === "text"))
+    .map((node) => {
+      const text = normalizeCanvasFragmentText(node.data?.text || stripCanvasHtml(node.data?.textHtml));
+      return {
+        id: String(node.id ?? ""),
+        title: String(node.data?.title ?? "文本片段"),
+        text,
+      };
+    })
+    .filter((item) => item.text);
+}
+
+function renderCanvasConnectedTextReference(fragments = []) {
+  if (!fragments.length) {
+    return "";
+  }
+  const preview = fragments
+    .map((fragment, index) => {
+      const title = fragments.length > 1 ? `${index + 1}. ${fragment.title}` : fragment.title;
+      return `${title}\n${fragment.text}`;
+    })
+    .join("\n\n");
+  return `
+    <span class="canvas-connected-text-reference">
+      <button class="canvas-connected-text-trigger" type="button" aria-label="查看连接剧本片段">
+        ${renderCanvasIcon("text")}
+        <i>${escapeHtml(String(fragments.length))}</i>
+      </button>
+      <span class="canvas-connected-text-popover" role="tooltip">${escapeHtml(preview)}</span>
+    </span>
+  `;
+}
+
+function normalizeCanvasFragmentText(text) {
+  return String(text ?? "")
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 420);
+}
+
+function stripCanvasHtml(html) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h1|h2|h3|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function renderLiblibTextEditor(node) {
+  return `
+    <aside class="canvas-node-editor text-editor" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="文本节点编辑" style="${escapeAttr(canvasEditorPositionStyle(node, { nodeWidth: 310, nodeHeight: 300, editorWidth: 960 }))}">
+      <textarea
+        aria-label="节点内容"
+        data-canvas-text-input
+        data-node-id="${escapeAttr(node?.id ?? "")}"
+        placeholder="写下你想讲的故事、场景或角色设定。例如：一个来自未来的机器人，在城市屋顶看星星。"
+      >${escapeHtml(node?.data?.text ?? "")}</textarea>
+      <footer class="canvas-editor-controls">
+        <button class="canvas-model-chip" type="button">GVLM 3.1⌄</button>
+        <span class="canvas-editor-spacer"></span>
+        <button type="button" aria-label="翻译">${renderCanvasIcon("translate")}</button>
+        <button type="button" aria-label="积分">✦ 1</button>
+        <button class="canvas-send-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="发送">${renderCanvasIcon("arrow-up")}</button>
+      </footer>
+    </aside>
+  `;
+}
+
+function renderCanvasContextMenu(menu = {}, options = {}) {
+  const isNodeMenu = menu.mode === "node" && menu.nodeId;
+  const menuWidth = 244;
+  const menuHeight = isNodeMenu ? 296 : 236;
+  const stageWidth = Number(menu.stageWidth ?? 0);
+  const stageHeight = Number(menu.stageHeight ?? 0);
+  const maxLeft = stageWidth > menuWidth ? stageWidth - menuWidth - 8 : Number.POSITIVE_INFINITY;
+  const maxTop = stageHeight > menuHeight ? stageHeight - menuHeight - 8 : Number.POSITIVE_INFINITY;
+  const left = Math.max(8, Math.min(maxLeft, Number(menu.x ?? 120)));
+  const top = Math.max(8, Math.min(maxTop, Number(menu.y ?? 120)));
+  const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig);
+  return `
+    <aside class="canvas-context-menu${isNodeMenu ? " canvas-node-context-menu" : ""}" data-canvas-context-menu role="menu" aria-label="${isNodeMenu ? "节点操作菜单" : "添加节点菜单"}" style="left:${left}px;top:${top}px">
+      ${isNodeMenu ? `
+        <button type="button" role="menuitem" class="danger" data-action="delete-canvas-node" data-node-id="${escapeAttr(menu.nodeId)}">
+          <span aria-hidden="true">${renderCanvasIcon("trash")}</span>
+          删除
+        </button>
+      ` : ""}
+      ${items.map((item) => `
+        <button type="button" role="menuitem" data-action="add-canvas-template" data-template-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.type)}">
+          <span aria-hidden="true">${renderCanvasIcon(item.type)}</span>
+          ${escapeHtml(item.title)}
+        </button>
+      `).join("")}
+    </aside>
+  `;
+}
+
+function resolveCanvasScriptPicker(ui = {}, state = {}) {
+  const picker = ui.canvasScriptPicker && typeof ui.canvasScriptPicker === "object"
+    ? ui.canvasScriptPicker
+    : null;
+  if (!picker?.nodeId) {
+    return null;
+  }
+  const scripts = resolveCanvasProjectScripts(state, ui);
+  const selectedScript =
+    scripts.find((script) => script.id === picker.scriptId) ??
+    (picker.scriptId ? null : null);
+  return {
+    nodeId: String(picker.nodeId),
+    x: Number(picker.x ?? 140),
+    y: Number(picker.y ?? 120),
+    scriptId: picker.scriptId ?? "",
+    scripts,
+    selectedScript,
+  };
+}
+
+function resolveCanvasProjectScripts(state = {}, ui = {}) {
+  const records = [];
+  const sectionCache = ui?.canvasScriptSectionsByScriptId && typeof ui.canvasScriptSectionsByScriptId === "object"
+    ? ui.canvasScriptSectionsByScriptId
+    : {};
+  const pushScript = (script = {}, episodes = []) => {
+    const id = String(script.id ?? script.scriptId ?? "");
+    if (!id || records.some((record) => record.id === id)) {
+      return;
+    }
+    const projectId = String(script.projectId ?? script.project?.id ?? script.project_id ?? state?.projectDetail?.project?.id ?? state?.project?.id ?? "");
+    const sections = Array.isArray(sectionCache[id])
+      ? resolveCanvasScriptEpisodes(sectionCache[id], script)
+      : [];
+    records.push({
+      id,
+      projectId,
+      title: String(script.title ?? script.name ?? state?.project?.name ?? state?.projectDetail?.project?.name ?? "项目剧本"),
+      type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
+      updatedAt: String(script.updatedAt ?? script.createdAt ?? ""),
+      text: String(script.inputText ?? script.text ?? script.content ?? ""),
+      sections,
+      episodes: resolveCanvasScriptEpisodes(episodes, script),
+    });
+  };
+  if (state?.projectDetail?.script) {
+    pushScript(state.projectDetail.script, state.projectDetail.episodes);
+  }
+  if (state?.script) {
+    pushScript(state.script, state?.projectDetail?.episodes ?? []);
+  }
+  const scriptRecords = [
+    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
+    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
+    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
+    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
+  ];
+  scriptRecords.forEach((record) => {
+    const script = record.script ?? record;
+    pushScript(script, record.episodes ?? script.episodes ?? []);
+  });
+  return records;
+}
+
+function resolveCanvasScriptEpisodes(episodes = [], script = {}) {
+  const normalized = Array.isArray(episodes) ? episodes : [];
+  if (normalized.length) {
+    return normalized.map((episode, index) => ({
+      id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
+      title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
+      text: String(
+        episode.scriptText ??
+        episode.inputText ??
+        episode.text ??
+        episode.summary ??
+        script.inputText ??
+        script.text ??
+        "",
+      ),
+      storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
+    }));
+  }
+  return [{
+    id: "episode-primary",
+    title: "剧一",
+    text: String(script.inputText ?? script.text ?? script.content ?? ""),
+    storyboardCount: 0,
+  }];
+}
+
+function renderCanvasScriptPicker(picker = {}) {
+  const scriptSelected = Boolean(picker.selectedScript);
+  const title = scriptSelected ? "选择目录" : "选择剧本";
+  const selectedItems = picker.selectedScript?.sections?.length
+    ? picker.selectedScript.sections
+    : picker.selectedScript?.episodes ?? [];
+  const items = scriptSelected ? selectedItems : picker.scripts;
+  return `
+    <aside class="canvas-script-picker" data-canvas-script-picker style="left:${Math.max(8, Math.round(picker.x))}px;top:${Math.max(8, Math.round(picker.y))}px" aria-label="${escapeAttr(title)}">
+      <header>
+        ${scriptSelected ? `<button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeAttr(picker.nodeId)}" aria-label="返回剧本列表">${renderCanvasIcon("collapse")}</button>` : ""}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <div class="canvas-script-picker-list">
+        ${items.length ? items.map((item) => scriptSelected
+          ? renderCanvasEpisodePickerItem(item, picker)
+          : renderCanvasScriptPickerItem(item, picker)).join("") : `<p>暂无可用${scriptSelected ? "剧集" : "剧本"}</p>`}
+      </div>
+    </aside>
+  `;
+}
+
+function renderCanvasScriptPickerItem(script, picker) {
+  return `
+    <button type="button" data-action="select-canvas-script-source" data-node-id="${escapeAttr(picker.nodeId)}" data-script-id="${escapeAttr(script.id)}">
+      ${renderCanvasIcon("book")}
+      <span>
+        <strong>${escapeHtml(script.title)}</strong>
+      </span>
+    </button>
+  `;
+}
+
+function renderCanvasEpisodePickerItem(episode, picker) {
+  return `
+    <button type="button" data-action="apply-canvas-script-episode" data-node-id="${escapeAttr(picker.nodeId)}" data-script-id="${escapeAttr(picker.scriptId)}" data-episode-id="${escapeAttr(episode.id)}">
+      ${renderCanvasIcon("story")}
+      <span>
+        <strong>${escapeHtml(episode.title)}</strong>
+        <small>${episode.storyboardCount ? `${escapeHtml(String(episode.storyboardCount))} 分镜` : "剧集文本"}</small>
+      </span>
+    </button>
+  `;
+}
+
+function canvasNodePositionStyle(node, fallbackSize = {}) {
+  const x = Number(node?.position?.x ?? 360);
+  const y = Number(node?.position?.y ?? 100);
+  const width = Number(node?.size?.width ?? fallbackSize.width ?? 360);
+  const height = Number(node?.size?.height ?? fallbackSize.height ?? 260);
+  return `left:${x}px;top:${y}px;--node-width:${width}px;--node-height:${height}px`;
+}
+
+function canvasEditorPositionStyle(node, options = {}) {
+  const nodeX = Number(node?.position?.x ?? 360);
+  const nodeY = Number(node?.position?.y ?? 100);
+  const nodeWidth = Number(options.nodeWidth ?? node?.size?.width ?? 360);
+  const nodeHeight = Number(options.nodeHeight ?? node?.size?.height ?? 260);
+  const editorWidth = Number(options.editorWidth ?? 600);
+  const left = Math.max(8, Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2)));
+  const top = Math.round(nodeY + nodeHeight + 2);
+  return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px`;
+}
+
+function canvasViewportStyle(viewport = {}) {
+  const x = Number(viewport.x ?? 0);
+  const y = Number(viewport.y ?? 0);
+  const zoom = Number(viewport.zoom ?? 1);
+  return `--canvas-pan-x:${x}px;--canvas-pan-y:${y}px;--canvas-zoom:${zoom}`;
+}
+
+function canvasGridStyle(viewport = {}) {
+  const x = Number(viewport.x ?? 0);
+  const y = Number(viewport.y ?? 0);
+  const zoom = Number(viewport.zoom ?? 1);
+  const gridSize = Math.max(6, Math.round(18 * zoom * 100) / 100);
+  return `--canvas-grid-size:${gridSize}px;--canvas-grid-x:${x}px;--canvas-grid-y:${y}px`;
+}
+
+function renderCanvasInspectorMetrics({ inputCount = 0, outputCount = 0, selectedNode = null } = {}) {
+  if (selectedNode?.type === "script") {
+    return `
+      <div class="canvas-inspector-metrics">
+        <span><b>${outputCount}</b>输出</span>
+        <span><b>${escapeHtml(canvasSourceLabel(selectedNode?.data?.source))}</b>来源</span>
+        <span><b>${escapeHtml(selectedNode?.data?.status ?? "idle")}</b>状态</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="canvas-inspector-metrics">
+      <span><b>${inputCount}</b>输入</span>
+      <span><b>${escapeHtml(selectedNode?.data?.modelCode ?? "未选")}</b>模型</span>
+      <span><b>${escapeHtml(selectedNode?.data?.status ?? "idle")}</b>状态</span>
+    </div>
+  `;
+}
+
+function canvasSourceLabel(source) {
+  if (source === "project_script") {
+    return "项目剧本";
+  }
+  if (source === "upload") {
+    return "上传";
+  }
+  return source || "手动";
+}
+
+function renderCanvasElementItem(node, active = false) {
+  const kind = node?.type ?? "output";
+  const title = node?.data?.title ?? node?.id ?? "节点";
+  const status = node?.data?.status ?? "idle";
+  const meta = node?.data?.modelCode
+    ? `${node.data.modelCode} · ${node.data.mediaKind ?? kind}`
+    : node?.data?.source === "project_script"
+      ? "项目剧本片段"
+      : status;
+  return `
+    <button class="canvas-element-item ${kind} ${active ? "active" : ""}" type="button" data-action="select-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="${escapeAttr(kind)}">
+      <span class="canvas-element-icon" aria-hidden="true">${renderCanvasIcon(kind)}</span>
+      <span class="canvas-element-copy">
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(meta)}</small>
+      </span>
+      <i>${escapeHtml(status)}</i>
+    </button>
+  `;
+}
+
+function renderCanvasQuickAction(kind, label) {
+  return `
+    <button class="canvas-quick-action ${kind}" type="button">
+      <span aria-hidden="true">${renderCanvasIcon(kind)}</span>
+      <strong>${escapeHtml(label)}</strong>
+    </button>
+  `;
+}
+
+function renderCanvasIcon(icon) {
+  const icons = {
+    audio: '<path d="M9 18V6l10-2v12" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="16" r="2" />',
+    book: '<path d="M5 5.5h6.2a2.8 2.8 0 0 1 2.8 2.8v10.2H7.8A2.8 2.8 0 0 1 5 15.7V5.5Z" /><path d="M14 8.3h5v10.2h-5" />',
+    clock: '<circle cx="12" cy="12" r="8" /><path d="M12 7.8v4.6l3 1.8" />',
+    collapse: '<path d="M14 6 8 12l6 6" /><path d="M20 6 14 12l6 6" />',
+    copy: '<rect x="8" y="8" width="10" height="10" rx="1.6" /><path d="M6 15.5H5.8A1.8 1.8 0 0 1 4 13.7V5.8A1.8 1.8 0 0 1 5.8 4h7.9A1.8 1.8 0 0 1 15.5 5.8V6" />',
+    cursor: '<path d="M7 4.5 18.5 12 13 13.2l-2.4 5.1L7 4.5Z" />',
+    download: '<path d="M12 4.5v10" /><path d="m7.5 10 4.5 4.5 4.5-4.5" /><path d="M5 19.5h14" />',
+    fullscreen: '<path d="M8.5 4H4v4.5" /><path d="M4 4l5.2 5.2" /><path d="M15.5 4H20v4.5" /><path d="m20 4-5.2 5.2" /><path d="M8.5 20H4v-4.5" /><path d="m4 20 5.2-5.2" /><path d="M15.5 20H20v-4.5" /><path d="m20 20-5.2-5.2" />',
+    grid: '<path d="M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z" />',
+    help: '<circle cx="12" cy="12" r="8" /><path d="M9.8 9.4a2.4 2.4 0 1 1 3.8 2c-.9.6-1.5 1.1-1.5 2.1" /><path d="M12 16.7h.01" />',
+    image: '<rect x="4.5" y="5" width="15" height="14" rx="2" /><path d="m7.5 16 3.4-4 2.5 2.8 1.7-2 2.9 3.2" /><circle cx="15.5" cy="9" r="1.2" />',
+    keyboard: '<rect x="4" y="7" width="16" height="10" rx="1.8" /><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8" />',
+    link: '<path d="M9.5 14.5 14.5 9.5" /><path d="M10.3 8.2 11.8 6.7a3 3 0 0 1 4.2 4.2l-1.5 1.5" /><path d="M13.7 15.8 12.2 17.3A3 3 0 0 1 8 13.1l1.5-1.5" />',
+    minus: '<path d="M5 12h14" />',
+    plus: '<path d="M12 5v14M5 12h14" />',
+    role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
+    search: '<circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4 4" />',
+    share: '<circle cx="6.5" cy="12" r="2" /><circle cx="17.5" cy="7" r="2" /><circle cx="17.5" cy="17" r="2" /><path d="m8.3 11.2 7.4-3.4M8.3 12.8l7.4 3.4" />',
+    sort: '<path d="M8 7h9M8 12h6M8 17h3" /><path d="m5 8-2 2 2 2" />',
+    send: '<path d="M12 19V5" /><path d="m5 12 7-7 7 7" />',
+    story: '<path d="M6 5h12v14H6z" /><path d="M9 8h6M9 11h6M9 14h3" /><path d="M18 8l2-1v10l-2-1" />',
+    text: '<rect x="5" y="4.5" width="14" height="15" rx="2" /><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5" />',
+    trash: '<path d="M5.5 7h13" /><path d="M9 7V5.5h6V7" /><path d="m8 10 .5 8.2h7l.5-8.2" /><path d="M11 11.5v4.8M14 11.5v4.8" />',
+    translate: '<path d="M5 5h8" /><path d="M9 5v14" /><path d="M4 19h10" /><path d="M7 9c.7 2.1 2.2 3.9 5 5" /><path d="M12 9c-.7 2.1-2.2 3.9-5 5" /><path d="M17 10l3.5 9" /><path d="M14.5 19l3.5-9" /><path d="M15.5 16h4" />',
+    upload: '<path d="M12 16V5" /><path d="m7 10 5-5 5 5" /><path d="M5 19h14" />',
+    video: '<rect x="4" y="6" width="13" height="12" rx="2" /><path d="m17 10 4-2v8l-4-2" /><path d="M8 10.5 11.5 12 8 13.5z" />',
+    "arrow-up": '<path d="M12 19V5" /><path d="m5 12 7-7 7 7" />',
+    user: '<circle cx="12" cy="8.5" r="3" /><path d="M6.5 19a5.5 5.5 0 0 1 11 0" />',
+  };
+
+  return `
+    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      ${icons[icon] ?? icons.plus}
+    </svg>
+  `;
+}
+
+function renderStatusbarActionIcon(icon) {
+  const icons = {
+    handbook: `
+      <path d="M7.5 6.75A2.25 2.25 0 0 1 9.75 4.5H18v12H9.75A2.25 2.25 0 0 0 7.5 18.75M7.5 6.75A2.25 2.25 0 0 0 5.25 4.5H4.5v12h.75A2.25 2.25 0 0 1 7.5 18.75M12 8.25h3.75M12 11.25h3.75" />
+    `,
+    sparkle: `
+      <path d="M9 6.75 9.848 8.902 12 9.75 9.848 10.598 9 12.75 8.152 10.598 6 9.75 8.152 8.902ZM16.5 5.25l.424 1.076L18 6.75l-1.076.424L16.5 8.25l-.424-1.076L15 6.75l1.076-.424ZM15.75 12.75l.636 1.614L18 15l-1.614.636L15.75 17.25l-.636-1.614L13.5 15l1.614-.636Z" />
+    `,
+    cart: `
+      <path d="M2.25 3h1.386a.75.75 0 0 1 .73.582L4.71 5.25H19.5a.75.75 0 0 1 .728.93l-1.5 6A.75.75 0 0 1 18 12.75H6.06a.75.75 0 0 1-.728-.57L3.39 4.5H2.25M7.5 16.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm9 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+    `,
+    bell: `
+      <path d="M14.857 17.082a23.848 23.848 0 0 0 4.182 1.022.75.75 0 0 1 .21 1.415 24.878 24.878 0 0 1-14.498 0 .75.75 0 0 1 .21-1.415 23.848 23.848 0 0 0 4.182-1.022M15 8.25a3 3 0 1 0-6 0c0 1.102-.412 2.105-1.091 2.867-.549.617-.879 1.398-.879 2.258v.375h9.94v-.375c0-.86-.33-1.64-.88-2.258A4.233 4.233 0 0 1 15 8.25Z" />
+    `,
+    support: `
+      <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
+    `,
+    user: `
+      <path d="M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM4.5 19.5a7.5 7.5 0 0 1 15 0H4.5Z" />
+    `,
+  };
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      ${icons[icon] ?? icons.user}
+    </svg>
+  `;
 }
 
 function renderGlobalStatusbar(session, options = {}) {
@@ -2960,28 +5283,32 @@ function renderGlobalStatusbar(session, options = {}) {
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
         <div class="statusbar-wondershare">
-          <span class="wondershare-w" aria-hidden="true">W</span>
+          <span class="statusbar-n-mark" aria-hidden="true">灵</span>
           <div>
-            <strong>Wondershare</strong>
-            <small>万兴科技</small>
-          </div>
-        </div>
-        <span class="statusbar-divider" aria-hidden="true"></span>
-        <div class="statusbar-wondershare">
-          <span class="statusbar-n-mark" aria-hidden="true">N</span>
-          <div>
-            <strong>万兴剧厂</strong>
+            <strong>灵曦剧场</strong>
           </div>
         </div>
       </div>
       <div class="statusbar-actions">
-        <span class="statusbar-seedance">限时特惠 免费排队 <b>SEEDANCE 2.0</b></span>
-        <button class="statusbar-pill" type="button">创作手册</button>
-        <button class="statusbar-pill" type="button">商务合作</button>
-        <button class="statusbar-credit" type="button" aria-label="积分余额"><span>✦</span> ${escapeHtml(String(creditBalance))} <span aria-hidden="true">⌄</span></button>
-        <button class="statusbar-icon" type="button" aria-label="消息通知">✉</button>
+        <button class="statusbar-quick-action text-action" type="button" aria-label="创作手册">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
+          <span>创作手册</span>
+        </button>
+        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作">
+          <span>商务合作</span>
+        </button>
+        <button class="statusbar-quick-action credit-action" type="button" aria-label="积分余额" data-action="open-credit-ledger">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("sparkle")}</span>
+          <b>${escapeHtml(String(creditBalance))}</b>
+          <span class="statusbar-action-icon trailing">${renderStatusbarActionIcon("cart")}</span>
+        </button>
+        <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
+        </button>
         <div class="statusbar-popover-wrap">
-          <button class="statusbar-icon" type="button" aria-haspopup="menu" aria-label="客服支持">◎</button>
+          <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
+            <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
+          </button>
           <div class="statusbar-popover support-popover" role="menu">
             <button class="popover-menu-item featured" type="button" role="menuitem">
               <strong>客服热线：4000-300624</strong>
@@ -2991,7 +5318,9 @@ function renderGlobalStatusbar(session, options = {}) {
           </div>
         </div>
         <div class="statusbar-popover-wrap">
-          <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">${escapeHtml(session.user.phone.slice(-2) || "我")}</button>
+          <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
+            <span class="statusbar-action-icon user-avatar-icon">${renderStatusbarActionIcon("user")}</span>
+          </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
               <strong>创作者 ${escapeHtml(session.user.phone.slice(-8) || "442027442")}</strong>
@@ -3000,7 +5329,7 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem">我的订阅</button>
             <button class="popover-menu-item" type="button" role="menuitem">订单开票</button>
             <button class="popover-menu-item" type="button" role="menuitem">合伙人中心</button>
-            <button class="popover-menu-item" type="button" role="menuitem">账号设置</button>
+            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
             <button class="popover-menu-item" type="button" role="menuitem">问题反馈</button>
@@ -3021,8 +5350,8 @@ function renderHomeHero({ detailState }) {
       <div class="hero-overlay"></div>
       <div class="hero-content">
         <div class="hero-brand-lockup">
-          <div class="hero-brand-mark" aria-hidden="true">N</div>
-          <div class="hero-brand-text">万兴剧厂</div>
+          <div class="hero-brand-mark" aria-hidden="true">灵</div>
+          <div class="hero-brand-text">灵曦剧场</div>
         </div>
         <h1 class="hero-title">您的专属 AI 电影工作室</h1>
         <div class="hero-value-row" aria-label="核心卖点">
@@ -3052,62 +5381,95 @@ function renderScrollableWorkbenchSurface(surface, content) {
 }
 
 function renderProjectGallery({ ui }) {
-  const projects = ui.projectLibrary ?? [];
-  const searchQuery = String(ui.projectSearchQuery ?? "").trim();
-  const statusFilters = ui.projectStatusFilters ?? [];
-  const filteredProjects = filterProjects(
-    filterProjectsByStatus(sortProjectsByCreatedAt(projects), statusFilters),
-    searchQuery,
-  );
-  const totalProjects = filteredProjects.length;
-  const totalPages = Math.max(1, Math.ceil(totalProjects / PROJECTS_PER_PAGE));
-  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
-  const pageStart = (currentPage - 1) * PROJECTS_PER_PAGE;
-  const pagedProjects = filteredProjects.slice(pageStart, pageStart + PROJECTS_PER_PAGE);
+  const snapshot = getProjectGallerySnapshot(ui);
+  const selectedIds = normalizeSelectedProjectIds(ui.selectedProjectIds);
+  const selectedCount = snapshot.pageProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;
+  const searchQuery = snapshot.searchQuery;
+  const searchDraft = String(ui.projectSearchDraft ?? searchQuery);
 
   return `
     <section class="project-gallery-shell">
       <header class="project-gallery-header">
         <div>
-          <h1>全部项目(${totalProjects})</h1>
+          <h1>全部项目(${snapshot.totalProjects})</h1>
         </div>
         <div class="project-gallery-filters">
-          <div class="gallery-filter-group">
-            <button
-              class="gallery-filter ${ui.projectStatusMenuOpen ? "active" : ""}"
-              type="button"
-              data-action="toggle-project-status-menu"
-              aria-expanded="${ui.projectStatusMenuOpen ? "true" : "false"}"
-            >
-              <span>项目状态</span>
-              <span class="gallery-filter-caret">${ui.projectStatusMenuOpen ? "⌃" : "⌄"}</span>
-            </button>
-            ${ui.projectStatusMenuOpen ? renderProjectStatusMenu(statusFilters) : ""}
-          </div>
           <label class="gallery-search">
             <input
               type="search"
                 placeholder="请输入项目名称"
-              value="${escapeHtml(searchQuery)}"
+              value="${escapeHtml(searchDraft)}"
               data-action="search-projects"
             />
           </label>
         </div>
       </header>
+      <div class="project-gallery-toolbar">
+        <div class="project-gallery-toolbar-summary">
+          <strong>本页已选 ${selectedCount}</strong>
+          <span>仅作用于当前页</span>
+        </div>
+        <div class="project-gallery-toolbar-actions">
+          <button class="gallery-toolbar-button" type="button" data-action="select-current-page-projects">全选本页</button>
+          <button class="gallery-toolbar-button" type="button" data-action="clear-selected-projects" ${selectedCount ? "" : "disabled"}>取消选择</button>
+          <button class="gallery-toolbar-button danger" type="button" data-action="delete-selected-projects" ${selectedCount ? "" : "disabled"}>删除所选</button>
+        </div>
+      </div>
       <section class="project-gallery-grid" aria-label="项目列表">
         ${
-          totalProjects
-            ? pagedProjects.map((project) => renderProjectCard(project, ui.projectCardMenuId === project.id)).join("")
-            : renderEmptyProjectState(searchQuery, statusFilters)
+          snapshot.totalProjects
+            ? snapshot.pageProjects.map((project) => renderProjectCard(
+                project,
+                ui.projectCardMenuId === project.id,
+                selectedIds.has(String(project.id ?? "")),
+              )).join("")
+            : renderEmptyProjectState(searchQuery, [])
         }
       </section>
       ${renderWorkspaceStatusToast(ui.toast)}
-      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pagedProjects.length) : ""}
+      ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.pageProjects.length) : ""}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>
     </section>
   `;
+}
+
+export function getProjectGallerySnapshot(ui = {}) {
+  const projects = Array.isArray(ui.projectLibrary) ? ui.projectLibrary : [];
+  const searchQuery = String(ui.projectSearchQuery ?? "").trim();
+  const filteredProjects = filterProjects(sortProjectsByCreatedAt(projects), searchQuery, ui);
+  const projectsPerPage = resolveProjectGalleryPageSize(ui);
+  const totalProjects = filteredProjects.length;
+  const totalPages = Math.max(1, Math.ceil(totalProjects / projectsPerPage));
+  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
+  const pageStart = (currentPage - 1) * projectsPerPage;
+  const pageProjects = filteredProjects.slice(pageStart, pageStart + projectsPerPage);
+  return {
+    searchQuery,
+    filteredProjects,
+    projectsPerPage,
+    totalProjects,
+    totalPages,
+    currentPage,
+    pageProjects,
+  };
+}
+
+export function resolveProjectGalleryPageSize(ui = {}) {
+  const columns = Math.min(
+    PROJECT_GALLERY_MAX_COLUMNS,
+    Math.max(1, Math.floor(Number(ui.projectLibraryColumns ?? PROJECT_GALLERY_DEFAULT_COLUMNS))),
+  );
+  return columns * PROJECT_GALLERY_ROWS_PER_PAGE;
+}
+
+function normalizeSelectedProjectIds(value) {
+  return new Set(
+    (Array.isArray(value) ? value : [])
+      .map((id) => String(id ?? "").trim())
+      .filter(Boolean),
+  );
 }
 
 function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize) {
@@ -3177,33 +5539,22 @@ function buildProjectPageItems(currentPage, totalPages) {
   return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
-function renderProjectStatusMenu(activeStatuses) {
-  const activeSet = new Set(activeStatuses);
-  return `
-    <div class="project-status-menu" role="menu" aria-label="项目状态筛选">
-      ${PROJECT_STATUS_OPTIONS.map(
-        (status) => `
-          <label class="project-status-option">
-            <input
-              type="checkbox"
-              name="project-status-filter"
-              value="${escapeHtml(status)}"
-              ${activeSet.has(status) ? "checked" : ""}
-            />
-            <span class="project-status-box" aria-hidden="true"></span>
-            <span>${escapeHtml(status)}</span>
-          </label>
-        `,
-      ).join("")}
-    </div>
-  `;
-}
-
-function renderProjectCard(project, isMenuOpen) {
+function renderProjectCard(project, isMenuOpen, isSelected = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
-    <article class="project-gallery-card" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
+    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
+      <button
+        class="project-gallery-select-toggle"
+        type="button"
+        data-action="toggle-project-selection"
+        data-project-id="${escapeHtml(project.id)}"
+        aria-pressed="${isSelected ? "true" : "false"}"
+        aria-label="${isSelected ? "取消选择项目" : "选择项目"}"
+        title="${isSelected ? "取消选择" : "选择当前项目"}"
+      >
+        <span aria-hidden="true"></span>
+      </button>
       <div class="project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}">
         <label class="project-cover-placeholder" for="${coverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
@@ -3215,7 +5566,6 @@ function renderProjectCard(project, isMenuOpen) {
       <div class="project-gallery-meta">
         <div class="project-gallery-copy">
           <h2>${escapeHtml(project.name)}</h2>
-          <span class="project-gallery-status">${escapeHtml(project.status ?? "未开始")}</span>
           <p>创建于：${escapeHtml(project.createdAt ?? "2026/05/21")}</p>
         </div>
         <div class="project-card-actions">
@@ -3330,10 +5680,14 @@ function renderProjectRenameModal({ show, value, notice }) {
   `;
 }
 
-function renderProjectDeleteModal({ show, projectName }) {
+function renderProjectDeleteModal({ show, projectName, mode = "single", count = 0 }) {
   if (!show) {
     return "";
   }
+  const normalizedCount = Math.max(0, Number(count) || 0);
+  const message = mode === "bulk"
+    ? `所选内容将被删除，确定删除本页选中的 ${normalizedCount} 个项目吗？`
+    : `所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？`;
 
   return `
     <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除">
@@ -3342,13 +5696,72 @@ function renderProjectDeleteModal({ show, projectName }) {
           <div class="delete-project-icon">×</div>
           <div>
             <h2>确认删除</h2>
-            <p>所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？</p>
+            <p>${message}</p>
           </div>
           <button class="modal-close" type="button" data-action="close-delete-project-modal" aria-label="关闭">×</button>
         </div>
         <div class="delete-project-actions">
           <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-project-modal">取消</button>
           <button class="delete-confirm-button" type="button" data-action="confirm-delete-project-card">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasProjectRenameModal({ show, value, notice }) {
+  if (!show) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名画布">
+      <div class="rename-project-modal canvas-project-rename-modal">
+        <div class="rename-project-head">
+          <h2>重命名</h2>
+          <button class="modal-close" type="button" data-action="close-rename-canvas-project-modal" aria-label="关闭">×</button>
+        </div>
+        <label class="rename-project-field">
+          <input
+            id="canvas-project-rename-name-input"
+            type="text"
+            maxlength="50"
+            value="${escapeHtml(value)}"
+            placeholder="请输入画布名称"
+          />
+          <span class="rename-project-count canvas-project-rename-count">${[...value].length}/50</span>
+        </label>
+        <div class="rename-project-actions">
+          <p class="modal-inline-status">${escapeHtml(notice)}</p>
+          <div class="rename-project-button-row">
+            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-canvas-project-modal">取消</button>
+            <button class="primary-action rename-save-button" type="button" data-action="confirm-rename-canvas-project">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasProjectDeleteModal({ show, projectName }) {
+  if (!show) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除画布">
+      <div class="delete-project-modal canvas-project-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-delete-canvas-project-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-canvas-project-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-delete-canvas-project">确定</button>
         </div>
       </div>
     </section>
@@ -3393,15 +5806,57 @@ function renderEmptyProjectState(searchQuery, statusFilters) {
   return '<article class="project-empty-card"><strong>还没有项目</strong><span>从下方创建项目开始，创建后会在这里出现。</span></article>';
 }
 
-function filterProjects(projects, searchQuery) {
+function filterProjects(projects, searchQuery, ui = {}) {
   if (!searchQuery) {
     return projects;
   }
 
-  const normalizedQuery = searchQuery.toLocaleLowerCase();
-  return projects.filter((project) =>
-    String(project.name ?? "").toLocaleLowerCase().includes(normalizedQuery),
-  );
+  const normalizedQuery = normalizeProjectSearchText(searchQuery);
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  return projects.filter((project) => {
+    const searchableText = buildProjectSearchText(project, ui);
+    return searchableText.includes(normalizedQuery) || (compactQuery && searchableText.replace(/\s+/g, "").includes(compactQuery));
+  });
+}
+
+function buildProjectSearchText(project, ui = {}) {
+  return [
+    project?.name,
+    project?.title,
+    project?.scriptTitle,
+    project?.scriptName,
+    project?.scriptFileName,
+    project?.originalScriptTitle,
+    project?.currentScriptTitle,
+    project?.script?.title,
+    project?.script?.name,
+    ...(Array.isArray(project?.scripts)
+      ? project.scripts.flatMap((script) => [script?.title, script?.name])
+      : []),
+    ...findProjectScriptTitles(project, ui),
+  ]
+    .map(normalizeProjectSearchText)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function findProjectScriptTitles(project, ui = {}) {
+  const projectId = String(project?.id ?? "").trim();
+  if (!projectId || !Array.isArray(ui.scriptLibraryRecords)) {
+    return [];
+  }
+  return ui.scriptLibraryRecords
+    .filter((script) => {
+      const scriptProjectId = String(script?.projectId ?? script?.project?.id ?? script?.project_id ?? "").trim();
+      return scriptProjectId === projectId;
+    })
+    .flatMap((script) => [script?.title, script?.name]);
+}
+
+function normalizeProjectSearchText(value) {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase();
 }
 
 function filterProjectsByStatus(projects, statusFilters) {
@@ -3495,11 +5950,7 @@ function renderRailIcon(icon) {
       <path d="M19.25 13.55v2.7" />
     `,
     wand: `
-      <path d="m4.2 19.8 9.9-9.9" />
-      <path d="m10.3 7.9 5.8 5.8" />
-      <path d="m13.4 4.1.4 1.7 1.7.4-1.7.5-.4 1.6-.5-1.6-1.6-.5 1.6-.4.5-1.7Z" />
-      <path d="m18.8 8.4.3 1.2 1.2.3-1.2.3-.3 1.2-.3-1.2-1.2-.3 1.2-.3.3-1.2Z" />
-      <path d="m7.2 5.4.3 1.2 1.2.3-1.2.3-.3 1.2-.3-1.2-1.2-.3 1.2-.3.3-1.2Z" />
+      <path fill="currentColor" stroke="none" d="M3.7 15.9 5.3 7.4h14.9l-1.6 8.5H3.7Zm4.4-2.9h7.9l0.5-2.7H8.6L8.1 13Z" />
     `,
     users: `
       <path d="M8.8 11.3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />

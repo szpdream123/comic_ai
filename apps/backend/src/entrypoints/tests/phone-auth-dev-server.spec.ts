@@ -7,8 +7,6 @@ import { describe, it } from "node:test";
 describe.configure?.({ concurrency: 1 });
 
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
-import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
-import { resolveMembershipGenerationPriority } from "../../modules/membership/membership-priority.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
@@ -113,6 +111,7 @@ describe("phone auth dev server", () => {
           challengeId: requested.challengeId,
           phone: "13800138000",
           code: requested.devCode,
+          remember: true,
         }),
       });
       const verifyPayload = await verifyResponse.json();
@@ -137,333 +136,229 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("exposes authenticated membership plan, status, and order routes", async () => {
+  it("returns the current user's available credits in session and generation config", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      const planId = "95000000-0000-4000-8000-000000020101";
-      await seedMembershipPlan(db, {
-        id: planId,
-        code: "professional_monthly_http",
-      });
-
-      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
-        headers: { cookie },
-      });
-      const plans = await plansResponse.json();
-
-      const statusResponse = await fetch(`${server.origin}/api/membership/status`, {
-        headers: { cookie },
-      });
-      const status = await statusResponse.json();
-
-      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-http-order-create",
-          cookie,
-        },
-        body: JSON.stringify({ membershipPlanId: planId }),
-      });
-      const order = await orderResponse.json();
-      const returnedPlan = plans.data.plans.find((plan: { id: string }) => plan.id === planId);
-
-      assert.equal(plansResponse.status, 200);
-      assert.equal(returnedPlan?.id, planId);
-      assert.equal(statusResponse.status, 200);
-      assert.deepEqual(status.membership, {
-        status: "none",
-        currentTier: null,
-        currentPeriodEndAt: null,
-        entitlements: {
-          priorityGeneration: false,
-          teamAssetLibrary: false,
-          teamDashboard: false,
-          teamMemberManagement: false,
-        },
-        team: {
-          seatLimit: null,
-        },
-      });
-      assert.equal(orderResponse.status, 200);
-      assert.equal(order.order.productType, "membership_plan");
-      assert.equal(order.order.membershipPlanId, planId);
-      assert.equal(order.order.productSnapshot.code, "professional_monthly_http");
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("seeds default experience and professional membership plans for local acceptance when none exists", async () => {
-    const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
-
-    try {
-      await server.listen(0);
-      const cookie = await login(server.origin, "13800138002");
-
-      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
-        headers: { cookie },
-      });
-      const plans = await plansResponse.json();
-
-      assert.equal(plansResponse.status, 200);
-      const planByCode = new Map(plans.data.plans.map((plan: { code: string }) => [plan.code, plan]));
-
-      assert.equal(plans.data.plans.length, 2);
-      assert.equal(planByCode.get("experience_weekly").displayName, "体验版");
-      assert.equal(planByCode.get("experience_weekly").tier, "experience");
-      assert.equal(planByCode.get("experience_weekly").periodUnit, "day");
-      assert.equal(planByCode.get("experience_weekly").amountMinor, 9900);
-      assert.equal(planByCode.get("professional_monthly").displayName, "专业版月卡");
-      assert.equal(planByCode.get("professional_monthly").tier, "professional");
-      assert.equal(planByCode.get("professional_monthly").periodUnit, "month");
-      assert.equal(planByCode.get("professional_monthly").amountMinor, 29900);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("activates membership status after a successful mock payment callback", async () => {
-    const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
-
-    try {
-      await server.listen(0);
-      const cookie = await login(server.origin, "13800138000");
-      const planId = "95000000-0000-4000-8000-000000020102";
-      await seedMembershipPlan(db, {
-        id: planId,
-        code: "professional_monthly_callback",
-      });
-
-      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-http-callback-order",
-          cookie,
-        },
-        body: JSON.stringify({ membershipPlanId: planId }),
-      });
-      const order = await orderResponse.json();
-
-      const intentResponse = await fetch(`${server.origin}/api/billing/payment-intents`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-http-callback-intent",
-          cookie,
-        },
-        body: JSON.stringify({
-          orderId: order.order.id,
-          provider: "wechat_pay",
-          productMode: "native_qr",
-        }),
-      });
-      const intent = await intentResponse.json();
-      const callbackBody = {
-        provider: "wechat_pay" as const,
-        providerEventDedupKey: "membership-http-callback-paid",
-        merchantOrderNo: intent.paymentIntent.merchantOrderNo,
-        providerTradeId: "wx-membership-http-callback-paid",
-        eventType: "payment_succeeded" as const,
-        amountMinor: intent.paymentIntent.amountMinor,
-        currency: "CNY",
-        merchantId: "comic-ai-dev-merchant",
-      };
-      const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...callbackBody,
-          signature: signPaymentCallback(callbackBody, "dev-payment-secret"),
-        }),
-      });
-      const callback = await callbackResponse.json();
-
-      const statusResponse = await fetch(`${server.origin}/api/membership/status`, {
-        headers: { cookie },
-      });
-      const status = await statusResponse.json();
-      const paidOrder = await db.query<{ organization_id: string }>(
-        "SELECT organization_id FROM billing_orders WHERE id = $1",
-        [order.order.id],
-      );
-      const paidOrganizationId = paidOrder.rows[0]!.organization_id;
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [paidOrganizationId],
-      );
-      const period = await db.query<{ id: string; period_end_at: Date | string }>(
-        "SELECT id, period_end_at FROM membership_periods WHERE plan_id = $1",
-        [planId],
-      );
-      const giftLots = await db.query<{
-        source_id: string;
-        available_amount: number | string;
-        expires_at: Date | string | null;
-        metadata_json: Record<string, unknown>;
-      }>(
+      const membership = await db.query<{ id: string; organization_id: string; workspace_id: string }>(
         `
-          SELECT source_id, available_amount, expires_at, metadata_json
-          FROM credit_lots
-          WHERE organization_id = $1
-            AND source_type = 'membership_gift'
-        `,
-        [paidOrganizationId],
-      );
-      const outbox = await db.query<{ event_type: string; status: string }>(
-        `
-          SELECT event_type, status
-          FROM outbox_events
-          WHERE event_type IN ('payment.succeeded', 'membership.period.started')
-          ORDER BY event_type ASC
+          SELECT id, organization_id, workspace_id
+          FROM memberships
+          WHERE user_id = (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+          LIMIT 1
         `,
       );
+      assert.ok(membership.rows[0]);
 
-      assert.equal(orderResponse.status, 200);
-      assert.equal(intentResponse.status, 200);
-      assert.equal(callbackResponse.status, 200);
-      assert.equal(callback.order.status, "paid");
-      assert.equal(statusResponse.status, 200);
-      assert.equal(status.membership.status, "professional_active");
-      assert.equal(status.membership.currentTier, "professional");
-      assert.equal(status.membership.entitlements.priorityGeneration, true);
-      assert.equal(status.membership.entitlements.teamMemberManagement, true);
-      assert.equal(status.membership.team.seatLimit, 50);
-      assert.match(status.membership.currentPeriodEndAt, /^\d{4}-\d{2}-\d{2}T/);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 13000);
-      assert.equal(period.rows.length, 1);
-      assert.equal(giftLots.rows.length, 1);
-      assert.equal(giftLots.rows[0]?.source_id, period.rows[0]?.id);
-      assert.equal(Number(giftLots.rows[0]?.available_amount ?? 0), 3000);
-      assert.equal(
-        new Date(giftLots.rows[0]!.expires_at!).toISOString(),
-        new Date(period.rows[0]!.period_end_at).toISOString(),
-      );
-      assert.equal(giftLots.rows[0]?.metadata_json.tier, "professional");
-      assert.deepEqual(outbox.rows, [
-        { event_type: "membership.period.started", status: "processed" },
-        { event_type: "payment.succeeded", status: "processed" },
+      await db.query("UPDATE organizations SET credit_balance_cached = 0 WHERE id = $1", [
+        membership.rows[0].organization_id,
       ]);
+      await db.query(
+        `
+          INSERT INTO team_member_profiles (
+            id,
+            organization_id,
+            workspace_id,
+            membership_id,
+            team_account,
+            display_name,
+            business_role,
+            credit_balance_cached,
+            created_by_user_id
+          )
+          VALUES (
+            '00000000-0000-4000-8000-000000000203',
+            $1,
+            $2,
+            $3,
+            'credit_owner_2036',
+            'Credit Owner',
+            'director',
+            2036,
+            (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+          )
+          ON CONFLICT (organization_id, workspace_id, membership_id)
+          DO UPDATE SET credit_balance_cached = EXCLUDED.credit_balance_cached
+        `,
+        [
+          membership.rows[0].organization_id,
+          membership.rows[0].workspace_id,
+          membership.rows[0].id,
+        ],
+      );
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "session-current-user-credit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Credit Project",
+          scriptInput: "Episode 1: Credits should follow current user.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const project = await createProjectResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${project.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "session-current-user-credit-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const episode = await createEpisodeResponse.json();
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episode.data.episode.id}/generation-config`,
+        { headers: { cookie } },
+      );
+      const generationConfig = await generationConfigResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.availableCredits, 2036);
+      assert.equal(session.user.creditBalance, 2036);
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfig.data.creditBalance, 2036);
     } finally {
       await server.close();
     }
   });
 
-  it("does not let one phone account inherit another account's paid membership entitlements", async () => {
+  it("uses a one-day auth cookie when SMS login is not remembered", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({
-      db,
-      storageRuntime: {
-        mode: "cos",
-        provider: "tencent_cos",
-        bucket: "creator-test",
-      },
-    });
-    const originalDatabaseUrl = process.env.DATABASE_URL;
-    process.env.DATABASE_URL = originalDatabaseUrl || "postgres://tenant-isolation-upload-gate.test/local";
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
-      const paidCookie = await login(server.origin, "13800138010");
-      const ordinaryCookie = await login(server.origin, "13800138011");
-      const planId = "95000000-0000-4000-8000-000000020103";
-      await seedMembershipPlan(db, {
-        id: planId,
-        code: "professional_monthly_tenant_isolation",
-      });
 
-      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
+      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-tenant-isolation-order",
-          cookie: paidCookie,
-        },
-        body: JSON.stringify({ membershipPlanId: planId }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: "13800138000" }),
       });
-      const order = await orderResponse.json();
-      const intentResponse = await fetch(`${server.origin}/api/billing/payment-intents`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-tenant-isolation-intent",
-          cookie: paidCookie,
-        },
-        body: JSON.stringify({
-          orderId: order.order.id,
-          provider: "wechat_pay",
-          productMode: "native_qr",
-        }),
-      });
-      const intent = await intentResponse.json();
-      const callbackBody = {
-        provider: "wechat_pay" as const,
-        providerEventDedupKey: "membership-tenant-isolation-paid",
-        merchantOrderNo: intent.paymentIntent.merchantOrderNo,
-        providerTradeId: "wx-membership-tenant-isolation-paid",
-        eventType: "payment_succeeded" as const,
-        amountMinor: intent.paymentIntent.amountMinor,
-        currency: "CNY",
-        merchantId: "comic-ai-dev-merchant",
-      };
-      const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
+      const requested = await requestResponse.json();
+
+      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          ...callbackBody,
-          signature: signPaymentCallback(callbackBody, "dev-payment-secret"),
+          challengeId: requested.challengeId,
+          phone: "13800138000",
+          code: requested.devCode,
+          remember: false,
         }),
       });
+      const cookie = verifyResponse.headers.get("set-cookie") ?? "";
 
-      const paidStatusResponse = await fetch(`${server.origin}/api/membership/status`, {
-        headers: { cookie: paidCookie },
-      });
-      const paidStatus = await paidStatusResponse.json();
-      const ordinaryStatusResponse = await fetch(`${server.origin}/api/membership/status`, {
-        headers: { cookie: ordinaryCookie },
-      });
-      const ordinaryStatus = await ordinaryStatusResponse.json();
-      const uploadResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "tenant-isolation-blocked-team-upload",
-          cookie: ordinaryCookie,
-        },
-        body: JSON.stringify({
-          projectId: null,
-          purpose: "team-assets/character",
-          fileName: "ordinary-user-blocked.png",
-          contentType: "image/png",
-          sizeBytes: 1024,
-        }),
-      });
-      const uploadBody = await uploadResponse.json();
-
-      assert.equal(orderResponse.status, 200);
-      assert.equal(intentResponse.status, 200);
-      assert.equal(callbackResponse.status, 200);
-      assert.equal(paidStatusResponse.status, 200);
-      assert.equal(paidStatus.membership.status, "professional_active");
-      assert.equal(paidStatus.membership.entitlements.teamAssetLibrary, true);
-      assert.equal(ordinaryStatusResponse.status, 200);
-      assert.equal(ordinaryStatus.membership.status, "none");
-      assert.equal(ordinaryStatus.membership.entitlements.teamAssetLibrary, false);
-      assert.equal(uploadResponse.status, 403);
-      assert.equal(uploadBody.errorCode, "team_asset_library_entitlement_required");
+      assert.equal(verifyResponse.status, 200);
+      assert.match(cookie, /Max-Age=86400/);
     } finally {
-      if (originalDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
-      } else {
-        process.env.DATABASE_URL = originalDatabaseUrl;
-      }
+      await server.close();
+    }
+  });
+
+  it("sets phone users' initial password to the last six phone digits and supports password login", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: "18571521874" }),
+      });
+      const requested = await requestResponse.json();
+
+      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          challengeId: requested.challengeId,
+          phone: "18571521874",
+          code: requested.devCode,
+        }),
+      });
+      const createdUser = await db.query<{ password_hash: string | null }>(
+        "SELECT password_hash FROM users WHERE phone_e164 = '+8618571521874'",
+      );
+
+      const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: "18571521874",
+          password: "521874",
+          remember: true,
+        }),
+      });
+      const passwordPayload = await passwordResponse.json();
+      const cookie = passwordResponse.headers.get("set-cookie") ?? "";
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const sessionPayload = await sessionResponse.json();
+
+      assert.equal(requestResponse.status, 200);
+      assert.equal(verifyResponse.status, 200);
+      assert.match(createdUser.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
+      assert.notEqual(createdUser.rows[0]?.password_hash, "521874");
+      assert.equal(passwordResponse.status, 200);
+      assert.equal(passwordPayload.user.phone, "+8618571521874");
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionPayload.authenticated, true);
+      assert.match(cookie, /Max-Age=2592000/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses a one-day auth cookie when password login is not remembered", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES ('00000000-0000-4000-8000-000000000004', '+8618571521874', 'active')
+        `,
+      );
+
+      const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: "18571521874",
+          password: "521874",
+          remember: false,
+        }),
+      });
+      const cookie = passwordResponse.headers.get("set-cookie") ?? "";
+
+      assert.equal(passwordResponse.status, 200);
+      assert.match(cookie, /Max-Age=86400/);
+    } finally {
       await server.close();
     }
   });
@@ -741,6 +636,258 @@ describe("phone auth dev server", () => {
       assert.equal(first.script.id, replay.script.id);
       assert.deepEqual(conflict, { error: "idempotency_conflict" });
       assert.equal(projects.projects.length, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes creator projects with export records through the HTTP route", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138199");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-delete-export-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "HTTP delete export project",
+          scriptInput: "Episode 1: A project is exported before deletion.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-parse",
+          cookie,
+        },
+      });
+
+      const confirmResponse = await fetch(`${server.origin}/api/creator/assets/confirm-all`, {
+        method: "POST",
+        headers: { cookie },
+      });
+
+      const calibrationResponse = await fetch(`${server.origin}/api/creator/calibration/run`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-calibration",
+          cookie,
+        },
+      });
+
+      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-image",
+          cookie,
+        },
+      });
+
+      const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "http-delete-export-project-export",
+          cookie,
+        },
+      });
+      const exported = await exportResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ projectId: created.project.id }),
+      });
+      const deleted = await deleteResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(parseResponse.status, 202);
+      assert.equal(confirmResponse.status, 200);
+      assert.equal(calibrationResponse.status, 200);
+      assert.equal(imageResponse.status, 200);
+      assert.equal(exportResponse.status, 200);
+      assert.equal(exported.exportRecord.manifestStatus, "ready");
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deleted.deleted, true);
+      assert.equal(deleted.projectId, created.project.id);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates, renames, and deletes canvas projects through HTTP routes", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138277");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-project-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "迷雾世界-第一卷",
+        }),
+      });
+      const created = await createResponse.json();
+      const projectId = created.data.project.id;
+      const userRow = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1",
+        ["+8613800138277"],
+      );
+      const userId = userRow.rows[0]?.id;
+      assert.ok(userId);
+      await db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            aspect_ratio,
+            resolution,
+            phase,
+            created_by_user_id
+          )
+          VALUES (
+            '40000000-0000-4000-8000-000000000277',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            '普通项目不能进入画布项目列表',
+            '9:16',
+            '1080p',
+            'asset_review',
+            $1
+          )
+        `,
+        [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            title,
+            status,
+            created_by_user_id,
+            updated_by_user_id
+          )
+          VALUES (
+            '50000000-0000-4000-8000-000000000277',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            '40000000-0000-4000-8000-000000000277',
+            '普通项目绑定画布',
+            'active',
+            $1,
+            $1
+          )
+        `,
+        [userId],
+      );
+      const createdRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
+      const ordinaryProjectsAfterCanvasCreate = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const ordinaryProjects = await ordinaryProjectsAfterCanvasCreate.json();
+
+      const renameResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "迷雾世界-第二卷",
+        }),
+      });
+      const renamed = await renameResponse.json();
+      const renamedRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
+
+      const listResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie },
+      });
+      const listed = await listResponse.json();
+      const renameProjectLinkedCanvasResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/50000000-0000-4000-8000-000000000277`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            title: "不应被独立画布接口改名",
+          }),
+        },
+      );
+      const renameProjectLinkedCanvas = await renameProjectLinkedCanvasResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
+        method: "DELETE",
+        headers: { cookie },
+      });
+      const deleted = await deleteResponse.json();
+      const deletedRow = await db.query<{ title: string; deleted_at: string | null }>(
+        "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
+        [projectId],
+      );
+
+      const afterDeleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie },
+      });
+      const afterDelete = await afterDeleteResponse.json();
+
+      assert.equal(createResponse.status, 201);
+      assert.equal(created.data.project.title, "迷雾世界-第一卷");
+      assert.equal(createdRow.rows[0]?.title, "迷雾世界-第一卷");
+      assert.equal(createdRow.rows[0]?.deleted_at, null);
+      assert.equal(ordinaryProjectsAfterCanvasCreate.status, 200);
+      assert.equal(
+        ordinaryProjects.data.projects.some((project) => project.id === projectId || project.name === "迷雾世界-第一卷"),
+        false,
+      );
+      assert.equal(renameResponse.status, 200);
+      assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
+      assert.equal(renamedRow.rows[0]?.title, "迷雾世界-第二卷");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
+      assert.equal(
+        listed.data.projects.some((project) => project.id === "50000000-0000-4000-8000-000000000277"),
+        false,
+      );
+      assert.equal(renameProjectLinkedCanvasResponse.status, 404);
+      assert.equal(renameProjectLinkedCanvas.errorCode, "canvas_project_not_found");
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deleted.data.deletedProjectId, projectId);
+      assert.notEqual(deletedRow.rows[0]?.deleted_at, null);
+      assert.equal(afterDelete.data.projects.some((project) => project.id === projectId), false);
     } finally {
       await server.close();
     }
@@ -2192,7 +2339,7 @@ describe("phone auth dev server", () => {
         assert.deepEqual(tasksEnvelope.data.items, []);
         assert.equal(generationConfigResponse.status, 200);
         assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "gpt-image-2-cn");
-        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "video_mock_1");
+        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
         assert.equal(generationConfigEnvelope.data.creditBalance, 10000);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
@@ -2208,6 +2355,414 @@ describe("phone auth dev server", () => {
       } finally {
         await server.close();
       }
+  });
+
+  it("uses active admin video model configs for episode generation config", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET model_code = 'happyhorse-1.0-r2v',
+            display_name = '快乐马1.0',
+            provider_name = 'aliyun-bailian',
+            provider_model = 'happyhorse-1.0-r2v',
+            provider_protocol = 'aliyun_bailian_video',
+            provider_config_json = '{"baseURL":"https://dashscope.aliyuncs.com","createTaskEndpoint":"/api/v1/services/aigc/video-generation/video-synthesis","queryTaskEndpoint":"/api/v1/tasks/{taskId}","apiKeyEnv":"ALIYUNBAILIAN_API_KEY"}'::jsonb,
+            pricing_json = '{"unit":"video","baseCredits":120}'::jsonb,
+            sort_order = 1,
+            status = 'active'
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-video-config-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Admin video config project",
+          scriptInput: "Episode 1: Use the configured video model.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Configured Video" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-config`,
+        { headers: { cookie } },
+      );
+      const generationConfigEnvelope = await generationConfigResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "happyhorse-1.0-r2v");
+      assert.ok(
+        generationConfigEnvelope.data.models.some(
+          (model: { modelCode?: string; modelLabel?: string }) =>
+            model.modelCode === "happyhorse-1.0-r2v" && model.modelLabel === "快乐马1.0",
+        ),
+      );
+      assert.equal(
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "video_mock_1"),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes enabled storyboard prompt packages to authenticated creators", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const envelope = await packagesResponse.json();
+
+      assert.equal(packagesResponse.status, 200);
+      assert.ok(Array.isArray(envelope.packages));
+      assert.ok(envelope.packages.some((item: { package_type?: string }) => item.package_type === "genre"));
+      assert.ok(envelope.packages.some((item: { package_type?: string }) => item.package_type === "emotion"));
+      assert.equal(envelope.packages.every((item: { status?: string }) => item.status === "enabled"), true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("generates an AI storyboard preview from creator-selected prompt packages", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        title: "第一章",
+        logline: "少年托付妹妹。",
+        scriptBeats: [
+          {
+            beatNo: 1,
+            plot: "任小野把小草托付给闵婶子。",
+            characters: ["任小野", "闵婶子"],
+            locationHint: "闵婶家门前",
+            props: ["饭食"],
+            dialogue: "今天又得麻烦您照看小草了。",
+          },
+        ],
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138210");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview project",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(previewResponse.status, 200);
+      assert.equal(textChatGateway.calls.length, 4);
+      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /按玄幻修仙风格改编/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /节奏强、冲突硬/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /请按分镜表输出/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /以下【改写要求】必须作为上方任务说明的一部分执行/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /通用禁忌：/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景默认提示词/);
+      assert.match(textChatGateway.calls[2]?.prompt ?? "", /角色默认提示词/);
+      assert.match(textChatGateway.calls[3]?.prompt ?? "", /分镜默认提示词/);
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.script.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.scenes.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
+      assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("commits AI storyboard preview payload into a real episode workspace", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138212");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-commit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard commit project",
+          scriptInput: "任小野把机械腿残骸掷向食人花树。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const commitResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview/commit`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            episodeTitle: "第 1 集",
+            commitPayload: {
+              characters: [
+                {
+                  characterName: "任小野",
+                  characterDescription: "灰晶收割者少年。",
+                  characterImagePrompt: "任小野角色设定图",
+                },
+              ],
+              scenes: [
+                {
+                  sceneName: "黑山密林",
+                  sceneDescription: "腐叶和断根包围的密林。",
+                  sceneImagePrompt: "黑山密林场景图",
+                },
+              ],
+              props: [
+                {
+                  propName: "机械腿残骸",
+                  propDescription: "沉重的金属残骸。",
+                  propImagePrompt: "机械腿残骸道具图",
+                },
+              ],
+              storyboards: [
+                {
+                  plot: "任小野把机械腿残骸掷向食人花树。",
+                  dialogue: "任小野：别过来。",
+                  imagePrompt: "静态分镜图提示词",
+                  videoPrompt: "动态视频提示词",
+                },
+              ],
+            },
+          }),
+        },
+      );
+      const commitEnvelope = await commitResponse.json();
+      const episodeId = commitEnvelope.episode?.id;
+
+      const [assetsResponse, storyboardsResponse] = await Promise.all([
+        fetch(`${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+      ]);
+      const assetsEnvelope = await assetsResponse.json();
+      const storyboardsEnvelope = await storyboardsResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(commitResponse.status, 200);
+      assert.equal(commitEnvelope.episode.title, "第 1 集");
+      assert.equal(commitEnvelope.storyboards.length, 1);
+      assert.equal(assetsEnvelope.data.items[0].name, "任小野");
+      assert.equal(storyboardsEnvelope.data.items[0].sceneAnalysis, "任小野把机械腿残骸掷向食人花树。\n\n任小野：别过来。");
+      assert.deepEqual(
+        storyboardsEnvelope.data.items[0].generationDrafts.map((draft: { mode: string; prompt: string }) => ({
+          mode: draft.mode,
+          prompt: draft.prompt,
+        })).sort((left: { mode: string }, right: { mode: string }) => left.mode.localeCompare(right.mode)),
+        [
+          { mode: "image", prompt: "静态分镜图提示词" },
+          { mode: "video", prompt: "动态视频提示词" },
+        ],
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("streams AI storyboard preview text before the final parsed payload", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      [
+        '{"title":"第一章","scriptBeats":[',
+        '{"beatNo":1,"plot":"任小野托付妹妹。","characters":["任小野"],"locationHint":"门前","props":[],"dialogue":""}',
+        "]}",
+      ],
+      [
+        '{"scenes":[{"sceneName":"门前","sceneDescription":"旧木屋","sceneImagePrompt":"旧木屋。"}]}',
+      ],
+      [
+        '{"characters":[{"characterName":"任小野","characterDescription":"少年","characterImagePrompt":"少年。"}]}',
+      ],
+      [
+        '{"storyboards":[{"plot":"递出饭食","dialogue":"","imagePrompt":"递出饭食。","videoPrompt":"中景。"}]}',
+      ],
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138211");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-stream-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard stream project",
+          scriptInput: "任小野托付妹妹。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "text/event-stream", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野托付妹妹。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const text = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      assert.ok(text.indexOf("event: script_delta") < text.indexOf("event: complete"));
+      assert.ok(text.indexOf("event: asset_delta") < text.indexOf("event: complete"));
+      assert.match(text, /event: script_prompt/);
+      assert.match(text, /event: asset_prompt/);
+      assert.match(text, /场景提示词生成/);
+      assert.match(text, /角色提示词生成/);
+      assert.match(text, /分镜提示词生成/);
+      assert.match(text, /请按分镜表输出/);
+      assert.match(text, /避免魔改原著核心设定/);
+      assert.match(text, /任小野托付妹妹/);
+      assert.match(text, /递出饭食/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("exposes enabled image prompt styles as project styles to authenticated creators", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const stylesResponse = await fetch(
+        `${server.origin}/api/creator/project-styles?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const envelope = await stylesResponse.json();
+
+      assert.equal(stylesResponse.status, 200);
+      assert.ok(Array.isArray(envelope.styles));
+      assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
+      assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
+      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/admin/assets/prompt-covers/")));
+      assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
+    } finally {
+      await server.close();
+    }
   });
 
   it("creates and updates project members through the project-scoped team API", async () => {
@@ -2823,6 +3378,15 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ projectId }),
       });
       const deletedProject = await deleteProjectResponse.json();
+      const snapshotRowsAfterDelete = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*)::int AS count
+          FROM ai_generation_task_snapshots
+          WHERE organization_id = $1
+            AND task_id = $2
+        `,
+        ["10000000-0000-4000-8000-000000000001", taskId],
+      );
 
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
@@ -2831,6 +3395,7 @@ describe("phone auth dev server", () => {
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
+      assert.equal(Number(snapshotRowsAfterDelete.rows[0]?.count ?? -1), 0);
     } finally {
       await server.close();
     }
@@ -2905,21 +3470,6 @@ describe("phone auth dev server", () => {
         `,
         ["10000000-0000-4000-8000-000000000001", projectId, taskId],
       );
-      const lotAllocationRows = await db.query<{ count: number | string }>(
-        `
-          SELECT count(*)::int AS count
-          FROM credit_reservation_lot_allocations
-          WHERE organization_id = $1
-            AND reservation_id IN (
-              SELECT id
-              FROM credit_reservations
-              WHERE organization_id = $1
-                AND project_id = $2
-                AND task_id = $3
-            )
-        `,
-        ["10000000-0000-4000-8000-000000000001", projectId, taskId],
-      );
 
       const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
         method: "DELETE",
@@ -2935,8 +3485,7 @@ describe("phone auth dev server", () => {
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(generationResponse.status, 200);
       assert.equal(Number(reservationRows.rows[0]?.count ?? 0) > 0, true);
-      assert.equal(Number(lotAllocationRows.rows[0]?.count ?? 0) > 0, true);
-      assert.equal(deleteProjectResponse.status, 200, JSON.stringify(deletedProject));
+      assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
     } finally {
@@ -3263,6 +3812,23 @@ describe("phone auth dev server", () => {
       const createAssetEnvelope = await createAssetResponse.json();
       const assetId = createAssetEnvelope.data.asset.assetId;
 
+      const createBlankAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "role",
+            name: "空白角色",
+          }),
+        },
+      );
+      const createBlankAssetEnvelope = await createBlankAssetResponse.json();
+      const blankAssetId = createBlankAssetEnvelope.data.asset.assetId;
+
       const listAfterCreateResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`,
         { headers: { cookie } },
@@ -3319,12 +3885,22 @@ describe("phone auth dev server", () => {
       assert.equal(createAssetEnvelope.data.asset.assetType, "role");
       assert.equal(createAssetEnvelope.data.asset.name, "废土主角");
       assert.equal(createAssetEnvelope.data.asset.description, "初始角色设定");
+      assert.equal(createBlankAssetResponse.status, 200);
+      assert.equal(createBlankAssetEnvelope.data.asset.description, "");
       assert.equal(listAfterCreateResponse.status, 200);
-      assert.equal(listAfterCreateEnvelope.data.items.length, 1);
-      assert.equal(listAfterCreateEnvelope.data.items[0].assetId, assetId);
+      assert.equal(listAfterCreateEnvelope.data.items.length, 2);
+      assert.ok(listAfterCreateEnvelope.data.items.some((item: { assetId: string }) => item.assetId === assetId));
+      assert.equal(
+        listAfterCreateEnvelope.data.items.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
+        "",
+      );
       assert.equal(workbenchAfterCreateResponse.status, 200);
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 1);
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role[0].assetId, assetId);
+      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 2);
+      assert.ok(workbenchAfterCreateEnvelope.data.assetsByType.role.some((item: { assetId: string }) => item.assetId === assetId));
+      assert.equal(
+        workbenchAfterCreateEnvelope.data.assetsByType.role.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
+        "",
+      );
       assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.character[0].name, "废土主角");
       assert.equal(updateAssetResponse.status, 200);
       assert.equal(updateAssetEnvelope.data.asset.assetId, assetId);
@@ -3335,7 +3911,8 @@ describe("phone auth dev server", () => {
       assert.equal(deleteAssetResponse.status, 200);
       assert.equal(deleteAssetEnvelope.data.deleted, true);
       assert.equal(listAfterDeleteResponse.status, 200);
-      assert.deepEqual(listAfterDeleteEnvelope.data.items, []);
+      assert.equal(listAfterDeleteEnvelope.data.items.length, 1);
+      assert.equal(listAfterDeleteEnvelope.data.items[0].assetId, blankAssetId);
     } finally {
       await server.close();
     }
@@ -4218,6 +4795,10 @@ describe("phone auth dev server", () => {
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(taskResponse.status, 200);
       assert.equal(taskEnvelope.data.status, "succeeded");
+      assert.equal(taskEnvelope.data.progressStage, "completed");
+      assert.equal(taskEnvelope.data.progressPercent, 100);
+      assert.equal(taskEnvelope.data.snapshot.progressStage, "completed");
+      assert.equal(taskEnvelope.data.snapshot.progressPercent, 100);
       assert.equal(taskEnvelope.data.result.imageUrl, snapshotUrl);
       assert.equal(taskEnvelope.data.result.assetVersionId, "snapshot-version");
       assert.equal(listResponse.status, 200);
@@ -4339,11 +4920,19 @@ describe("phone auth dev server", () => {
 
   it("returns friendly display messages for GPT Image provider gateway failures", async () => {
     const db = await createDevDb();
+    const previousApiKey = process.env.GPT_IMAGE2_API_KEY;
+    process.env.GPT_IMAGE2_API_KEY = previousApiKey || "test-gpt-image-key";
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138012");
+      const readCreatedTask = async (response: Response) => {
+        const envelope = await response.json();
+        const taskId = envelope.data?.taskId ?? envelope.details?.taskId ?? envelope.data?.details?.taskId;
+        assert.ok(taskId, `generation task response should include a task id: ${JSON.stringify(envelope)}`);
+        return { ...(envelope.data ?? {}), taskId };
+      };
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
@@ -4389,7 +4978,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const ambiguousTask = (await ambiguousTaskResponse.json()).data;
+      const ambiguousTask = await readCreatedTask(ambiguousTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -4437,6 +5026,26 @@ describe("phone auth dev server", () => {
         `,
         [ambiguousTask.taskId, new Date("2026-06-03T07:02:01.000Z")],
       );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          ambiguousTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_submission_ambiguous",
+            providerStatus: "result_unknown",
+          }),
+          new Date("2026-06-03T07:02:01.000Z"),
+        ],
+      );
 
       const timeoutTaskResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
@@ -4455,7 +5064,7 @@ describe("phone auth dev server", () => {
           }),
         },
       );
-      const timeoutTask = (await timeoutTaskResponse.json()).data;
+      const timeoutTask = await readCreatedTask(timeoutTaskResponse);
       await db.query(
         `
           UPDATE tasks
@@ -4487,6 +5096,154 @@ describe("phone auth dev server", () => {
         ],
       );
 
+      const emptyResponseTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-empty-response-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "empty provider response",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const emptyResponseTask = await readCreatedTask(emptyResponseTaskResponse);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [emptyResponseTask.taskId, new Date("2026-06-03T07:04:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          emptyResponseTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            errorMessage: "Unexpected end of JSON input",
+            displayMessage: "provider_failed",
+          }),
+          new Date("2026-06-03T07:04:01.000Z"),
+        ],
+      );
+
+      const fetchFailedTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-fetch-failed-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "fetch failed",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const fetchFailedTask = await readCreatedTask(fetchFailedTaskResponse);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [fetchFailedTask.taskId, new Date("2026-06-03T07:05:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          fetchFailedTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            providerMessage: "fetch failed",
+          }),
+          new Date("2026-06-03T07:05:01.000Z"),
+        ],
+      );
+
+      const volcengineModelNotFoundTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "provider-gateway-volcengine-model-not-found",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "volcengine model not found",
+            model: "gpt-image-2-cn",
+          }),
+        },
+      );
+      const volcengineModelNotFoundTask = await readCreatedTask(volcengineModelNotFoundTaskResponse);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [volcengineModelNotFoundTask.taskId, new Date("2026-06-03T07:06:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'provider_failed',
+              credit_status = 'released',
+              failure_json = $2::jsonb,
+              failed_at = $3,
+              updated_at = $3
+          WHERE task_id = $1
+        `,
+        [
+          volcengineModelNotFoundTask.taskId,
+          JSON.stringify({
+            failureCode: "provider_failed",
+            providerMessage: "volcengine_ark_image_404:InvalidEndpointOrModel.NotFound:The model or endpoint doubao-seedream-4-0 does not exist or you do not have access to it.",
+          }),
+          new Date("2026-06-03T07:06:01.000Z"),
+        ],
+      );
+
       const ambiguousLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${ambiguousTask.taskId}`, {
         headers: { cookie },
       });
@@ -4495,12 +5252,40 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const timeoutEnvelope = await timeoutLookupResponse.json();
+      const emptyResponseLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${emptyResponseTask.taskId}`, {
+        headers: { cookie },
+      });
+      const emptyResponseEnvelope = await emptyResponseLookupResponse.json();
+      const fetchFailedLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${fetchFailedTask.taskId}`, {
+        headers: { cookie },
+      });
+      const fetchFailedEnvelope = await fetchFailedLookupResponse.json();
+      const volcengineModelNotFoundLookupResponse = await fetch(`${server.origin}/api/generation-tasks/${volcengineModelNotFoundTask.taskId}`, {
+        headers: { cookie },
+      });
+      const volcengineModelNotFoundEnvelope = await volcengineModelNotFoundLookupResponse.json();
 
       assert.equal(ambiguousLookupResponse.status, 200);
       assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
       assert.equal(timeoutLookupResponse.status, 200);
       assert.equal(timeoutEnvelope.data.failure.displayMessage, "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
+      assert.equal(emptyResponseLookupResponse.status, 200);
+      assert.equal(emptyResponseEnvelope.data.failure.displayMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.equal(emptyResponseEnvelope.data.failure.providerMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.doesNotMatch(JSON.stringify(emptyResponseEnvelope.data.failure), /Unexpected end of JSON input/);
+      assert.equal(fetchFailedLookupResponse.status, 200);
+      assert.equal(fetchFailedEnvelope.data.failure.displayMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.equal(fetchFailedEnvelope.data.failure.providerMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.doesNotMatch(JSON.stringify(fetchFailedEnvelope.data.failure), /fetch failed/);
+      assert.equal(volcengineModelNotFoundLookupResponse.status, 200);
+      assert.equal(volcengineModelNotFoundEnvelope.data.failure.displayMessage, "火山方舟图片模型不可用或当前账号无权限：doubao-seedream-4-0。任务没有生成图片，积分已返还，请检查模型配置或供应商权限。");
+      assert.doesNotMatch(volcengineModelNotFoundEnvelope.data.failure.displayMessage, /InvalidEndpointOrModel/);
     } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.GPT_IMAGE2_API_KEY;
+      } else {
+        process.env.GPT_IMAGE2_API_KEY = previousApiKey;
+      }
       await server.close();
     }
   });
@@ -4947,17 +5732,6 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveProfessionalPriorityMembership(db);
-      const priorityCheck = await resolveMembershipGenerationPriority(db, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
-        modelCode: "seedance-i2v-pro",
-        now: new Date("2026-06-09T08:00:00.000Z"),
-      });
-      assert.deepEqual(priorityCheck, {
-        enabled: true,
-        priority: 1,
-        reason: "professional_membership_model_family_priority",
-      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -5013,8 +5787,6 @@ describe("phone auth dev server", () => {
         },
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
-      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
-      assert.ok(videoTaskEnvelope.data, JSON.stringify(videoTaskEnvelope));
       const taskId = videoTaskEnvelope.data.taskId;
       const outbox = await db.query<{
         event_type: string;
@@ -5024,9 +5796,6 @@ describe("phone auth dev server", () => {
           modelCode?: string;
           mediaType?: string;
           queueName?: string;
-          membershipPriority?: boolean;
-          queuePriority?: number;
-          priorityReason?: string;
         };
       }>(
         "SELECT event_type, status, payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
@@ -5043,6 +5812,7 @@ describe("phone auth dev server", () => {
         [taskId],
       );
 
+      assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTaskEnvelope.data.status, "queued");
       assert.equal(providerCalls.length, 0);
       assert.equal(providerRequests.rows[0]?.count, 0);
@@ -5052,12 +5822,6 @@ describe("phone auth dev server", () => {
       assert.equal(outbox.rows[0]?.payload_json.modelCode, "seedance-i2v-pro");
       assert.equal(outbox.rows[0]?.payload_json.mediaType, "video");
       assert.equal(outbox.rows[0]?.payload_json.queueName, "generation-submit-video");
-      assert.equal(outbox.rows[0]?.payload_json.membershipPriority, true);
-      assert.equal(outbox.rows[0]?.payload_json.queuePriority, 1);
-      assert.equal(
-        outbox.rows[0]?.payload_json.priorityReason,
-        "professional_membership_model_family_priority",
-      );
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 135);
       assert.equal(reservation.rows[0]?.status, "active");
     } finally {
@@ -6236,8 +7000,7 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
     assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
-    assert.match(launcherScript, /LOCAL_DATABASE_DIR/);
-    assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
+    assert.doesNotMatch(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
     assert.match(launcherScript, /server\.listen\(port\)/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);
@@ -6248,47 +7011,6 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
-    assert.match(launcherScript, /NODE_ENV\s*===\s*"production"/);
-    assert.match(launcherScript, /Refusing to start phone-auth dev server/);
-    assert.match(launcherScript, /isSafeDevServerDatabaseUrl/);
-    assert.match(launcherScript, /ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE/);
-    assert.match(launcherScript, /non-local DATABASE_URL/);
-  });
-
-  it("refuses to construct the dev server in production mode", () => {
-    assert.throws(
-      () => createPhoneAuthDevServer({ env: { NODE_ENV: "production" } }),
-      /phone_auth_dev_server_forbidden_in_production/,
-    );
-  });
-
-  it("refuses to construct the dev server against a remote database by default", () => {
-    assert.throws(
-      () =>
-        createPhoneAuthDevServer({
-          env: {
-            NODE_ENV: "development",
-            DATABASE_URL: "postgres://comic-ai.example.com/prod",
-          },
-        }),
-      /phone_auth_dev_server_remote_database_forbidden/,
-    );
-  });
-
-  it("allows injected test databases while remote DATABASE_URL is present", () => {
-    const db = {
-      query: async () => ({ rows: [] }),
-      close: async () => undefined,
-    } as Awaited<ReturnType<typeof createDevDb>>;
-    const server = createPhoneAuthDevServer({
-      db,
-      env: {
-        NODE_ENV: "development",
-        DATABASE_URL: "postgres://comic-ai.example.com/prod",
-      },
-    });
-
-    return server.close();
   });
 
   it("gates team member creation behind the paid team entitlement", async () => {
@@ -6537,282 +7259,26 @@ async function login(origin: string, phone: string) {
   return verifyResponse.headers.get("set-cookie") ?? "";
 }
 
-async function seedMembershipPlan(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  input: {
-    id: string;
-    code: string;
-  },
-) {
-  await db.query(
-    `
-      INSERT INTO membership_plans (
-        id,
-        code,
-        display_name,
-        tier,
-        period_unit,
-        period_count,
-        amount_minor,
-        currency,
-        gift_credits,
-        seat_limit,
-        entitlements_json,
-        priority_rules_json,
-        display_metadata_json,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        'Professional Monthly HTTP',
-        'professional',
-        'month',
-        1,
-        29900,
-        'CNY',
-        3000,
-        50,
-        $3::jsonb,
-        $4::jsonb,
-        $5::jsonb,
-        'active',
-        $6,
-        $6
-      )
-    `,
-    [
-      input.id,
-      input.code,
-      JSON.stringify([
-        "priority_generation",
-        "team_asset_library",
-        "team_dashboard",
-        "team_member_management",
-      ]),
-      JSON.stringify({ modelFamilies: ["seedance"] }),
-      JSON.stringify({ sortOrder: 20 }),
-      new Date("2026-06-08T07:30:00.000Z"),
-    ],
-  );
-}
+class FakeAiStoryboardTextGateway {
+  readonly calls: Array<{ model: string; prompt: string }> = [];
 
-async function seedActiveProfessionalPriorityMembership(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-) {
-  const organizationId = "10000000-0000-4000-8000-000000000001";
-  const user = await db.query<{ id: string }>(
-    "SELECT id FROM users WHERE phone_e164 = '+8613800138000' LIMIT 1",
-  );
-  const userId = user.rows[0]?.id;
-  if (!userId) {
-    throw new Error("priority_membership_seed_user_missing");
+  constructor(private readonly responses: Array<string | string[]>) {}
+
+  async completeJson(input: { model: string; prompt: string }) {
+    this.calls.push(input);
+    const response = this.responses.shift();
+    assert.ok(response, "missing fake AI storyboard response");
+    return Array.isArray(response) ? response.join("") : response;
   }
 
-  const planId = "95000000-0000-4000-8000-000000020201";
-  const orderId = "96000000-0000-4000-8000-000000020201";
-  const periodId = "97000000-0000-4000-8000-000000020201";
-  const subscriptionId = "98000000-0000-4000-8000-000000020201";
-  const periodEndAt = "2026-07-08T08:00:00.000Z";
-  const planSnapshot = {
-    id: planId,
-    code: "professional_monthly_priority_http",
-    displayName: "Professional Monthly Priority HTTP",
-    tier: "professional",
-    periodUnit: "month",
-    periodCount: 1,
-    amountMinor: 29900,
-    currency: "CNY",
-    giftCredits: 3000,
-    seatLimit: 50,
-    entitlements: ["team_member_management", "priority_generation"],
-    priorityRules: { modelFamilies: ["seedance"] },
-    displayMetadata: { sortOrder: 20 },
-  };
-
-  await db.query(
-    `
-      INSERT INTO membership_plans (
-        id,
-        code,
-        display_name,
-        tier,
-        period_unit,
-        period_count,
-        amount_minor,
-        currency,
-        gift_credits,
-        seat_limit,
-        entitlements_json,
-        priority_rules_json,
-        display_metadata_json,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'professional',
-        'month',
-        1,
-        29900,
-        'CNY',
-        3000,
-        50,
-        $4::jsonb,
-        $5::jsonb,
-        $6::jsonb,
-        'active',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [
-      planId,
-      planSnapshot.code,
-      planSnapshot.displayName,
-      JSON.stringify(planSnapshot.entitlements),
-      JSON.stringify(planSnapshot.priorityRules),
-      JSON.stringify(planSnapshot.displayMetadata),
-    ],
-  );
-  await db.query(
-    `
-      INSERT INTO billing_orders (
-        id,
-        organization_id,
-        created_by_user_id,
-        order_no,
-        product_type,
-        membership_plan_id,
-        package_snapshot_json,
-        product_snapshot_json,
-        credits,
-        amount_minor,
-        currency,
-        status,
-        expires_at
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-PRIORITY-HTTP',
-        'membership_plan',
-        $4,
-        $5::jsonb,
-        $5::jsonb,
-        3000,
-        29900,
-        'CNY',
-        'pending_payment',
-        '2026-06-08T08:30:00.000Z'
-      )
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [orderId, organizationId, userId, planId, JSON.stringify(planSnapshot)],
-  );
-  await db.query(
-    `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        'professional_active',
-        'professional',
-        '2026-06-08T08:00:00.000Z',
-        $3,
-        $4,
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        status = EXCLUDED.status,
-        current_tier = EXCLUDED.current_tier,
-        current_period_start_at = EXCLUDED.current_period_start_at,
-        current_period_end_at = EXCLUDED.current_period_end_at,
-        latest_order_id = EXCLUDED.latest_order_id,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [subscriptionId, organizationId, periodEndAt, orderId],
-  );
-  await db.query(
-    `
-      INSERT INTO membership_periods (
-        id,
-        organization_id,
-        order_id,
-        plan_id,
-        tier,
-        period_start_at,
-        period_end_at,
-        gift_credits,
-        plan_snapshot_json,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'professional',
-        '2026-06-08T08:00:00.000Z',
-        $5,
-        3000,
-        $6::jsonb,
-        'active',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
-      ON CONFLICT (organization_id, order_id) DO NOTHING
-    `,
-    [periodId, organizationId, orderId, planId, periodEndAt, JSON.stringify(planSnapshot)],
-  );
-
-  for (const [entitlementId, entitlementKey] of [
-    ["99000000-0000-4000-8000-000000020201", "priority_generation"],
-    ["99000000-0000-4000-8000-000000020202", "team_member_management"],
-  ] as const) {
-    await db.query(
-      `
-        INSERT INTO organization_entitlements (
-          id,
-          organization_id,
-          entitlement_key,
-          status,
-          source,
-          expires_at,
-          created_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, 'active', 'payment', $4, '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
-        ON CONFLICT (organization_id, entitlement_key)
-        DO UPDATE SET
-          status = 'active',
-          source = 'payment',
-          expires_at = EXCLUDED.expires_at,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [entitlementId, organizationId, entitlementKey, periodEndAt],
-    );
+  async *streamJson(input: { model: string; prompt: string }) {
+    this.calls.push(input);
+    const response = this.responses.shift();
+    assert.ok(response, "missing fake AI storyboard response");
+    const chunks = Array.isArray(response) ? response : [response];
+    for (const chunk of chunks) {
+      yield chunk;
+    }
   }
 }
 

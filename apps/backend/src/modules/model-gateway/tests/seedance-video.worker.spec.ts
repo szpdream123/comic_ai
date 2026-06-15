@@ -386,15 +386,25 @@ describe("Seedance video BullMQ worker services", () => {
       BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
       VOLCENGINE_ARK_API_KEY: "seedance-test-key",
     };
-    const fetchImpl = (async () => new Response(
-      JSON.stringify({
-        data: {
-          task_id: "seedance-timeout-task-1",
-          status: "queued",
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    )) as typeof fetch;
+    const providerCalls: Array<{ url: string; method: string }> = [];
+    const fetchImpl = (async (url, init) => {
+      providerCalls.push({ url: String(url), method: String(init?.method ?? "GET") });
+      if (init?.method === "DELETE") {
+        return new Response(JSON.stringify({ data: { deleted: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            task_id: "seedance-timeout-task-1",
+            status: "queued",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
     const server = createPhoneAuthDevServer({
       db,
       env,
@@ -442,6 +452,8 @@ describe("Seedance video BullMQ worker services", () => {
       });
       const expired = await expireSeedanceVideoPollJob(db, {
         taskId: videoTask.taskId,
+        env,
+        fetchImpl,
         now: new Date("2026-06-03T02:10:00.000Z"),
       });
       const failedTaskResponse = await fetch(
@@ -473,8 +485,30 @@ describe("Seedance video BullMQ worker services", () => {
         "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE task_id = $1",
         [videoTask.taskId],
       );
+      const providerRequest = await db.query<{
+        status: string;
+        failure_code: string | null;
+        response_redacted_json: { cancelStatus?: string; cancelResponse?: { taskId?: string } } | null;
+      }>(
+        `
+          SELECT status, failure_code, response_redacted_json
+          FROM provider_requests
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.taskId],
+      );
 
       assert.deepEqual(expired, { status: "failed", failureCode: "provider_poll_timeout" });
+      assert.deepEqual(
+        providerCalls.filter((call) => call.method === "DELETE").map((call) => call.url),
+        ["https://ark-db.example.test/db/query/seedance-timeout-task-1"],
+      );
+      assert.equal(providerRequest.rows[0]?.status, "canceled");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_poll_timeout");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json?.cancelStatus, "canceled");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json?.cancelResponse?.taskId, "seedance-timeout-task-1");
       assert.equal(failedTask.status, "result_unknown");
       assert.equal(failedTask.failureCode, "provider_poll_timeout");
       assert.equal(failedSnapshot.rows[0]?.status, "result_unknown");

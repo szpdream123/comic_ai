@@ -35,6 +35,7 @@ const FALLBACK_ASSETS = {
     { id: "mock-prop-4", name: "金属残片", description: "爆炸后飞散的机械碎片，增强动作信息量。", preview: "" },
   ],
 };
+const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = Object.values(FALLBACK_ASSETS)
   .flat()
@@ -374,7 +375,7 @@ function renderAssetCardLegacy(asset, assetKind, active, checked) {
           placeholder="可以编辑，点击框外后自动保存"
         >${escapeHtml(desc)}</textarea>
       </label>
-      <span class="count">${[...desc].length} / 800</span>
+      <span class="count">${[...desc].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}</span>
     </article>
   `;
 }
@@ -485,7 +486,6 @@ function renderStoryboardCard(storyboard, active) {
       <span class="pick"></span>
       <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(storyboard.title ?? "")}</strong>
       <span class="meta">角色 / 场景 / 道具</span>
-      <span class="tabs">做图片　做视频</span>
       <span class="desc">${escapeHtml(desc)}</span>
       <span class="count">${[...desc].length} / 3000</span>
       <span class="preview">${renderStoryboardPreviewThumb(refs)}</span>
@@ -976,7 +976,7 @@ function renderAssetCard(asset, assetKind, active, checked) {
           placeholder="鍙互缂栬緫锛岀偣鍑绘澶栧悗鑷姩淇濆瓨"
         >${escapeHtml(desc)}</textarea>
       </label>
-      <span class="count">${[...desc].length} / 800</span>
+      <span class="count">${[...desc].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}</span>
     </article>
   `;
 }

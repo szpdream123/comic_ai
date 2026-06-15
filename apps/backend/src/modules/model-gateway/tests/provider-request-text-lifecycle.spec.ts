@@ -8,6 +8,7 @@ import {
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
+  submitProviderRequest,
 } from "../provider-request.service.ts";
 
 describe("provider request text lifecycle", () => {
@@ -78,6 +79,66 @@ describe("provider request text lifecycle", () => {
 
       assert.equal(canceled.status, "canceled");
       assert.equal(canceled.failureCode, "client_aborted_stream");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stores provider response diagnostics when submission returns an error", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedScope(db);
+
+      await assert.rejects(
+        () => submitProviderRequest(db, {
+          ...providerInput("diagnostics"),
+          providerName: "openai",
+          providerOperation: "episode.image.generate",
+          adapter: {
+            async submit() {
+              throw Object.assign(new Error("openai_images_503"), {
+                providerDiagnostics: {
+                  httpStatus: 503,
+                  statusText: "Service Unavailable",
+                  contentType: "application/json",
+                  requestId: "req_gateway_503",
+                  responseBodyLength: 72,
+                  responseBodyPreview: '{"error":{"message":"upstream overloaded","code":"temporarily_unavailable"}}',
+                },
+              });
+            },
+          },
+        }),
+        /openai_images_503/,
+      );
+
+      const stored = await db.query<{
+        status: string;
+        failure_code: string | null;
+        response_redacted_json: Record<string, unknown> | null;
+      }>(
+        `
+          SELECT status, failure_code, response_redacted_json
+          FROM provider_requests
+          WHERE request_key = $1
+          LIMIT 1
+        `,
+        ["text-diagnostics"],
+      );
+
+      assert.equal(stored.rows[0]?.status, "result_unknown");
+      assert.equal(stored.rows[0]?.failure_code, "provider_submission_ambiguous");
+      assert.deepEqual(stored.rows[0]?.response_redacted_json, {
+        diagnostics: {
+          httpStatus: 503,
+          statusText: "Service Unavailable",
+          contentType: "application/json",
+          requestId: "req_gateway_503",
+          responseBodyLength: 72,
+          responseBodyPreview: '{"error":{"message":"upstream overloaded","code":"temporarily_unavailable"}}',
+        },
+      });
     } finally {
       await db.close();
     }

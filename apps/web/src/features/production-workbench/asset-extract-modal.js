@@ -1,27 +1,37 @@
-import { escapeHtml, disabled } from "./markup.js";
+import { escapeAttr, escapeHtml, disabled } from "./markup.js";
 
 export function renderAssetExtractModal({
   activeTab = "script-upload",
   show = false,
   uploadNotice = "",
   busy = false,
-  submitAction = "create-project",
-  submitLabel = "确认上传",
+  submitAction = "import-script-document",
+  submitLabel = "创建剧本",
+  mode = "full",
+  defaultScript = "",
+  lookControlsHtml = "",
+  scriptUploadFileName = "",
 } = {}) {
   if (!show) {
     return "";
   }
+  const manualOnly = mode === "manual";
+  const uploadOnly = mode === "upload";
+  const safeActiveTab = manualOnly
+    ? "script-library"
+    : uploadOnly
+      ? "script-upload"
+      : (activeTab === "script-library" ? activeTab : "script-upload");
 
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="上传剧本">
       <div class="script-modal upload-studio-modal">
         <div class="modal-tabs">
-          ${renderTab(activeTab, "script-library", "剧本库")}
-          ${renderTab(activeTab, "script-upload", "剧本上传")}
-          ${renderTab(activeTab, "storyboard-upload", "分镜单上传")}
+          ${uploadOnly ? "" : renderTab(safeActiveTab, "script-library", "手动创作")}
+          ${manualOnly ? "" : renderTab(safeActiveTab, "script-upload", "剧本上传")}
           <button class="modal-close upload-modal-close" type="button" data-action="close-script-modal" aria-label="关闭">×</button>
         </div>
-        ${renderBody(activeTab)}
+        ${renderBody(safeActiveTab, { defaultScript, lookControlsHtml, scriptUploadFileName })}
         <div class="modal-actions upload-modal-actions">
           <p class="modal-inline-status">${escapeHtml(uploadNotice)}</p>
           <button
@@ -31,7 +41,7 @@ export function renderAssetExtractModal({
             data-action="${escapeHtml(submitAction)}"
             ${disabled(busy)}
           >
-            确认上传
+            ${escapeHtml(submitLabel)}
           </button>
         </div>
       </div>
@@ -47,112 +57,75 @@ function renderTab(activeTab, tab, label) {
   `;
 }
 
-function renderBody(activeTab) {
+function renderBody(activeTab, options = {}) {
   if (activeTab === "script-library") {
     return `
       <div class="modal-panel library-empty upload-library-panel">
-        <input class="modal-search" type="search" placeholder="搜索剧本" />
-        <div class="library-placeholder">
-          <strong>剧本库为空</strong>
-          <span>当前还没有可复用的剧本条目，可切换到上传标签继续创建。</span>
-        </div>
+        ${renderManualScriptField(options.defaultScript)}
+        ${options.lookControlsHtml ? `<div class="script-manual-look-controls">${options.lookControlsHtml}</div>` : ""}
       </div>
     `;
   }
 
-  if (activeTab === "storyboard-upload") {
-    return renderStoryboardUploadPanel();
-  }
-
-  return renderScriptUploadPanel();
+  return renderScriptUploadPanel(options);
 }
 
-function renderScriptUploadPanel() {
+function renderManualScriptField(value = "") {
+  return `
+    <label class="script-manual-field">
+      <textarea
+        id="manual-script-input"
+        maxlength="5000"
+        placeholder="${escapeAttr("例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。")}"
+      >${escapeHtml(value)}</textarea>
+      <span class="script-manual-count">${[...value].length}/5000</span>
+    </label>
+  `;
+}
+
+function renderScriptUploadPanel(options = {}) {
   return `
     <div class="modal-panel upload-panel-stack">
       <p class="upload-tip-line">
-        <span class="upload-tip-icon" aria-hidden="true">ⓘ</span>
-        请上传完整剧本，剧本里的内容需标注“第x集”，
-        <button type="button" class="upload-tip-link">查看示例</button>
+        <span class="upload-tip-icon" aria-hidden="true">✦</span>
+        请将小说中的章节（如“第一章”“第二章”等）清晰分隔，有助于提升拆解的准确性。本功能支持 3,000 字至 100 万字的小说内容。
       </p>
       ${renderUploadZone({
         title: "点击上传或直接拖拽剧本文档至框体内",
-        formats: "支持docx/txt格式",
+        formats: "支持 docx/txt 格式",
         icon: "script",
+        action: "pick-script-upload-file",
+        dropzone: "script-upload",
+        fileName: options.scriptUploadFileName,
       })}
     </div>
   `;
 }
 
-function renderStoryboardUploadPanel() {
-  return `
-    <div class="modal-panel storyboard-upload-shell">
-      <aside class="storyboard-guide-card">
-        <div class="storyboard-guide-copy">
-          <h3>分镜单格式说明</h3>
-          <p>分镜单需含集数、镜号、画面描述和台词等信息。上传后会严格遵循你的分镜规划；若需 AI 优化分镜，建议仍从剧本上传开始。</p>
-        </div>
-
-        <section class="storyboard-format-block">
-          <div class="storyboard-format-head">
-            <strong>文本样式分镜单</strong>
-            <button type="button" class="secondary-action compact template-button">下载模板</button>
-          </div>
-          <p>以 Word 文件上传，每集分镜单前标注“第x集”，每个分镜前注明“镜号”。</p>
-          <div class="storyboard-sample script" aria-hidden="true">
-            <span>点击放大查看</span>
-          </div>
-        </section>
-
-        <section class="storyboard-format-block">
-          <div class="storyboard-format-head">
-            <strong>表格样式分镜单</strong>
-            <button type="button" class="secondary-action compact template-button">下载模板</button>
-          </div>
-          <p>以 Excel 文件上传，表格首行为字段名，并单设镜号列；每个 Sheet 代表 1 集，并以“第x集”命名。</p>
-          <div class="storyboard-sample sheet" aria-hidden="true">
-            <span>点击放大查看</span>
-          </div>
-        </section>
-      </aside>
-
-      ${renderUploadZone({
-        title: "点击上传或直接拖拽分镜单文档至框体内",
-        formats: "支持doc/docx/txt/xls/xlsx格式",
-        icon: "storyboard",
-        className: "wide",
-      })}
-    </div>
-  `;
-}
-
-function renderUploadZone({ title, formats, icon, className = "" }) {
+function renderUploadZone({ title, formats, icon, className = "", action = "", dropzone = "", fileName = "" }) {
   const classes = ["upload-dropzone", className].filter(Boolean).join(" ");
+  const actionAttr = action ? ` data-action="${escapeAttr(action)}"` : "";
+  const dropzoneAttr = dropzone ? ` data-dropzone="${escapeAttr(dropzone)}"` : "";
+  const safeFileName = String(fileName ?? "").trim();
   return `
-    <button class="${classes}" type="button">
-      <span class="upload-dropzone-icon ${icon}" aria-hidden="true">${renderUploadGlyph(icon)}</span>
-      <strong>${title}</strong>
-      <span>${formats}</span>
+    <button class="${classes}" type="button"${actionAttr}${dropzoneAttr}>
+      <span class="upload-dropzone-icon ${icon}" aria-hidden="true">${renderUploadGlyph()}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <span>${safeFileName ? `已选择：${escapeHtml(safeFileName)}` : escapeHtml(formats)}</span>
+      ${dropzone === "script-upload" ? `
+        <input
+          class="script-upload-file-input"
+          type="file"
+          accept=".docx,.txt,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          data-action="select-script-upload-file"
+          hidden
+        />
+      ` : ""}
     </button>
   `;
 }
 
-function renderUploadGlyph(icon) {
-  if (icon === "storyboard") {
-    return `
-      <svg viewBox="0 0 48 48" focusable="false">
-        <path d="M14 10h20a4 4 0 0 1 4 4v8" />
-        <path d="M14 18h20" />
-        <path d="M22 10v12" />
-        <path d="M14 28h8" />
-        <path d="M29 26v12" />
-        <path d="m24 33 5-5 5 5" />
-        <path d="M10 28h12v10H10z" />
-        <path d="M10 40h28" />
-      </svg>
-    `;
-  }
-
+function renderUploadGlyph() {
   return `
     <svg viewBox="0 0 48 48" focusable="false">
       <path d="M15 8h11l9 9v23a3 3 0 0 1-3 3H15a3 3 0 0 1-3-3V11a3 3 0 0 1 3-3Z" />

@@ -7,6 +7,7 @@ import {
   findPersistentAuthSessionByToken,
   requestPersistentLoginCode,
   revokePersistentAuthSession,
+  verifyPersistentPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../persistent-auth.service.ts";
 
@@ -165,6 +166,71 @@ describe("persistent phone auth", { concurrency: false }, () => {
 
       assert.equal(result.kind, "user_disabled");
       assert.equal(sessions.rows.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("backfills default passwords for existing phone users without a password hash", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES ('00000000-0000-4000-8000-000000000002', '+8618571521874', 'active')
+        `,
+      );
+
+      const verified = await verifyPersistentPasswordLogin(db, {
+        account: "18571521874",
+        password: "521874",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+      });
+      const user = await db.query<{ password_hash: string | null }>(
+        "SELECT password_hash FROM users WHERE phone_e164 = '+8618571521874'",
+      );
+      const sessions = await db.query("SELECT id FROM auth_sessions");
+
+      assert.equal(verified.kind, "verified");
+      assert.match(user.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
+      assert.notEqual(user.rows[0]?.password_hash, "521874");
+      assert.equal(sessions.rows.length, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("uses a one-day session when password login is not remembered", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status, password_hash)
+          VALUES (
+            '00000000-0000-4000-8000-000000000003',
+            '+8618571521874',
+            'active',
+            'scrypt:v1:invalid:hash'
+          )
+        `,
+      );
+
+      await db.query(
+        "UPDATE users SET password_hash = NULL WHERE phone_e164 = '+8618571521874'",
+      );
+
+      const verified = await verifyPersistentPasswordLogin(db, {
+        account: "18571521874",
+        password: "521874",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+        remember: false,
+      });
+
+      assert.equal(verified.kind, "verified");
+      assert.equal(
+        verified.kind === "verified" ? verified.session.expiresAt.toISOString() : "",
+        "2026-06-12T10:00:00.000Z",
+      );
     } finally {
       await db.close();
     }

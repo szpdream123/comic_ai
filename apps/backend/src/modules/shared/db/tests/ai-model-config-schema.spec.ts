@@ -136,6 +136,7 @@ describe("ai model configuration schema", () => {
         capabilities_json: Record<string, unknown>;
         provider_config_json: Record<string, unknown>;
         pricing_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
       }>(
         `
           SELECT
@@ -146,7 +147,8 @@ describe("ai model configuration schema", () => {
             media_type,
             capabilities_json,
             provider_config_json,
-            pricing_json
+            pricing_json,
+            ui_config_json
           FROM ai_model_configs
           WHERE model_code IN ('gpt-image-2-cn', 'seedance-i2v-pro')
           ORDER BY model_code
@@ -159,7 +161,15 @@ describe("ai model configuration schema", () => {
       ]);
       assert.equal(result.rows[0]?.provider_protocol, "openai_images");
       assert.equal(result.rows[0]?.media_type, "image");
+      assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://code.shoestravel.xin");
+      assert.equal(result.rows[0]?.provider_config_json.endpoint, "/v1/images/generations");
+      assert.equal(result.rows[0]?.provider_config_json.editEndpoint, "/v1/images/edits");
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
+      assert.deepEqual(result.rows[0]?.ui_config_json.supportedModes, [
+        "text_to_image",
+        "multi_reference",
+        "image_to_image",
+      ]);
       assert.equal(result.rows[1]?.provider_protocol, "volcengine_ark_video");
       assert.equal(result.rows[1]?.provider_model, "seedance-2-0-i2v");
       assert.equal(result.rows[1]?.invocation_mode, "async_polling");
@@ -189,6 +199,220 @@ describe("ai model configuration schema", () => {
           submit_queue_name: "generation-submit-video",
           poll_queue_name: "generation-poll-video",
         },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds GPT Image 2 reference generation as an OpenAI Images compatible model", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        status: string;
+        task_modes_json: string[];
+        provider_config_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            display_name,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            status,
+            task_modes_json,
+            provider_config_json,
+            pricing_json,
+            limits_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE model_code = 'gpt-image-2-reference-cn'
+          LIMIT 1
+        `,
+      );
+
+      const model = result.rows[0];
+      assert.equal(model?.display_name, "GPT Image 2 参考生图");
+      assert.equal(model?.provider_name, "openai");
+      assert.equal(model?.provider_model, "gpt-image-2");
+      assert.equal(model?.provider_protocol, "openai_images");
+      assert.equal(model?.invocation_mode, "sync");
+      assert.equal(model?.media_type, "image");
+      assert.equal(model?.status, "active");
+      assert.ok(model?.task_modes_json.includes("image.reference_generate"));
+      assert.equal(model?.provider_config_json.baseURL, "https://code.shoestravel.xin");
+      assert.equal(model?.provider_config_json.endpoint, "/v1/images/generations");
+      assert.equal(model?.provider_config_json.editEndpoint, "/v1/images/edits");
+      assert.equal(model?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
+      assert.equal(model?.pricing_json.baseCredits, 99);
+      assert.equal(model?.limits_json.maxReferences, 8);
+      assert.deepEqual(model?.ui_config_json.supportedModes, ["multi_reference", "image_to_image"]);
+      assert.equal(model?.ui_config_json.providerDocUrl, "https://code.shoestravel.xin/custom/a99e495b4c5372d7");
+
+      const policies = await db.query<{ submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code = 'gpt-image-2-reference-cn'
+          LIMIT 1
+        `,
+      );
+      assert.equal(policies.rows[0]?.submit_queue_name, "generation-submit-image");
+      assert.equal(policies.rows[0]?.poll_queue_name, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds Aliyun Bailian HappyHorse as an active async video model", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        provider_config_json: Record<string, unknown>;
+        default_params_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            provider_config_json,
+            default_params_json,
+            pricing_json
+          FROM ai_model_configs
+          WHERE model_code = 'happyhorse-1.0-r2v'
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(result.rows[0]?.model_code, "happyhorse-1.0-r2v");
+      assert.equal(result.rows[0]?.provider_name, "aliyun-bailian");
+      assert.equal(result.rows[0]?.provider_model, "happyhorse-1.0-r2v");
+      assert.equal(result.rows[0]?.provider_protocol, "aliyun_bailian_video");
+      assert.equal(result.rows[0]?.invocation_mode, "async_polling");
+      assert.equal(result.rows[0]?.media_type, "video");
+      assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://dashscope.aliyuncs.com");
+      assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "ALIYUNBAILIAN_API_KEY");
+      assert.equal(result.rows[0]?.default_params_json.aspectRatio, "16:9");
+      assert.equal(result.rows[0]?.pricing_json.baseCredits, 120);
+
+      const policies = await db.query<{ submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code = 'happyhorse-1.0-r2v'
+          LIMIT 1
+        `,
+      );
+      assert.equal(policies.rows[0]?.submit_queue_name, "generation-submit-video");
+      assert.equal(policies.rows[0]?.poll_queue_name, "generation-poll-video");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds Jimeng image models as active configurable image models", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        status: string;
+        task_modes_json: string[];
+        provider_config_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            display_name,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            status,
+            task_modes_json,
+            provider_config_json,
+            pricing_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE model_code IN ('jimeng-5-image', 'jimeng-4-5-image', 'jimeng-4-0-image')
+          ORDER BY sort_order ASC
+        `,
+      );
+
+      assert.deepEqual(result.rows.map((row) => row.model_code), [
+        "jimeng-5-image",
+        "jimeng-4-5-image",
+        "jimeng-4-0-image",
+      ]);
+      assert.deepEqual(result.rows.map((row) => row.provider_model), [
+        "doubao-seedream-5-0-260128",
+        "doubao-seedream-4-5-251128",
+        "doubao-seedream-4-0",
+      ]);
+      for (const row of result.rows) {
+        assert.equal(row.provider_name, "volcengine");
+        assert.equal(row.provider_protocol, "custom_http");
+        assert.equal(row.invocation_mode, "sync");
+        assert.equal(row.media_type, "image");
+        assert.equal(row.status, "active");
+        assert.ok(row.task_modes_json.includes("image.generate"));
+        assert.ok(row.task_modes_json.includes("image.edit"));
+        assert.equal(row.provider_config_json.apiKeyEnv, "VOLCENGINE_ARK_API_KEY");
+        assert.equal(row.provider_config_json.requestFormat, "volcengine_ark_images_generation");
+        assert.equal(row.pricing_json.unit, "image");
+        assert.equal(row.ui_config_json.group, "即梦");
+      }
+
+      const policies = await db.query<{ model_code: string; submit_queue_name: string; poll_queue_name: string | null }>(
+        `
+          SELECT c.model_code, p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code IN ('jimeng-5-image', 'jimeng-4-5-image', 'jimeng-4-0-image')
+          ORDER BY c.sort_order ASC
+        `,
+      );
+      assert.deepEqual(policies.rows, [
+        { model_code: "jimeng-5-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "jimeng-4-5-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "jimeng-4-0-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
       ]);
     } finally {
       await db.close();

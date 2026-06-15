@@ -47,6 +47,7 @@ export async function ensureCreatorSqlState(input: {
           SELECT s.id
           FROM scripts s
           WHERE s.project_id = p.id
+            AND s.deleted_at IS NULL
           ORDER BY s.created_at DESC, s.id DESC
           LIMIT 1
         ) AS script_id

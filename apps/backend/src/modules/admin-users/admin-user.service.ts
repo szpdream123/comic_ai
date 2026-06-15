@@ -788,6 +788,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
     const ledgerScope = ledgerScopeForTarget(target);
+    const fetchLimit = Math.min(300, pageSize * 4);
     const result = await deps.db.query<LedgerRow>(
       `
         SELECT *
@@ -797,13 +798,14 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         ORDER BY created_at DESC, id ASC
         LIMIT $4
       `,
-      [target.organizationId, ...ledgerScope.params, pageSize],
+      [target.organizationId, ...ledgerScope.params, fetchLimit],
     );
+    const rows = coalesceUserCreditLedgerRows(result.rows).slice(0, pageSize);
     const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
-      data: result.rows.map(ledgerFromRow),
+      data: rows.map(ledgerFromRow),
       summary,
-      meta: { total: result.rows.length },
+      meta: { total: rows.length },
     };
   }
 
@@ -928,6 +930,8 @@ interface LedgerScope {
 interface LedgerRow {
   id: string;
   organization_id: string;
+  reservation_id: string | null;
+  allocation_id: string | null;
   entry_type: string;
   amount: number | string;
   available_delta: number | string;
@@ -1062,7 +1066,34 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
 }
 
 function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
-  const targetFilter = "(metadata_json->>'targetUserId' = $2 OR metadata_json->>'targetMembershipId' = $3)";
+  const targetFilter = `(
+    metadata_json->>'targetUserId' = $2
+    OR metadata_json->>'targetMembershipId' = $3
+    OR created_by_user_id = $2::uuid
+    OR EXISTS (
+      SELECT 1
+      FROM credit_reservations ledger_reservation
+      JOIN workflows ledger_workflow
+        ON ledger_workflow.organization_id = ledger_reservation.organization_id
+       AND ledger_workflow.id = ledger_reservation.workflow_id
+      WHERE ledger_reservation.organization_id = credit_ledger_entries.organization_id
+        AND ledger_reservation.id = credit_ledger_entries.reservation_id
+        AND ledger_workflow.created_by_user_id = $2::uuid
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM credit_reservation_allocations ledger_allocation
+      JOIN tasks ledger_task
+        ON ledger_task.organization_id = ledger_allocation.organization_id
+       AND ledger_task.id = ledger_allocation.task_id
+      JOIN workflows ledger_workflow
+        ON ledger_workflow.organization_id = ledger_task.organization_id
+       AND ledger_workflow.id = ledger_task.workflow_id
+      WHERE ledger_allocation.organization_id = credit_ledger_entries.organization_id
+        AND ledger_allocation.id = credit_ledger_entries.allocation_id
+        AND ledger_workflow.created_by_user_id = $2::uuid
+    )
+  )`;
   if (target.teamProfileId) {
     return {
       sql: targetFilter,
@@ -1108,17 +1139,46 @@ async function buildUserCreditSummary(
     : null;
   const totals = await queryOne<{
     total_granted: number | string;
-    total_consumed: number | string;
     total_released: number | string;
   }>(
     db,
     `
       SELECT
         COALESCE(SUM(amount) FILTER (WHERE entry_type = 'grant'), 0) AS total_granted,
-        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'consume'), 0) AS total_consumed,
         COALESCE(SUM(amount) FILTER (WHERE entry_type = 'release'), 0) AS total_released
       FROM credit_ledger_entries
       WHERE organization_id = $1
+        AND ${ledgerScope.sql}
+    `,
+    [target.organizationId, ...ledgerScope.params],
+  );
+  const reservationConsumed = await queryOne<{ total_consumed: number | string }>(
+    db,
+    `
+      SELECT COALESCE(SUM(r.amount_consumed), 0) AS total_consumed
+      FROM credit_reservations r
+      LEFT JOIN workflows reservation_workflow
+        ON reservation_workflow.organization_id = r.organization_id
+       AND reservation_workflow.id = r.workflow_id
+      WHERE r.organization_id = $1
+        AND (
+          r.metadata_json->>'targetUserId' = $2
+          OR r.metadata_json->>'targetMembershipId' = $3
+          OR r.created_by_user_id = $2::uuid
+          OR reservation_workflow.created_by_user_id = $2::uuid
+        )
+    `,
+    [target.organizationId, target.userId, target.membershipId],
+  );
+  const standaloneConsumed = await queryOne<{ total_consumed: number | string }>(
+    db,
+    `
+      SELECT COALESCE(SUM(amount), 0) AS total_consumed
+      FROM credit_ledger_entries
+      WHERE organization_id = $1
+        AND entry_type = 'consume'
+        AND reservation_id IS NULL
+        AND allocation_id IS NULL
         AND ${ledgerScope.sql}
     `,
     [target.organizationId, ...ledgerScope.params],
@@ -1149,6 +1209,7 @@ async function buildUserCreditSummary(
   const memberAvailable = member ? Number(member.credit_balance_cached ?? 0) : null;
   const memberUsed = member ? Number(member.credit_used_cached ?? 0) : null;
   const targetReserved = Number(reservations?.active_reserved ?? 0);
+  const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
   return {
     balanceScope: target.teamProfileId ? "member" : "organization",
     organizationAvailableCredits: organizationAvailable,
@@ -1158,7 +1219,7 @@ async function buildUserCreditSummary(
     displayAvailableCredits: memberAvailable ?? organizationAvailable,
     displayReservedCredits: target.teamProfileId ? targetReserved : organizationReserved,
     totalGrantedCredits: Number(totals?.total_granted ?? 0),
-    totalConsumedCredits: Number(totals?.total_consumed ?? 0),
+    totalConsumedCredits: totalConsumed,
     totalReleasedCredits: Number(totals?.total_released ?? 0),
     activeReservationCount: Number(reservations?.active_count ?? 0),
     manualReviewReservationCount: Number(reservations?.manual_review_count ?? 0),
@@ -1229,6 +1290,8 @@ function ledgerFromRow(row: LedgerRow) {
   return {
     id: row.id,
     organizationId: row.organization_id,
+    reservationId: row.reservation_id,
+    allocationId: row.allocation_id,
     entryType: row.entry_type,
     amount: Number(row.amount),
     availableDelta: Number(row.available_delta),
@@ -1240,6 +1303,40 @@ function ledgerFromRow(row: LedgerRow) {
     metadata: normalizeJson(row.metadata_json),
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function coalesceUserCreditLedgerRows(rows: LedgerRow[]): LedgerRow[] {
+  const reservationDeductionKeys = new Set<string>();
+  for (const row of rows) {
+    if (row.entry_type !== "reservation") {
+      continue;
+    }
+    const key = creditLedgerTaskDeductionKey(row);
+    if (key) {
+      reservationDeductionKeys.add(key);
+    }
+  }
+
+  return rows.filter((row) => {
+    const key = creditLedgerTaskDeductionKey(row);
+    if (row.entry_type === "consume" && key && reservationDeductionKeys.has(key)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function creditLedgerTaskDeductionKey(row: LedgerRow): string {
+  const metadata = normalizeJson(row.metadata_json);
+  const reservationId = String(row.reservation_id ?? "").trim();
+  if (reservationId) {
+    return `reservation:${reservationId}`;
+  }
+  const taskId = String(metadata.taskId ?? metadata.task_id ?? "").trim();
+  if (taskId) {
+    return `task:${taskId}`;
+  }
+  return "";
 }
 
 function normalizeJson(value: unknown): Record<string, unknown> {

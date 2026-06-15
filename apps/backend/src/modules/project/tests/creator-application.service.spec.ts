@@ -16,6 +16,65 @@ const organizationId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("creator application service", { concurrency: false }, () => {
+  it("keeps workspace project and script libraries separated", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-library-separation-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const projectCreated = await creator.createProject({
+        user,
+        body: {
+          name: "普通项目",
+          scriptInput: "Episode 1: ordinary project script.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-library-separation-project",
+        now: new Date("2026-06-13T08:00:00.000Z"),
+      });
+      const scriptImported = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "独立剧本",
+          scriptInput: "第 1 集\n独立剧本正文。",
+        },
+        now: new Date("2026-06-13T08:01:00.000Z"),
+      });
+
+      const projects = await creator.listProjects({
+        user,
+        now: new Date("2026-06-13T08:02:00.000Z"),
+      });
+      const scripts = await creator.listWorkspaceScripts({
+        user,
+        now: new Date("2026-06-13T08:03:00.000Z"),
+      });
+
+      assert.equal(projectCreated.status, 200);
+      assert.equal(scriptImported.status, 200);
+      assert.deepEqual(
+        (projects.body as any).projects.map((project: any) => project.name),
+        ["普通项目"],
+      );
+      assert.deepEqual(
+        (scripts.body as any).scripts.map((script: any) => script.title),
+        ["独立剧本"],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("runs the creator flow through formal handlers and writes calibration audit plus export records", async () => {
     const db = await createMigratedTestDb();
 
@@ -205,6 +264,699 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("commits AI storyboard preview into episode assets, storyboards, and drafts", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-ai-storyboard-commit-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "AI storyboard commit",
+          scriptInput: "Episode 1: A preview result will become a real episode.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-ai-storyboard-commit-create",
+        now: new Date("2026-06-08T10:00:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+
+      const fullCharacterDescription = [
+        "女性，外表约18岁，实际为迷雾鬼，身份不明。",
+        "性格诡异、危险，具有欺骗性。",
+        "生成一张3x3九宫格角色设定图，专业影视美术角色参考板。",
+      ].join("\n");
+      const fullSceneDescription = [
+        "末日世界，迷雾笼罩，太阳难以照进。",
+        "城墙根下龟裂的大地上横七竖八躺着迷雾鬼的尸体。",
+        "灰黑色的血渗入大地。",
+      ].join("\n");
+      const fullPropDescription = [
+        "任小野腰间的切割刀，用于靠近迷雾鬼尸体，刀身洁净但有深黑色血迹。",
+        "金属材质，表面有划痕和污渍。",
+      ].join("\n");
+
+      const fullStoryboardVideoPrompt = "动态视频提示词";
+      const committed = await creator.commitAiStoryboardPreview({
+        user,
+        projectId,
+        body: {
+          episodeTitle: "第 1 集",
+          commitPayload: {
+            scriptText: "任小野保护小草。",
+            characters: [
+              {
+                characterName: "任小野",
+                characterDescription: fullCharacterDescription,
+                characterImagePrompt: "任小野角色设定图",
+              },
+            ],
+            scenes: [
+              {
+                sceneName: "黑山密林",
+                sceneDescription: fullSceneDescription,
+                sceneImagePrompt: "黑山密林场景概念图",
+              },
+            ],
+            props: [
+              {
+                propName: "机械腿残骸",
+                propDescription: fullPropDescription,
+                propImagePrompt: "机械腿残骸道具图",
+              },
+            ],
+            storyboards: [
+              {
+                shotNo: 1,
+                plot: "任小野把机械腿残骸掷向食人花树。",
+                dialogue: "任小野：别过来。",
+                imagePrompt: "静态分镜图提示词",
+                videoPrompt: fullStoryboardVideoPrompt,
+                durationSec: 4,
+              },
+            ],
+          },
+        },
+        now: new Date("2026-06-08T10:01:00.000Z"),
+      });
+
+      const counts = await db.query<{
+        episode_count: number;
+        asset_count: number;
+        shot_count: number;
+        image_draft_count: number;
+        video_draft_count: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM episodes WHERE project_id = $1) AS episode_count,
+            (
+              SELECT count(*)::int
+              FROM asset_versions v
+              JOIN assets a
+                ON a.organization_id = v.organization_id
+               AND a.id = v.asset_id
+              WHERE a.project_id = $1
+                AND v.metadata_json->>'episodeId' IS NOT NULL
+            ) AS asset_count,
+            (SELECT count(*)::int FROM shots WHERE project_id = $1) AS shot_count,
+            (
+              SELECT count(*)::int
+              FROM episode_generation_drafts
+              WHERE project_id = $1
+                AND target_type = 'storyboard'
+                AND mode = 'image'
+                AND prompt = '静态分镜图提示词'
+            ) AS image_draft_count,
+            (
+              SELECT count(*)::int
+              FROM episode_generation_drafts
+              WHERE project_id = $1
+                AND target_type = 'storyboard'
+                AND mode = 'video'
+                AND prompt = '动态视频提示词'
+            ) AS video_draft_count
+        `,
+        [projectId],
+      );
+      const assetLabels = await db.query<{
+        asset_type: string;
+        label: string;
+        prompt: string | null;
+        description: string | null;
+      }>(
+        `
+          SELECT
+            a.asset_type,
+            v.metadata_json->>'label' AS label,
+            v.metadata_json->>'prompt' AS prompt,
+            v.metadata_json->>'description' AS description
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND v.metadata_json->>'episodeId' = $2
+          ORDER BY a.asset_type ASC
+        `,
+        [projectId, (committed.body as any).episode.id],
+      );
+      const shotRows = await db.query<{ description: string }>(
+        "SELECT description FROM shots WHERE project_id = $1",
+        [projectId],
+      );
+
+      assert.equal(committed.status, 200);
+      assert.equal((committed.body as any).episode.title, "第 1 集");
+      assert.equal((committed.body as any).storyboards.length, 1);
+      assert.deepEqual(counts.rows[0], {
+        episode_count: 1,
+        asset_count: 3,
+        shot_count: 1,
+        image_draft_count: 1,
+        video_draft_count: 1,
+      });
+      assert.deepEqual(
+        assetLabels.rows.map((row) => [row.asset_type, row.label, row.prompt]),
+        [
+          ["character_sheet", "任小野", "任小野角色设定图"],
+          ["prop_reference", "机械腿残骸", "机械腿残骸道具图"],
+          ["scene_reference", "黑山密林", "黑山密林场景概念图"],
+        ],
+      );
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "character_sheet")?.description ?? "", /女性，外表约18岁/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "character_sheet")?.description ?? "", /生成一张3x3九宫格角色设定图/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "character_sheet")?.description ?? "", /任小野角色设定图/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "prop_reference")?.description ?? "", /任小野腰间的切割刀/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "prop_reference")?.description ?? "", /金属材质/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "prop_reference")?.description ?? "", /机械腿残骸道具图/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /末日世界，迷雾笼罩/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /灰黑色的血渗入大地/);
+      assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /黑山密林场景概念图/);
+      assert.equal(shotRows.rows[0]?.description ?? "", fullStoryboardVideoPrompt);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("commits raw AI storyboard asset descriptions into episode asset metadata", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-ai-storyboard-raw-description-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "AI storyboard raw description commit",
+          scriptInput: "Episode 1: Raw descriptions become editable fixed asset text.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-ai-storyboard-raw-description-create",
+        now: new Date("2026-06-08T10:10:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+
+      const committed = await creator.commitAiStoryboardPreview({
+        user,
+        projectId,
+        body: {
+          episodeTitle: "Episode 1",
+          commitPayload: {
+            characters: [
+              {
+                characterName: "Aunt Min",
+                characterDescription: "display character summary",
+                rawCharacterDescription: "raw character full fixed profile with display character summary, costume, face, body, and negative constraints",
+                characterImagePrompt: "character sheet prompt",
+              },
+            ],
+            scenes: [
+              {
+                sceneName: "Courtyard",
+                sceneDescription: "display scene summary",
+                rawSceneDescription: "raw scene full fixed profile with display scene summary, architecture, light, weather, and no-humans constraints",
+                sceneImagePrompt: "scene reference prompt",
+              },
+            ],
+            props: [
+              {
+                propName: "Food Bundle",
+                propDescription: "display prop summary",
+                rawPropDescription: "raw prop full fixed profile with display prop summary, material, color, state, owner, and consistency rules",
+                propImagePrompt: "prop reference prompt",
+              },
+            ],
+            storyboards: [
+              {
+                shotNo: 1,
+                plot: "storyboard full plot sentinel: Aunt Min carries the bundle.",
+                dialogue: "storyboard dialogue sentinel: Do not cross the gate.",
+                visualDescription: "storyboard visual sentinel: dusk courtyard with smoke.",
+                coreAction: "storyboard action sentinel: bundle lifted and hidden.",
+                imagePrompt: "image prompt",
+                videoPrompt: "video prompt",
+                chapterVideoPrompt: "chapter video prompt sentinel: scene analysis, transition, shot list, and asset tables.",
+                chapterImagePrompt: "chapter image prompt sentinel: scene, character, and prop tables.",
+              },
+            ],
+          },
+        },
+        now: new Date("2026-06-08T10:11:00.000Z"),
+      });
+
+      const descriptions = await db.query<{ asset_type: string; description: string | null }>(
+        `
+          SELECT a.asset_type, v.metadata_json->>'description' AS description
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND v.metadata_json->>'episodeId' = $2
+          ORDER BY a.asset_type ASC
+        `,
+        [projectId, (committed.body as any).episode.id],
+      );
+      const shotDescriptions = await db.query<{ description: string }>(
+        "SELECT description FROM shots WHERE project_id = $1",
+        [projectId],
+      );
+      const generationDrafts = await db.query<{ mode: string; prompt: string }>(
+        `
+          SELECT mode, prompt
+          FROM episode_generation_drafts
+          WHERE project_id = $1
+            AND target_type = 'storyboard'
+          ORDER BY mode ASC
+        `,
+        [projectId],
+      );
+
+      assert.equal(committed.status, 200);
+      assert.match(
+        descriptions.rows.find((row) => row.asset_type === "character_sheet")?.description ?? "",
+        /raw character full fixed profile/,
+      );
+      assert.equal(
+        (descriptions.rows.find((row) => row.asset_type === "character_sheet")?.description ?? "").match(/display character summary/g)?.length,
+        1,
+      );
+      assert.match(
+        descriptions.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "",
+        /raw scene full fixed profile/,
+      );
+      assert.equal(
+        (descriptions.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "").match(/display scene summary/g)?.length,
+        1,
+      );
+      assert.match(
+        descriptions.rows.find((row) => row.asset_type === "prop_reference")?.description ?? "",
+        /raw prop full fixed profile/,
+      );
+      assert.equal(
+        (descriptions.rows.find((row) => row.asset_type === "prop_reference")?.description ?? "").match(/display prop summary/g)?.length,
+        1,
+      );
+      assert.equal(
+        shotDescriptions.rows[0]?.description ?? "",
+        "chapter video prompt sentinel: scene analysis, transition, shot list, and asset tables.",
+      );
+      assert.match(generationDrafts.rows.find((row) => row.mode === "image")?.prompt ?? "", /chapter image prompt sentinel/);
+      assert.match(generationDrafts.rows.find((row) => row.mode === "video")?.prompt ?? "", /chapter video prompt sentinel/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("deletes episode storyboards instead of reviving them as unassigned fallback episodes", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-episode-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Delete episode project",
+          scriptInput: "Episode 1: Delete this episode and its storyboards.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-delete-episode-create",
+        now: new Date("2026-05-18T10:20:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-delete-episode-parse",
+        now: new Date("2026-05-18T10:21:00.000Z"),
+      });
+
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const beforeDelete = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T10:22:00.000Z"),
+      });
+      const episodeId = (beforeDelete.body as any).episodes[0].id;
+      const deleted = await creator.deleteEpisode({
+        user,
+        body: {
+          projectId,
+          episodeId,
+        },
+        now: new Date("2026-05-18T10:23:00.000Z"),
+      });
+      const afterDelete = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T10:24:00.000Z"),
+      });
+
+      assert.equal(deleted.status, 200);
+      assert.equal((afterDelete.body as any).episodes.length, 0);
+      assert.equal((afterDelete.body as any).shots.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("deletes a project after export records without violating workflow foreign keys", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-project-export-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Delete exported project",
+          scriptInput: "Episode 1: This project will be exported and deleted.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-delete-project-export-create",
+        now: new Date("2026-05-18T10:30:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const workflowId = "50000000-0000-4000-8000-000000000901";
+      const storageObjectId = "60000000-0000-4000-8000-000000000901";
+      const exportRecordId = "70000000-0000-4000-8000-000000000901";
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            workflow_type,
+            status,
+            input_snapshot_json,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, $4, 'export.create', 'succeeded', '{}'::jsonb, $5)
+        `,
+        [workflowId, organizationId, workspaceId, projectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            bucket,
+            object_key,
+            content_type,
+            metadata_json,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, $4, 'creator-dev', 'exports/delete-project.json', 'application/json', '{}'::jsonb, $5)
+        `,
+        [storageObjectId, organizationId, workspaceId, projectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO export_records (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            workflow_id,
+            storage_object_id,
+            manifest_status,
+            allow_partial_export,
+            item_count,
+            missing_asset_count,
+            latest_signed_url_expires_at,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, 'ready', false, 1, 0, $7, $8)
+        `,
+        [
+          exportRecordId,
+          organizationId,
+          workspaceId,
+          projectId,
+          workflowId,
+          storageObjectId,
+          new Date("2026-05-18T11:30:00.000Z"),
+          userId,
+        ],
+      );
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-05-18T10:33:00.000Z"),
+      });
+      const counts = await db.query<{ workflows: number; export_records: number; projects: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM workflows WHERE organization_id = $1 AND project_id = $2) AS workflows,
+            (SELECT count(*)::int FROM export_records WHERE organization_id = $1 AND project_id = $2) AS export_records,
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id = $2) AS projects
+        `,
+        [organizationId, projectId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(counts.rows[0], {
+        workflows: 0,
+        export_records: 0,
+        projects: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("deletes a project with its internal scripts after script reader sections reference episodes", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-project-script-reader-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Delete project with script reader sections",
+          scriptInput: "Episode 1: This project has script reader sections.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-delete-project-script-reader-create",
+        now: new Date("2026-06-14T09:10:00.000Z"),
+      });
+      await creator.parseScript({
+        user,
+        idempotencyKey: "creator-application-delete-project-script-reader-parse",
+        now: new Date("2026-06-14T09:11:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-06-14T09:12:00.000Z"),
+      });
+      const episodeId = (detail.body as any).episodes[0].id;
+      const projectStorageObjectId = "40000000-0000-4000-8000-000000000901";
+      localObjectStore.put("projects/delete-project-cover.png", {});
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            bucket,
+            object_key,
+            content_type,
+            metadata_json,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, $4, 'creator-dev', 'projects/delete-project-cover.png', 'image/png', '{}'::jsonb, $5)
+        `,
+        [projectStorageObjectId, organizationId, workspaceId, projectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO script_reader_sections (
+            id,
+            organization_id,
+            project_id,
+            script_id,
+            episode_id,
+            title,
+            body,
+            sequence,
+            status,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            '30000000-0000-4000-8000-000000000901',
+            $1,
+            $2,
+            NULL,
+            $3,
+            'Referenced episode',
+            'reader section body',
+            1,
+            'draft',
+            $4,
+            $5,
+            $5
+          )
+        `,
+        [organizationId, projectId, episodeId, userId, new Date("2026-06-14T09:13:00.000Z")],
+      );
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-06-14T09:14:00.000Z"),
+      });
+      const counts = await db.query<{
+        originalProject: number;
+        scripts: number;
+        sections: number;
+        episodes: number;
+        storageObjects: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id = $2) AS originalProject,
+            (SELECT count(*)::int FROM scripts WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL) AS scripts,
+            (SELECT count(*)::int FROM script_reader_sections WHERE organization_id = $1 AND project_id = $2 AND status <> 'archived') AS sections,
+            (SELECT count(*)::int FROM episodes WHERE organization_id = $1 AND project_id = $2) AS episodes,
+            (SELECT count(*)::int FROM storage_objects WHERE id = $3) AS storageObjects
+        `,
+        [organizationId, projectId, projectStorageObjectId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(counts.rows[0], {
+        originalProject: 0,
+        scripts: 0,
+        sections: 0,
+        episodes: 0,
+        storageObjects: 0,
+      });
+      assert.equal(localObjectStore.has("projects/delete-project-cover.png"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps imported script projects when deleting their project shell", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-delete-imported-script-project-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const imported = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "Imported Script",
+          scriptInput: "Chapter 1\nImported script body.",
+        },
+        now: new Date("2026-06-14T10:10:00.000Z"),
+      });
+      const projectId = (imported.body as any).project.id;
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-06-14T10:11:00.000Z"),
+      });
+      const counts = await db.query<{
+        originalProject: number;
+        retainedProjects: number;
+        movedScripts: number;
+        movedSections: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id = $2) AS originalProject,
+            (SELECT count(*)::int FROM projects WHERE organization_id = $1 AND id <> $2) AS retainedProjects,
+            (SELECT count(*)::int FROM scripts WHERE organization_id = $1 AND project_id <> $2 AND title = 'Imported Script' AND deleted_at IS NULL) AS movedScripts,
+            (SELECT count(*)::int FROM script_reader_sections WHERE organization_id = $1 AND project_id <> $2 AND status <> 'archived') AS movedSections
+        `,
+        [organizationId, projectId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(counts.rows[0], {
+        originalProject: 0,
+        retainedProjects: 1,
+        movedScripts: 1,
+        movedSections: 1,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("lists reusable official assets as browse-only application data", async () => {
     const db = await createMigratedTestDb();
 
@@ -363,6 +1115,98 @@ describe("creator application service", { concurrency: false }, () => {
       assert.match((updated.body as any).project.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
       assert.equal((detail.body as any).project.coverStorageObjectId, prepared.storageObjectId);
       assert.match((detail.body as any).project.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stores script covers by storage object id and returns signed cover urls", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-script-cover-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Creator script cover storage",
+          scriptInput: "Episode 3: upload a script cover.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-script-cover-create",
+        now: new Date("2026-05-18T12:10:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const scriptId = (created.body as { script: { id: string } }).script.id;
+      const actor = {
+        actorId: userId,
+        organizationId,
+        workspaceId,
+        role: "creator" as const,
+        capabilities: [],
+      };
+
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        projectId,
+        purpose: "script-covers",
+        fileName: "script-cover.png",
+        contentType: "image/png",
+        sizeBytes: 128,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "creator-application-script-cover-upload",
+        now: new Date("2026-05-18T12:11:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 128,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-18T12:12:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      const updated = await creator.updateScriptCard({
+        user,
+        projectId,
+        scriptId,
+        body: {
+          uploadSessionId: prepared.uploadSessionId,
+          storageObjectId: prepared.storageObjectId,
+        },
+        now: new Date("2026-05-18T12:13:00.000Z"),
+      });
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T12:14:00.000Z"),
+      });
+
+      assert.equal(updated.status, 200);
+      assert.equal((updated.body as any).script.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((updated.body as any).script.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
+      assert.equal((detail.body as any).script.coverStorageObjectId, prepared.storageObjectId);
+      assert.match((detail.body as any).script.coverImageUrl ?? "", /^signed:\/\/creator-dev\//);
     } finally {
       await db.close();
     }
@@ -542,6 +1386,150 @@ describe("creator application service", { concurrency: false }, () => {
 
       assert.equal(deleted.status, 200);
       assert.equal(localObjectStore.has(prepared.objectKey), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates episode storyboards in the requested project and persists them to SQL", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-create-shot-project-context-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Persist requested storyboard",
+          scriptInput: "Episode 1: create one manual storyboard.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-create-shot-project-context-create",
+        now: new Date("2026-06-14T08:00:00.000Z"),
+      });
+      const projectId = (created.body as any).project.id;
+      const episodeCreated = await creator.createEpisode({
+        user,
+        body: {
+          projectId,
+          title: "第一集",
+        },
+        now: new Date("2026-06-14T08:01:00.000Z"),
+      });
+      const episodeId = (episodeCreated.body as any).episode.id;
+
+      const shotCreated = await creator.createShot({
+        user,
+        body: {
+          projectId,
+          episodeId,
+          title: "2",
+          description: "新增分镜内容",
+        },
+        now: new Date("2026-06-14T08:02:00.000Z"),
+      });
+      const shotId = (shotCreated.body as any).shot.id;
+      const storedShots = await db.query<{
+        id: string;
+        project_id: string;
+        episode_id: string;
+        title: string;
+        description: string;
+      }>(
+        `
+          SELECT id, project_id, episode_id, title, description
+          FROM shots
+          WHERE id = $1
+        `,
+        [shotId],
+      );
+
+      assert.equal(created.status, 200);
+      assert.equal(episodeCreated.status, 200);
+      assert.equal(shotCreated.status, 200);
+      assert.equal(storedShots.rows[0]?.project_id, projectId);
+      assert.equal(storedShots.rows[0]?.episode_id, episodeId);
+      assert.equal(storedShots.rows[0]?.title, "2");
+      assert.equal(storedShots.rows[0]?.description, "新增分镜内容");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates missing episode records before persisting a storyboard shot", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-create-shot-missing-episode-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Auto create missing episode",
+          scriptInput: "Episode 1: create shot should also create the missing episode.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-create-shot-missing-episode-create",
+        now: new Date("2026-06-14T09:00:00.000Z"),
+      });
+      const projectId = (created.body as any).project.id;
+      const missingEpisodeId = "11111111-1111-4111-8111-111111111111";
+
+      const shotCreated = await creator.createShot({
+        user,
+        body: {
+          projectId,
+          episodeId: missingEpisodeId,
+          episodeTitle: "第 2 集",
+          title: "1",
+          description: "",
+        },
+        now: new Date("2026-06-14T09:01:00.000Z"),
+      });
+      const episodeRows = await db.query<{ id: string; title: string }>(
+        `
+          SELECT id, title
+          FROM episodes
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+        `,
+        [organizationId, projectId, missingEpisodeId],
+      );
+      const shotRows = await db.query<{ id: string; episode_id: string }>(
+        `
+          SELECT id, episode_id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND episode_id = $3
+        `,
+        [organizationId, projectId, missingEpisodeId],
+      );
+
+      assert.equal(shotCreated.status, 200);
+      assert.equal(episodeRows.rows[0]?.title, "第 2 集");
+      assert.equal(shotRows.rows.length, 1);
     } finally {
       await db.close();
     }

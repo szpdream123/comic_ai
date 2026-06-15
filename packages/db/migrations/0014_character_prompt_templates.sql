@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS character_prompt_templates (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz NULL,
-  CHECK (stage IN ('extract', 'merge', 'grid')),
+  CHECK (stage IN ('extract')),
   CHECK (model_family IN ('general', 'doubao', 'seedream')),
   CHECK (status IN ('enabled', 'disabled')),
   CHECK (code ~ '^[a-z0-9_]+$')

@@ -185,7 +185,7 @@ export function loadGenerationQueueConfig(
         ),
         maxAttempts: parsePositiveInteger(
           env.GENERATION_POLL_VIDEO_MAX_ATTEMPTS,
-          120,
+          2160,
           10_000,
         ),
         concurrency: pollVideoConcurrency,

@@ -13,13 +13,22 @@ export interface TeamTemporaryCredential {
 
 export async function createTeamTemporaryCredential(): Promise<TeamTemporaryCredential> {
   const temporaryPassword = randomBytes(temporaryPasswordBytes).toString("base64url");
-  const salt = randomBytes(saltLength);
-  const hash = await hashPassword(temporaryPassword, salt);
 
   return {
     temporaryPassword,
-    passwordHash: encodePasswordHash(salt, hash),
+    passwordHash: await createUserPasswordHash(temporaryPassword),
   };
+}
+
+export async function createUserPasswordHash(password: string): Promise<string> {
+  const salt = randomBytes(saltLength);
+  const hash = await hashPassword(password, salt);
+  return encodePasswordHash(salt, hash);
+}
+
+export function defaultPasswordFromPhone(phoneE164: string): string {
+  const digits = phoneE164.replace(/\D/g, "");
+  return digits.slice(-6);
 }
 
 export async function verifyTeamCredential(input: {

@@ -106,6 +106,72 @@ function postJson(url, body) {
   });
 }
 
+async function* postJsonSse(url, body, options = {}) {
+  const response = await fetch(resolveApiUrl(url), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+    },
+    body: JSON.stringify(body ?? {}),
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const error = new Error(text || `request_failed:${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const event = parseSseMessage(part);
+      if (event) {
+        yield event;
+      }
+    }
+  }
+  buffer += decoder.decode();
+  const event = parseSseMessage(buffer);
+  if (event) {
+    yield event;
+  }
+}
+
+function parseSseMessage(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return null;
+  }
+  const lines = text.split(/\r?\n/);
+  const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+  const dataText = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!dataText) {
+    return { event: eventName, data: null };
+  }
+  try {
+    return { event: eventName, data: JSON.parse(dataText) };
+  } catch {
+    return { event: eventName, data: dataText };
+  }
+}
+
 async function postMultipart(url, formData) {
   return fetchJson(url, {
     method: "POST",
@@ -116,6 +182,14 @@ async function postMultipart(url, formData) {
 function patchJson(url, body) {
   return fetchJson(url, {
     method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+function putJson(url, body) {
+  return fetchJson(url, {
+    method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
@@ -465,6 +539,16 @@ export const creatorApi = {
     return fetchJson("/api/creator/state");
   },
 
+  getCreditLedger(options = {}) {
+    const pageSize = Number(options.pageSize ?? 50);
+    const params = new URLSearchParams();
+    if (Number.isFinite(pageSize) && pageSize > 0) {
+      params.set("pageSize", String(Math.min(100, Math.round(pageSize))));
+    }
+    const query = params.toString();
+    return fetchJson(`/api/creator/credits/ledger${query ? `?${query}` : ""}`);
+  },
+
   getTeamOverview() {
     return fetchJson("/api/creator/team/overview");
   },
@@ -487,6 +571,58 @@ export const creatorApi = {
 
   getProjects() {
     return fetchJson("/api/creator/projects");
+  },
+
+  getCanvasProjects() {
+    return fetchJson("/api/creator/canvas-projects");
+  },
+
+  createCanvasProject(input) {
+    return postJsonWithIdempotency("/api/creator/canvas-projects", input, {
+      action: "canvas-project.create",
+    });
+  },
+
+  updateCanvasProject(projectId, input) {
+    return patchJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`, input);
+  },
+
+  deleteCanvasProject(projectId) {
+    return deleteJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`);
+  },
+
+  getProjectCanvas(projectId) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`);
+  },
+
+  saveProjectCanvas(projectId, input) {
+    return putJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`, input);
+  },
+
+  runCanvasNode(canvasProjectId, nodeKey, input, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/run`,
+      input,
+      {
+        action: "canvas.node.run",
+        idempotencyKey: options.idempotencyKey,
+      },
+    );
+  },
+
+  listCanvasNodeRuns(canvasProjectId, nodeKey) {
+    return fetchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/runs`);
+  },
+
+  selectCanvasNodeArtifact(canvasProjectId, artifactId, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/artifacts/${encodeURIComponent(artifactId)}/select`,
+      input,
+    );
+  },
+
+  getWorkspaceScripts() {
+    return fetchJson("/api/creator/scripts");
   },
 
   getProjectDetail(projectId) {
@@ -659,6 +795,50 @@ export const creatorApi = {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/episodes`);
   },
 
+  getScriptReaderSections(projectId, input = {}) {
+    const query = input.scriptId ? `?scriptId=${encodeURIComponent(input.scriptId)}` : "";
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`);
+  },
+
+  createScriptReaderSection(projectId, input) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`,
+      input,
+    );
+  },
+
+  importScriptDocument(input) {
+    return postJsonWithIdempotency("/api/creator/scripts/import-document", input, {
+      action: "script.import-document",
+    });
+  },
+
+  updateScriptReaderSection(projectId, sectionId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+      input,
+    );
+  },
+
+  deleteScriptReaderSection(projectId, sectionId) {
+    return deleteJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+    );
+  },
+
+  updateScriptCard(projectId, scriptId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+      input,
+    );
+  },
+
+  deleteScriptCard(projectId, scriptId) {
+    return deleteJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+    );
+  },
+
   getProjectMembers(projectId) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/members`);
   },
@@ -719,6 +899,50 @@ export const creatorApi = {
     return postJsonWithIdempotency("/api/membership/orders", input, {
       action: "membership.order.create",
       idempotencyKey: options.idempotencyKey,
+    });
+  },
+
+  getStoryboardPromptPackages() {
+    return fetchJson("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
+    });
+  },
+
+  createAiStoryboardPreview(projectId, input) {
+    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input ?? {}),
+      timeoutMs: 180000,
+    });
+  },
+
+  createAiStoryboardPreviewStream(projectId, input, options = {}) {
+    return postJsonSse(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  createAiScriptAnalysisStream(projectId, input, options = {}) {
+    return postJsonSse(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-script-analysis?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  commitAiStoryboardPreview(projectId, input) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview/commit`,
+      input,
+    );
+  },
+
+  getProjectStyles() {
+    return fetchJson("/api/creator/project-styles?category=official&status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
     });
   },
 
@@ -924,6 +1148,10 @@ export const creatorApi = {
 
   listGenerationConfig(episodeId) {
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-config`);
+  },
+
+  listGlobalGenerationConfig() {
+    return fetchJson("/api/generation-config");
   },
 
   createImageTask(episodeId, input, options = {}) {

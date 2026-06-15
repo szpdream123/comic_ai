@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the hardening branch focused on backend correctness and invisible behavior fixes. Payment callback classification becomes an explicit policy that always maps manual-review provider events to visible Admin/Ops work. Creator retry gets a SQL-level claim before any external provider request can be created, so duplicate clicks cannot start duplicate generation jobs. Visual redesign files are parked outside this branch unless product explicitly approves the wider scope.
 
-**Tech Stack:** TypeScript, Node test runner, PGlite-backed SQL tests, PostgreSQL-compatible SQL, existing `runIdempotentCommand`, workflow task runtime, payment outbox/inbox services.
+**Tech Stack:** TypeScript, Node test runner, PostgreSQL-backed SQL tests, existing `runIdempotentCommand`, workflow task runtime, payment outbox/inbox services.
 
 ---
 

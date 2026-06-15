@@ -2,6 +2,23 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
 import { hashAdminPassword } from "../admin-auth/admin-auth.service.ts";
+import {
+  buildPublicLegalDocument,
+  defaultLegalDocumentValue,
+  defaultLegalDocuments,
+  findEnabledLegalDocument,
+  legalDocumentTypeFromLegacyKey,
+  legalDocumentConfigs,
+  legalDocumentsConfigKey,
+  legalDocumentsRevisionId,
+  migrateLegacyLegalDocuments,
+  normalizeLegalDocuments,
+  normalizeLegalDocumentValue,
+  publicLegalDocumentKeyByType,
+  sanitizeLegalDocumentsForStorage,
+  type LegalDocumentRecord,
+  type LegalDocumentType,
+} from "./legal-documents.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -12,6 +29,30 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
     value_type: "number",
     scope: "creator",
     description: "默认团队子账号上限",
+    updated_at: null,
+  },
+  {
+    key: legalDocumentsConfigKey,
+    value_json: defaultLegalDocuments(),
+    value_type: "json",
+    scope: "creator",
+    description: "登录页协议列表与启用版本管理",
+    updated_at: null,
+  },
+  {
+    key: legalDocumentConfigs.serviceAgreement.key,
+    value_json: defaultLegalDocumentValue(legalDocumentConfigs.serviceAgreement.key),
+    value_type: "json",
+    scope: "creator",
+    description: legalDocumentConfigs.serviceAgreement.description,
+    updated_at: null,
+  },
+  {
+    key: legalDocumentConfigs.privacyPolicy.key,
+    value_json: defaultLegalDocumentValue(legalDocumentConfigs.privacyPolicy.key),
+    value_type: "json",
+    scope: "creator",
+    description: legalDocumentConfigs.privacyPolicy.description,
     updated_at: null,
   },
 ];
@@ -37,6 +78,293 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       data: {
         configs: withDefaultRuntimeConfigs(configs.rows).map(configFromRow),
         secretReferences: secretReferences.rows.map(secretReferenceFromRow),
+      },
+    };
+  }
+
+  async function getPublicLegalDocuments() {
+    const documents = await readLegalDocumentsFromDb(deps.db, new Date());
+
+    return {
+      data: {
+        serviceAgreement: buildPublicLegalDocument(
+          "service",
+          findEnabledLegalDocument(documents, "service"),
+        ),
+        privacyPolicy: buildPublicLegalDocument(
+          "privacy",
+          findEnabledLegalDocument(documents, "privacy"),
+        ),
+      },
+    };
+  }
+
+  async function listLegalDocuments() {
+    const documents = await readLegalDocumentsFromDb(deps.db, new Date());
+    return {
+      data: {
+        documents: documents
+          .filter((document) => !document.deleted)
+          .map((document) => adminLegalDocumentFromRecord(document)),
+      },
+    };
+  }
+
+  async function createLegalDocument(input: {
+    type: string;
+    title: string;
+    contentHtml: string;
+    versionLabel?: string | null;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const type = normalizeLegalDocumentTypeInput(input.type);
+    const reason = input.reason.trim();
+    if (!type) {
+      return error(400, "legal_document_type_invalid", "legal document type is invalid");
+    }
+    if (!reason) {
+      return error(400, "reason_required", "reason is required");
+    }
+    const documents = await readLegalDocumentsFromDb(deps.db, input.now);
+    const nextDocument: LegalDocumentRecord = {
+      id: randomUUID(),
+      type,
+      title: input.title.trim() || publicLegalDocumentTitle(type),
+      contentHtml: input.contentHtml.trim() || defaultLegalDocumentContent(type),
+      versionLabel: input.versionLabel?.trim() || null,
+      status: "disabled",
+      deleted: false,
+      sortOrder: nextLegalDocumentSortOrder(documents, type),
+      createdAt: input.now.toISOString(),
+      updatedAt: input.now.toISOString(),
+    };
+    const nextDocuments = [...documents, nextDocument];
+    const persistResult = await persistLegalDocuments({
+      db: deps.db,
+      previousDocuments: documents,
+      nextDocuments,
+      reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      auditOrganizationId: input.auditOrganizationId,
+      auditWorkspaceId: input.auditWorkspaceId,
+      now: input.now,
+      auditEventType: "admin.legal_document.created",
+      auditTargetId: nextDocument.id,
+      auditMetadata: { document: adminLegalDocumentFromRecord(nextDocument) },
+    });
+    if ("status" in persistResult && persistResult.status >= 400) {
+      return persistResult;
+    }
+    return {
+      status: 200,
+      body: {
+        data: adminLegalDocumentFromRecord(nextDocument),
+      },
+    };
+  }
+
+  async function updateLegalDocument(input: {
+    id: string;
+    title: string;
+    contentHtml: string;
+    versionLabel?: string | null;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const documentId = input.id.trim();
+    const reason = input.reason.trim();
+    if (!documentId) {
+      return error(400, "legal_document_id_required", "legal document id is required");
+    }
+    if (!reason) {
+      return error(400, "reason_required", "reason is required");
+    }
+    const documents = await readLegalDocumentsFromDb(deps.db, input.now);
+    const target = documents.find((document) => document.id === documentId && !document.deleted);
+    if (!target) {
+      return error(404, "legal_document_not_found", "legal document not found");
+    }
+    const nextDocuments = documents.map((document) =>
+      document.id === documentId
+        ? {
+            ...document,
+            title: input.title.trim() || document.title,
+            contentHtml: input.contentHtml.trim() || document.contentHtml,
+            versionLabel: input.versionLabel?.trim() || null,
+            updatedAt: input.now.toISOString(),
+          }
+        : document,
+    );
+    const updated = nextDocuments.find((document) => document.id === documentId)!;
+    const persistResult = await persistLegalDocuments({
+      db: deps.db,
+      previousDocuments: documents,
+      nextDocuments,
+      reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      auditOrganizationId: input.auditOrganizationId,
+      auditWorkspaceId: input.auditWorkspaceId,
+      now: input.now,
+      auditEventType: "admin.legal_document.updated",
+      auditTargetId: updated.id,
+      auditMetadata: {
+        previous: adminLegalDocumentFromRecord(target),
+        next: adminLegalDocumentFromRecord(updated),
+      },
+    });
+    if ("status" in persistResult && persistResult.status >= 400) {
+      return persistResult;
+    }
+    return {
+      status: 200,
+      body: {
+        data: adminLegalDocumentFromRecord(updated),
+      },
+    };
+  }
+
+  async function enableLegalDocument(input: {
+    id: string;
+    enabled: boolean;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const documentId = input.id.trim();
+    const reason = input.reason.trim();
+    if (!documentId) {
+      return error(400, "legal_document_id_required", "legal document id is required");
+    }
+    if (!reason) {
+      return error(400, "reason_required", "reason is required");
+    }
+    const documents = await readLegalDocumentsFromDb(deps.db, input.now);
+    const target = documents.find((document) => document.id === documentId && !document.deleted);
+    if (!target) {
+      return error(404, "legal_document_not_found", "legal document not found");
+    }
+    const nextDocuments = documents.map((document) => {
+      if (document.deleted || document.type !== target.type) return document;
+      if (document.id === documentId) {
+        return {
+          ...document,
+          status: input.enabled ? "enabled" : "disabled",
+          updatedAt: input.now.toISOString(),
+        };
+      }
+      if (input.enabled && document.status === "enabled") {
+        return {
+          ...document,
+          status: "disabled",
+          updatedAt: input.now.toISOString(),
+        };
+      }
+      return document;
+    });
+    const updated = nextDocuments.find((document) => document.id === documentId)!;
+    const persistResult = await persistLegalDocuments({
+      db: deps.db,
+      previousDocuments: documents,
+      nextDocuments,
+      reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      auditOrganizationId: input.auditOrganizationId,
+      auditWorkspaceId: input.auditWorkspaceId,
+      now: input.now,
+      auditEventType: "admin.legal_document.status_updated",
+      auditTargetId: updated.id,
+      auditMetadata: {
+        enabled: input.enabled,
+        type: updated.type,
+      },
+    });
+    if ("status" in persistResult && persistResult.status >= 400) {
+      return persistResult;
+    }
+    return {
+      status: 200,
+      body: {
+        data: adminLegalDocumentFromRecord(updated),
+      },
+    };
+  }
+
+  async function deleteLegalDocument(input: {
+    id: string;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const documentId = input.id.trim();
+    const reason = input.reason.trim();
+    if (!documentId) {
+      return error(400, "legal_document_id_required", "legal document id is required");
+    }
+    if (!reason) {
+      return error(400, "reason_required", "reason is required");
+    }
+    const documents = await readLegalDocumentsFromDb(deps.db, input.now);
+    const target = documents.find((document) => document.id === documentId && !document.deleted);
+    if (!target) {
+      return error(404, "legal_document_not_found", "legal document not found");
+    }
+    const remainingSameType = documents.filter(
+      (document) => !document.deleted && document.type === target.type && document.id !== documentId,
+    );
+    if (remainingSameType.length === 0) {
+      return error(400, "legal_document_last_of_type", "at least one legal document per type must remain");
+    }
+    const nextDocuments = documents.map((document) =>
+      document.id === documentId
+        ? {
+            ...document,
+            deleted: true,
+            status: "disabled",
+            updatedAt: input.now.toISOString(),
+          }
+        : document,
+    );
+    const persistResult = await persistLegalDocuments({
+      db: deps.db,
+      previousDocuments: documents,
+      nextDocuments,
+      reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      auditOrganizationId: input.auditOrganizationId,
+      auditWorkspaceId: input.auditWorkspaceId,
+      now: input.now,
+      auditEventType: "admin.legal_document.deleted",
+      auditTargetId: documentId,
+      auditMetadata: {
+        previous: adminLegalDocumentFromRecord(target),
+      },
+    });
+    if ("status" in persistResult && persistResult.status >= 400) {
+      return persistResult;
+    }
+    return {
+      status: 200,
+      body: {
+        data: { id: documentId },
       },
     };
   }
@@ -82,6 +410,11 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       [key],
     );
 
+    const normalizedInputValue =
+      key === legalDocumentsConfigKey
+        ? sanitizeLegalDocumentsForStorage(normalizeLegalDocuments(input.value, input.now), input.now)
+        : normalizeRuntimeConfigValue(key, input.value);
+
     await deps.db.query(
       `
         INSERT INTO runtime_config_entries (
@@ -99,7 +432,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       `,
       [
         key,
-        JSON.stringify(input.value),
+        JSON.stringify(normalizedInputValue),
         input.valueType,
         input.scope,
         input.description?.trim() || null,
@@ -120,7 +453,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         uuidFromIdempotencyKey(input.idempotencyKey),
         key,
         previous ? JSON.stringify(previous.value_json) : null,
-        JSON.stringify(input.value),
+        JSON.stringify(normalizedInputValue),
         input.actorAdminAccountId,
         reason,
         input.now,
@@ -146,11 +479,53 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         metadata: {
           key,
           previousValue: previous?.value_json ?? null,
-          nextValue: input.value,
+          nextValue: normalizedInputValue,
           valueType: input.valueType,
           scope: input.scope,
         },
       });
+    }
+
+    if (key === legalDocumentsConfigKey) {
+      await syncLegacyLegalDocumentConfigs({
+        db: deps.db,
+        documents: normalizeLegalDocuments(normalizedInputValue, input.now),
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      });
+    } else {
+      const legacyType = legalDocumentTypeFromLegacyKey(key);
+      if (legacyType) {
+        const currentDocuments = await readLegalDocumentsFromDb(deps.db, input.now);
+        const nextDocuments = currentDocuments.map((document) =>
+          document.type === legacyType && document.status === "enabled"
+            ? {
+                ...document,
+                ...normalizeLegacyDocumentPatch(legacyType, normalizedInputValue),
+                updatedAt: input.now.toISOString(),
+              }
+            : document,
+        );
+        await persistLegalDocuments({
+          db: deps.db,
+          previousDocuments: currentDocuments,
+          nextDocuments,
+          reason,
+          idempotencyKey: `${input.idempotencyKey}:legacy-sync`,
+          actorAdminAccountId: input.actorAdminAccountId,
+          auditOrganizationId: input.auditOrganizationId,
+          auditWorkspaceId: input.auditWorkspaceId,
+          now: input.now,
+          auditEventType: "admin.legal_document.updated",
+          auditTargetId: nextDocuments.find(
+            (document) => document.type === legacyType && document.status === "enabled",
+          )?.id ?? input.actorAdminAccountId,
+          auditMetadata: {
+            sourceConfigKey: key,
+            syncedFromLegacyConfig: true,
+          },
+        });
+      }
     }
 
     return {
@@ -158,7 +533,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       body: {
         data: configFromRow({
           key,
-          value_json: input.value,
+          value_json: normalizedInputValue,
           value_type: input.valueType,
           scope: input.scope,
           description: input.description?.trim() || null,
@@ -782,6 +1157,12 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
   return {
     listSettings,
+    getPublicLegalDocuments,
+    listLegalDocuments,
+    createLegalDocument,
+    updateLegalDocument,
+    enableLegalDocument,
+    deleteLegalDocument,
     updateRuntimeConfig,
     listRuntimeConfigRevisions,
     rollbackRuntimeConfig,
@@ -843,14 +1224,45 @@ interface AdminAccountBaseRow {
 }
 
 function configFromRow(row: RuntimeConfigRow) {
+  const normalizedValue = normalizeRuntimeConfigValue(row.key, normalizeJson(row.value_json));
   return {
     key: row.key,
-    value: normalizeJson(row.value_json),
+    value: normalizedValue,
     valueType: row.value_type,
     scope: row.scope,
     description: row.description,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
   };
+}
+
+function publicLegalDocumentFromRow(key: string, row: RuntimeConfigRow | null) {
+  const document = normalizeLegalDocumentValue(
+    key as (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+    row ? normalizeJson(row.value_json) : defaultLegalDocumentValue(
+      key as (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+    ),
+  );
+  return {
+    key,
+    document,
+    updatedAt: row?.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+function normalizeRuntimeConfigValue(key: string, value: unknown) {
+  if (key === legalDocumentsConfigKey) {
+    return normalizeLegalDocuments(value);
+  }
+  if (
+    key === legalDocumentConfigs.serviceAgreement.key ||
+    key === legalDocumentConfigs.privacyPolicy.key
+  ) {
+    return normalizeLegalDocumentValue(
+      key as (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+      value,
+    );
+  }
+  return value;
 }
 
 function withDefaultRuntimeConfigs(rows: RuntimeConfigRow[]) {
@@ -864,6 +1276,218 @@ function withDefaultRuntimeConfigs(rows: RuntimeConfigRow[]) {
     const scopeOrder = left.scope.localeCompare(right.scope);
     return scopeOrder || left.key.localeCompare(right.key);
   });
+}
+
+function adminLegalDocumentFromRecord(document: LegalDocumentRecord) {
+  return {
+    id: document.id,
+    type: document.type,
+    title: document.title,
+    status: document.status,
+    versionLabel: document.versionLabel,
+    updatedAt: document.updatedAt,
+    createdAt: document.createdAt,
+    document: {
+      title: document.title,
+      contentHtml: document.contentHtml,
+      versionLabel: document.versionLabel,
+    },
+  };
+}
+
+function publicLegalDocumentTitle(type: LegalDocumentType) {
+  return type === "service"
+    ? legalDocumentConfigs.serviceAgreement.title
+    : legalDocumentConfigs.privacyPolicy.title;
+}
+
+function defaultLegalDocumentContent(type: LegalDocumentType) {
+  return defaultLegalDocumentValue(publicLegalDocumentKeyByType(type)).contentHtml;
+}
+
+function nextLegalDocumentSortOrder(documents: LegalDocumentRecord[], type: LegalDocumentType) {
+  const typeDocuments = documents.filter((document) => document.type === type);
+  const maxSortOrder = typeDocuments.reduce((max, document) => Math.max(max, Number(document.sortOrder || 0)), 0);
+  return maxSortOrder + 100 || (type === "service" ? 100 : 200);
+}
+
+function normalizeLegalDocumentTypeInput(type: string): LegalDocumentType | null {
+  return type === "service" || type === "privacy" ? type : null;
+}
+
+async function readLegalDocumentsFromDb(db: SqlDatabase, now: Date) {
+  const rows = await db.query<RuntimeConfigRow>(
+    `
+      SELECT key, value_json, value_type, scope, description, updated_at
+      FROM runtime_config_entries
+      WHERE key = ANY($1::text[])
+    `,
+    [[legalDocumentsConfigKey, legalDocumentConfigs.serviceAgreement.key, legalDocumentConfigs.privacyPolicy.key]],
+  );
+  const byKey = new Map(rows.rows.map((row) => [row.key, row]));
+  const listRow = byKey.get(legalDocumentsConfigKey);
+  if (listRow) {
+    return normalizeLegalDocuments(normalizeJson(listRow.value_json), now);
+  }
+  return migrateLegacyLegalDocuments({
+    serviceAgreement: byKey.get(legalDocumentConfigs.serviceAgreement.key)?.value_json,
+    privacyPolicy: byKey.get(legalDocumentConfigs.privacyPolicy.key)?.value_json,
+    now,
+  });
+}
+
+async function persistLegalDocuments(input: {
+  db: SqlDatabase;
+  previousDocuments: LegalDocumentRecord[];
+  nextDocuments: LegalDocumentRecord[];
+  reason: string;
+  idempotencyKey: string;
+  actorAdminAccountId: string;
+  auditOrganizationId: string;
+  auditWorkspaceId: string;
+  now: Date;
+  auditEventType: string;
+  auditTargetId: string;
+  auditMetadata: Record<string, unknown>;
+}) {
+  const previousValue = sanitizeLegalDocumentsForStorage(input.previousDocuments, input.now);
+  const nextValue = sanitizeLegalDocumentsForStorage(input.nextDocuments, input.now);
+  const previousRevision = legalDocumentsRevisionId(previousValue);
+  const nextRevision = legalDocumentsRevisionId(nextValue);
+  if (previousRevision === nextRevision) {
+    return { status: 200, body: { data: null } };
+  }
+
+  await input.db.query(
+    `
+      INSERT INTO runtime_config_entries (
+        key, value_json, value_type, scope, description, updated_by_admin_id, updated_at
+      )
+      VALUES ($1, $2::jsonb, 'json', 'creator', $3, $4, $5)
+      ON CONFLICT (key)
+      DO UPDATE SET
+        value_json = EXCLUDED.value_json,
+        value_type = EXCLUDED.value_type,
+        scope = EXCLUDED.scope,
+        description = EXCLUDED.description,
+        updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      legalDocumentsConfigKey,
+      JSON.stringify(nextValue),
+      "登录页协议列表与启用版本管理",
+      input.actorAdminAccountId,
+      input.now,
+    ],
+  );
+
+  await input.db.query(
+    `
+      INSERT INTO runtime_config_revisions (
+        id, config_key, previous_value_json, next_value_json, changed_by_admin_id, reason, created_at
+      )
+      VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7)
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [
+      uuidFromIdempotencyKey(input.idempotencyKey),
+      legalDocumentsConfigKey,
+      JSON.stringify(previousValue),
+      JSON.stringify(nextValue),
+      input.actorAdminAccountId,
+      input.reason,
+      input.now,
+    ],
+  );
+
+  const existingAudit = await queryOne<{ id: string }>(
+    input.db,
+    "SELECT id FROM audit_events WHERE id = $1",
+    [uuidFromIdempotencyKey(`${input.idempotencyKey}:audit`)],
+  );
+  if (!existingAudit) {
+    await appendAuditEvent(input.db, {
+      organizationId: input.auditOrganizationId,
+      workspaceId: input.auditWorkspaceId,
+      actorUserId: null,
+      eventType: input.auditEventType,
+      targetType: "legal_document",
+      targetId: input.auditTargetId,
+      reason: input.reason,
+      sensitive: true,
+      metadata: input.auditMetadata,
+    });
+  }
+  return { status: 200, body: { data: nextValue } };
+}
+
+async function syncLegacyLegalDocumentConfigs(input: {
+  db: SqlDatabase;
+  documents: LegalDocumentRecord[];
+  actorAdminAccountId: string;
+  now: Date;
+}) {
+  const enabledService = findEnabledLegalDocument(input.documents, "service");
+  const enabledPrivacy = findEnabledLegalDocument(input.documents, "privacy");
+  const mappings: Array<{
+    key: string;
+    description: string;
+    value: LegalDocumentRecord | null;
+  }> = [
+    {
+      key: legalDocumentConfigs.serviceAgreement.key,
+      description: legalDocumentConfigs.serviceAgreement.description,
+      value: enabledService,
+    },
+    {
+      key: legalDocumentConfigs.privacyPolicy.key,
+      description: legalDocumentConfigs.privacyPolicy.description,
+      value: enabledPrivacy,
+    },
+  ];
+
+  for (const item of mappings) {
+    const configKey = item.key;
+    const documentValue = item.value
+      ? {
+          title: item.value.title,
+          contentHtml: item.value.contentHtml,
+          versionLabel: item.value.versionLabel,
+        }
+      : defaultLegalDocumentValue(configKey as (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"]);
+    await input.db.query(
+      `
+        INSERT INTO runtime_config_entries (
+          key, value_json, value_type, scope, description, updated_by_admin_id, updated_at
+        )
+        VALUES ($1, $2::jsonb, 'json', 'creator', $3, $4, $5)
+        ON CONFLICT (key)
+        DO UPDATE SET
+          value_json = EXCLUDED.value_json,
+          value_type = EXCLUDED.value_type,
+          scope = EXCLUDED.scope,
+          description = EXCLUDED.description,
+          updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        configKey,
+        JSON.stringify(documentValue),
+        item.description,
+        input.actorAdminAccountId,
+        input.now,
+      ],
+    );
+  }
+}
+
+function normalizeLegacyDocumentPatch(type: LegalDocumentType, value: unknown) {
+  const configKey = publicLegalDocumentKeyByType(type);
+  return normalizeLegalDocumentValue(
+    configKey as (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+    value,
+  );
 }
 
 function secretReferenceFromRow(row: SecretReferenceRow) {

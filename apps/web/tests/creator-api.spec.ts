@@ -166,6 +166,67 @@ test("project member update targets the member-scoped route", async () => {
   assert.equal(calls[0].options.method, "PATCH");
 });
 
+test("project canvas helpers target project-scoped canvas routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { ok: true },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getProjectCanvas("project/1");
+  await creatorApi.saveProjectCanvas("project/1", {
+    clientRevision: 1,
+    document: { nodes: [], edges: [] },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/canvas");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[1].url, "/api/creator/projects/project%2F1/canvas");
+  assert.equal(calls[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    clientRevision: 1,
+    document: { nodes: [], edges: [] },
+  });
+});
+
+test("canvas node history helpers target canvas-scoped routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { ok: true },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.runCanvasNode("canvas/1", "node/1", { prompt: "frame" }, { idempotencyKey: "run-key" });
+  await creatorApi.listCanvasNodeRuns("canvas/1", "node/1");
+  await creatorApi.selectCanvasNodeArtifact("canvas/1", "artifact/1", { selectionRole: "current" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/canvas/canvas%2F1/nodes/node%2F1/run",
+    "/api/canvas/canvas%2F1/nodes/node%2F1/runs",
+    "/api/canvas/canvas%2F1/artifacts/artifact%2F1/select",
+  ]);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["idempotency-key"], "run-key");
+  assert.equal(calls[1].options.method, undefined);
+  assert.equal(calls[2].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[2].options.body), { selectionRole: "current" });
+});
+
 test("billing read routes target explicit order and payment intent resources", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -228,6 +289,71 @@ test("generation queue health targets the admin ops queue endpoint", async () =>
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/admin/ops/generation-queues");
   assert.equal(calls[0].options.credentials, "include");
+});
+
+test("ai storyboard preview uses a 180 second request timeout", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timers.push(delay);
+    return previousSetTimeout(callback, 0, ...args);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.createAiStoryboardPreview("project/1", {
+      scriptText: "test",
+      packages: {},
+    });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview");
+  assert.equal(timers[0], 180000);
+});
+
+test("commit ai storyboard preview targets the project preview commit route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "request-1",
+        data: { episode: { id: "episode-1" } },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const result = await creatorApi.commitAiStoryboardPreview("project/1", {
+    episodeTitle: "第 1 集",
+    commitPayload: { storyboards: [{ plot: "分镜" }] },
+  });
+
+  assert.equal(result.episode.id, "episode-1");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview/commit");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    episodeTitle: "第 1 集",
+    commitPayload: { storyboards: [{ plot: "分镜" }] },
+  });
 });
 
 test("generation queue job ops targets the admin ops queue job endpoint with idempotency", async () => {

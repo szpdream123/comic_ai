@@ -241,7 +241,7 @@ Required fix:
 
 - Create SQL repositories for Project and Script.
 - Keep in-memory stores only for unit tests.
-- Integration tests for command handlers must use migrated PGlite.
+- Integration tests for command handlers must use migrated PostgreSQL schemas.
 - CreateProject must atomically write:
   - idempotency record
   - project

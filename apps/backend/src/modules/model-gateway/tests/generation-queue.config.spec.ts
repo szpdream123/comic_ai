@@ -4,6 +4,13 @@ import { describe, it } from "node:test";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 
 describe("generation queue config", () => {
+  it("defaults Seedance video polling to 3 hours at the 5 second interval", () => {
+    const config = loadGenerationQueueConfig({});
+
+    assert.equal(config.poll.video.intervalMs, 5000);
+    assert.equal(config.poll.video.maxAttempts, 2160);
+  });
+
   it("loads BullMQ finalize concurrency, limiter, and artifact upload retry settings from env", () => {
     const config = loadGenerationQueueConfig({
       REDIS_URL: "redis://127.0.0.1:6379/0",

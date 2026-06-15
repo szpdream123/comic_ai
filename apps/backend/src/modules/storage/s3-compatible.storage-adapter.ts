@@ -6,6 +6,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Readable } from "node:stream";
 
 import type { StorageAdapter } from "./storage.service.ts";
 
@@ -67,15 +68,18 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     objectKey: string;
     body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
+    contentLength?: number | null;
   }) {
     let result;
     try {
+      const body = await resolveUploadBody(input.body, input.contentLength);
       result = await this.client.send(
         new PutObjectCommand({
           Bucket: input.bucket,
           Key: input.objectKey,
-          Body: input.body as never,
+          Body: body.value as never,
           ContentType: input.contentType ?? undefined,
+          ContentLength: body.contentLength ?? undefined,
         }),
       );
     } catch (error) {
@@ -83,7 +87,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
         bucket: input.bucket,
         objectKey: input.objectKey,
         contentType: input.contentType ?? null,
-        sizeBytes: input.body instanceof Uint8Array ? input.body.byteLength : null,
+        sizeBytes: input.body instanceof Uint8Array ? input.body.byteLength : input.contentLength ?? null,
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -142,4 +146,34 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       throw error;
     }
   }
+}
+
+async function resolveUploadBody(
+  body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream,
+  contentLength?: number | null,
+): Promise<{ value: Uint8Array | NodeJS.ReadableStream; contentLength: number | null }> {
+  if (body instanceof Uint8Array) {
+    return { value: body, contentLength: body.byteLength };
+  }
+  if (typeof contentLength === "number" && Number.isFinite(contentLength) && contentLength >= 0) {
+    return {
+      value: isWebReadableStream(body) ? Readable.fromWeb(body as never) : body as NodeJS.ReadableStream,
+      contentLength: Math.floor(contentLength),
+    };
+  }
+  const bytes = await readStreamToBytes(body);
+  return { value: bytes, contentLength: bytes.byteLength };
+}
+
+async function readStreamToBytes(body: ReadableStream<Uint8Array> | NodeJS.ReadableStream): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  const stream = isWebReadableStream(body) ? Readable.fromWeb(body as never) : body;
+  for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array | string>) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
+  return Boolean(value && typeof value === "object" && typeof (value as ReadableStream).getReader === "function");
 }
