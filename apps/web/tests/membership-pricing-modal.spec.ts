@@ -57,6 +57,41 @@ test("renders provider payment links instead of a mock qr when the pay action ha
   assert.doesNotMatch(html, /library-team-qr-code/);
 });
 
+test("renders provider qr code images for url-based payment codes", () => {
+  const html = renderPricingModal({
+    open: true,
+    paymentIntent: {
+      id: "intent-qr-image",
+      orderId: "order-qr-image",
+      provider: "alipay",
+      status: "submitted",
+      amountMinor: 1,
+      currency: "CNY",
+      merchantOrderNo: "MO-QR-IMAGE",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    },
+    paymentAction: {
+      kind: "qr_code",
+      provider: "alipay",
+      merchantOrderNo: "MO-QR-IMAGE",
+      amountMinor: 1,
+      currency: "CNY",
+      url: "https://qr.alipay.com/test",
+      codeUrl: "https://qr.alipay.com/test",
+      qrCodeImage: "data:image/svg+xml;base64,PHN2Zy8+",
+    },
+    billingOrder: {
+      id: "order-qr-image",
+      status: "pending_payment",
+      productType: "membership_plan",
+    },
+  });
+
+  assert.match(html, /library-team-payment-qr-image/);
+  assert.match(html, /data:image\/svg\+xml;base64,PHN2Zy8\+/);
+  assert.doesNotMatch(html, /打开支付页面/);
+});
+
 test("renders membership payment qr in a separate modal instead of the subscription layout", () => {
   const html = renderPricingModal({
     open: true,
@@ -100,27 +135,67 @@ test("renders membership payment qr in a separate modal instead of the subscript
   });
 
   const subscriptionLayout = html.match(/<div class="library-team-subscription-layout">[\s\S]*?<\/div>\s*<\/section>/)?.[0] ?? "";
+  const paymentModal = html.match(/<div class="library-team-modal-backdrop library-team-payment-modal-backdrop"[\s\S]*$/)?.[0] ?? "";
 
   assert.match(html, /data-modal="membership-payment"/);
   assert.match(html, /aria-labelledby="membership-payment-title"/);
   assert.match(html, /library-team-payment-card/);
   assert.match(html, /library-team-payment-flow/);
-  assert.match(html, /扫码支付/);
+  assert.match(html, /微信扫码支付/);
   assert.match(html, /权益生效/);
   assert.match(html, /支付成功后自动开通，无需刷新页面/);
-  assert.match(html, /请使用手机扫码支付/);
+  assert.match(html, /微信支付未返回真实二维码/);
+  assert.match(html, /请确认微信支付配置已启用/);
   assert.match(html, /支付方式/);
-  assert.match(html, /手机扫码/);
+  assert.match(html, /微信支付/);
   assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
   assert.doesNotMatch(html, /刷新状态/);
   assert.doesNotMatch(html, /return-membership-plan-selection/);
   assert.doesNotMatch(html, /请使用微信\/支付宝扫码支付/);
   assert.doesNotMatch(html, /渠道/);
-  assert.doesNotMatch(html, /微信支付/);
-  assert.doesNotMatch(html, /支付宝/);
+  assert.doesNotMatch(paymentModal, /支付宝/);
   assert.doesNotMatch(subscriptionLayout, /library-team-payment-panel/);
   assert.match(html, /library-team-payment-qr/);
   assert.match(html, /《付费会员服务协议》/);
+});
+
+test("renders local payment simulation action on localhost", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { host: "localhost:4310" } };
+  try {
+    const html = renderPricingModal({
+      open: true,
+      paymentIntent: {
+        id: "intent-local-sim",
+        orderId: "order-local-sim",
+        provider: "wechat_pay",
+        status: "submitted",
+        amountMinor: 1,
+        currency: "CNY",
+        merchantOrderNo: "MO-LOCAL-SIM",
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      },
+      paymentAction: {
+        kind: "qr_code",
+        provider: "wechat_pay",
+        merchantOrderNo: "MO-LOCAL-SIM",
+        amountMinor: 1,
+        currency: "CNY",
+        url: "weixin://wxpay/bizpayurl?pr=test",
+        qrCodeImage: "data:image/png;base64,aGVsbG8=",
+      },
+      billingOrder: {
+        id: "order-local-sim",
+        status: "pending_payment",
+        productType: "membership_plan",
+      },
+    });
+
+    assert.match(html, /simulate-membership-payment-success/);
+    assert.match(html, /本地模拟支付成功/);
+  } finally {
+    globalThis.window = originalWindow;
+  }
 });
 
 test("renders expired membership payment as blocked instead of a scannable qr", () => {
@@ -383,6 +458,88 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /request-enterprise-contact/);
 });
 
+test("renders WeChat and Alipay subscription actions for membership plans", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-pro-month",
+        code: "professional_monthly",
+        displayName: "专业版月卡",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 29900,
+        currency: "CNY",
+        giftCredits: 3000,
+      },
+    ],
+  });
+
+  assert.match(html, /微信订阅/);
+  assert.match(html, /支付宝订阅/);
+  assert.match(html, /data-provider="wechat_pay"/);
+  assert.match(html, /data-provider="alipay"/);
+  assert.doesNotMatch(html, />立即订阅<\/button>/);
+});
+
+test("renders Alipay copy when the payment intent uses Alipay", () => {
+  const html = renderPricingModal({
+    open: true,
+    paymentIntent: {
+      id: "intent-alipay",
+      orderId: "order-alipay",
+      provider: "alipay",
+      status: "submitted",
+      amountMinor: 29900,
+      currency: "CNY",
+      merchantOrderNo: "MO-ALIPAY",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    },
+    paymentAction: {
+      kind: "mock_qr",
+      provider: "alipay",
+      merchantOrderNo: "MO-ALIPAY",
+    },
+    billingOrder: {
+      id: "order-alipay",
+      status: "pending_payment",
+      productType: "membership_plan",
+    },
+  });
+
+  const paymentModal = html.match(/<div class="library-team-modal-backdrop library-team-payment-modal-backdrop"[\s\S]*$/)?.[0] ?? "";
+
+  assert.match(paymentModal, /支付宝扫码支付/);
+  assert.match(paymentModal, /使用支付宝扫码完成付款/);
+  assert.match(paymentModal, /支付宝未返回真实二维码/);
+  assert.match(paymentModal, /支付方式<\/dt><dd>支付宝/);
+  assert.doesNotMatch(paymentModal, /微信扫码支付/);
+});
+
+test("renders sub-yuan membership prices with cents", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-test-cent",
+        code: "experience_test_cent",
+        displayName: "测试版",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 1,
+        amountMinor: 1,
+        currency: "CNY",
+        giftCredits: 1,
+        displayMetadata: { sortOrder: 1 },
+      },
+    ],
+  });
+
+  assert.match(html, /测试版/);
+  assert.match(html, /¥0\.01/);
+});
+
 test("ignores unsafe provider payment urls in the payment modal", () => {
   const html = renderPricingModal({
     open: true,
@@ -413,5 +570,5 @@ test("ignores unsafe provider payment urls in the payment modal", () => {
 
   assert.doesNotMatch(html, /javascript:alert/);
   assert.doesNotMatch(html, /data-payment-real-action/);
-  assert.match(html, /library-team-qr-code/);
+  assert.match(html, /微信支付未返回真实二维码/);
 });

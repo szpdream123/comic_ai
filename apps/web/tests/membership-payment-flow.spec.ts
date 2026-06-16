@@ -286,6 +286,53 @@ test("membership payment countdown refreshes every second independently from pay
   assert.equal(scheduledCountdowns[0].delayMs, 1000);
 });
 
+test("creating a membership payment uses the selected Alipay provider", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+  }, {
+    async createMembershipOrder(input) {
+      calls.push(["createMembershipOrder", input]);
+      return { order: { id: "order-membership-1", orderNo: "MO-1", membershipPlanId: input.membershipPlanId } };
+    },
+    async createPaymentIntent(input) {
+      calls.push(["createPaymentIntent", input]);
+      return {
+        paymentIntent: {
+          id: "intent-membership-1",
+          orderId: input.orderId,
+          status: "submitted",
+          provider: input.provider,
+          amountMinor: 29900,
+          currency: "CNY",
+          merchantOrderNo: "MO-1",
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        },
+        payAction: {
+          kind: "mock_qr",
+          provider: input.provider,
+          merchantOrderNo: "MO-1",
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "purchase-membership-plan",
+      planId: "plan-pro-month",
+      provider: "alipay",
+    },
+  });
+
+  assert.deepEqual(calls.map(([name]) => name), ["createMembershipOrder", "createPaymentIntent"]);
+  assert.equal(calls[1][1].provider, "alipay");
+  assert.equal(workbench.ui.pendingMembershipPaymentProvider, "alipay");
+  assert.equal(workbench.ui.lastPaymentIntent.provider, "alipay");
+  assert.equal(workbench.ui.lastPaymentAction.provider, "alipay");
+});
+
 test("unchecking the paid agreement hides the membership payment qr and pauses polling", async () => {
   const clearedPolls = [];
   const workbench = createWorkbench({

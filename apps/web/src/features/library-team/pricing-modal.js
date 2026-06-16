@@ -89,18 +89,48 @@ function renderPricingPlan(plan, selectedPlanId) {
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
       <p class="library-team-plan-note">${escapeHtml(planNote(plan.id))}</p>
+      ${renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan: Boolean(plan.membershipPlanId) })}
+      <ul class="library-team-feature-list">
+        ${featuresForPlan(plan.id).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
+      </ul>
+    </article>
+  `;
+}
+
+function renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan }) {
+  const buttonClass = `library-team-button${featured ? " library-team-button-primary" : ""}`;
+  if (!isMembershipPlan) {
+    return `
       <button
-        class="library-team-button${featured ? " library-team-button-primary" : ""}"
+        class="${buttonClass}"
         type="button"
         data-action="${escapeAttr(actionName)}"
         data-plan-id="${escapeAttr(planId)}"
         data-package-id="${escapeAttr(packageId)}"
         data-provider="wechat_pay"
       >${escapeHtml(actionLabel)}</button>
-      <ul class="library-team-feature-list">
-        ${featuresForPlan(plan.id).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
-      </ul>
-    </article>
+    `;
+  }
+
+  return `
+    <div class="library-team-plan-payment-actions" aria-label="订阅支付方式">
+      <button
+        class="${buttonClass}"
+        type="button"
+        data-action="${escapeAttr(actionName)}"
+        data-plan-id="${escapeAttr(planId)}"
+        data-package-id="${escapeAttr(packageId)}"
+        data-provider="wechat_pay"
+      >微信订阅</button>
+      <button
+        class="library-team-button library-team-button-alipay"
+        type="button"
+        data-action="${escapeAttr(actionName)}"
+        data-plan-id="${escapeAttr(planId)}"
+        data-package-id="${escapeAttr(packageId)}"
+        data-provider="alipay"
+      >支付宝订阅</button>
+    </div>
   `;
 }
 
@@ -155,6 +185,9 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
   }
   const amountLabel = formatAmount(paymentIntent.amountMinor, paymentIntent.currency);
   const status = String(paymentIntent.status ?? billingOrder?.status ?? "submitted");
+  const provider = String(paymentIntent.provider ?? paymentAction?.provider ?? "wechat_pay");
+  const providerName = paymentProviderName(provider);
+  const providerFlowName = paymentProviderFlowName(provider);
   const orderNo = paymentAction?.merchantOrderNo ?? paymentIntent.merchantOrderNo ?? billingOrder?.orderNo ?? paymentIntent.id ?? "-";
   const expiresAt = membershipPaymentState?.qrExpiresAt ?? paymentIntent.expiresAt ?? null;
   const expired = isExpiredPayment(status, expiresAt);
@@ -199,6 +232,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
                   expiresAt,
                   orderNo,
                   realPaymentUrl,
+                  providerName,
                 })}
             <div class="library-team-payment-summary">
               <div class="library-team-payment-total">
@@ -207,11 +241,11 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
               </div>
               ${selectedPlan ? renderSelectedPlanDigest(selectedPlan) : ""}
               <p class="library-team-payment-status">${escapeHtml(statusCopy)}</p>
-              ${renderPaymentFlow({ succeeded, expired })}
+              ${renderPaymentFlow({ succeeded, expired, providerFlowName })}
               <dl class="library-team-payment-meta">
                 <div><dt>订单</dt><dd>${escapeHtml(orderNo)}</dd></div>
                 <div><dt>状态</dt><dd>${escapeHtml(paymentStatusLabel(status, billingOrder?.status))}</dd></div>
-                <div><dt>支付方式</dt><dd>手机扫码</dd></div>
+                <div><dt>支付方式</dt><dd>${escapeHtml(providerName)}</dd></div>
               </dl>
             </div>
           </section>
@@ -231,12 +265,12 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
   `;
 }
 
-function renderPaymentScanState({ agreementAccepted, expired, expiresAt, orderNo, realPaymentUrl }) {
+function renderPaymentScanState({ agreementAccepted, expired, expiresAt, orderNo, realPaymentUrl, providerName }) {
   if (expired) {
     return `
       <div class="library-team-payment-scan is-blocked">
         ${renderPaymentExpiredState(orderNo)}
-        <p class="library-team-payment-provider">二维码已过期，请重新生成后扫码支付</p>
+        <p class="library-team-payment-provider">${escapeHtml(providerName)}二维码已过期，请重新生成后扫码支付</p>
       </div>
     `;
   }
@@ -257,9 +291,9 @@ function renderPaymentScanState({ agreementAccepted, expired, expiresAt, orderNo
         data-expires-at="${escapeAttr(expiresAt ?? "")}"
       >${escapeHtml(`${formatRemainingTime(expiresAt)} 后过期`)}</div>
       ${realPaymentUrl
-        ? renderRealPaymentAction(realPaymentUrl, orderNo)
-        : renderMockPaymentQr({ expired: false, succeeded: false, orderNo })}
-      <p class="library-team-payment-provider">扫码后将自动确认权益</p>
+        ? renderRealPaymentAction(realPaymentUrl, orderNo, providerName)
+        : renderPaymentProviderPendingState(orderNo, providerName)}
+      <p class="library-team-payment-provider">${escapeHtml(providerName)}完成后将自动确认权益</p>
     </div>
   `;
 }
@@ -304,13 +338,13 @@ function renderPaymentAgreementBlockedState(orderNo) {
   `;
 }
 
-function renderPaymentFlow({ succeeded, expired }) {
+function renderPaymentFlow({ succeeded, expired, providerFlowName }) {
   return `
     <ol class="library-team-payment-flow" aria-label="支付流程">
       <li class="is-active">
         <span>1</span>
-        <strong>扫码支付</strong>
-        <small>使用手机完成付款</small>
+        <strong>${escapeHtml(providerFlowName)}扫码支付</strong>
+        <small>使用${escapeHtml(providerFlowName)}扫码完成付款</small>
       </li>
       <li class="${succeeded ? "is-active" : expired ? "is-muted" : ""}">
         <span>2</span>
@@ -353,15 +387,35 @@ function renderPaymentActions({
         data-provider="${escapeAttr(paymentIntent.provider ?? paymentAction?.provider ?? "wechat_pay")}"
       >重新生成二维码</button>`
     : "";
-  if (!manualRefreshAction && !regenerateAction) {
+  const simulateSuccessAction = shouldShowLocalPaymentSimulation(paymentIntent, billingOrder)
+    ? `<button
+        class="library-team-payment-refresh-link"
+        type="button"
+        data-action="simulate-membership-payment-success"
+        data-payment-intent-id="${escapeAttr(paymentIntent.id ?? "")}"
+        data-order-id="${escapeAttr(billingOrder?.id ?? paymentIntent.orderId ?? "")}"
+      >本地模拟支付成功</button>`
+    : "";
+  if (!manualRefreshAction && !regenerateAction && !simulateSuccessAction) {
     return "";
   }
   return `
     <div class="library-team-payment-actions${manualRefreshAction && !regenerateAction ? " is-subtle" : ""}">
       ${regenerateAction}
       ${manualRefreshAction}
+      ${simulateSuccessAction}
     </div>
   `;
+}
+
+function shouldShowLocalPaymentSimulation(paymentIntent, billingOrder) {
+  if (!paymentIntent || isSucceededPayment(paymentIntent.status, billingOrder?.status)) {
+    return false;
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(window.location.host ?? "");
 }
 
 function renderSelectedPlanDigest(plan) {
@@ -406,35 +460,56 @@ function renderPaymentAgreement(agreementAccepted = true) {
   `;
 }
 
-function renderRealPaymentAction(paymentUrl, orderNo) {
+function renderRealPaymentAction(paymentUrl, orderNo, providerName) {
   const isImageLike = /^data:image\//i.test(paymentUrl) || /\.(?:png|jpg|jpeg|webp|gif|svg)(?:[?#].*)?$/i.test(paymentUrl);
   return `
     <div class="library-team-payment-qr is-real" aria-label="支付二维码" data-payment-real-action>
       ${
         isImageLike
           ? `<img class="library-team-payment-qr-image" src="${escapeAttr(paymentUrl)}" alt="支付二维码" loading="lazy" />`
-          : `<a class="library-team-payment-link" href="${escapeAttr(paymentUrl)}" target="_blank" rel="noopener noreferrer">打开支付页面</a>`
+          : `<a class="library-team-payment-link" href="${escapeAttr(paymentUrl)}" target="_blank" rel="noopener noreferrer">打开${escapeHtml(providerName)}支付页面</a>`
       }
-      <strong>请使用支付页面完成付款</strong>
+      <strong>请使用${escapeHtml(providerName)}支付页面完成付款</strong>
       <span>${escapeHtml(orderNo)}</span>
     </div>
   `;
 }
 
-function renderMockPaymentQr({ expired, succeeded, orderNo }) {
+function renderPaymentProviderPendingState(orderNo, providerName) {
   return `
-    <div class="library-team-payment-qr${expired ? " is-expired" : ""}${succeeded ? " is-success" : ""}" aria-label="支付二维码">
-      <div class="library-team-qr-code" aria-hidden="true">
-        ${renderQrCells(orderNo)}
-      </div>
-      <strong>${escapeHtml(succeeded ? "支付已完成" : expired ? "二维码已过期" : "请使用手机扫码支付")}</strong>
+    <div class="library-team-payment-qr is-blocked" aria-label="支付二维码待生成">
+      <div class="library-team-payment-blocked-mark" aria-hidden="true">!</div>
+      <strong>${escapeHtml(providerName)}未返回真实二维码</strong>
       <span>${escapeHtml(orderNo)}</span>
+      <small>请确认${escapeHtml(providerName)}配置已启用，并检查下单接口返回的 code_url 字段。</small>
     </div>
   `;
+}
+
+function paymentProviderName(provider) {
+  return provider === "alipay" ? "支付宝" : "微信支付";
+}
+
+function paymentProviderFlowName(provider) {
+  return provider === "alipay" ? "支付宝" : "微信";
 }
 
 function resolvePaymentActionUrl(paymentAction) {
-  for (const key of ["qrCodeUrl", "qr_code_url", "codeUrl", "code_url", "paymentUrl", "payment_url", "url"]) {
+  for (const key of [
+    "qrCodeImage",
+    "qr_code_image",
+    "qrCodeUrl",
+    "qr_code_url",
+    "qrcodeUrl",
+    "qrcode_url",
+    "codeUrl",
+    "code_url",
+    "paymentUrl",
+    "payment_url",
+    "payUrl",
+    "pay_url",
+    "url",
+  ]) {
     const value = paymentAction?.[key];
     if (typeof value === "string" && value.trim()) {
       const paymentUrl = value.trim();
@@ -447,7 +522,7 @@ function resolvePaymentActionUrl(paymentAction) {
 }
 
 function isSafePaymentUrl(value) {
-  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(value)) {
+  if (/^data:image\/(?:png|jpe?g|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(value)) {
     return true;
   }
   try {
@@ -552,7 +627,8 @@ function formatAmount(amountMinor, currency) {
     return "待确认金额";
   }
   const symbol = currency === "CNY" ? "¥" : `${currency ?? ""} `;
-  return `${symbol}${Math.round(amount / 100)}`;
+  const major = amount / 100;
+  return `${symbol}${Number.isInteger(major) ? String(major) : major.toFixed(2)}`;
 }
 
 function formatRemainingTime(value) {
