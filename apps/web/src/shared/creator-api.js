@@ -960,6 +960,10 @@ export const creatorApi = {
     });
   },
 
+  simulatePaymentIntentSuccess(input) {
+    return postJson("/api/billing/payment-intents/simulate-success", input);
+  },
+
   requestEnterpriseContact(input, options = {}) {
     return postJsonWithIdempotency("/api/billing/enterprise-contact-requests", input, {
       action: "billing.enterprise-contact.create",

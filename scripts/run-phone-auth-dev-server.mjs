@@ -23,8 +23,8 @@ if (process.env.NODE_ENV === "production") {
   console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
   process.exit(1);
 }
-if (!isSafeDevServerDatabaseUrl(process.env.DATABASE_URL)) {
-  console.error("Refusing to start phone-auth dev server with a non-local DATABASE_URL.");
+if (!process.env.DATABASE_URL?.trim()) {
+  console.error("DATABASE_URL is required in .env before starting the phone-auth dev server.");
   process.exit(1);
 }
 if (!process.env.LOCAL_DATABASE_DIR?.trim()) {

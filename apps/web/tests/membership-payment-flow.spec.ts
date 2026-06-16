@@ -212,6 +212,100 @@ test("paid membership payment keeps polling until membership entitlements become
   assert.equal(scheduledPolls[0].delayMs, 2000);
 });
 
+test("simulating a membership payment success runs callback then activates membership", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+    },
+    pendingMembershipPlanId: "plan-pro-month",
+    membershipPaymentPolling: true,
+  }, {
+    async simulatePaymentIntentSuccess(input) {
+      calls.push(["simulatePaymentIntentSuccess", input]);
+      return { simulated: true, order: { id: "order-membership-1", status: "paid" } };
+    },
+    async getBillingOrder(orderId) {
+      calls.push(["getBillingOrder", orderId]);
+      return {
+        order: {
+          id: orderId,
+          productType: "membership_plan",
+          status: "paid",
+        },
+      };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      calls.push(["getPaymentIntent", paymentIntentId]);
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-membership-1",
+          status: "succeeded",
+        },
+      };
+    },
+    async getMembershipPlans() {
+      calls.push("getMembershipPlans");
+      return { data: { plans: [] } };
+    },
+    async getMembershipStatus() {
+      calls.push("getMembershipStatus");
+      return {
+        membership: {
+          status: "professional_active",
+          entitlements: { teamAssetLibrary: true },
+        },
+      };
+    },
+    async getTeamOverview() {
+      calls.push("getTeamOverview");
+      return { overview: { entitlements: { teamAssetLibrary: true } } };
+    },
+    async getTeamMembers() {
+      calls.push("getTeamMembers");
+      return { members: [{ userId: "member-1" }] };
+    },
+  });
+  workbench.paymentPollClearTimeout = () => {
+    calls.push("paymentPollClearTimeout");
+  };
+  workbench.membershipPaymentPollTimer = { active: true };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "simulate-membership-payment-success",
+      paymentIntentId: "intent-membership-1",
+      orderId: "order-membership-1",
+    },
+  });
+
+  assert.deepEqual(calls, [
+    "paymentPollClearTimeout",
+    ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
+    ["getBillingOrder", "order-membership-1"],
+    ["getPaymentIntent", "intent-membership-1"],
+    "getMembershipStatus",
+  ]);
+  assert.equal(workbench.ui.lastBillingOrder.status, "paid");
+  assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
+  assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+  assert.equal(workbench.ui.membershipPaymentPolling, false);
+  assert.equal(workbench.membershipPaymentPollTimer, null);
+  assert.match(workbench.ui.toast, /会员已开通/);
+});
+
 test("membership payment countdown refreshes every second independently from payment polling", async () => {
   const scheduledPolls = [];
   const scheduledCountdowns = [];

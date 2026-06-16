@@ -47,13 +47,11 @@ import { resolveMembershipGenerationPriority } from "../modules/membership/membe
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
+  signPaymentCallback,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
-  createDefaultPaymentProviderRegistry,
-  createLocalPaymentProviderAdapter,
-  createPayLabAdapter,
-  createStaticPaymentProviderRegistry,
+  createEnvPaymentProviderRegistry,
   isPaymentProvider,
   type PaymentProvider,
 } from "../modules/commerce-payment/payment-provider-adapter.ts";
@@ -282,21 +280,7 @@ const contentTypes: Record<string, string> = {
 };
 
 function createDevPaymentProviderRegistry() {
-  const paylabBaseUrl = process.env.PAYLAB_BASE_URL?.trim();
-  if (!paylabBaseUrl) {
-    return createDefaultPaymentProviderRegistry();
-  }
-
-  return createStaticPaymentProviderRegistry({
-    paylab: createPayLabAdapter({
-      baseUrl: paylabBaseUrl,
-      apiKey: process.env.PAYLAB_API_KEY?.trim(),
-      webhookSigningSecret: process.env.PAYLAB_WEBHOOK_SIGNING_SECRET?.trim(),
-      dashboardBaseUrl: process.env.PAYLAB_DASHBOARD_BASE_URL?.trim(),
-    }),
-    wechat_pay: createLocalPaymentProviderAdapter("wechat_pay"),
-    alipay: createLocalPaymentProviderAdapter("alipay"),
-  });
+  return createEnvPaymentProviderRegistry(process.env);
 }
 
 interface AuthHttpResponse<T> {
@@ -8281,13 +8265,10 @@ async function hasActiveOrganizationEntitlement(
   return Boolean(entitlement);
 }
 
-function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
+function assertRemoteDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
   const databaseUrl = runtimeEnv.DATABASE_URL?.trim();
   if (!databaseUrl) {
-    return;
-  }
-  if (runtimeEnv.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE === "true") {
-    return;
+    throw new Error("phone_auth_dev_server_database_url_required");
   }
 
   let parsed: URL;
@@ -8299,10 +8280,8 @@ function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
 
   const hostname = parsed.hostname.toLowerCase();
   if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
-    return;
+    throw new Error("phone_auth_dev_server_local_database_forbidden");
   }
-
-  throw new Error("phone_auth_dev_server_remote_database_forbidden");
 }
 
 export function createPhoneAuthDevServer(
@@ -8316,7 +8295,7 @@ export function createPhoneAuthDevServer(
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
   if (!options.db) {
-    assertSafeDevServerDatabaseUrl(runtimeEnv);
+    assertRemoteDevServerDatabaseUrl(runtimeEnv);
   }
   const dbPromise = options.db
     ? Promise.resolve(options.db)
@@ -11248,6 +11227,59 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname === "/api/billing/payment-intents/simulate-success"
+        ) {
+          const body = (await readJsonBody(request)) as {
+            paymentIntentId?: string | null;
+          };
+          const paymentIntentId = String(body.paymentIntentId ?? "").trim();
+          if (!paymentIntentId) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "payment_intent_id_required" },
+            });
+          }
+
+          const intentEnvelope = await commercePayment.getPaymentIntent({
+            user: { sessionToken: authenticated.sessionToken },
+            paymentIntentId,
+            now: new Date(),
+          });
+          if (intentEnvelope.status !== 200 || !("paymentIntent" in intentEnvelope.body)) {
+            return writeJson(response, intentEnvelope);
+          }
+
+          const intent = intentEnvelope.body.paymentIntent;
+          const callbackFacts = {
+            provider: intent.provider,
+            providerEventDedupKey: `local-simulated:${intent.provider}:${intent.merchantOrderNo}`,
+            merchantOrderNo: intent.merchantOrderNo,
+            providerTradeId: `local-simulated-trade:${intent.provider}:${intent.merchantOrderNo}`,
+            eventType: "payment_succeeded" as const,
+            amountMinor: intent.amountMinor,
+            currency: intent.currency,
+            merchantId: "comic-ai-dev-merchant",
+          };
+          const now = new Date();
+          const callbackResult = await commercePayment.processPaymentCallback({
+            body: {
+              ...callbackFacts,
+              signature: signPaymentCallback(callbackFacts, devPaymentCallbackSecret),
+            },
+            now,
+          });
+          await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 10 });
+          return writeJson(response, {
+            status: callbackResult.status,
+            body: {
+              simulated: true,
+              ...callbackResult.body,
+            },
+          });
         }
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);

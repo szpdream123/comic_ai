@@ -2459,6 +2459,14 @@ async function syncMembershipSurface(workbench) {
     : null;
 }
 
+async function syncMembershipStatusOnly(workbench) {
+  if (typeof workbench.api?.getMembershipStatus !== "function") {
+    return;
+  }
+  const payload = await workbench.api.getMembershipStatus();
+  workbench.ui.membershipStatus = normalizeMembershipStatus(payload);
+}
+
 function normalizeMembershipStatus(payload) {
   const value = payload?.data ?? payload;
   if (value?.membership && typeof value.membership === "object") {
@@ -2764,6 +2772,31 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
   if (fromPoll) {
     startMembershipPaymentWatcher(workbench);
   }
+  render(workbench, { preserveLibraryScroll: true });
+  return false;
+}
+
+async function handleSimulatedMembershipPaymentStatus(workbench) {
+  if (!isMembershipBillingOrder(workbench.ui.lastBillingOrder)) {
+    stopMembershipPaymentWatcher(workbench);
+    return false;
+  }
+
+  if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
+    await syncMembershipStatusOnly(workbench);
+    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+      stopMembershipPaymentWatcher(workbench);
+      stopMembershipPaymentCountdown(workbench);
+      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
+      render(workbench, { preserveLibraryScroll: true });
+      return true;
+    }
+    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
+    startMembershipPaymentWatcher(workbench);
+    render(workbench, { preserveLibraryScroll: true });
+    return false;
+  }
+
   render(workbench, { preserveLibraryScroll: true });
   return false;
 }
@@ -4506,6 +4539,38 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         !isExpiredPaymentIntent(workbench.ui.lastPaymentIntent)
       ) {
         workbench.ui.toast = `支付状态已刷新：${workbench.ui.lastPaymentIntent?.status ?? "unknown"}。`;
+      }
+    } catch (error) {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+    } finally {
+      workbench.ui.busy = false;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "simulate-membership-payment-success") {
+    const paymentIntentId = target.dataset.paymentIntentId ?? workbench.ui.lastPaymentIntent?.id ?? "";
+    const orderId = target.dataset.orderId ?? workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
+    if (!paymentIntentId || !orderId) {
+      workbench.ui.toast = "缺少支付单信息，请重新创建支付意图。";
+      render(workbench);
+      return;
+    }
+    if (!(await ensureMembershipPaymentLogin(workbench))) {
+      return;
+    }
+
+    stopMembershipPaymentWatcher(workbench);
+    workbench.ui.busy = true;
+    workbench.ui.toast = "正在模拟支付回调...";
+    render(workbench);
+    try {
+      await workbench.api.simulatePaymentIntentSuccess({ paymentIntentId });
+      await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
+      const changedToPaid = await handleSimulatedMembershipPaymentStatus(workbench);
+      if (!changedToPaid) {
+        workbench.ui.toast = "已模拟支付成功，正在同步会员权益...";
       }
     } catch (error) {
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
