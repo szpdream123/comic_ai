@@ -94,7 +94,7 @@ test("script management shows creation entries above cover tabs when backend scr
   assert.ok(html.indexOf('class="script-entry-grid"') < html.indexOf('class="script-cover-tabs"'));
   assert.match(html, /class="script-cover-tabs"/);
   assert.match(html, /role="tablist"/);
-  assert.match(html, /class="script-project-card active"/);
+  assert.match(html, /class="script-project-card[^"]*\bactive\b/);
   assert.match(html, /class="script-project-menu-button"/);
   assert.match(html, /data-action="toggle-script-card-menu"/);
   assert.match(html, /data-action="upload-script-cover"/);

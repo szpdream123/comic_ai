@@ -77,7 +77,9 @@ describe("login page shell", () => {
     assert.match(js, /function validateAgreementsAccepted\(\)/);
     assert.match(js, /function showAgreementHint\(message\)/);
     assert.match(js, /showAgreementHint\("请先同意并勾选上述协议"\)/);
-    assert.match(js, /showAgreementError\("请先同意并勾选上述协议"\)/);
+    assert.match(js, /const message = "请先同意并勾选上述协议"/);
+    assert.match(js, /showAgreementError\(message\)/);
+    assert.match(js, /showGlobalToast\("error", "请先同意协议", message\)/);
     assert.match(js, /agreementsCheckbox\?\.focus\(\)/);
     assert.match(js, /button\.classList\.toggle\("is-disabled", !accepted\)/);
     assert.match(js, /agreementsCheckbox\?\.addEventListener\("change"/);
@@ -132,15 +134,17 @@ describe("login page shell", () => {
 });
 
 describe("login page client flow", () => {
-  it("calls the auth endpoints and includes a development debug panel", async () => {
+  it("calls the auth endpoints without exposing development verification codes", async () => {
     const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
 
     assert.match(js, /\/api\/auth\/code\/request/);
     assert.match(js, /\/api\/auth\/code\/verify/);
     assert.match(js, /\/api\/auth\/session/);
-    assert.match(js, /devCode/);
-    assert.match(js, /\/api\/auth\/dev\/challenges\//);
-    assert.match(js, /debug-panel/);
+    assert.doesNotMatch(js, /devCode/);
+    assert.doesNotMatch(js, /\/api\/auth\/dev\/challenges\//);
+    assert.doesNotMatch(js, /debug-panel/);
+    assert.doesNotMatch(html, /debug-panel/);
     assert.match(js, /\/app\.html/);
     assert.match(js, /window\.location\.protocol === "file:"/);
   });

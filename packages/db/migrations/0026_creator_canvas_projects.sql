@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS creator_canvas_documents (
   organization_id uuid NOT NULL REFERENCES organizations(id),
   workspace_id uuid NOT NULL REFERENCES workspaces(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
-  project_id uuid NOT NULL REFERENCES projects(id),
+  project_id uuid NULL REFERENCES projects(id),
   schema_version integer NOT NULL DEFAULT 1 CHECK (schema_version >= 1),
   server_revision integer NOT NULL DEFAULT 1 CHECK (server_revision >= 1),
   document_json jsonb NOT NULL,

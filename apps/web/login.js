@@ -235,7 +235,6 @@ const codeInput = document.querySelector("#code-input");
 const requestCodeButton = document.querySelector("#request-code-button");
 const verifyButton = document.querySelector("#verify-button");
 const statusMessage = document.querySelector("#status-message");
-const debugPanel = document.querySelector("#debug-panel");
 const authPanel = document.querySelector(".auth-panel");
 const phoneLoginTab = document.querySelector("#phone-login-tab");
 const passwordLoginTab = document.querySelector("#password-login-tab");
@@ -271,6 +270,7 @@ let agreementDocuments = {
     contentHtml: "<p>协议内容加载中...</p>",
   },
 };
+let agreementDocumentsPromise = null;
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
 const appUrl =
@@ -333,6 +333,10 @@ function sanitizeAgreementHtml(html) {
 }
 
 async function loadAgreementDocuments() {
+  if (agreementDocumentsPromise) {
+    return agreementDocumentsPromise;
+  }
+  agreementDocumentsPromise = (async () => {
   try {
     const response = await fetch(resolveApiUrl("/api/public/legal-documents"), {
       credentials: "include",
@@ -348,6 +352,8 @@ async function loadAgreementDocuments() {
   } catch {
     // Keep fallback copy when the public agreement endpoint is unavailable.
   }
+  })();
+  return agreementDocumentsPromise;
 }
 
 function showAgreementError(message) {
@@ -397,14 +403,16 @@ function validateAgreementsAccepted() {
     updateAgreementActionState();
     return true;
   }
+  const message = "请先同意并勾选上述协议";
   updateAgreementActionState();
-  showAgreementError("请先同意并勾选上述协议");
+  showAgreementError(message);
+  showGlobalToast("error", "请先同意协议", message);
   return false;
 }
 
-function openAgreementModal(kind) {
+async function openAgreementModal(kind) {
   const documentKey = kind === "privacy" ? "privacyPolicy" : "serviceAgreement";
-  const documentData = agreementDocuments[documentKey];
+  let documentData = agreementDocuments[documentKey];
   if (agreementModalTitle) {
     agreementModalTitle.textContent = documentData?.title || "协议详情";
   }
@@ -413,6 +421,17 @@ function openAgreementModal(kind) {
   }
   if (agreementModal) {
     agreementModal.hidden = false;
+  }
+  await loadAgreementDocuments();
+  documentData = agreementDocuments[documentKey];
+  if (!agreementModal || agreementModal.hidden) {
+    return;
+  }
+  if (agreementModalTitle) {
+    agreementModalTitle.textContent = documentData?.title || "鍗忚璇︽儏";
+  }
+  if (agreementModalContent) {
+    agreementModalContent.innerHTML = sanitizeAgreementHtml(documentData?.contentHtml || "<p>鏆傛棤鍗忚鍐呭銆?/p>");
   }
 }
 
@@ -448,7 +467,6 @@ function setAuthMode(mode) {
   }
 
   if (isPasswordMode) {
-    debugPanel.hidden = true;
     setStatus("");
   }
 }
@@ -518,13 +536,6 @@ function authErrorMessage(payload, fallback) {
   return errorCopy[payload?.error] ?? fallback;
 }
 
-function showDebug(message) {
-  debugPanel.hidden = false;
-  debugPanel.textContent = message;
-}
-
-await loadAgreementDocuments();
-
 function updateRequestCodeButton() {
   if (!requestCodeButton) {
     return;
@@ -588,7 +599,6 @@ requestCodeButton?.addEventListener("click", async () => {
   const phone = phoneInput?.value?.trim() ?? "";
   requestCodeButton.disabled = true;
   requestCodeButton.textContent = "发送中...";
-  setStatus("正在请求验证码...");
 
   let requestResponse;
   let requestPayload;
@@ -601,7 +611,6 @@ requestCodeButton?.addEventListener("click", async () => {
     requestPayload = await requestResponse.json();
   } catch {
     resetRequestCodeButton();
-    setStatus("验证码请求失败");
     showGlobalToast("error", "验证码发送失败", "网络连接异常，请稍后再试");
     return;
   }
@@ -609,7 +618,6 @@ requestCodeButton?.addEventListener("click", async () => {
   if (!requestResponse.ok) {
     const message = authErrorMessage(requestPayload, "验证码请求失败");
     resetRequestCodeButton();
-    setStatus(message);
     showGlobalToast("error", "验证码发送失败", message);
     return;
   }
@@ -621,23 +629,7 @@ requestCodeButton?.addEventListener("click", async () => {
       ? `，今日还可发送 ${requestPayload.remainingToday} 次`
       : "";
   const deliveredMessage = `验证码已发送至 ${requestPayload.maskedPhone}${remainingText}`;
-  setStatus(deliveredMessage);
   showGlobalToast("success", "验证码已发送", deliveredMessage);
-
-  if (requestPayload.devCode) {
-    showDebug(`开发验证码：${requestPayload.devCode}`);
-    return;
-  }
-
-  const debugResponse = await fetch(
-    resolveApiUrl(`/api/auth/dev/challenges/${requestPayload.challengeId}`),
-    { credentials: "include" },
-  );
-
-  if (debugResponse.ok) {
-    const debugPayload = await debugResponse.json();
-    showDebug(`开发验证码：${debugPayload.code}`);
-  }
 });
 
 form?.addEventListener("submit", async (event) => {
@@ -651,7 +643,6 @@ form?.addEventListener("submit", async (event) => {
   }
 
   if (!activeChallengeId) {
-    setStatus("请先获取验证码");
     showGlobalToast("error", "登录失败", "请先获取验证码");
     return;
   }

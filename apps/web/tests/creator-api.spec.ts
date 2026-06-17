@@ -52,6 +52,32 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
+test("read API calls coalesce duplicate in-flight requests", async () => {
+  const calls = [];
+  let resolveFetch;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    await new Promise((resolve) => {
+      resolveFetch = resolve;
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ projects: [] }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const first = creatorApi.getProjects();
+  const second = creatorApi.getProjects();
+  resolveFetch();
+  const [firstPayload, secondPayload] = await Promise.all([first, second]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects");
+  assert.deepEqual(firstPayload, { projects: [] });
+  assert.deepEqual(secondPayload, { projects: [] });
+});
+
 test("importEpisodeAsset targets the episode-scoped import route", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

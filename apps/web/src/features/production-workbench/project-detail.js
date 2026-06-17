@@ -164,19 +164,23 @@ function resolveImportedAssetPreview(asset) {
   );
 }
 export function renderProjectDetail(context = {}) {
-  const { state = {}, ui = {}, session = { user: { phone: "" } } } = context;
+  const { state: rawState = {}, ui = {}, session = { user: { phone: "" } } } = context;
+  const state = rawState && typeof rawState === "object" ? rawState : {};
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
 
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
+    const workspaceContent = renderPageBoundary("项目工作台", activeNavTab, () => `
+      ${renderProjectInteriorShell({ state, ui, detailState })}
+    `);
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
           ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance })}
-          ${renderProjectInteriorShell({ state, ui, detailState })}
+          ${workspaceContent}
         </section>
       </section>
       ${renderAssetExtractModal({
@@ -208,10 +212,13 @@ export function renderProjectDetail(context = {}) {
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode === "episode-workbench") {
+    const episodeWorkbenchContent = renderPageBoundary("剧集工作台", activeNavTab, () =>
+      renderEpisodeWorkbenchScreen({ state, ui, session }),
+    );
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
-        ${renderEpisodeWorkbenchScreen({ state, ui, session })}
+        ${episodeWorkbenchContent}
       </section>
       ${renderAssetExtractModal({
         activeTab: ui.scriptTab,
@@ -250,7 +257,9 @@ export function renderProjectDetail(context = {}) {
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
         ${renderGlobalStatusbar(session, { creditBalance })}
-        ${renderMainPanel({ state, ui, session, detailState, progress, activeNavTab })}
+        ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
+          renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
+        )}
       </section>
     </section>
 
@@ -308,6 +317,36 @@ export function renderProjectDetail(context = {}) {
     ${renderGenerationQueueJobConfirmModal(ui)}
     ${renderCreditLedgerDrawer(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
+  `;
+}
+
+function renderPageBoundary(label, activeNavTab, renderContent) {
+  try {
+    return renderContent();
+  } catch (error) {
+    console.error(`[creator-app] page render failed: ${activeNavTab}`, error);
+    return renderPageErrorPanel(label, error);
+  }
+}
+
+function navTabLabel(activeNavTab) {
+  return NAV_TABS.find((tab) => tab.id === activeNavTab)?.label ?? "当前页面";
+}
+
+function renderPageErrorPanel(label, error) {
+  const message = error instanceof Error ? error.message : String(error ?? "unknown_error");
+  return `
+    <section class="workbench-page-error" role="alert" aria-live="polite">
+      <div>
+        <p class="section-kicker">${escapeHtml(label)}</p>
+        <h2>此页面暂时无法加载</h2>
+        <p>${escapeHtml(message || "页面内部出现错误，请稍后重试。")}</p>
+      </div>
+      <div class="workbench-page-error-actions">
+        <button class="secondary-action compact" type="button" data-action="navigate-home">返回首页</button>
+        <button class="secondary-action compact" type="button" data-action="navigate-projects">查看项目</button>
+      </div>
+    </section>
   `;
 }
 
@@ -3972,8 +4011,7 @@ function renderCanvasProjectGallery(ui = {}) {
 }
 
 function normalizeCanvasProjectCards(ui = {}) {
-  const fallback = [{ id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" }];
-  const projects = Array.isArray(ui.canvasProjects) && ui.canvasProjects.length ? ui.canvasProjects : fallback;
+  const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => ({
     id: String(project?.id ?? `canvas-project-${index + 1}`),
     title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
@@ -6013,14 +6051,15 @@ function renderCandidate(group, candidate, busy) {
 }
 
 function getProgress(state) {
+  const currentState = state && typeof state === "object" ? state : {};
   const steps = [
-    Boolean(state.project),
-    Boolean(state.shots?.length),
-    Boolean(state.assetReview?.readyForGeneration),
-    Boolean(state.calibration),
-    Boolean(state.shots?.length && state.shots.every((shot) => shot.currentImageAssetVersionId)),
-    Boolean(state.shots?.length && state.shots.every((shot) => shot.currentVideoAssetVersionId)),
-    Boolean(state.exportPreview),
+    Boolean(currentState.project),
+    Boolean(currentState.shots?.length),
+    Boolean(currentState.assetReview?.readyForGeneration),
+    Boolean(currentState.calibration),
+    Boolean(currentState.shots?.length && currentState.shots.every((shot) => shot.currentImageAssetVersionId)),
+    Boolean(currentState.shots?.length && currentState.shots.every((shot) => shot.currentVideoAssetVersionId)),
+    Boolean(currentState.exportPreview),
   ];
 
   return {

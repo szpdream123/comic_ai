@@ -78,6 +78,7 @@ import {
   getOrCreateProjectCanvas,
   listCanvasNodeRuns,
   markCanvasNodeRunQueued,
+  saveCanvasByCanvasProjectId,
   saveProjectCanvas,
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
@@ -193,7 +194,6 @@ const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const devPaymentCallbackSecret = "dev-payment-secret";
 const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
-const devInitialCreditBalance = 10000;
 const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
 const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -923,7 +923,15 @@ async function listCanvasProjects(
 ): Promise<CanvasProjectRecord[]> {
   const result = await db.query<CanvasProjectRow>(
     `
-      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      SELECT
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        title,
+        status,
+        created_by_user_id,
+        created_at
       FROM creator_canvas_projects
       WHERE organization_id = $1
         AND created_by_user_id = $2
@@ -7576,19 +7584,13 @@ async function ensureDevWorkspaceAccess(
 
   await db.query(
     `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Comic AI Studio', 'active', $2)
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Comic AI Studio', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET name = EXCLUDED.name,
-          credit_balance_cached = CASE
-            WHEN organizations.credit_balance_cached <= 0
-            THEN $2
-            ELSE organizations.credit_balance_cached
-          END
+      SET name = EXCLUDED.name
     `,
-    [devOrganizationId, devInitialCreditBalance],
+    [devOrganizationId],
   );
-  await ensureDevInitialCreditLot(db);
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
@@ -7641,19 +7643,13 @@ async function ensurePersonalDevWorkspaceAccess(
 
   await db.query(
     `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Personal Creator Workspace', 'active', $2)
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Personal Creator Workspace', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET status = 'active',
-          credit_balance_cached = CASE
-            WHEN organizations.credit_balance_cached <= 0
-            THEN $2
-            ELSE organizations.credit_balance_cached
-          END
+      SET status = 'active'
     `,
-    [scope.organizationId, devInitialCreditBalance],
+    [scope.organizationId],
   );
-  await ensureDevInitialCreditLot(db, scope.organizationId);
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
@@ -7673,33 +7669,148 @@ async function ensurePersonalDevWorkspaceAccess(
   );
 }
 
-async function resolveDefaultWorkspaceForSession(
+async function resolvePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
-  now: Date,
 ): Promise<string> {
-  const membership = await queryOne<{ workspace_id: string }>(
-    db,
+  await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+  await repairTeamWorkspaceProjectsToPersonalWorkspaces(db);
+  return personalProjectWorkspaceId(authenticated.user.id);
+}
+
+async function ensurePersonalProjectWorkspaceForSession(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  authenticated: { sessionToken: string; user: AuthenticatedUser },
+): Promise<string> {
+  return ensureCachedPersonalProjectWorkspaceAccess(db, authenticated.user.id);
+}
+
+const personalProjectWorkspaceAccessPromises = new WeakMap<
+  Awaited<ReturnType<typeof createDevDb>>,
+  Map<string, Promise<string>>
+>();
+
+async function ensureCachedPersonalProjectWorkspaceAccess(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+): Promise<string> {
+  let promises = personalProjectWorkspaceAccessPromises.get(db);
+  if (!promises) {
+    promises = new Map();
+    personalProjectWorkspaceAccessPromises.set(db, promises);
+  }
+  const cached = promises.get(userId);
+  if (cached) {
+    return cached;
+  }
+  const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
+    .then(() => personalProjectWorkspaceId(userId))
+    .catch((error) => {
+      promises?.delete(userId);
+      throw error;
+    });
+  promises.set(userId, promise);
+  return promise;
+}
+
+async function ensurePersonalProjectWorkspaceAccess(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const workspaceId = personalProjectWorkspaceId(userId);
+
+  await db.query(
     `
-      SELECT workspace_id
-      FROM memberships
-      WHERE user_id = $1
-        AND status = 'active'
-        AND workspace_id IS NOT NULL
-      ORDER BY
-        CASE WHEN workspace_id = $2 THEN 1 ELSE 0 END,
-        created_at DESC,
-        id DESC
-      LIMIT 1
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Comic AI Studio', 'active')
+      ON CONFLICT (id) DO UPDATE
+      SET name = EXCLUDED.name,
+          status = 'active'
     `,
-    [authenticated.user.id, devWorkspaceId],
+    [devOrganizationId],
   );
-  if (membership?.workspace_id) {
-    return membership.workspace_id;
+
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Personal Project Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
+    `,
+    [workspaceId, devOrganizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET role = 'owner_admin', status = 'active'
+    `,
+    [randomUUID(), devOrganizationId, workspaceId, userId],
+  );
+}
+
+const teamWorkspaceProjectRepairPromises = new WeakMap<
+  Awaited<ReturnType<typeof createDevDb>>,
+  Promise<void>
+>();
+
+async function repairTeamWorkspaceProjectsToPersonalWorkspaces(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  let repairPromise = teamWorkspaceProjectRepairPromises.get(db);
+  if (!repairPromise) {
+    repairPromise = runTeamWorkspaceProjectRepair(db);
+    teamWorkspaceProjectRepairPromises.set(db, repairPromise);
+  }
+  return repairPromise;
+}
+
+async function runTeamWorkspaceProjectRepair(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const owners = await db.query<{ user_id: string }>(
+    `
+      SELECT DISTINCT created_by_user_id AS user_id
+      FROM projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND created_by_user_id IS NOT NULL
+    `,
+    [devOrganizationId, devWorkspaceId],
+  );
+
+  for (const owner of owners.rows) {
+    await ensurePersonalProjectWorkspaceAccess(db, owner.user_id);
   }
 
-  await ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
-  return personalDevTenantScope(authenticated.user.id).workspaceId;
+  await db.query(
+    `
+      UPDATE projects
+      SET workspace_id = personal_scope.workspace_id
+      FROM (
+        SELECT
+          u.id AS user_id,
+          (
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 1, 8) || '-' ||
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 9, 4) || '-' ||
+            '4' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 14, 3) || '-' ||
+            '8' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 18, 3) || '-' ||
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 21, 12)
+          )::uuid AS workspace_id
+        FROM users u
+      ) personal_scope
+      WHERE projects.organization_id = $1
+        AND projects.workspace_id = $2
+        AND projects.created_by_user_id IS NOT NULL
+        AND projects.created_by_user_id = personal_scope.user_id
+    `,
+    [devOrganizationId, devWorkspaceId],
+  );
+}
+
+function personalProjectWorkspaceId(userId: string) {
+  const normalized = userId.replace(/-/g, "");
+  return uuidFromHex(`c${normalized.slice(1, 32)}`);
 }
 
 function personalDevTenantScope(userId: string): DevTenantScope {
@@ -7713,64 +7824,6 @@ function personalDevTenantScope(userId: string): DevTenantScope {
 function uuidFromHex(hex: string) {
   const value = hex.padEnd(32, "0").slice(0, 32);
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
-}
-
-async function ensureDevInitialCreditLot(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  organizationId = devOrganizationId,
-) {
-  const sourceId = "00000000-0000-4000-8000-000000000001";
-  const existingLot = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM credit_lots
-      WHERE organization_id = $1
-        AND source_type = 'dev_seed_initial_credits'
-        AND source_id = $2
-      LIMIT 1
-    `,
-    [organizationId, sourceId],
-  );
-  if (existingLot) {
-    return;
-  }
-
-  const organization = await queryOne<{ credit_balance_cached: number | string }>(
-    db,
-    "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-    [organizationId],
-  );
-  const currentBalance = Number(organization?.credit_balance_cached ?? 0);
-  const balanceWithoutImplicitSeed = Math.max(0, currentBalance - devInitialCreditBalance);
-  const now = new Date();
-
-  await db.query("BEGIN");
-  try {
-    await db.query(
-      `
-        UPDATE organizations
-        SET credit_balance_cached = $2,
-            updated_at = $3
-        WHERE id = $1
-      `,
-      [organizationId, balanceWithoutImplicitSeed, now],
-    );
-    await grantCreditsInTransaction(db, {
-      organizationId,
-      amount: devInitialCreditBalance,
-      sourceType: "dev_seed_initial_credits",
-      sourceId,
-      reason: "dev initial credits",
-      createdByUserId: null,
-      metadata: { seededBy: "phone-auth-dev-server" },
-      now,
-    });
-    await db.query("COMMIT");
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
-  }
 }
 
 async function ensureDefaultMembershipPlan(
@@ -10696,9 +10749,6 @@ export function createPhoneAuthDevServer(
             expiresAt: result.expiresAt.toISOString(),
             retryAfterSeconds: result.retryAfterSeconds,
             remainingToday: result.remainingToday,
-            ...(smsProvider.providerName === "dev"
-              ? { devCode: result.plainCode }
-              : {}),
           },
         });
       }
@@ -11143,7 +11193,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         const membershipOrders = createMembershipOrderService({
           db,
@@ -11200,7 +11250,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         await ensureDefaultCreditPackage(db, { now: new Date() });
         const commercePayment = createCommercePaymentService({
@@ -11370,7 +11420,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         if (request.method === "POST" && pathname === "/api/storage/upload-sessions") {
           if (!process.env.DATABASE_URL?.trim()) {
@@ -11645,6 +11695,8 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
+        pathname === "/api/creator/canvas-projects" ||
+        pathname.startsWith("/api/creator/canvas-projects/") ||
         pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
@@ -11659,6 +11711,10 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
+
+        const currentWorkspaceId = pathname.startsWith("/api/creator/canvas-projects")
+          ? await ensurePersonalProjectWorkspaceForSession(db, authenticated)
+          : devWorkspaceId;
 
         const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
         if (request.method === "GET" && canvasNodeRunsMatch) {
@@ -12978,13 +13034,14 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
         const creatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
+        const teamCreatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
 
         if (request.method === "GET" && pathname === "/api/creator/team/overview") {
           return writeJson(
             response,
-            await creatorApplication.getTeamOverview({
+            await teamCreatorApplication.getTeamOverview({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -12997,7 +13054,7 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && pathname === "/api/creator/team/members") {
           return writeJson(
             response,
-            await creatorApplication.listTeamMembers({
+            await teamCreatorApplication.listTeamMembers({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -13030,7 +13087,7 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.createTeamMember({
+            await teamCreatorApplication.createTeamMember({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -13171,15 +13228,10 @@ export function createPhoneAuthDevServer(
         }
 
         if (pathname === "/api/creator/canvas-projects") {
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
-            capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
-            now: new Date(),
-          });
-          if (!actor.workspaceId) {
-            throw new AuthorizationError("workspace_not_found");
-          }
+          const actor = {
+            organizationId: devOrganizationId,
+            workspaceId: currentWorkspaceId,
+          };
           const ownedProjects = await listCanvasProjects(db, {
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
@@ -13208,15 +13260,74 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const standaloneCanvasMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)\/canvas$/);
+        if (standaloneCanvasMatch) {
+          if (request.method !== "GET" && request.method !== "PUT") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const canvasProjectId = decodeURIComponent(standaloneCanvasMatch[1] ?? "");
+          const actor = {
+            organizationId: devOrganizationId,
+            workspaceId: currentWorkspaceId,
+          };
+          const project = await findCanvasProjectRecord(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+            projectId: canvasProjectId,
+          });
+          if (!project) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          const now = new Date();
+          try {
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, {
+                canvas: await findCanvasByCanvasProjectId(db, {
+                  organizationId: actor.organizationId,
+                  workspaceId: actor.workspaceId,
+                  canvasProjectId,
+                }),
+              }));
+            }
+            const body = (await readJsonBody(request)) as {
+              clientRevision?: unknown;
+              serverRevision?: unknown;
+              document?: unknown;
+              events?: Array<Record<string, unknown>>;
+            };
+            return writeJson(response, enveloped(200, {
+              canvas: await saveCanvasByCanvasProjectId(db, {
+                organizationId: actor.organizationId,
+                workspaceId: actor.workspaceId,
+                canvasProjectId,
+                userId: authenticated.user.id,
+                clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
+                document: body.document,
+                events: Array.isArray(body.events) ? body.events : [],
+                now,
+              }),
+            }));
+          } catch (error) {
+            if (error instanceof CanvasConflictError) {
+              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+                serverRevision: error.serverRevision,
+                serverDocument: error.serverDocument as Record<string, unknown>,
+              }));
+            }
+            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
         const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
-            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
-            now: new Date(),
-          });
+          const actor = {
+            organizationId: devOrganizationId,
+            workspaceId: currentWorkspaceId,
+          };
           const project = await findCanvasProjectRecord(db, {
             organizationId: actor.organizationId,
             userId: authenticated.user.id,

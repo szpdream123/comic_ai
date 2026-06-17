@@ -47,11 +47,13 @@ const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
 const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
-const CREDIT_SESSION_REFRESH_INTERVAL_MS = 10_000;
+const CREDIT_SESSION_REFRESH_INTERVAL_MS = 60_000;
 const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
 const WORKBENCH_TOAST_DISMISS_MS = 2000;
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const ENABLE_EPISODE_EVENT_TRACKING = false;
+const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
+const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
@@ -866,6 +868,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.canvasRunPreview = null;
     render(workbench);
   };
+  workbench.updateCanvasDocument = (canvasDocument) => updateActiveCanvasDocument(workbench, canvasDocument);
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.target);
@@ -893,6 +896,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       startCanvasNodeResize(workbench, event, canvasResizeTarget);
       return;
     }
+    const canvasNodeTarget = eventTarget?.closest?.(".canvas-lib-node[data-canvas-node-id]");
+    const uploadCardDragTarget = eventTarget?.closest?.(".canvas-upload-card");
+    if (
+      canvasNodeTarget &&
+      uploadCardDragTarget &&
+      !eventTarget?.closest?.(".canvas-node-connect, input")
+    ) {
+      startCanvasUploadNodeLongPressDrag(workbench, event, canvasNodeTarget);
+      return;
+    }
     if (shouldStartCanvasPan(eventTarget, event)) {
       workbench.canvasPointerHandledAt = Date.now();
       startCanvasPan(workbench, event);
@@ -900,6 +913,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
+  });
+  window.addEventListener("hashchange", () => {
+    syncWorkbenchHashRoute(workbench, window.location.hash);
   });
   root.addEventListener("wheel", (event) => {
     const eventTarget = resolveEventElement(event.target);
@@ -940,11 +956,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
     const canvasNodeTarget = eventTarget?.closest?.(".canvas-lib-node[data-canvas-node-id]");
-    const uploadMediaDragTarget = eventTarget?.closest?.(".canvas-upload-card.has-media");
+    const uploadCardDragTarget = eventTarget?.closest?.(".canvas-upload-card");
     const canvasNodeDragHandleTarget = eventTarget?.closest?.("[data-canvas-node-drag-handle]");
     const blockedCanvasNodeDragTarget = canvasNodeDragHandleTarget
       ? null
-      : uploadMediaDragTarget
+      : uploadCardDragTarget
       ? eventTarget?.closest?.(".canvas-node-connect, input")
       : eventTarget?.closest?.(
         ".canvas-text-format-toolbar, .canvas-node-connect, [data-canvas-node-resize-handle], button, input, textarea, [contenteditable='true'], select, option, a",
@@ -2221,6 +2237,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
   });
 
+  render(workbench);
   await refresh(workbench);
   render(workbench);
 }
@@ -2264,31 +2281,75 @@ function installEpisodeWorkbenchTestHooks(workbench) {
 }
 
 async function refresh(workbench) {
-  await refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  workbench.state = await workbench.api.getCreatorState();
-  const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
-  if (stateBalance !== null) {
-    setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
-  }
-  if (workbench.state?.project?.id) {
-    try {
-      applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, workbench.state.project.id));
-      await syncProjectInteriorSupplementary(workbench);
-    } catch (error) {
-      if (!String(error instanceof Error ? error.message : error).includes("project_not_found")) {
-        throw error;
+  hydratePersistedWorkbenchState(workbench);
+  syncWorkbenchRouteState(workbench, window.location.hash);
+  syncCanvasRouteState(workbench, window.location.hash);
+
+  void refreshSessionCreditBalance(workbench, { renderOnChange: false });
+
+  const visibleTab = workbench.ui.activeNavTab;
+  const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";
+  const isProjectWorkspace =
+    visibleTab === "project" && workbench.ui.projectPanelMode !== "library";
+  const isTeamSurface = visibleTab === "team";
+  const isToolsSurface = visibleTab === "tools";
+  const isScriptSurface = visibleTab === "script";
+  const isAssetLibrarySurface = visibleTab === "library";
+
+  if (isProjectLibrary) {
+    await syncProjectLibraryFromApi(workbench, { includeAssets: false });
+  } else if (isProjectWorkspace) {
+    workbench.state = typeof workbench.api?.getCreatorState === "function"
+      ? await workbench.api.getCreatorState()
+      : null;
+    const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
+    if (stateBalance !== null) {
+      setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
+    }
+    if (workbench.state?.project?.id) {
+      try {
+        const [projectDetail] = await Promise.all([
+          loadProjectDetailForWorkbench(workbench, workbench.state.project.id),
+          syncProjectInteriorSupplementary(workbench),
+        ]);
+        applyProjectDetail(workbench, projectDetail);
+      } catch (error) {
+        if (!String(error instanceof Error ? error.message : error).includes("project_not_found")) {
+          throw error;
+        }
       }
     }
+    workbench.ui.exportHistory = workbench.state.project
+      ? await loadExportHistory(workbench)
+      : [];
   }
-  await syncProjectLibraryFromApi(workbench);
-  await syncScriptLibraryFromApi(workbench);
-  await syncProjectStyles(workbench);
-  await syncStoryboardPromptPackages(workbench);
-  workbench.ui.exportHistory = workbench.state.project
-    ? await loadExportHistory(workbench)
-    : [];
-  hydratePersistedWorkbenchState(workbench);
-  await syncCanvasProjectsFromApi(workbench);
+
+  if (isTeamSurface) {
+    runLazyWorkbenchTask(workbench, "team surface", async () => {
+      await loadTeamSurface(workbench);
+      render(workbench);
+    });
+  }
+  if (isToolsSurface) {
+    runLazyWorkbenchTask(workbench, "canvas projects", async () => {
+      await syncCanvasProjectsFromApi(workbench);
+      await ensureCanvasGenerationConfig(workbench, { force: true });
+      render(workbench);
+    });
+  }
+  if (isScriptSurface) {
+    runLazyWorkbenchTask(workbench, "script library", async () => {
+      await refreshScriptLibraryIfAvailable(workbench);
+      render(workbench);
+    });
+  }
+  if (isAssetLibrarySurface && shouldPrefetchReusableAssetLibrary(workbench)) {
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
+  }
+
   const nextStoryboards = syncStoryboards(
     workbench.ui.storyboards,
     createStoryboardList(workbench.state),
@@ -2317,7 +2378,6 @@ async function refresh(workbench) {
       workbench.ui.episodeWorkbenchError = friendlyError(error);
     }
   }
-  syncWorkbenchRouteState(workbench, window.location.hash);
   const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
   if (!restoredEpisodeRoute) {
     const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
@@ -2332,17 +2392,51 @@ async function refresh(workbench) {
       });
     }
   }
-  syncCanvasRouteState(workbench, window.location.hash);
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
-  if (workbench.ui.activeNavTab === "team") {
-    await loadTeamSurface(workbench);
+}
+
+function syncWorkbenchHashRoute(workbench, hash) {
+  syncWorkbenchRouteState(workbench, hash);
+  syncCanvasRouteState(workbench, hash);
+  workbench.ui.projectInteriorStatusMenuOpen = false;
+  workbench.ui.toast = "";
+  render(workbench);
+  scheduleLazySurfaceLoad(workbench);
+}
+
+function scheduleLazySurfaceLoad(workbench) {
+  const visibleTab = workbench.ui.activeNavTab;
+  if (visibleTab === "project" && workbench.ui.projectPanelMode === "library") {
+    runLazyWorkbenchTask(workbench, "project library", async () => {
+      await syncProjectLibraryFromApi(workbench, { includeAssets: false });
+      render(workbench);
+    });
   }
-  if (workbench.ui.activeNavTab === "tools") {
-    await syncCanvasProjectsFromApi(workbench);
-    await ensureCanvasGenerationConfig(workbench, { force: true });
+  if (visibleTab === "tools") {
+    runLazyWorkbenchTask(workbench, "canvas projects", async () => {
+      await syncCanvasProjectsFromApi(workbench);
+      await ensureCanvasGenerationConfig(workbench);
+      render(workbench);
+    });
   }
-  if (shouldPrefetchReusableAssetLibrary(workbench)) {
-    await syncAssetLibraryFromApi(workbench);
+  if (visibleTab === "library") {
+    workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
+  }
+  if (visibleTab === "team") {
+    runLazyWorkbenchTask(workbench, "team surface", async () => {
+      await loadTeamSurface(workbench);
+      render(workbench);
+    });
+  }
+  if (visibleTab === "script") {
+    runLazyWorkbenchTask(workbench, "script library", async () => {
+      await refreshScriptLibraryIfAvailable(workbench);
+      render(workbench);
+    });
   }
 }
 
@@ -3032,22 +3126,29 @@ async function loadTeamSurface(workbench) {
 function render(workbench, options = {}) {
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
-  const activeStoryboards = getActiveStoryboards(workbench);
-  const selectedStoryboard = getSelectedStoryboard(
-    activeStoryboards,
-    workbench.ui.selectedStoryboardId,
-  );
-  syncActiveCanvasDocument(workbench);
-  workbench.root.innerHTML = renderProductionWorkbench({
-    state: workbench.state,
-    session: workbench.session,
-    api: workbench.api,
-    ui: {
-      ...workbench.ui,
-      storyboards: activeStoryboards,
-      selectedStoryboard,
-    },
-  });
+  let renderFailed = false;
+  try {
+    const activeStoryboards = getActiveStoryboards(workbench);
+    const selectedStoryboard = getSelectedStoryboard(
+      activeStoryboards,
+      workbench.ui.selectedStoryboardId,
+    );
+    syncActiveCanvasDocument(workbench);
+    workbench.root.innerHTML = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      api: workbench.api,
+      ui: {
+        ...workbench.ui,
+        storyboards: activeStoryboards,
+        selectedStoryboard,
+      },
+    });
+  } catch (error) {
+    renderFailed = true;
+    console.error("[creator-app] render failed", error);
+    workbench.root.innerHTML = renderRecoverableWorkbenchShell(workbench, error);
+  }
   restoreEpisodeWorkbenchScrollState(workbench.root, episodeScrollState);
   restoreWorkbenchSurfaceScrollState(workbench.root, surfaceScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
@@ -3057,12 +3158,35 @@ function render(workbench, options = {}) {
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
     persistWorkbenchState(workbench);
   }
+  if (renderFailed) {
+    return;
+  }
   applyPostRenderEffects(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench);
   mountCanvasWorkflowIfPresent(workbench);
   updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
   resumeCanvasGenerationPollingIfNeeded(workbench);
+}
+
+function renderRecoverableWorkbenchShell(workbench, error) {
+  const message = friendlyError(error);
+  return renderProductionWorkbench({
+    state: {},
+    session: workbench.session ?? { user: { phone: "" } },
+    api: workbench.api,
+    ui: {
+      activeNavTab: workbench.ui?.activeNavTab ?? deriveInitialNavTab(window.location.hash),
+      projectPanelMode: workbench.ui?.projectPanelMode ?? deriveInitialProjectPanelMode(window.location.hash),
+      libraryTeamRoute: workbench.ui?.libraryTeamRoute ?? deriveInitialLibraryTeamRoute(window.location.hash),
+      toast: { tone: "error", message: `页面局部渲染失败：${message}` },
+      projectLibrary: [],
+      projectStyles: [],
+      canvasProjects: [],
+      selectedCanvasProjectId: DEFAULT_CANVAS_PROJECT_ID,
+      renderRecoveryError: message,
+    },
+  });
 }
 
 function showWorkbenchToast(workbench, message, options = {}) {
@@ -3522,6 +3646,8 @@ function resolveMergedGenerationPrompt(currentPrompt, nextPrompt) {
 export async function handleProductionWorkbenchAction(workbench, target) {
   const action = target.dataset.action;
   const allowWhileBusy = new Set([
+    "set-nav-tab",
+    "open-create-modal",
     "open-delete-sidebar-storyboard-modal",
     "close-delete-storyboard-modal",
     "confirm-delete-storyboard",
@@ -3746,7 +3872,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-canvas-script-picker") {
-    await refreshScriptLibraryIfAvailable(workbench);
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const nodeId = target.dataset.nodeId ?? "";
     const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
@@ -3763,6 +3888,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     };
     workbench.ui.canvasContextMenu = null;
     render(workbench);
+    runLazyWorkbenchTask(workbench, "script library", async () => {
+      await refreshScriptLibraryIfAvailable(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -3997,7 +4126,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.selectedScriptEpisodeId = "";
       workbench.ui.scriptReaderSections = [];
       workbench.ui.scriptReaderSectionsLoaded = false;
-      await loadScriptReaderSections(workbench);
+      render(workbench);
+      runLazyWorkbenchTask(workbench, "script reader sections", async () => {
+        await loadScriptReaderSections(workbench);
+        render(workbench);
+      });
+      return;
     }
     render(workbench);
     return;
@@ -4317,8 +4451,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-pricing") {
     workbench.ui.isLibraryPricingModalOpen = true;
-    await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
     render(workbench);
+    runLazyWorkbenchTask(workbench, "pricing surface", async () => {
+      await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
+      render(workbench);
+    });
     return;
   }
 
@@ -4655,8 +4792,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.toast = "";
     window.location.hash = "library";
     render(workbench);
-    await syncAssetLibraryFromApi(workbench);
-    render(workbench);
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -4672,8 +4811,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
     render(workbench);
-    await syncAssetLibraryFromApi(workbench);
-    render(workbench);
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -4688,8 +4829,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
     render(workbench);
-    await syncAssetLibraryFromApi(workbench);
-    render(workbench);
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -4758,8 +4901,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryDetailAssetId = "";
     workbench.ui.libraryDetailView = "turnaround";
     render(workbench);
-    await syncAssetLibraryFromApi(workbench);
-    render(workbench);
+    runLazyWorkbenchTask(workbench, "asset library", async () => {
+      await syncAssetLibraryFromApi(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -5075,10 +5220,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.libraryTeamRoute = "team";
     workbench.ui.teamDashboardTab = "member-consumption";
     workbench.ui.teamDashboardDateRange = "today";
-    await loadTeamSurface(workbench);
     workbench.ui.toast = "";
     window.location.hash = "team";
     render(workbench);
+    runLazyWorkbenchTask(workbench, "team surface", async () => {
+      await loadTeamSurface(workbench);
+      render(workbench);
+    });
     return;
   }
 
@@ -5156,7 +5304,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.canvasAddMenuOpen = false;
       workbench.ui.canvasContextMenu = null;
       workbench.ui.canvasProjectMenuId = null;
-      await ensureCanvasGenerationConfig(workbench);
     }
     if (workbench.ui.activeNavTab === "library") {
       workbench.ui.libraryTeamRoute = "assets";
@@ -5164,20 +5311,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.toast = "";
-    window.location.hash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
-    if (workbench.ui.activeNavTab === "project") {
-      await syncProjectLibraryFromApi(workbench);
-    }
-    if (workbench.ui.activeNavTab === "tools") {
-      await syncCanvasProjectsFromApi(workbench);
-    }
-    if (workbench.ui.activeNavTab === "library") {
-      await syncAssetLibraryFromApi(workbench);
-    }
-    if (workbench.ui.activeNavTab === "team") {
-      await loadTeamSurface(workbench);
-    }
+    const nextHash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
+    const currentHash = String(window.location.hash ?? "").replace(/^#/, "");
+    window.location.hash = nextHash;
     render(workbench);
+    if (currentHash === nextHash) {
+      scheduleLazySurfaceLoad(workbench);
+    }
     return;
   }
 
@@ -5186,11 +5326,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.selectedCanvasProjectId = projectId;
     workbench.ui.activeCanvasBusinessProjectId = null;
     workbench.ui.activeCanvasProjectId = projectId;
-    syncActiveCanvasDocument(workbench);
+    const loadedStandaloneCanvas = await loadStandaloneCanvasProject(workbench, projectId).catch((error) => {
+      workbench.ui.toast = `画布加载失败：${friendlyError(error)}`;
+      return false;
+    });
+    if (!loadedStandaloneCanvas) {
+      syncActiveCanvasDocument(workbench);
+    }
     workbench.ui.canvasProjectView = "detail";
     workbench.ui.canvasAddMenuOpen = false;
     workbench.ui.canvasContextMenu = null;
-    workbench.ui.toast = "";
+    if (loadedStandaloneCanvas) {
+      workbench.ui.toast = "";
+    }
     if (typeof window !== "undefined") {
       window.location.hash = "tools-canvas";
     }
@@ -5328,9 +5476,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.createAspectRatio = "9:16";
     workbench.ui.createProjectType = resolveDefaultProjectStyleCode(workbench);
     workbench.ui.isProjectStyleMenuOpen = false;
-    await syncProjectStyles(workbench);
-    workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
     render(workbench);
+    if (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) {
+      runLazyWorkbenchTask(workbench, "project styles", async () => {
+        await syncProjectStyles(workbench);
+        workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
+        render(workbench);
+      });
+    }
     return;
   }
 
@@ -5369,14 +5522,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.scriptSubmitLabel = scriptModalMode === "manual" ? "开始分析" : "创建剧本";
     workbench.ui.uploadNotice = "";
     workbench.ui.toast = "";
+    render(workbench);
     if (
       scriptModalMode === "manual" &&
       (!hasStoryboardPromptPackagesForType(workbench, "genre") ||
         !hasStoryboardPromptPackagesForType(workbench, "emotion"))
     ) {
-      await syncStoryboardPromptPackages(workbench);
+      runLazyWorkbenchTask(workbench, "storyboard prompt packages", async () => {
+        await syncStoryboardPromptPackages(workbench);
+        render(workbench);
+      });
     }
-    render(workbench);
     return;
   }
 
@@ -9553,9 +9709,7 @@ function createDefaultCanvasProjectRecord(input = {}) {
 }
 
 function normalizeCanvasProjects(ui = {}) {
-  const projects = Array.isArray(ui.canvasProjects) && ui.canvasProjects.length
-    ? ui.canvasProjects
-    : [createDefaultCanvasProjectRecord()];
+  const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => createDefaultCanvasProjectRecord({
     id: project?.id ?? (index === 0 ? DEFAULT_CANVAS_PROJECT_ID : `canvas-project-${index + 1}`),
     title: project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`),
@@ -9570,6 +9724,16 @@ function syncActiveCanvasDocument(workbench) {
   }
   const projects = normalizeCanvasProjects(workbench.ui);
   workbench.ui.canvasProjects = projects;
+  if (!projects.length) {
+    workbench.ui.selectedCanvasProjectId = null;
+    workbench.ui.canvasDocument = null;
+    workbench.ui.canvasDocumentsByProject = {
+      ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+        ? workbench.ui.canvasDocumentsByProject
+        : {}),
+    };
+    return null;
+  }
   const selectedProjectId = projects.some((project) => project.id === workbench.ui.selectedCanvasProjectId)
     ? workbench.ui.selectedCanvasProjectId
     : projects[0]?.id ?? DEFAULT_CANVAS_PROJECT_ID;
@@ -9661,9 +9825,40 @@ async function loadProjectCanvasForActiveProject(workbench) {
   return true;
 }
 
+async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
+  const projectId = String(canvasProjectId ?? "").trim();
+  if (!projectId || typeof workbench.api?.getStandaloneCanvas !== "function") {
+    return false;
+  }
+  const payload = await workbench.api.getStandaloneCanvas(projectId);
+  const canvas = payload?.canvas ?? payload;
+  const document = canvas?.document && typeof canvas.document === "object"
+    ? canvas.document
+    : null;
+  if (!document) {
+    return false;
+  }
+  workbench.ui.activeCanvasBusinessProjectId = null;
+  workbench.ui.activeCanvasProjectId = canvas.canvasProjectId ?? document.canvasProjectId ?? projectId;
+  workbench.ui.selectedCanvasProjectId = projectId;
+  workbench.ui.canvasServerRevision = Number(canvas.serverRevision ?? 1) || 1;
+  workbench.ui.canvasSaveStatus = "idle";
+  workbench.ui.canvasSaveError = "";
+  workbench.ui.canvasDocumentsByProject = {
+    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+      ? workbench.ui.canvasDocumentsByProject
+      : {}),
+    [projectId]: document,
+  };
+  workbench.ui.canvasDocument = document;
+  return true;
+}
+
 function scheduleProjectCanvasSave(workbench, options = {}) {
-  const projectId = resolveActiveCanvasBusinessProjectId(workbench);
-  if (!projectId || typeof workbench.api?.saveProjectCanvas !== "function") {
+  const projectId = resolveActiveCanvasBusinessProjectId(workbench) ?? workbench.ui?.activeCanvasProjectId;
+  const canSaveProjectCanvas = Boolean(resolveActiveCanvasBusinessProjectId(workbench)) && typeof workbench.api?.saveProjectCanvas === "function";
+  const canSaveStandaloneCanvas = !resolveActiveCanvasBusinessProjectId(workbench) && typeof workbench.api?.saveStandaloneCanvas === "function";
+  if (!projectId || (!canSaveProjectCanvas && !canSaveStandaloneCanvas)) {
     return;
   }
   const document = workbench.ui?.canvasDocument;
@@ -9686,8 +9881,15 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
 }
 
 async function saveProjectCanvasNow(workbench) {
-  const projectId = resolveActiveCanvasBusinessProjectId(workbench);
-  if (!projectId || typeof workbench.api?.saveProjectCanvas !== "function") {
+  const businessProjectId = resolveActiveCanvasBusinessProjectId(workbench);
+  const projectId = businessProjectId ?? workbench.ui?.activeCanvasProjectId;
+  if (!projectId) {
+    return null;
+  }
+  const saveCanvas = businessProjectId
+    ? workbench.api?.saveProjectCanvas
+    : workbench.api?.saveStandaloneCanvas;
+  if (typeof saveCanvas !== "function") {
     return null;
   }
   if (workbench.canvasSaveTimer) {
@@ -9699,7 +9901,7 @@ async function saveProjectCanvasNow(workbench) {
     return null;
   }
   const revision = Number(workbench.ui.canvasServerRevision ?? 1) || 1;
-  const savePromise = workbench.api.saveProjectCanvas(projectId, {
+  const savePromise = saveCanvas.call(workbench.api, projectId, {
     clientRevision: revision,
     document,
     events: [],
@@ -9718,7 +9920,7 @@ async function saveProjectCanvasNow(workbench) {
         [projectId]: canvas.document,
       };
     }
-    workbench.ui.activeCanvasBusinessProjectId = projectId;
+    workbench.ui.activeCanvasBusinessProjectId = businessProjectId ?? null;
     workbench.ui.activeCanvasProjectId = canvas?.canvasProjectId ?? workbench.ui.activeCanvasProjectId ?? null;
     workbench.ui.canvasServerRevision = Number(canvas?.serverRevision ?? revision) || revision;
     workbench.ui.canvasSaveStatus = "saved";
@@ -9794,7 +9996,7 @@ function deleteCanvasProject(workbench, projectId) {
   const projects = normalizeCanvasProjects(workbench.ui);
   const removedIndex = projects.findIndex((project) => project.id === targetId);
   const nextProjects = projects.filter((project) => project.id !== targetId);
-  workbench.ui.canvasProjects = nextProjects.length ? nextProjects : [createDefaultCanvasProjectRecord()];
+  workbench.ui.canvasProjects = nextProjects;
   const documentsByProject = {
     ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
       ? workbench.ui.canvasDocumentsByProject
@@ -9805,7 +10007,7 @@ function deleteCanvasProject(workbench, projectId) {
   if (workbench.ui.selectedCanvasProjectId === targetId) {
     workbench.ui.selectedCanvasProjectId =
       workbench.ui.canvasProjects[Math.min(Math.max(removedIndex, 0), workbench.ui.canvasProjects.length - 1)]?.id ??
-      DEFAULT_CANVAS_PROJECT_ID;
+      null;
   }
   syncActiveCanvasDocument(workbench);
   workbench.ui.canvasProjectView = "list";
@@ -10332,6 +10534,65 @@ function startCanvasNodeDrag(workbench, event, nodeElement) {
 
   ownerDocument.addEventListener(moveEventName, onPointerMove);
   ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function startCanvasUploadNodeLongPressDrag(workbench, event, nodeElement) {
+  if (!nodeElement || event.button !== 0) {
+    return;
+  }
+  const ownerDocument = nodeElement.ownerDocument ?? document;
+  const startClient = { x: event.clientX, y: event.clientY };
+  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
+  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
+  const cancelEventName = event.type === "pointerdown" ? "pointercancel" : "mouseleave";
+  let dragStarted = false;
+  let timer = null;
+  workbench.canvasPointerHandledAt = Date.now();
+
+  const cleanup = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    ownerDocument.removeEventListener(moveEventName, onPointerMove);
+    ownerDocument.removeEventListener(upEventName, onPointerUp);
+    ownerDocument.removeEventListener(cancelEventName, onPointerCancel);
+  };
+
+  const beginDrag = () => {
+    if (dragStarted) {
+      return;
+    }
+    dragStarted = true;
+    cleanup();
+    workbench.canvasPointerHandledAt = Date.now();
+    workbench.ui.lastCanvasNodeDrag = {
+      nodeId: nodeElement.dataset?.canvasNodeId ?? "",
+      at: Date.now(),
+    };
+    startCanvasNodeDrag(workbench, event, nodeElement);
+  };
+
+  const onPointerMove = (moveEvent) => {
+    const dx = moveEvent.clientX - startClient.x;
+    const dy = moveEvent.clientY - startClient.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) {
+      beginDrag();
+    }
+  };
+
+  const onPointerUp = () => {
+    cleanup();
+  };
+
+  const onPointerCancel = () => {
+    cleanup();
+  };
+
+  timer = setTimeout(beginDrag, CANVAS_UPLOAD_LONG_PRESS_DRAG_MS);
+  ownerDocument.addEventListener(moveEventName, onPointerMove);
+  ownerDocument.addEventListener(upEventName, onPointerUp, { once: true });
+  ownerDocument.addEventListener(cancelEventName, onPointerCancel, { once: true });
 }
 
 function startCanvasNodeResize(workbench, event, resizeHandle) {
@@ -10946,7 +11207,6 @@ function installCreditBalanceRefresh(workbench) {
   if (typeof window === "undefined" || typeof workbench?.api?.getSession !== "function") {
     return;
   }
-  void refreshSessionCreditBalance(workbench, { renderOnChange: true });
   if (typeof window.setInterval === "function") {
     workbench.creditRefreshTimer = window.setInterval(() => {
       void refreshSessionCreditBalance(workbench, { renderOnChange: true });
@@ -11760,6 +12020,18 @@ async function runAction(workbench, message, action, options = {}) {
 
 export async function handleWorkbenchActionForTest(workbench, target) {
   return handleAction(workbench, target);
+}
+
+export async function refreshProductionWorkbenchForTest(workbench) {
+  return refresh(workbench);
+}
+
+export async function syncCanvasProjectsFromApiForTest(workbench) {
+  return syncCanvasProjectsFromApi(workbench);
+}
+
+export function syncWorkbenchHashRouteForTest(workbench, hash) {
+  return syncWorkbenchHashRoute(workbench, hash);
 }
 
 export function mapEpisodeStoryboardContractForTest(storyboard) {
@@ -21947,14 +22219,33 @@ async function buildOfficialAssetImportPayload(workbench, record, assetKind) {
   };
 }
 
-async function syncProjectLibraryFromApi(workbench) {
+async function syncProjectLibraryFromApi(workbench, options = {}) {
   const payload = await workbench.api.getProjects();
   const projects = Array.isArray(payload.projects)
     ? payload.projects.map((project) => mapProjectRecordToCard(project))
     : [];
   workbench.ui.projectLibrary = projects;
   syncSelectedProjectCard(workbench, projects);
-  await syncProjectLibraryAssets(workbench);
+  if (options.includeAssets !== false) {
+    await syncProjectLibraryAssets(workbench);
+  }
+}
+
+function runLazyWorkbenchTask(workbench, label, task) {
+  void Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      console.warn(`[workbench] ${label} failed`, error);
+      if (!workbench?.ui) {
+        return;
+      }
+      if (label === "project styles") {
+        workbench.ui.projectStyles = [];
+      }
+      if (label === "storyboard prompt packages") {
+        workbench.ui.storyboardPromptPackages = [];
+      }
+    });
 }
 
 async function refreshProjectLibraryIfAvailable(workbench) {
@@ -21989,7 +22280,7 @@ async function syncCanvasProjectsFromApi(workbench) {
     if (remoteProjects.length) {
       workbench.ui.canvasProjects = remoteProjects;
     } else {
-      workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
+      workbench.ui.canvasProjects = [];
     }
   } catch (error) {
     workbench.ui.toast = `画布项目同步失败：${friendlyError(error)}`;
@@ -22035,13 +22326,15 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
 
   workbench.ui.libraryLoading = true;
   workbench.ui.libraryError = "";
+  const requestInput = {
+    scope,
+    category: workbench.ui.libraryCategory,
+    folder: workbench.ui.libraryFolder,
+    query: workbench.ui.libraryQuery,
+  };
+  const cacheKey = assetLibraryCacheKey(requestInput);
   try {
-    const payload = await workbench.api.getLibraryAssets({
-      scope,
-      category: workbench.ui.libraryCategory,
-      folder: workbench.ui.libraryFolder,
-      query: workbench.ui.libraryQuery,
-    });
+    const payload = await loadAssetLibraryPayload(workbench, cacheKey, requestInput);
     if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
       return;
     }
@@ -22064,6 +22357,46 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
       workbench.ui.libraryLoading = false;
     }
   }
+}
+
+function assetLibraryCacheKey(input = {}) {
+  return [
+    input.scope ?? "",
+    input.category ?? "",
+    input.folder ?? "",
+    String(input.query ?? "").trim(),
+  ].join("\u001f");
+}
+
+async function loadAssetLibraryPayload(workbench, cacheKey, requestInput) {
+  const now = Date.now();
+  const cached = workbench.assetLibraryCache?.get?.(cacheKey);
+  if (cached && now - Number(cached.createdAt ?? 0) < ASSET_LIBRARY_CACHE_TTL_MS) {
+    return cached.payload;
+  }
+  if (!workbench.assetLibraryInFlight) {
+    workbench.assetLibraryInFlight = new Map();
+  }
+  const pending = workbench.assetLibraryInFlight.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+  const request = workbench.api.getLibraryAssets(requestInput)
+    .then((payload) => {
+      if (!workbench.assetLibraryCache) {
+        workbench.assetLibraryCache = new Map();
+      }
+      workbench.assetLibraryCache.set(cacheKey, {
+        createdAt: Date.now(),
+        payload,
+      });
+      return payload;
+    })
+    .finally(() => {
+      workbench.assetLibraryInFlight?.delete?.(cacheKey);
+    });
+  workbench.assetLibraryInFlight.set(cacheKey, request);
+  return request;
 }
 
 function shouldFetchAssetLibrary(workbench) {

@@ -353,6 +353,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
 async function ensureStandaloneCanvasProjectSchema(db: SqlDatabase) {
   await db.query("ALTER TABLE creator_canvas_projects ALTER COLUMN project_id DROP NOT NULL");
+  await db.query("ALTER TABLE creator_canvas_documents ALTER COLUMN project_id DROP NOT NULL");
   if (await creatorCanvasProjectIndexCurrent(db)) {
     return;
   }

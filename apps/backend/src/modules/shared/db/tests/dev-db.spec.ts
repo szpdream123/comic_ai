@@ -355,9 +355,9 @@ async function dropSchema(connectionString: string, schemaName: string) {
 }
 
 function requiredPostgresConnectionString() {
-  const connectionString = process.env.TEST_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
+  const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    throw new Error("TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL database tests");
+    throw new Error("DATABASE_URL is required for PostgreSQL database tests");
   }
   return connectionString;
 }

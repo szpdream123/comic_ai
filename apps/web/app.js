@@ -1,5 +1,5 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
-import { initProductionWorkbench } from "./src/features/production-workbench/index.js?liquid-ether=12";
+import { initProductionWorkbench } from "./src/features/production-workbench/index.js?liquid-ether=13";
 
 const root = document.querySelector("#creator-app");
 const loginUrl =
@@ -39,14 +39,40 @@ async function bootstrap() {
       window.location.href = loginUrl;
       return;
     }
-    root.innerHTML = `
-      <section class="workbench-fatal">
-        <h1>工作台加载失败</h1>
-        <p>${message === "request_timeout" ? "请求超时，请确认本地服务已启动后重试。" : message}</p>
-        <a href="${loginUrl}">返回登录</a>
-      </section>
-    `;
+    await initProductionWorkbench({
+      root,
+      session: {
+        authenticated: false,
+        user: {
+          id: "",
+          phone: "",
+        },
+        bootstrapError: message,
+      },
+      api: createRecoverableApi(creatorApi, message),
+      onLogout: async () => {
+        await creatorApi.logout().catch(() => undefined);
+        clearCreatorBrowserStorage();
+        window.location.replace(loginUrl);
+      },
+    });
   }
+}
+
+function createRecoverableApi(api, bootstrapError) {
+  return new Proxy(api, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === "getSession") {
+        return async () => ({
+          authenticated: false,
+          user: { id: "", phone: "" },
+          bootstrapError,
+        });
+      }
+      return value;
+    },
+  });
 }
 
 function clearCreatorBrowserStorage() {

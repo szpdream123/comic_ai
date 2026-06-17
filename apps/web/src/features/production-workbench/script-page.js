@@ -37,6 +37,7 @@ const SCRIPT_SORT_OPTIONS = [
 ];
 
 export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
+  state = state && typeof state === "object" ? state : {};
   const scriptRecord = state.projectDetail?.script ?? state.script ?? null;
   const detailScripts = Array.isArray(state.projectDetail?.scripts) ? state.projectDetail.scripts : [];
   const libraryScripts = Array.isArray(ui.scriptLibraryRecords) ? ui.scriptLibraryRecords : [];

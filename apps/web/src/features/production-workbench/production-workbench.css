@@ -48,6 +48,36 @@
   color: var(--glow-tint);
 }
 
+.workbench-page-error {
+  display: flex;
+  min-height: min(34rem, calc(100dvh - 9rem));
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.workbench-page-error h2 {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 1.35rem;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+.workbench-page-error p {
+  max-width: 42rem;
+  margin: 0 auto;
+}
+
+.workbench-page-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
 .production-workbench {
   position: relative;
   z-index: 2;
@@ -1448,6 +1478,7 @@
   position: absolute;
   inset: 0;
   z-index: 1;
+  pointer-events: none;
   background:
     radial-gradient(circle at 52% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.28) 35rem),
     linear-gradient(180deg, oklch(0% 0 0 / 0.1), oklch(0% 0 0 / 0.64));

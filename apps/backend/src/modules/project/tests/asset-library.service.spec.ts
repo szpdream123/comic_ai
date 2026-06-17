@@ -127,6 +127,50 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
+  it("skips replaying official seed writes when the seed is current", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenantAndProject(db);
+      await ensureDefaultOfficialLibraryAssets(db, {
+        now: new Date("2026-05-23T09:01:30.000Z"),
+      });
+
+      let queryCount = 0;
+      const countingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+          queryCount += 1;
+          return db.query<T>(sql, params);
+        },
+      };
+
+      await ensureDefaultOfficialLibraryAssets(countingDb, {
+        now: new Date("2026-05-23T09:02:30.000Z"),
+      });
+
+      const officialCounts = await db.query<{ assets: number; versions: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM library_assets WHERE scope = 'official') AS assets,
+            (
+              SELECT count(*)::int
+              FROM library_asset_versions lav
+              JOIN library_assets la ON la.id = lav.library_asset_id
+              WHERE la.scope = 'official'
+            ) AS versions
+        `,
+      );
+
+      assert.equal(queryCount, 0);
+      assert.deepEqual(officialCounts.rows[0], {
+        assets: 136,
+        versions: 136,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("seeds every official role scene and prop with generated raster previews", async () => {
     const db = await createMigratedTestDb();
 

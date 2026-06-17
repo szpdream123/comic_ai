@@ -22,6 +22,7 @@ import {
   sanitizeEpisodeWorkbenchSelection,
   findProjectCoverInput,
   renderProductionWorkbench,
+  syncCanvasProjectsFromApiForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
   uploadProjectCoverFile,
@@ -11924,14 +11925,13 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /canvas-project-gallery/);
-    assert.match(html, /全部画布\(1\)/);
-    assert.match(html, /画布项目/);
+    assert.match(html, /全部画布\(0\)/);
     assert.match(html, /请输入项目名称/);
-    assert.match(html, /data-action="open-canvas-project"/);
+    assert.doesNotMatch(html, /data-action="open-canvas-project"/);
     assert.match(html, /data-action="create-canvas-project"/);
-    assert.match(html, /创建时间：2026\/06\/10/);
-    assert.match(html, /canvas-project-card-actions/);
-    assert.match(html, /data-action="toggle-canvas-project-menu"/);
+    assert.doesNotMatch(html, /创建时间：2026\/06\/10/);
+    assert.doesNotMatch(html, /canvas-project-card-actions/);
+    assert.doesNotMatch(html, /data-action="toggle-canvas-project-menu"/);
     assert.doesNotMatch(html, /创建人：/);
     assert.match(html, /创建画布/);
     assert.doesNotMatch(html, /canvas-workspace/);
@@ -11960,6 +11960,43 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /全部画布\(2\)/);
     assert.doesNotMatch(html, /共 \d+ 节点/);
+  });
+
+  it("keeps the canvas gallery empty when the backend returns no projects", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async getCanvasProjects() {
+          return { projects: [] };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [{ id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" }],
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasDocument: createDefaultCanvasDocument({ projectId: "canvas-project-main" }),
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await syncCanvasProjectsFromApiForTest(workbench);
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: workbench.ui,
+    });
+
+    assert.deepEqual(workbench.ui.canvasProjects, []);
+    assert.equal(workbench.ui.selectedCanvasProjectId, null);
+    assert.equal(workbench.ui.canvasDocument, null);
+    assert.match(html, /全部画布\(0\)/);
+    assert.doesNotMatch(html, /data-action="open-canvas-project"/);
   });
 
   it("creates a real canvas project from the gallery create button", async () => {
@@ -12004,11 +12041,11 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(workbench.ui.canvasProjectView, "detail");
-    assert.equal(workbench.ui.canvasProjects.length, 2);
-    assert.deepEqual(apiCalls, [["create", { title: "画布项目 2", status: "草稿" }]]);
-    assert.equal(workbench.ui.canvasProjects[1].id, "remote-canvas-2");
-    assert.match(workbench.ui.canvasProjects[1].title, /画布项目 2/);
-    assert.equal(workbench.ui.selectedCanvasProjectId, workbench.ui.canvasProjects[1].id);
+    assert.equal(workbench.ui.canvasProjects.length, 1);
+    assert.deepEqual(apiCalls, [["create", { title: "画布项目 1", status: "草稿" }]]);
+    assert.equal(workbench.ui.canvasProjects[0].id, "remote-canvas-2");
+    assert.match(workbench.ui.canvasProjects[0].title, /画布项目 1/);
+    assert.equal(workbench.ui.selectedCanvasProjectId, workbench.ui.canvasProjects[0].id);
     assert.ok(workbench.ui.canvasDocumentsByProject[workbench.ui.selectedCanvasProjectId]);
     assert.equal(workbench.ui.canvasDocument.projectId, workbench.ui.selectedCanvasProjectId);
   });
@@ -12020,6 +12057,9 @@ describe("production workbench project tab", () => {
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "list",
+        canvasProjects: [
+          { id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" },
+        ],
         canvasProjectMenuId: "canvas-project-main",
       }),
     });
@@ -12051,6 +12091,9 @@ describe("production workbench project tab", () => {
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "list",
+        canvasProjects: [
+          { id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" },
+        ],
         renameCanvasProjectId: "canvas-project-main",
         renameCanvasProjectName: "迷雾世界-第一卷",
       }),
@@ -12114,6 +12157,47 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasProjects[0].id, "canvas-project-main");
     assert.equal(workbench.ui.canvasDocumentsByProject["canvas-project-2"], undefined);
     assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-project-main");
+    assert.equal(workbench.ui.deleteCanvasProjectId, null);
+  });
+
+  it("does not recreate a placeholder when deleting the last canvas project", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async deleteCanvasProject(projectId) {
+          return { deletedProjectId: projectId };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [
+          { id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" },
+        ],
+        selectedCanvasProjectId: "canvas-project-main",
+        deleteCanvasProjectId: "canvas-project-main",
+        canvasDocumentsByProject: {
+          "canvas-project-main": { projectId: "canvas-project-main", nodes: [] },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "confirm-delete-canvas-project",
+      },
+    });
+
+    assert.deepEqual(workbench.ui.canvasProjects, []);
+    assert.equal(workbench.ui.canvasDocumentsByProject["canvas-project-main"], undefined);
+    assert.equal(workbench.ui.selectedCanvasProjectId, null);
+    assert.equal(workbench.ui.canvasDocument, null);
     assert.equal(workbench.ui.deleteCanvasProjectId, null);
   });
 
@@ -12742,6 +12826,65 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(editorHtml, /value="gpt-image-2-cn"/);
   });
 
+  it("opens a standalone canvas project without requesting a business project canvas", async () => {
+    const apiCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async getProjectCanvas(projectId) {
+          apiCalls.push(["getProjectCanvas", projectId]);
+          throw new Error("standalone canvas must not load through project canvas");
+        },
+        async getStandaloneCanvas(canvasProjectId) {
+          apiCalls.push(["getStandaloneCanvas", canvasProjectId]);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 3,
+              document: {
+                version: 2,
+                canvasProjectId,
+                projectId: canvasProjectId,
+                viewport: { x: 12, y: 24, zoom: 0.8 },
+                nodes: [{ id: "persisted-node", type: "text", position: { x: 20, y: 40 }, data: { title: "已保存节点" } }],
+                edges: [],
+              },
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [{ id: "canvas-main", title: "画布项目", createdAt: "2026/06/17", status: "草稿" }],
+        selectedCanvasProjectId: "canvas-main",
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "open-canvas-project",
+        canvasProjectId: "canvas-main",
+      },
+    });
+
+    assert.deepEqual(apiCalls, [["getStandaloneCanvas", "canvas-main"]]);
+    assert.equal(workbench.ui.canvasProjectView, "detail");
+    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-main");
+    assert.equal(workbench.ui.activeCanvasBusinessProjectId, null);
+    assert.equal(workbench.ui.activeCanvasProjectId, "canvas-main");
+    assert.equal(workbench.ui.canvasDocument.projectId, "canvas-main");
+    assert.equal(workbench.ui.canvasDocument.nodes[0]?.id, "persisted-node");
+    assert.equal(workbench.ui.canvasServerRevision, 3);
+    assert.equal(workbench.ui.toast, "");
+  });
+
   it("loads backend image models for project-level canvas documents without a persisted episode", async () => {
     const episodeConfigCalls = [];
     const globalConfigCalls = [];
@@ -13187,6 +13330,25 @@ describe("production workbench project tab", () => {
     assert.match(mouseBlock, /\[data-canvas-node-resize-handle\]/);
     assert.match(mouseBlock, /\[contenteditable='true'\]/);
     assert.match(mouseBlock, /startCanvasNodeDrag\(workbench, event, canvasNodeTarget\)/);
+  });
+
+  it("supports long-press dragging empty canvas upload cards while preserving upload clicks", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const pointerBlock = source.match(/root\.addEventListener\("pointerdown"[\s\S]*?window\.addEventListener\("resize"/)?.[0] ?? "";
+    const longPressBlock = source.match(/function startCanvasUploadNodeLongPressDrag[\s\S]*?function startCanvasNodeResize/)?.[0] ?? "";
+
+    assert.match(source, /CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250/);
+    assert.match(pointerBlock, /uploadCardDragTarget/);
+    assert.match(pointerBlock, /\.canvas-upload-card/);
+    assert.match(pointerBlock, /startCanvasUploadNodeLongPressDrag\(workbench, event, canvasNodeTarget\)/);
+    assert.match(longPressBlock, /setTimeout\(beginDrag, CANVAS_UPLOAD_LONG_PRESS_DRAG_MS\)/);
+    assert.match(longPressBlock, /Math\.abs\(dx\) \+ Math\.abs\(dy\) > 6/);
+    assert.match(longPressBlock, /workbench\.ui\.lastCanvasNodeDrag/);
+    assert.match(longPressBlock, /startCanvasNodeDrag\(workbench, event, nodeElement\)/);
+    assert.match(longPressBlock, /onPointerUp[\s\S]*?cleanup\(\)/);
   });
 
   it("renders an inline text node title as a drag handle while the body stays editable", () => {
