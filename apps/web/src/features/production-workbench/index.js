@@ -2284,6 +2284,7 @@ async function refresh(workbench) {
   await syncScriptLibraryFromApi(workbench);
   await syncProjectStyles(workbench);
   await syncStoryboardPromptPackages(workbench);
+  await syncMembershipSurface(workbench);
   workbench.ui.exportHistory = workbench.state.project
     ? await loadExportHistory(workbench)
     : [];
@@ -2338,6 +2339,7 @@ async function refresh(workbench) {
     await loadTeamSurface(workbench);
   }
   if (workbench.ui.activeNavTab === "tools") {
+    await syncMembershipSurface(workbench);
     await syncCanvasProjectsFromApi(workbench);
     await ensureCanvasGenerationConfig(workbench, { force: true });
   }
@@ -2477,6 +2479,54 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "";
   return status === "experience_active" || status === "professional_active";
+}
+
+function hasActiveProfessionalTeamManagement(membershipStatus) {
+  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
+  const tier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
+  const entitlements = membershipStatus?.entitlements ?? membershipStatus?.membership?.entitlements ?? {};
+  const isProfessionalActive = status === "professional_active" || (!status && tier === "professional");
+  return isProfessionalActive && entitlements?.teamMemberManagement === true;
+}
+
+function effectiveTeamOverviewForMembership(workbench) {
+  const overview = workbench.ui.teamOverview ?? {};
+  if (!hasActiveProfessionalTeamManagement(workbench.ui.membershipStatus)) {
+    return overview;
+  }
+  const seats = overview?.seats ?? {};
+  const membershipStatus = workbench.ui.membershipStatus ?? {};
+  const membershipSeatLimit = Number(
+    membershipStatus?.team?.seatLimit ?? membershipStatus?.membership?.team?.seatLimit ?? 0,
+  );
+  const limit = Math.max(
+    Number(seats.limit ?? seats.total ?? 0),
+    Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
+  );
+  const used = Number(seats.used ?? 0);
+  return {
+    ...overview,
+    entitlements: {
+      ...(overview?.entitlements ?? {}),
+      teamMemberManagement: true,
+    },
+    seats: {
+      ...seats,
+      used,
+      limit,
+      remaining: limit > 0 ? Math.max(0, limit - used) : Number(seats.remaining ?? 0),
+    },
+    permissions: {
+      ...(overview?.permissions ?? {}),
+      canReadMembers: true,
+      canCreateMember: true,
+      canViewDashboard: true,
+    },
+  };
+}
+
+function isCanvasMembershipRequiredError(error) {
+  return String(error?.errorCode ?? "") === "canvas_membership_required";
 }
 
 function isSucceededPaymentIntent(paymentIntent, billingOrder) {
@@ -2704,6 +2754,28 @@ function startMembershipPaymentWatcher(workbench) {
   }, delayMs);
 }
 
+function requestPageRefreshAfterMembershipPaymentSuccess(workbench) {
+  if (workbench.membershipPaymentSuccessRefreshRequested) {
+    return;
+  }
+  workbench.membershipPaymentSuccessRefreshRequested = true;
+  if (typeof workbench.requestPageRefreshAfterMembershipPaymentSuccess === "function") {
+    workbench.requestPageRefreshAfterMembershipPaymentSuccess();
+    return;
+  }
+  if (typeof window === "undefined" || typeof window.location?.reload !== "function") {
+    return;
+  }
+  const setTimeoutFn = typeof window.setTimeout === "function"
+    ? window.setTimeout.bind(window)
+    : null;
+  if (setTimeoutFn) {
+    setTimeoutFn(() => window.location.reload(), 0);
+    return;
+  }
+  window.location.reload();
+}
+
 async function refreshMembershipPaymentStatus(workbench, { fromPoll = false } = {}) {
   const paymentIntentId = workbench.ui.lastPaymentIntent?.id ?? "";
   const orderId = workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
@@ -2740,17 +2812,15 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
 
   if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
     await refreshMembershipEntitlementSurfaces(workbench);
-    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
-      stopMembershipPaymentWatcher(workbench);
-      stopMembershipPaymentCountdown(workbench);
-      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
-      render(workbench, { preserveLibraryScroll: true });
-      return true;
-    }
-    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
-    startMembershipPaymentWatcher(workbench);
+    stopMembershipPaymentWatcher(workbench);
+    stopMembershipPaymentCountdown(workbench);
+    workbench.ui.toast = "";
+    await refreshSessionCreditBalance(workbench, { renderOnChange: false });
+    clearMembershipPaymentState(workbench);
+    workbench.ui.isLibraryPricingModalOpen = false;
     render(workbench, { preserveLibraryScroll: true });
-    return false;
+    requestPageRefreshAfterMembershipPaymentSuccess(workbench);
+    return true;
   }
 
   if (isExpiredMembershipPayment(workbench)) {
@@ -3847,6 +3917,34 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       try {
         task = await submitCanvasRunIfAvailable(workbench, { ...preview, creditCost });
       } catch (error) {
+        if (isCanvasMembershipRequiredError(error)) {
+          if (previousBalance !== null) {
+            setWorkbenchCreditBalance(workbench, previousBalance);
+          }
+          updateActiveCanvasDocument(workbench, updateCanvasNodeData(workbench.ui.canvasDocument, nodeId, {
+            status: "ready",
+            generationProgress: 0,
+            generationStage: "",
+            lastTaskId: null,
+            taskId: null,
+            generationTaskId: null,
+            platform: null,
+          }));
+          if (String(workbench.ui.canvasGeneratingNodeId ?? "") === nodeId) {
+            workbench.ui.canvasGeneratingNodeId = null;
+          }
+          workbench.ui.membershipStatus = { status: "none" };
+          workbench.ui.canvasEditorOpen = false;
+          workbench.ui.canvasRunPreview = null;
+          workbench.ui.isLibraryPricingModalOpen = true;
+          workbench.ui.toast = "";
+          await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
+          if (workbench.ui.membershipStatus == null) {
+            workbench.ui.membershipStatus = { status: "none" };
+          }
+          render(workbench);
+          return;
+        }
         if (previousBalance !== null) {
           setWorkbenchCreditBalance(workbench, previousBalance);
         }
@@ -4331,7 +4429,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench, { preserveLibraryScroll: true });
       return;
     }
-    workbench.ui.toast = "已同意付费会员服务协议，可继续扫码支付。";
     if (
       workbench.ui.lastPaymentIntent &&
       workbench.ui.lastBillingOrder &&
@@ -4410,14 +4507,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     await runAction(workbench, "正在创建会员支付订单...", async () => {
-      const { orderResponse, intentResponse } = await createMembershipPaymentQr(workbench, {
+      await createMembershipPaymentQr(workbench, {
         membershipPlanId,
         provider,
       });
-      const amountMinor = Number(intentResponse?.paymentIntent?.amountMinor ?? 0);
-      const amountLabel = amountMinor > 0 ? `¥${Math.round(amountMinor / 100)}` : "当前会员套餐";
-      workbench.ui.toast = `已生成会员支付二维码：${amountLabel}，订单号 ${intentResponse?.paymentIntent?.merchantOrderNo ?? orderResponse.order.orderNo}。`;
-    }, { successToast: "已创建会员支付意图，支付二维码已生成。" });
+      workbench.ui.toast = "";
+    }, { successToast: null });
     return;
   }
 
@@ -4529,6 +4624,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.teamMemberStatusFilter = "all";
     workbench.ui.toast = "已重置成员筛选条件。";
     render(workbench);
+    return;
+  }
+
+  if (action === "set-team-panel-tab") {
+    workbench.ui.teamPanelTab = target.dataset.teamPanelTab === "credits" ? "credits" : "members";
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
@@ -4747,13 +4849,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-team-member-create") {
-    const overview = workbench.ui.teamOverview;
+    const overview = effectiveTeamOverviewForMembership(workbench);
     if (overview?.entitlements?.teamMemberManagement !== true) {
       workbench.ui.isLibraryPricingModalOpen = true;
       render(workbench);
       return;
     }
-    if (Number(overview?.seats?.remaining ?? 0) <= 0) {
+    const seatLimit = Number(overview?.seats?.limit ?? overview?.seats?.total ?? 0);
+    const remainingSeats = Number(overview?.seats?.remaining ?? 0);
+    if (seatLimit > 0 && remainingSeats <= 0) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "团队席位已满，扩容后才能继续创建成员账号。";
       render(workbench);
@@ -5104,6 +5208,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await syncProjectLibraryFromApi(workbench);
     }
     if (workbench.ui.activeNavTab === "tools") {
+      await syncMembershipSurface(workbench);
       await syncCanvasProjectsFromApi(workbench);
     }
     if (workbench.ui.activeNavTab === "library") {
@@ -9660,6 +9765,13 @@ async function saveProjectCanvasNow(workbench) {
     workbench.ui.canvasSaveError = "";
     return canvas;
   } catch (error) {
+    if (isCanvasMembershipRequiredError(error)) {
+      workbench.ui.membershipStatus = { status: "none" };
+      workbench.ui.canvasSaveStatus = "idle";
+      workbench.ui.canvasSaveError = "";
+      render(workbench);
+      return null;
+    }
     if (error?.errorCode === "canvas_revision_conflict" && error?.details?.serverDocument) {
       workbench.ui.canvasDocument = error.details.serverDocument;
       workbench.ui.canvasDocumentsByProject = {
@@ -21905,6 +22017,11 @@ async function syncCanvasProjectsFromApi(workbench) {
       try {
         await loadProjectCanvasForActiveProject(workbench);
       } catch (error) {
+        if (isCanvasMembershipRequiredError(error)) {
+          workbench.ui.membershipStatus = { status: "none" };
+          syncActiveCanvasDocument(workbench);
+          return;
+        }
         workbench.ui.toast = `项目画布同步失败：${friendlyError(error)}`;
       }
     }
@@ -21927,6 +22044,11 @@ async function syncCanvasProjectsFromApi(workbench) {
       workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
     }
   } catch (error) {
+    if (isCanvasMembershipRequiredError(error)) {
+      workbench.ui.membershipStatus = { status: "none" };
+      syncActiveCanvasDocument(workbench);
+      return;
+    }
     workbench.ui.toast = `画布项目同步失败：${friendlyError(error)}`;
     workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
   }

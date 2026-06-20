@@ -72,6 +72,7 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       );
       assert.deepEqual(entitlements.rows, [
         { entitlement_key: "priority_generation", status: "active" },
+        { entitlement_key: "team_asset_library", status: "active" },
         { entitlement_key: "team_member_management", status: "active" },
       ]);
       assert.equal(Number(limits.rows[0]?.seat_limit), 50);
@@ -79,6 +80,98 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       assert.equal(outbox.rows[0]?.event_type, "membership.period.started");
       assert.equal(outbox.rows[0]?.payload_json.gift_credits, 51000);
       assert.equal(outbox.rows[0]?.payload_json.order_id, fixture.orderId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("activates every professional entitlement configured on the paid plan snapshot", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const fixture = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030041",
+        paymentIntentId: "97000000-0000-4000-8000-000000030041",
+        providerEventId: "98000000-0000-4000-8000-000000030041",
+        outboxEventId: "99000000-0000-4000-8000-000000030041",
+        plan: {
+          ...professionalPlan(),
+          entitlements: [
+            "canvas_access",
+            "priority_generation",
+            "team_asset_library",
+            "team_member_management",
+            "full_flow_agent",
+          ],
+        },
+        amountMinor: 29900,
+        paidAt: new Date("2026-06-08T08:00:00.000Z"),
+      });
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: fixture.event,
+        now: new Date("2026-06-08T08:05:00.000Z"),
+      });
+
+      const entitlements = await db.query<{ entitlement_key: string; status: string }>(
+        `
+          SELECT entitlement_key, status
+          FROM organization_entitlements
+          WHERE organization_id = $1
+          ORDER BY entitlement_key
+        `,
+        [organizationId],
+      );
+
+      assert.deepEqual(entitlements.rows, [
+        { entitlement_key: "canvas_access", status: "active" },
+        { entitlement_key: "full_flow_agent", status: "active" },
+        { entitlement_key: "priority_generation", status: "active" },
+        { entitlement_key: "team_asset_library", status: "active" },
+        { entitlement_key: "team_member_management", status: "active" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps professional entitlements limited to the paid plan configuration", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const limitedPlan = {
+        ...professionalPlan(),
+        entitlements: ["team_member_management", "priority_generation"],
+      };
+      const fixture = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030051",
+        paymentIntentId: "97000000-0000-4000-8000-000000030051",
+        providerEventId: "98000000-0000-4000-8000-000000030051",
+        outboxEventId: "99000000-0000-4000-8000-000000030051",
+        plan: limitedPlan,
+        amountMinor: 29900,
+        paidAt: new Date("2026-06-08T08:00:00.000Z"),
+      });
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: fixture.event,
+        now: new Date("2026-06-08T08:05:00.000Z"),
+      });
+
+      const entitlements = await db.query<{ entitlement_key: string; status: string }>(
+        `
+          SELECT entitlement_key, status
+          FROM organization_entitlements
+          WHERE organization_id = $1
+          ORDER BY entitlement_key
+        `,
+        [organizationId],
+      );
+
+      assert.deepEqual(entitlements.rows, [
+        { entitlement_key: "priority_generation", status: "active" },
+        { entitlement_key: "team_member_management", status: "active" },
+      ]);
     } finally {
       await db.close();
     }
@@ -137,7 +230,7 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         [organizationId],
       );
       const professionalEntitlements = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key IN ('priority_generation', 'team_member_management')",
+        "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')",
         [organizationId],
       );
       const limits = await db.query<{ count: number }>(
@@ -164,7 +257,7 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
     }
   });
 
-  it("expires payment professional entitlements when an experience payment becomes current", async () => {
+  it("keeps active professional membership current when a later experience payment succeeds", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -196,8 +289,12 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         now: new Date("2026-06-09T08:05:00.000Z"),
       });
 
-      const subscription = await db.query<{ status: string; current_tier: string | null }>(
-        "SELECT status, current_tier FROM organization_membership_subscriptions WHERE organization_id = $1",
+      const subscription = await db.query<{
+        status: string;
+        current_tier: string | null;
+        current_period_end_at: Date | string | null;
+      }>(
+        "SELECT status, current_tier, current_period_end_at FROM organization_membership_subscriptions WHERE organization_id = $1",
         [organizationId],
       );
       const activeProfessionalEntitlements = await db.query<{ count: number }>(
@@ -205,16 +302,130 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
           SELECT count(*)::int AS count
           FROM organization_entitlements
           WHERE organization_id = $1
-            AND entitlement_key IN ('priority_generation', 'team_member_management')
+            AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')
             AND status = 'active'
             AND (expires_at IS NULL OR expires_at > $2)
         `,
         [organizationId, new Date("2026-06-09T08:05:00.000Z")],
       );
+      const periods = await db.query<{ tier: string; status: string }>(
+        `
+          SELECT tier, status
+          FROM membership_periods
+          WHERE organization_id = $1
+          ORDER BY tier
+        `,
+        [organizationId],
+      );
+      assert.equal(subscription.rows[0]?.status, "professional_active");
+      assert.equal(subscription.rows[0]?.current_tier, "professional");
+      assert.equal(
+        new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
+        "2026-07-08T08:00:00.000Z",
+      );
+      assert.equal(activeProfessionalEntitlements.rows[0]?.count, 3);
+      assert.deepEqual(periods.rows, [
+        { tier: "experience", status: "active" },
+        { tier: "professional", status: "active" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
 
-      assert.equal(subscription.rows[0]?.status, "experience_active");
-      assert.equal(subscription.rows[0]?.current_tier, "experience");
-      assert.equal(activeProfessionalEntitlements.rows[0]?.count, 0);
+  it("does not keep downgrading an organization that already has a professional period but an experience current tier", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const professional = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030301",
+        paymentIntentId: "97000000-0000-4000-8000-000000030301",
+        providerEventId: "98000000-0000-4000-8000-000000030301",
+        outboxEventId: "99000000-0000-4000-8000-000000030301",
+        plan: professionalPlan(),
+        amountMinor: 500000,
+        paidAt: new Date("2026-06-08T08:00:00.000Z"),
+      });
+      const experience = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030302",
+        paymentIntentId: "97000000-0000-4000-8000-000000030302",
+        providerEventId: "98000000-0000-4000-8000-000000030302",
+        outboxEventId: "99000000-0000-4000-8000-000000030302",
+        plan: experiencePlan(),
+        amountMinor: 9900,
+        paidAt: new Date("2026-06-10T08:00:00.000Z"),
+      });
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: professional.event,
+        now: new Date("2026-06-08T08:05:00.000Z"),
+      });
+      await db.query(
+        `
+          UPDATE organization_membership_subscriptions
+          SET status = 'experience_active',
+              current_tier = 'experience',
+              current_period_end_at = '2026-06-16T08:00:00.000Z'
+          WHERE organization_id = $1
+        `,
+        [organizationId],
+      );
+      await db.query(
+        `
+          UPDATE organization_entitlements
+          SET status = 'expired',
+              expires_at = '2026-06-09T08:00:00.000Z'
+          WHERE organization_id = $1
+            AND source = 'payment'
+        `,
+        [organizationId],
+      );
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: experience.event,
+        now: new Date("2026-06-10T08:05:00.000Z"),
+      });
+
+      const subscription = await db.query<{
+        status: string;
+        current_tier: string | null;
+        current_period_end_at: Date | string | null;
+      }>(
+        "SELECT status, current_tier, current_period_end_at FROM organization_membership_subscriptions WHERE organization_id = $1",
+        [organizationId],
+      );
+      const periods = await db.query<{ tier: string; status: string }>(
+        `
+          SELECT tier, status
+          FROM membership_periods
+          WHERE organization_id = $1
+          ORDER BY tier, period_end_at
+        `,
+        [organizationId],
+      );
+      const activeProfessionalEntitlements = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM organization_entitlements
+          WHERE organization_id = $1
+            AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')
+            AND status = 'active'
+            AND (expires_at IS NULL OR expires_at > $2)
+        `,
+        [organizationId, new Date("2026-06-10T08:05:00.000Z")],
+      );
+
+      assert.equal(subscription.rows[0]?.status, "professional_active");
+      assert.equal(subscription.rows[0]?.current_tier, "professional");
+      assert.equal(
+        new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
+        "2026-07-08T08:00:00.000Z",
+      );
+      assert.deepEqual(periods.rows, [
+        { tier: "experience", status: "active" },
+        { tier: "professional", status: "active" },
+      ]);
+      assert.equal(activeProfessionalEntitlements.rows[0]?.count, 3);
     } finally {
       await db.close();
     }
@@ -232,7 +443,7 @@ function professionalPlan() {
     amountMinor: 500000,
     giftCredits: 51000,
     seatLimit: 50,
-    entitlements: ["team_member_management", "priority_generation"],
+    entitlements: ["team_member_management", "team_asset_library", "priority_generation"],
     priorityRules: { modelFamilies: ["seedance"] },
     displayMetadata: { sortOrder: 20 },
   };
@@ -248,7 +459,7 @@ function experiencePlan() {
     periodCount: 7,
     amountMinor: 9900,
     giftCredits: 800,
-    seatLimit: 1,
+    seatLimit: 0,
     entitlements: [],
     priorityRules: {},
     displayMetadata: { sortOrder: 10 },

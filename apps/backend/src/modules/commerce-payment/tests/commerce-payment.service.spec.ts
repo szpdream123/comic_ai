@@ -207,6 +207,99 @@ describe("commerce payment service", { concurrency: false }, () => {
     }
   });
 
+  it("snapshots credit package gift credits without creating membership entitlements", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const giftPackageId = "90000000-0000-4000-8000-000000000901";
+      await db.query(
+        `
+          INSERT INTO credit_packages (
+            id,
+            code,
+            display_name,
+            subtitle,
+            credits,
+            gift_credits,
+            amount_minor,
+            currency,
+            badge,
+            sort_order,
+            metadata_json,
+            status
+          )
+          VALUES (
+            $1,
+            'gift_credits_120',
+            'Gift Credits 120',
+            'Base 100 plus 20 bonus',
+            100,
+            20,
+            9900,
+            'CNY',
+            'recommended',
+            10,
+            '{"accent":"mint"}'::jsonb,
+            'active'
+          )
+        `,
+        [giftPackageId],
+      );
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: giftPackageId },
+        idempotencyKey: "order-key-gift-credits",
+        now: new Date("2026-05-21T08:30:00.000Z"),
+      });
+
+      assert.equal(orderResponse.status, 200);
+      assert.equal(orderResponse.body.order.productType, "credit_package");
+      assert.equal(orderResponse.body.order.creditPackageId, giftPackageId);
+      assert.equal(orderResponse.body.order.membershipPlanId, null);
+      assert.equal(orderResponse.body.order.credits, 120);
+      assert.deepEqual(orderResponse.body.order.productSnapshot, {
+        code: "gift_credits_120",
+        displayName: "Gift Credits 120",
+        subtitle: "Base 100 plus 20 bonus",
+        baseCredits: 100,
+        giftCredits: 20,
+        credits: 120,
+        amountMinor: 9900,
+        currency: "CNY",
+        badge: "recommended",
+        sortOrder: 10,
+        metadata: { accent: "mint" },
+      });
+
+      const membershipPeriods = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM membership_periods WHERE organization_id = $1",
+        [organizationId],
+      );
+      const subscriptions = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM organization_membership_subscriptions WHERE organization_id = $1",
+        [organizationId],
+      );
+      const entitlements = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1",
+        [organizationId],
+      );
+
+      assert.equal(membershipPeriods.rows[0]?.count, 0);
+      assert.equal(subscriptions.rows[0]?.count, 0);
+      assert.equal(entitlements.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("creates a PayLab payment intent through the provider adapter and replays idempotently", async () => {
     const db = await createMigratedTestDb();
 

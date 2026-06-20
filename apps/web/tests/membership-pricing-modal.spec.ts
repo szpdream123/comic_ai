@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { renderPricingModal } from "../src/features/library-team/pricing-modal.js";
@@ -381,6 +382,123 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /data-plan-tier="experience"/);
   assert.match(html, /data-plan-tier="professional"/);
   assert.match(html, /request-enterprise-contact/);
+});
+
+test("uses subscription copy and canvas benefit for every membership tier", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-experience",
+        code: "experience_weekly",
+        displayName: "体验版",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 300,
+      },
+      {
+        id: "plan-pro-month",
+        code: "professional_monthly",
+        displayName: "专业版月卡",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 29900,
+        currency: "CNY",
+        giftCredits: 3000,
+      },
+    ],
+  });
+
+  assert.equal((html.match(/立即订阅/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /立即购买/);
+  assert.equal((html.match(/可使用画布功能/g) ?? []).length, 3);
+  assert.match(html, /data-action="purchase-membership-plan"/);
+  assert.match(html, /data-action="request-enterprise-contact"/);
+});
+
+test("renders membership benefits from backend display metadata before fallback copy", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-pro-month",
+        code: "专业版月卡299",
+        displayName: "专业版会员套餐",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 29900,
+        currency: "CNY",
+        giftCredits: 3000,
+        displayMetadata: {
+          note: "后台配置的专业会员权益说明",
+          features: [
+            "可使用画布功能",
+            "Seedance 2.0 优先排队",
+            "团队成员管理",
+            "全流程 Agent",
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.match(html, /专业版会员套餐/);
+  assert.match(html, /¥299/);
+  assert.match(html, /3,000 会员积分/);
+  assert.match(html, /后台配置的专业会员权益说明/);
+  assert.match(html, /可使用画布功能/);
+  assert.match(html, /Seedance 2\.0 优先排队/);
+  assert.match(html, /团队成员管理/);
+  assert.match(html, /全流程 Agent/);
+  assert.doesNotMatch(html, /支持 50 人团队/);
+});
+
+test("filters known membership benefits when backend entitlements do not include them", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-experience",
+        code: "experience",
+        displayName: "Experience",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 100,
+        entitlements: ["canvas_access"],
+        displayMetadata: {
+          features: [
+            "可使用画布功能",
+            "团队成员管理",
+            "自定义运营文案",
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.match(html, /可使用画布功能/);
+  assert.match(html, /自定义运营文案/);
+  assert.doesNotMatch(html, /团队成员管理/);
+});
+
+test("keeps membership pricing card actions on the same horizontal row", () => {
+  const css = readFileSync(
+    new URL("../src/features/library-team/library-team.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*display:\s*grid/);
+  assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*grid-template-rows:\s*auto\s+auto\s+auto\s+auto\s+minmax\(3\.4em,\s*auto\)\s+auto\s+1fr/);
+  assert.match(css, /\.library-team-badge\.is-placeholder\s*\{[\s\S]*visibility:\s*hidden/);
+  assert.match(css, /\.library-team-plan-card\s+\.library-team-button\s*\{[\s\S]*align-self:\s*end/);
 });
 
 test("ignores unsafe provider payment urls in the payment modal", () => {

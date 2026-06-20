@@ -87,7 +87,7 @@ export function resolveApiUrl(url) {
   const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
     window.location.host ?? "",
   );
-  const localBackendPort = /^(?:431\d|4320|4322|4399)$/.test(window.location.port ?? "");
+  const localBackendPort = /^(?:431\d|4320|4322|4325|4399)$/.test(window.location.port ?? "");
   const shouldUseDevBackend =
     window.location.protocol === "file:" ||
     (backendOwnedPath && localHttpHost && !localBackendPort);

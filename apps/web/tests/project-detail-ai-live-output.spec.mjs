@@ -82,6 +82,13 @@ test("loading AI storyboard preview shows the active asset stage response", () =
   }
 });
 
+test("project workspace keeps the AI storyboard preview overlay mounted with global overlays", () => {
+  const html = renderLoadingPreview("character", "{\"characters\":[{\"name\":\"A\"}]}");
+
+  assert.match(html, /single-episode-ai-overlay/);
+  assert.match(html, /single-episode-ai-preview loading/);
+});
+
 test("project workspace renders action feedback as global status toast", () => {
   const successHtml = renderLoadingPreview("character", "{}", { toast: "已重命名为 新角色。" });
   const errorHtml = renderLoadingPreview("character", "{}", { toast: "删除失败：权限不足" });

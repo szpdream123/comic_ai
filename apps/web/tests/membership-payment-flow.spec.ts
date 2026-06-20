@@ -67,6 +67,9 @@ test("refreshing a credit package payment does not refresh membership entitlemen
 test("refreshing a paid membership payment refreshes the active entitlement surfaces", async () => {
   const calls = [];
   const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
     lastBillingOrder: {
       id: "order-membership-1",
       productType: "membership_plan",
@@ -139,13 +142,21 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
   ]);
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.teamMembers[0].userId, "member-1");
-  assert.match(workbench.ui.toast, /会员已开通/);
+  assert.equal(workbench.ui.toast, "");
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+  assert.equal(workbench.ui.pendingMembershipPlanId, "");
+  assert.equal(workbench.ui.lastBillingOrder, null);
+  assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
-test("paid membership payment keeps polling until membership entitlements become active", async () => {
+test("paid membership payment closes the qr flow and refreshes even before entitlement sync returns active", async () => {
   const calls = [];
-  const scheduledPolls = [];
+  const reloads = [];
   const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
     lastBillingOrder: {
       id: "order-membership-1",
       productType: "membership_plan",
@@ -157,6 +168,7 @@ test("paid membership payment keeps polling until membership entitlements become
       status: "submitted",
     },
     membershipPaymentQrCreatedAt: new Date().toISOString(),
+    membershipPaymentPolling: true,
   }, {
     async getBillingOrder(orderId) {
       calls.push(["getBillingOrder", orderId]);
@@ -191,8 +203,11 @@ test("paid membership payment keeps polling until membership entitlements become
       throw new Error("team_refresh_should_not_run");
     },
   });
+  workbench.requestPageRefreshAfterMembershipPaymentSuccess = () => {
+    reloads.push("reload");
+  };
   workbench.paymentPollSetTimeout = (callback, delayMs) => {
-    scheduledPolls.push({ callback, delayMs });
+    calls.push(["setTimeout", delayMs]);
     return { delayMs };
   };
   workbench.paymentPollClearTimeout = () => {};
@@ -206,10 +221,14 @@ test("paid membership payment keeps polling until membership entitlements become
   });
 
   assert.equal(workbench.ui.membershipStatus.status, "none");
-  assert.match(workbench.ui.toast, /正在同步会员权益/);
-  assert.doesNotMatch(workbench.ui.toast, /会员已开通/);
-  assert.equal(scheduledPolls.length, 1);
-  assert.equal(scheduledPolls[0].delayMs, 2000);
+  assert.equal(workbench.ui.toast, "");
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+  assert.equal(workbench.ui.pendingMembershipPlanId, "");
+  assert.equal(workbench.ui.lastBillingOrder, null);
+  assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.equal(workbench.ui.membershipPaymentPolling, false);
+  assert.deepEqual(reloads, ["reload"]);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
 test("membership payment countdown refreshes every second independently from payment polling", async () => {
@@ -335,6 +354,57 @@ test("unchecking the paid agreement hides the membership payment qr and pauses p
   assert.match(workbench.root.innerHTML, /data-payment-agreement-blocked/);
   assert.doesNotMatch(workbench.root.innerHTML, /library-team-qr-code/);
   assert.match(workbench.ui.toast, /同意付费会员服务协议/);
+});
+
+test("checking the paid agreement resumes polling without showing a success toast", async () => {
+  const scheduledPolls = [];
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
+    membershipPaymentAgreementAccepted: false,
+    membershipPaymentQrCreatedAt: new Date().toISOString(),
+    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    membershipPaymentPolling: false,
+    toast: "",
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+      provider: "wechat_pay",
+      amountMinor: 29900,
+      currency: "CNY",
+      merchantOrderNo: "MO-1",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-1",
+    },
+  });
+  workbench.paymentPollSetTimeout = (callback, delayMs) => {
+    scheduledPolls.push({ callback, delayMs });
+    return { delayMs };
+  };
+  workbench.paymentPollClearTimeout = () => {};
+
+  await handleWorkbenchActionForTest(workbench, {
+    checked: true,
+    dataset: {
+      action: "toggle-membership-payment-agreement",
+    },
+  });
+
+  assert.equal(workbench.ui.membershipPaymentAgreementAccepted, true);
+  assert.equal(scheduledPolls.length, 1);
+  assert.equal(workbench.ui.toast, "");
+  assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast success/);
 });
 
 test("creating a membership payment is blocked while the paid agreement is unchecked", async () => {

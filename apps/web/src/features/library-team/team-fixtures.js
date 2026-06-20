@@ -10,18 +10,18 @@ export const teamFixture = {
   members: [],
 };
 
-export const memberFilters = ["账号", "成员名称", "角色", "项目", "状态", "备注"];
+export const memberFilters = ["状态", "角色", "成员名称"];
 
 export const memberTableColumns = [
+  "",
+  "成员",
   "账号",
-  "成员名称",
   "角色",
-  "项目",
   "成员组",
+  "参与项目形式",
+  "当前积分",
   "状态",
-  "积分",
-  "备注",
-  "操作",
+  "自定义",
 ];
 
 export const dashboardDateShortcuts = ["今天", "昨天", "本周", "本月", "上月", "今年"];

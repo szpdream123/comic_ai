@@ -35,6 +35,7 @@ describe("foundation schema", () => {
         "payment_risk_events",
         "payment_reconciliation_runs",
         "payment_reconciliation_items",
+        "credit_wallet_transfers",
         "storage_objects",
         "organization_entitlements",
         "library_assets",
@@ -193,6 +194,154 @@ describe("foundation schema", () => {
         "created_at",
         "updated_at",
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("models configurable credit packages and team pool transfers", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      assert.deepEqual(await listColumnNames(db, "credit_packages"), [
+        "id",
+        "code",
+        "display_name",
+        "subtitle",
+        "credits",
+        "gift_credits",
+        "amount_minor",
+        "currency",
+        "badge",
+        "sort_order",
+        "metadata_json",
+        "status",
+        "valid_from",
+        "valid_until",
+        "created_at",
+        "updated_at",
+      ]);
+
+      assert.deepEqual(await listColumnNames(db, "credit_wallet_transfers"), [
+        "id",
+        "source_organization_id",
+        "target_organization_id",
+        "operator_user_id",
+        "amount",
+        "status",
+        "source_ledger_entry_id",
+        "target_ledger_entry_id",
+        "idempotency_key",
+        "failure_code",
+        "metadata_json",
+        "created_at",
+        "updated_at",
+      ]);
+
+      await db.query(`
+        INSERT INTO users (id, phone_e164, status)
+        VALUES ('00000000-0000-4000-8000-000000000301', '+8613800138301', 'active')
+      `);
+      await db.query(`
+        INSERT INTO organizations (id, name, status)
+        VALUES ('10000000-0000-4000-8000-000000000301', 'Transfer Out Org', 'active')
+      `);
+      await db.query(`
+        INSERT INTO organizations (id, name, status)
+        VALUES ('10000000-0000-4000-8000-000000000302', 'Transfer In Org', 'active')
+      `);
+      await db.query(`
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json
+        )
+        VALUES
+          (
+            '93000000-0000-4000-8000-000000000301',
+            '10000000-0000-4000-8000-000000000301',
+            'transfer_out',
+            50,
+            -50,
+            0,
+            0,
+            'credit_wallet_transfer',
+            '94000000-0000-4000-8000-000000000301',
+            'transfer to team pool',
+            '{}'::jsonb
+          ),
+          (
+            '93000000-0000-4000-8000-000000000302',
+            '10000000-0000-4000-8000-000000000302',
+            'transfer_in',
+            50,
+            50,
+            0,
+            0,
+            'credit_wallet_transfer',
+            '94000000-0000-4000-8000-000000000301',
+            'transfer from personal wallet',
+            '{}'::jsonb
+          )
+      `);
+      await db.query(`
+        INSERT INTO credit_wallet_transfers (
+          id,
+          source_organization_id,
+          target_organization_id,
+          operator_user_id,
+          amount,
+          status,
+          source_ledger_entry_id,
+          target_ledger_entry_id,
+          idempotency_key,
+          metadata_json
+        )
+        VALUES (
+          '94000000-0000-4000-8000-000000000301',
+          '10000000-0000-4000-8000-000000000301',
+          '10000000-0000-4000-8000-000000000302',
+          '00000000-0000-4000-8000-000000000301',
+          50,
+          'succeeded',
+          '93000000-0000-4000-8000-000000000301',
+          '93000000-0000-4000-8000-000000000302',
+          'transfer-key-1',
+          '{}'::jsonb
+        )
+      `);
+
+      await assert.rejects(
+        db.query(`
+          INSERT INTO credit_packages (
+            id,
+            code,
+            display_name,
+            credits,
+            gift_credits,
+            amount_minor,
+            currency,
+            status
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000301',
+            'negative_gift',
+            'Negative Gift',
+            100,
+            -1,
+            1000,
+            'CNY',
+            'active'
+          )
+        `),
+      );
     } finally {
       await db.close();
     }

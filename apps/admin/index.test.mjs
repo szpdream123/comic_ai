@@ -176,16 +176,17 @@ test("admin shell wires final design actions to real admin APIs", () => {
   new vm.Script(script);
 });
 
-test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
+test("admin shell uses same-origin API requests unless opened from a file URL", () => {
   for (const contract of [
     "function resolveAdminApiUrl",
-    "backendOwnedPath",
-    "isAlternateDevPort",
     '"http://127.0.0.1:4310"',
+    "window.location.protocol === \"file:\"",
+    "window.location.origin",
     "fetch(resolveAdminApiUrl(path)",
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
+  assert.doesNotMatch(script, /isAlternateDevPort/);
 });
 
 test("model editor defaults new configs to an identifiable image model template", () => {
@@ -312,6 +313,104 @@ test("admin shell includes membership plan management page", async () => {
   assert.match(html, /openMembershipPlanDrawer/);
   assert.match(html, /\/api\/admin\/membership\/plans/);
   assert.match(html, /permissionAttrs\("membership\.plan\.write"\)/);
+});
+
+test("admin standalone shell keeps membership plan management visible", () => {
+  const standaloneStart = script.indexOf("standaloneAgreementMenuContract");
+  assert.notEqual(standaloneStart, -1, "standalone shell override exists");
+  const standaloneScript = script.slice(standaloneStart);
+
+  for (const contract of [
+    'path.includes("/membership")',
+    'membership: "/admin/membership"',
+    'navButton("membership"',
+    'state.page === "membership"',
+    "renderMembershipPage",
+  ]) {
+    assert.match(standaloneScript, new RegExp(escapeRegExp(contract)));
+  }
+});
+
+test("admin membership plan save uses an ASCII-safe idempotency key", () => {
+  const saveStart = script.indexOf("/api/admin/membership/plans");
+  assert.notEqual(saveStart, -1, "membership plan save endpoint exists");
+  const saveBlock = script.slice(saveStart, script.indexOf("function membershipPlanPayloadFromForm", saveStart));
+
+  assert.match(script, /function adminIdempotencyKey/);
+  assert.match(saveBlock, /adminIdempotencyKey\("membership-plan"\)/);
+  assert.doesNotMatch(saveBlock, /payload\.(id|code)/);
+});
+
+test("admin membership plan drawer exposes operator-friendly pricing and entitlement controls", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  assert.notEqual(drawerStart, -1, "membership drawer exists");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("function membershipPlanPayloadFromForm", drawerStart));
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  for (const contract of [
+    "套餐标识/内部编码",
+    "专业版月卡299",
+    "价格（元）",
+    "amountYuan",
+    "会员有效期：单位 + 数量",
+    "check-grid",
+    "check-option",
+    "可使用画布功能",
+    "Seedance 2.0 优先排队",
+    "团队成员管理",
+    "全流程 Agent",
+    "前端展示权益",
+    "membershipEntitlementControls",
+    "membershipDisplayFeaturesText",
+    "team_asset_library",
+  ]) {
+    assert.match(drawerBlock + script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(drawerBlock, /entitlements:\s*\[[^\]]*"team_asset_library"/s);
+  assert.match(payloadBlock, /amountMinor:\s*Math\.round\(amountYuan \* 100\)/);
+  assert.match(payloadBlock, /const entitlements = membershipEntitlementsFromForm\(form\)/);
+  assert.match(payloadBlock, /membershipDisplayFeaturesFromForm\(form, entitlements\)/);
+  assert.match(drawerBlock, /name="seatLimit" type="number" min="0"/);
+  assert.match(payloadBlock, /payload\.seatLimit < 0/);
+  assert.doesNotMatch(payloadBlock, /payload\.seatLimit < 1/);
+  assert.doesNotMatch(drawerBlock, /<span>价格分<\/span>/);
+});
+
+test("admin membership plan payload removes unchecked known entitlement display text", () => {
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  assert.match(script, /function membershipKnownEntitlementLabelMap/);
+  assert.match(payloadBlock, /const entitlements = membershipEntitlementsFromForm\(form\)/);
+  assert.match(payloadBlock, /membershipDisplayFeaturesFromForm\(form, entitlements\)/);
+  assert.match(payloadBlock, /const selectedEntitlementSet = new Set\(selectedEntitlements\)/);
+  assert.match(payloadBlock, /membershipKnownEntitlementLabelMap\(\)/);
+  assert.match(payloadBlock, /selectedEntitlementSet\.has\(value\)/);
+  assert.match(payloadBlock, /knownFeatureLabelToValue\.get\(line\)/);
+});
+
+test("admin membership plan drawer warns operators about already configured plans", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  assert.notEqual(drawerStart, -1, "membership drawer exists");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("function membershipPlanPayloadFromForm", drawerStart));
+
+  for (const contract of [
+    "membershipConfiguredPlanNotice",
+    "已配置会员套餐",
+    "请配置其他套餐标识",
+    "membershipPlanConflictMessage",
+    "membership_plan_code_conflict",
+    "await loadMembershipPlans()",
+    "renderShell()",
+  ]) {
+    assert.match(drawerBlock + script, new RegExp(escapeRegExp(contract)));
+  }
 });
 
 test("admin user credit exposes team limit configuration only for team users", () => {

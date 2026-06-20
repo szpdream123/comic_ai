@@ -1804,12 +1804,21 @@ async function resolveLibraryEntitlement(
   const row = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id
+      SELECT id::text AS id
       FROM organization_entitlements
       WHERE organization_id = $1
         AND entitlement_key = 'team_asset_library'
         AND status = 'active'
+        AND source IS DISTINCT FROM 'payment'
         AND (expires_at IS NULL OR expires_at > $2)
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
+        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'
       LIMIT 1
     `,
     [input.actor.organizationId, input.now],

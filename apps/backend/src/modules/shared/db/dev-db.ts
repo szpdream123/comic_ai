@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import { Pool, type PoolClient } from "pg";
 
@@ -12,7 +14,7 @@ export interface DevDatabase extends SqlDatabase {
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");
+    return createLocalDevDb();
   }
 
   const pool = new Pool({
@@ -36,10 +38,10 @@ export async function createDevDb(): Promise<DevDatabase> {
     return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
-    throw new Error(
-      `PostgreSQL database initialization failed. ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
+    console.warn(
+      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
     );
+    return createLocalDevDb();
   }
 }
 
@@ -165,6 +167,24 @@ function withSchemaCleanup(db: DevDatabase, schemaName: string): DevDatabase {
       }
     },
   };
+}
+
+async function createLocalDevDb(): Promise<DevDatabase> {
+  const configuredLocalDir = process.env.LOCAL_DATABASE_DIR?.trim();
+  const ephemeralLocalDir = !configuredLocalDir && isTestRuntime()
+    ? `.local/dev-db/test-${randomUUID()}`
+    : null;
+  const localDbPath = resolve(
+    process.cwd(),
+    configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
+  );
+  await mkdir(dirname(localDbPath), { recursive: true });
+
+  const { PGlite } = await import("@electric-sql/pglite");
+  const db = new PGlite(localDbPath) as DevDatabase;
+  await ensureFoundationSchema(db);
+  console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
+  return db;
 }
 
 function isTestRuntime() {
@@ -304,6 +324,36 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await constraintExists(db, "credit_lots", "credit_lots_grant_ledger_entry_fk"))
   ) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0016_membership_subscription_payment.sql" });
+  }
+
+  if (
+    !(await tableExists(db, "credit_wallet_transfers")) ||
+    !(await columnExists(db, "credit_packages", "gift_credits")) ||
+    !(await columnExists(db, "credit_packages", "sort_order")) ||
+    !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "transfer_in"))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0028_credit_recharge_center.sql" });
+  }
+
+  if (!(await constraintAllowsNumericValue(db, "membership_plans", "membership_plans_seat_limit_check", "seat_limit", 0))) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0029_membership_plan_zero_seats.sql" });
+  }
+
+  if (
+    !(await constraintAllowsValue(
+      db,
+      "organization_entitlements",
+      "organization_entitlements_entitlement_key_check",
+      "canvas_access",
+    )) ||
+    !(await constraintAllowsValue(
+      db,
+      "organization_entitlements",
+      "organization_entitlements_entitlement_key_check",
+      "full_flow_agent",
+    ))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0030_membership_entitlement_keys.sql" });
   }
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
@@ -501,10 +551,12 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
       organization_id uuid NOT NULL REFERENCES organizations(id),
       entitlement_key text NOT NULL CHECK (
         entitlement_key IN (
+          'canvas_access',
+          'priority_generation',
           'team_asset_library',
           'team_member_management',
           'team_dashboard',
-          'priority_generation'
+          'full_flow_agent'
         )
       ),
       status text NOT NULL CHECK (status IN ('active', 'expired', 'revoked')),
@@ -938,6 +990,69 @@ async function constraintExists(db: SqlDatabase, tableName: string, constraintNa
   );
 
   return constraintCheck.rows[0]?.exists === true;
+}
+
+async function constraintAllowsValue(
+  db: SqlDatabase,
+  tableName: string,
+  constraintName: string,
+  value: string,
+) {
+  const constraintCheck = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_constraintdef(con.oid) AS definition
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = current_schema()
+        AND rel.relname = $1
+        AND con.conname = $2
+      LIMIT 1
+    `,
+    [tableName, constraintName],
+  );
+  return String(constraintCheck.rows[0]?.definition ?? "").includes(value);
+}
+
+async function constraintAllowsNumericValue(
+  db: SqlDatabase,
+  tableName: string,
+  constraintName: string,
+  columnName: string,
+  value: number,
+) {
+  const constraintCheck = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_constraintdef(con.oid) AS definition
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = current_schema()
+        AND rel.relname = $1
+        AND con.conname = $2
+      LIMIT 1
+    `,
+    [tableName, constraintName],
+  );
+  const definition = String(constraintCheck.rows[0]?.definition ?? "").trim();
+  if (!definition) {
+    return false;
+  }
+
+  const tempTable = `tmp_constraint_probe_${randomUUID().replace(/-/g, "")}`;
+  const safeColumnName = columnName.replace(/[^a-zA-Z0-9_]/g, "");
+  if (!safeColumnName) {
+    return false;
+  }
+  try {
+    await db.query(`CREATE TEMP TABLE ${tempTable} (${safeColumnName} integer, CONSTRAINT ${constraintName} ${definition}) ON COMMIT DROP`);
+    await db.query(`INSERT INTO ${tempTable} (${safeColumnName}) VALUES ($1)`, [value]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await db.query(`DROP TABLE IF EXISTS ${tempTable}`).catch(() => undefined);
+  }
 }
 
 async function uniqueConstraintForColumnsExists(db: SqlDatabase, tableName: string, columnNames: string[]) {

@@ -3,6 +3,126 @@ import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
 
+function createBaseState() {
+  return {
+    project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+    projectDetail: {
+      project: { id: "project-1", projectId: "project-1", name: "try" },
+      episodes: [{ id: "episode-1", title: "第 1 集", storyboardCount: 1 }],
+      assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+      shots: [{ id: "shot-1", episodeId: "episode-1", plot: "镜头一" }],
+    },
+  };
+}
+
+function createOpenPricingUi(overrides = {}) {
+  return {
+    activeNavTab: "home",
+    isLibraryPricingModalOpen: true,
+    membershipStatus: { status: "none" },
+    membershipPlans: [{
+      id: "plan-pro-month",
+      code: "professional_monthly",
+      displayName: "专业版月卡",
+      tier: "professional",
+      periodUnit: "month",
+      periodCount: 1,
+      amountMinor: 19900,
+      currency: "CNY",
+      giftCredits: 1000,
+    }],
+    ...overrides,
+  };
+}
+
+function extractStatusbarButton(html, className) {
+  return html.match(new RegExp(`<button[^>]*class="[^"]*${className}[^"]*"[^>]*>[\\s\\S]*?<\\/button>`))?.[0] ?? "";
+}
+
+function extractAccountPopoverCard(html) {
+  return html.match(/<div class="account-popover-card">[\s\S]*?<\/div>/)?.[0] ?? "";
+}
+
+test("global statusbar account card shows phone and keeps upgrade prompt without membership", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      membershipStatus: { status: "none" },
+    },
+  });
+
+  const card = extractAccountPopoverCard(html);
+
+  assert.match(card, /\+86 13800138000/);
+  assert.match(card, /\u5347\u7ea7\u4e13\u4e1a\u7248\uff0c\u521b\u5efa\u534f\u4f5c\u56e2\u961f/);
+});
+
+test("global statusbar account card prefers nickname and shows experience membership expiry", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", displayName: "\u65b0\u5bfc\u6f14\u6635\u79f0" } },
+    ui: {
+      activeNavTab: "home",
+      membershipStatus: {
+        status: "experience_active",
+        currentTier: "experience",
+        currentPeriodEndAt: "2026-06-27T08:00:00.000Z",
+      },
+    },
+  });
+
+  const card = extractAccountPopoverCard(html);
+
+  assert.match(card, /\u65b0\u5bfc\u6f14\u6635\u79f0/);
+  assert.doesNotMatch(card, /13800138000<\/strong>/);
+  assert.match(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
+  assert.match(card, /2026\/06\/27/);
+});
+
+test("global statusbar account card shows professional membership before experience", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        currentPeriodEndAt: "2026-07-08T08:00:00.000Z",
+      },
+    },
+  });
+
+  const card = extractAccountPopoverCard(html);
+
+  assert.match(card, /\u4e13\u4e1a\u7248\u4f1a\u5458/);
+  assert.match(card, /2026\/07\/08/);
+  assert.doesNotMatch(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
+});
+
+test("global statusbar account card does not show stale membership tier after expiry", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      membershipStatus: {
+        status: "expired",
+        currentTier: "professional",
+        currentPeriodEndAt: "2026-06-15T08:00:00.000Z",
+      },
+    },
+  });
+
+  const card = extractAccountPopoverCard(html);
+
+  assert.doesNotMatch(card, /\u4e13\u4e1a\u7248\u4f1a\u5458/);
+  assert.doesNotMatch(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
+  assert.match(card, /\u5347\u7ea7\u4e13\u4e1a\u7248\uff0c\u521b\u5efa\u534f\u4f5c\u56e2\u961f/);
+});
+
 test("global statusbar renders the compact handbook commerce and icon actions", () => {
   const html = renderProjectDetail({
     state: {
@@ -25,14 +145,21 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
   assert.match(html, /statusbar-quick-action text-action/);
   assert.match(html, /创作手册/);
   assert.match(html, /商务合作/);
-  assert.match(html, /statusbar-quick-action credit-action/);
+  assert.match(html, /data-action="show-commerce-placeholder"/);
+  const purchaseButton = extractStatusbarButton(html, "credit-action");
+  const walletButton = extractStatusbarButton(html, "wallet-action");
+
+  assert.match(purchaseButton, /statusbar-quick-action credit-action/);
+  assert.match(walletButton, /statusbar-quick-action wallet-action/);
   assert.match(html, /statusbar-action-icon trailing/);
+  assert.match(html, /aria-label="积分明细"/);
+  assert.match(html, /data-action="open-credit-ledger"/);
   assert.match(html, /statusbar-quick-action icon-action/);
   assert.match(html, /user-avatar-icon/);
   assert.match(html, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
 });
 
-test("global statusbar falls back to the current account credit balance", () => {
+test("global statusbar shows the current account credit balance in wallet only", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -51,11 +178,17 @@ test("global statusbar falls back to the current account credit balance", () => 
     },
   });
 
-  assert.match(html, /statusbar-quick-action credit-action/);
-  assert.match(html, />1280<\/b>/);
+  const purchaseButton = extractStatusbarButton(html, "credit-action");
+  const walletButton = extractStatusbarButton(html, "wallet-action");
+
+  assert.match(purchaseButton, /data-action="open-pricing"/);
+  assert.match(purchaseButton, /statusbar-action-icon trailing/);
+  assert.doesNotMatch(purchaseButton, /1280/);
+  assert.match(walletButton, /data-action="open-credit-ledger"/);
+  assert.match(walletButton, />1280<\/b>/);
 });
 
-test("global statusbar prefers the current user balance over stale config balance", () => {
+test("global statusbar puts the preferred current user balance in wallet", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -76,12 +209,153 @@ test("global statusbar prefers the current user balance over stale config balanc
     },
   });
 
-  assert.match(html, /statusbar-quick-action credit-action/);
-  assert.match(html, /data-action="open-credit-ledger"/);
-  assert.match(html, />2036<\/b>/);
+  const purchaseButton = extractStatusbarButton(html, "credit-action");
+  const walletButton = extractStatusbarButton(html, "wallet-action");
+
+  assert.match(purchaseButton, /data-action="open-pricing"/);
+  assert.doesNotMatch(purchaseButton, /2036/);
+  assert.match(walletButton, /data-action="open-credit-ledger"/);
+  assert.match(walletButton, />2036<\/b>/);
 });
 
-test("credit ledger drawer renders flat credit usage rows", () => {
+test("global overlays render pricing and wallet from the project workspace branch", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000", availableCredits: 2036 } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+      isLibraryPricingModalOpen: true,
+      creditLedgerOpen: true,
+      membershipStatus: { status: "none" },
+      membershipPlans: [{
+        id: "plan-pro-month",
+        code: "professional_monthly",
+        displayName: "专业版月卡",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 19900,
+        currency: "CNY",
+        giftCredits: 1000,
+      }],
+    },
+  });
+
+  assert.match(html, /data-modal="pricing"/);
+  assert.match(html, /library-team-global-pricing-scope/);
+  assert.match(html, /official-library-page/);
+  assert.match(html, /library-team-pricing-modal/);
+  assert.match(html, /data-action="purchase-membership-plan"/);
+  assert.match(html, /credit-ledger-drawer/);
+  assert.match(html, /积分明细/);
+});
+
+test("membership pricing overlay renders from every workbench module", () => {
+  const cases = [
+    ["home", { activeNavTab: "home" }],
+    ["script", { activeNavTab: "script" }],
+    ["tools", { activeNavTab: "tools", membershipStatus: { status: "experience_active" } }],
+    ["project gallery", { activeNavTab: "project", projectPanelMode: "library" }],
+    ["project workspace", { activeNavTab: "project", projectPanelMode: "workspace", projectInteriorSection: "overview" }],
+    ["episode workbench", { activeNavTab: "project", projectPanelMode: "episode-workbench", selectedEpisodeId: "episode-1" }],
+    ["library", { activeNavTab: "library" }],
+    ["team", { activeNavTab: "team" }],
+  ];
+
+  for (const [label, ui] of cases) {
+    const html = renderProjectDetail({
+      state: createBaseState(),
+      session: { user: { phone: "+86 13800138000", availableCredits: 2036 } },
+      ui: createOpenPricingUi(ui),
+    });
+
+    assert.match(html, /data-modal="pricing"/, label);
+    assert.match(html, /library-team-global-pricing-scope/, label);
+    assert.match(html, /library-team-pricing-modal/, label);
+    assert.match(html, /data-action="purchase-membership-plan"/, label);
+  }
+});
+
+test("team module renders from team overview instead of project member data", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "team",
+      libraryTeamRoute: "team",
+      projectMembers: [{
+        id: "project-member",
+        phone: "13900000000",
+        role: "viewer",
+        status: "enabled",
+      }],
+      teamOverview: {
+        entitlements: { teamMemberManagement: true },
+        team: { activated: false, memberCount: 0 },
+        seats: { used: 0, limit: 50, remaining: 50 },
+        credits: { allocatable: 13299 },
+        permissions: {
+          canReadMembers: true,
+          canCreateMember: true,
+          canViewDashboard: true,
+        },
+      },
+      teamMembers: [],
+    },
+  });
+
+  assert.match(html, /团队成员管理已开通/);
+  assert.match(html, /data-action="open-team-member-create"/);
+  assert.doesNotMatch(html, /开通专业版/);
+  assert.doesNotMatch(html, /13900000000/);
+});
+
+test("team module unlocks from active professional membership when team overview is stale", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "team",
+      libraryTeamRoute: "team",
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        currentPeriodEndAt: "2026-07-20T00:00:00.000Z",
+        entitlements: { teamMemberManagement: true },
+        team: { seatLimit: 50 },
+      },
+      teamOverview: {
+        entitlements: { teamMemberManagement: false },
+        team: { activated: false, memberCount: 0 },
+        seats: { used: 0, limit: 0, remaining: 0 },
+        credits: { allocatable: 13299 },
+        permissions: {
+          canReadMembers: true,
+          canCreateMember: false,
+          canViewDashboard: false,
+        },
+      },
+      teamMembers: [],
+    },
+  });
+
+  assert.match(html, /团队成员管理已开通/);
+  assert.match(html, /data-action="open-team-member-create"/);
+  assert.doesNotMatch(html, /去开通/);
+  assert.doesNotMatch(html, /当前账号没有创建成员权限/);
+});
+
+test("credit ledger drawer renders simple wallet transaction rows", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -97,35 +371,25 @@ test("credit ledger drawer renders flat credit usage rows", () => {
       activeNavTab: "tools",
       creditLedgerOpen: true,
       creditLedgerRows: [{
-        id: "ledger-1",
+        id: "ledger-recharge",
+        entryType: "grant",
+        amount: 3000,
+        availableDelta: 3000,
+        sourceType: "payment_order",
+        sourceId: "order-1",
+        reason: "membership period gifted credits",
+        metadata: { taskId: "eb76876b-3d0d-49a5-8dc8-17b8200093a9" },
+        createdAt: "2026-06-12T08:00:00.000Z",
+      }, {
+        id: "ledger-consume",
         entryType: "consume",
         amount: 90,
         availableDelta: -90,
         sourceType: "generation_task",
         sourceId: "task-1",
-        reason: "nano banana 2",
-        metadata: { billingEvent: "consumed", modelCode: "nano_banana_2", taskId: "eb76876b-3d0d-49a5-8dc8-17b8200093a9" },
-        createdAt: "2026-06-12T08:00:00.000Z",
-      }, {
-        id: "ledger-3",
-        entryType: "reservation",
-        amount: 120,
-        availableDelta: -120,
-        sourceType: "generation_task",
-        sourceId: "task-3",
-        reason: "video generation",
-        metadata: { billingEvent: "reserved", mediaType: "video", taskId: "67aad2f0-0000-4000-8000-000000000003" },
+        reason: "image generation",
+        metadata: { billingEvent: "consumed", modelCode: "nano_banana_2", taskId: "67aad2f0-0000-4000-8000-000000000003" },
         createdAt: "2026-06-12T09:30:00.000Z",
-      }, {
-        id: "ledger-2",
-        entryType: "release",
-        amount: 80,
-        availableDelta: 80,
-        sourceType: "credit_reservation_allocation",
-        sourceId: "task-2",
-        reason: "reservation allocation released",
-        metadata: { billingEvent: "released", mediaType: "image", taskId: "task-2", failureCode: "task_timeout" },
-        createdAt: "2026-06-12T09:00:00.000Z",
       }],
       creditLedgerSummary: {
         displayAvailableCredits: 2036,
@@ -137,24 +401,19 @@ test("credit ledger drawer renders flat credit usage rows", () => {
   });
 
   assert.match(html, /credit-ledger-drawer/);
-  assert.match(html, /积分明细/);
-  for (const header of ["任务ID", "类型", "说明", "可用变化", "失败|成功", "来源", "时间"]) {
+  for (const header of ["\u65f6\u95f4", "\u7c7b\u578b", "\u79ef\u5206\u53d8\u5316"]) {
     assert.match(html, new RegExp(header));
   }
-  assert.match(html, /生成扣减/);
-  assert.match(html, /nano banana 2/);
-  assert.match(html, /data-full-id="eb76876b-3d0d-49a5-8dc8-17b8200093a9"/);
-  assert.match(html, />eb7687</);
-  assert.doesNotMatch(html, />eb76876b-3d0d-49a5-8dc8-17b8200093a9</);
-  assert.match(html, /credit-ledger-description/);
-  assert.match(html, /data-full-text=/);
-  assert.match(html, /credit-ledger-description-text/);
+  for (const removedHeader of ["\u4efb\u52a1ID", "\u8bf4\u660e", "\u53ef\u7528\u53d8\u5316", "\u5931\u8d25|\u6210\u529f", "\u6765\u6e90"]) {
+    assert.doesNotMatch(html, new RegExp(removedHeader));
+  }
+  assert.match(html, /\u5145\u503c/);
+  assert.match(html, /\+3,000/);
+  assert.match(html, /\u6d88\u8017/);
   assert.match(html, /-90/);
-  assert.match(html, /-120/);
-  assert.doesNotMatch(html, /\u5df2\u51bb\u7ed3\u79ef\u5206/);
-  assert.doesNotMatch(html, /\u4efb\u52a1\u51bb\u7ed3/);
-  assert.match(html, /失败/);
-  assert.match(html, /成功/);
+  assert.doesNotMatch(html, /membership period gifted credits/);
+  assert.doesNotMatch(html, /nano_banana_2/);
+  assert.doesNotMatch(html, /data-full-id=/);
+  assert.doesNotMatch(html, /credit-ledger-description/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);
-  assert.doesNotMatch(html, /账户事件/);
 });

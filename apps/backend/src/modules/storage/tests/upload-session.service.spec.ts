@@ -9,6 +9,7 @@ import {
   completeUploadSession,
   createUploadSession,
   findUploadSession,
+  normalizeCosStsError,
   runStorageRepairJob,
   type UploadSessionRuntime,
 } from "../upload-session.service.ts";
@@ -203,6 +204,19 @@ describe("upload session service", () => {
     } finally {
       await db.close();
     }
+  });
+
+  it("normalizes Tencent COS STS credential object errors", () => {
+    const error = normalizeCosStsError({
+      Code: "AuthFailure.SecretIdNotFound",
+      Message: "The SecretId is not found, please ensure that your SecretId is correct.",
+      RequestId: "sts-request-1",
+    });
+
+    assert.equal(error.name, "StorageCredentialError");
+    assert.equal(error.code, "storage_credentials_invalid");
+    assert.equal(error.providerCode, "AuthFailure.SecretIdNotFound");
+    assert.equal(error.providerRequestId, "sts-request-1");
   });
 
   it("repairs expired, dangling, and delete-failed storage records", async () => {

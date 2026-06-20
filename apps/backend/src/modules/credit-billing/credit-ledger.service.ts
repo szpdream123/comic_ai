@@ -14,7 +14,14 @@ import {
   createCreditLotInTransaction,
 } from "./credit-lot.service.ts";
 
-type CreditLedgerEntryType = "grant" | "reservation" | "consume" | "release" | "expire";
+type CreditLedgerEntryType =
+  | "grant"
+  | "reservation"
+  | "consume"
+  | "release"
+  | "expire"
+  | "transfer_out"
+  | "transfer_in";
 export type CreditAllocationOutcome = Extract<
   CreditReservationAllocationStatus,
   "consumed" | "released" | "manual_review_required"
@@ -289,6 +296,91 @@ export async function grantCreditsInTransaction(
   }
 
   return inserted.entry;
+}
+
+export async function transferCreditsBetweenOrganizationsInTransaction(
+  db: SqlDatabase,
+  input: {
+    sourceOrganizationId: string;
+    targetOrganizationId: string;
+    amount: number;
+    sourceId: string;
+    reason?: string | null;
+    metadata?: Record<string, unknown>;
+    createdByUserId?: string | null;
+    now: Date;
+  },
+): Promise<{
+  sourceLedgerEntry: CreditLedgerEntryRecord;
+  targetLedgerEntry: CreditLedgerEntryRecord;
+}> {
+  assertPositiveAmount(input.amount);
+  const reason = requireCreditReason(input.reason);
+  if (input.sourceOrganizationId === input.targetOrganizationId) {
+    throw new CreditLedgerConflictError();
+  }
+
+  const sourceEntry = await insertLedgerEntry(db, {
+    organizationId: input.sourceOrganizationId,
+    reservationId: null,
+    allocationId: null,
+    entryType: "transfer_out",
+    amount: input.amount,
+    availableDelta: -input.amount,
+    reservedDelta: 0,
+    consumedDelta: 0,
+    sourceType: "credit_wallet_transfer",
+    sourceId: input.sourceId,
+    reason,
+    metadata: input.metadata ?? {},
+    createdByUserId: input.createdByUserId ?? null,
+    now: input.now,
+  });
+  const targetEntry = await insertLedgerEntry(db, {
+    organizationId: input.targetOrganizationId,
+    reservationId: null,
+    allocationId: null,
+    entryType: "transfer_in",
+    amount: input.amount,
+    availableDelta: input.amount,
+    reservedDelta: 0,
+    consumedDelta: 0,
+    sourceType: "credit_wallet_transfer",
+    sourceId: input.sourceId,
+    reason,
+    metadata: input.metadata ?? {},
+    createdByUserId: input.createdByUserId ?? null,
+    now: input.now,
+  });
+
+  if (sourceEntry.kind === "inserted") {
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = credit_balance_cached - $2,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [input.sourceOrganizationId, input.amount, input.now],
+    );
+  }
+
+  if (targetEntry.kind === "inserted") {
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = credit_balance_cached + $2,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [input.targetOrganizationId, input.amount, input.now],
+    );
+  }
+
+  return {
+    sourceLedgerEntry: sourceEntry.entry,
+    targetLedgerEntry: targetEntry.entry,
+  };
 }
 
 export async function reserveCredits(

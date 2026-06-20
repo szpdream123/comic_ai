@@ -95,7 +95,10 @@ export async function createTeamMember(
       now: input.now,
     });
 
-    const planLimits = await resolvePlanLimits(db, input.actor.organizationId);
+    const planLimits = await resolvePlanLimits(db, {
+      organizationId: input.actor.organizationId,
+      now: input.now,
+    });
     const usedSeats = await countActiveSubaccounts(db, input.actor);
     if (usedSeats >= planLimits.seatLimit) {
       throw new TeamServiceError("team_seat_limit_reached");
@@ -263,7 +266,10 @@ export async function getTeamOverview(
 ) {
   assertCanViewTeamOverview(input.actor);
 
-  const planLimits = await resolvePlanLimits(db, input.actor.organizationId);
+  const planLimits = await resolvePlanLimits(db, {
+    organizationId: input.actor.organizationId,
+    now: input.now,
+  });
   const usedSeats = await countActiveSubaccounts(db, input.actor);
   const credits = await queryOne<{
     credit_balance_cached: number;
@@ -555,12 +561,35 @@ async function hasActiveEntitlement(
   const entitlement = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id
+      SELECT id::text AS id
       FROM organization_entitlements
       WHERE organization_id = $1
         AND entitlement_key = $2
         AND status = 'active'
+        AND source IS DISTINCT FROM 'payment'
         AND (expires_at IS NULL OR expires_at > $3)
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
+        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $3
+        AND (period.plan_snapshot_json -> 'entitlements') ? $2
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      JOIN membership_plans plan
+        ON plan.id = period.plan_id
+      WHERE period.organization_id = $1
+        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $3
+        AND plan.tier = 'professional'
+        AND plan.status = 'active'
+        AND (plan.valid_from IS NULL OR plan.valid_from <= $3)
+        AND (plan.valid_until IS NULL OR plan.valid_until > $3)
+        AND plan.entitlements_json ? $2
       LIMIT 1
     `,
     [input.organizationId, input.entitlementKey, input.now],
@@ -569,7 +598,33 @@ async function hasActiveEntitlement(
   return Boolean(entitlement);
 }
 
-async function resolvePlanLimits(db: SqlDatabase, organizationId: string) {
+async function resolvePlanLimits(
+  db: SqlDatabase,
+  input: { organizationId: string; now: Date },
+) {
+  const activeProfessionalPlan = await queryOne<{
+    seat_limit: number;
+  }>(
+    db,
+    `
+      SELECT plan.seat_limit
+      FROM membership_periods period
+      JOIN membership_plans plan
+        ON plan.id = period.plan_id
+      WHERE period.organization_id = $1
+        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND plan.tier = 'professional'
+        AND plan.status = 'active'
+        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
+        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
+        AND plan.entitlements_json ? 'team_member_management'
+      ORDER BY period.period_end_at DESC, period.created_at DESC
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
   const limits = await queryOne<{
     seat_limit: number;
     single_account_concurrency_limit: number;
@@ -581,12 +636,18 @@ async function resolvePlanLimits(db: SqlDatabase, organizationId: string) {
       WHERE organization_id = $1
       LIMIT 1
     `,
-    [organizationId],
+    [input.organizationId],
   );
   const defaultSeatLimit = await resolveDefaultSubaccountLimit(db);
+  const seatLimit =
+    activeProfessionalPlan
+      ? Number(activeProfessionalPlan.seat_limit ?? 0)
+      : limits
+        ? Number(limits.seat_limit ?? 0)
+        : defaultSeatLimit;
 
   return {
-    seatLimit: limits?.seat_limit ?? defaultSeatLimit,
+    seatLimit,
     singleAccountConcurrencyLimit: limits?.single_account_concurrency_limit ?? 1,
   };
 }

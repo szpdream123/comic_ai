@@ -979,6 +979,27 @@ test("resolveApiUrl keeps same-origin URLs on additional membership acceptance d
   );
 });
 
+test("resolveApiUrl keeps same-origin URLs on the local 4325 dev API port", async () => {
+  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
+
+  await withWindowLocation(
+    {
+      protocol: "http:",
+      host: "127.0.0.1:4325",
+      hostname: "127.0.0.1",
+      port: "4325",
+      origin: "http://127.0.0.1:4325",
+    },
+    () => {
+      assert.equal(
+        resolveApiUrl("/api/auth/session"),
+        "http://127.0.0.1:4325/api/auth/session",
+      );
+      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4325/app.html");
+    },
+  );
+});
+
 test("resolveApiUrl keeps same-origin URLs on the user-selected dev port", async () => {
   const { resolveApiUrl } = await import("../src/shared/creator-api.js");
 

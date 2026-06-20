@@ -25,7 +25,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       amountMinor: 9900,
       currency: "CNY",
       giftCredits: 0,
-      seatLimit: null,
+      seatLimit: 0,
       entitlements: ["priority_generation"],
       priorityRules: { modelFamilies: ["seedance-lite"] },
       displayMetadata: { sortOrder: 30 },
@@ -82,7 +82,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
     assert.equal(experience.status, 200);
     assert.equal(experience.body.plan.displayName, "Experience 7 Days");
     assert.equal(experience.body.plan.giftCredits, 0);
-    assert.equal(experience.body.plan.seatLimit, 1);
+    assert.equal(experience.body.plan.seatLimit, 0);
     assert.deepEqual(experience.body.plan.entitlements, ["priority_generation"]);
     assert.deepEqual(experience.body.plan.priorityRules, { modelFamilies: ["seedance-lite"] });
     assert.deepEqual(experience.body.plan.displayMetadata, { sortOrder: 30 });
@@ -97,7 +97,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       amountMinor: 9900,
       currency: "CNY",
       giftCredits: 0,
-      seatLimit: undefined,
+      seatLimit: 0,
       entitlements: ["priority_generation"],
       priorityRules: { modelFamilies: ["seedance-lite"] },
       displayMetadata: { sortOrder: 5 },
@@ -117,7 +117,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
 
     assert.equal(archivedExperience.status, 200);
     assert.equal(archivedExperience.body.plan.status, "archived");
-    assert.equal(archivedExperience.body.plan.seatLimit, 1);
+    assert.equal(archivedExperience.body.plan.seatLimit, 0);
     assert.deepEqual(revisions.rows, [{ count: 2 }]);
     assert.deepEqual(
       nonArchived.data.plans.map((plan) => plan.id),
@@ -205,7 +205,7 @@ test("membership plan service validates save input", async () => {
       },
       {
         name: "invalid seat limit",
-        overrides: { seatLimit: 0 },
+        overrides: { seatLimit: -1 },
         code: "invalid_seat_limit",
       },
     ];

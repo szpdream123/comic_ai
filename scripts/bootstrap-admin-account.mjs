@@ -56,6 +56,8 @@ export async function bootstrapAdminAccount(input) {
         password_hash = EXCLUDED.password_hash,
         display_name = EXCLUDED.display_name,
         status = EXCLUDED.status,
+        failed_login_count = 0,
+        locked_until = NULL,
         remark = EXCLUDED.remark,
         updated_at = EXCLUDED.updated_at
     `,

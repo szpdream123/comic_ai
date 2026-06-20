@@ -783,8 +783,10 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
-  async function listUserCreditLedger(input: { userId: string; pageSize?: number }) {
-    const target = await findUserCreditTarget(deps.db, input.userId);
+  async function listUserCreditLedger(input: { userId: string; workspaceId?: string | null; pageSize?: number }) {
+    const target = await findUserCreditTarget(deps.db, input.userId, {
+      workspaceId: input.workspaceId,
+    });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
     const ledgerScope = ledgerScopeForTarget(target);
@@ -908,6 +910,7 @@ interface UserCreditTargetRow {
   organization_id: string;
   workspace_id: string | null;
   membership_id: string;
+  membership_role: string;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -918,6 +921,7 @@ interface UserCreditTarget {
   organizationId: string;
   workspaceId: string | null;
   membershipId: string;
+  membershipRole: string;
   teamProfileId: string | null;
   createdByUserId: string | null;
 }
@@ -1026,7 +1030,12 @@ async function countOrganizationActiveSubaccounts(db: SqlDatabase, organizationI
   return Number(result?.count ?? 0);
 }
 
-async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<UserCreditTarget | undefined> {
+async function findUserCreditTarget(
+  db: SqlDatabase,
+  userId: string,
+  options: { workspaceId?: string | null } = {},
+): Promise<UserCreditTarget | undefined> {
+  const preferredWorkspaceId = options.workspaceId?.trim();
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
@@ -1036,6 +1045,7 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
+        m.role AS membership_role,
         tp.id AS team_profile_id,
         tp.created_by_user_id
       FROM users u
@@ -1043,11 +1053,12 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE u.id = $1
       ORDER BY
+        CASE WHEN $2::uuid IS NOT NULL AND m.workspace_id = $2::uuid THEN 0 ELSE 1 END,
         CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
-    [userId],
+    [userId, preferredWorkspaceId || null],
   );
 
   if (!row) {
@@ -1060,6 +1071,7 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
+    membershipRole: row.membership_role,
     teamProfileId: row.team_profile_id,
     createdByUserId: row.created_by_user_id,
   };
@@ -1094,14 +1106,14 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
         AND ledger_workflow.created_by_user_id = $2::uuid
     )
   )`;
-  if (target.teamProfileId) {
+  if (isMemberWalletTarget(target)) {
     return {
       sql: targetFilter,
       params: [target.userId, target.membershipId],
     };
   }
   return {
-    sql: `(${targetFilter} OR source_type = 'payment_order')`,
+    sql: `(${targetFilter} OR source_type = ANY(ARRAY['payment_order', 'membership_gift']))`,
     params: [target.userId, target.membershipId],
   };
 }
@@ -1123,7 +1135,7 @@ async function buildUserCreditSummary(
     `,
     [target.organizationId],
   );
-  const member = target.teamProfileId
+  const member = isMemberWalletTarget(target)
     ? await queryOne<{
         credit_balance_cached: number | string;
         credit_used_cached: number | string;
@@ -1211,19 +1223,23 @@ async function buildUserCreditSummary(
   const targetReserved = Number(reservations?.active_reserved ?? 0);
   const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
   return {
-    balanceScope: target.teamProfileId ? "member" : "organization",
+    balanceScope: isMemberWalletTarget(target) ? "member" : "organization",
     organizationAvailableCredits: organizationAvailable,
     organizationReservedCredits: organizationReserved,
     memberAvailableCredits: memberAvailable,
     memberUsedCredits: memberUsed,
     displayAvailableCredits: memberAvailable ?? organizationAvailable,
-    displayReservedCredits: target.teamProfileId ? targetReserved : organizationReserved,
+    displayReservedCredits: isMemberWalletTarget(target) ? targetReserved : organizationReserved,
     totalGrantedCredits: Number(totals?.total_granted ?? 0),
     totalConsumedCredits: totalConsumed,
     totalReleasedCredits: Number(totals?.total_released ?? 0),
     activeReservationCount: Number(reservations?.active_count ?? 0),
     manualReviewReservationCount: Number(reservations?.manual_review_count ?? 0),
   };
+}
+
+function isMemberWalletTarget(target: UserCreditTarget) {
+  return Boolean(target.teamProfileId && target.membershipRole !== "owner_admin");
 }
 
 function userFromRow(row: AdminUserRow): AdminUserListItem {

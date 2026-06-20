@@ -14,11 +14,6 @@ export type MembershipGenerationPriority =
     };
 
 interface MembershipPriorityRow {
-  subscription_status: string | null;
-  current_tier: string | null;
-  current_period_end_at: Date | string | null;
-  entitlement_status: string | null;
-  entitlement_expires_at: Date | string | null;
   plan_snapshot_json: unknown;
   capabilities_json: unknown;
 }
@@ -36,19 +31,9 @@ export async function resolveMembershipGenerationPriority(
     db,
     `
       SELECT
-        oms.status AS subscription_status,
-        oms.current_tier,
-        oms.current_period_end_at,
-        oe.status AS entitlement_status,
-        oe.expires_at AS entitlement_expires_at,
         active_period.plan_snapshot_json,
         amc.capabilities_json
       FROM ai_model_configs amc
-      LEFT JOIN organization_membership_subscriptions oms
-        ON oms.organization_id = $1
-      LEFT JOIN organization_entitlements oe
-        ON oe.organization_id = $1
-       AND oe.entitlement_key = 'priority_generation'
       LEFT JOIN LATERAL (
         SELECT plan_snapshot_json
         FROM membership_periods
@@ -72,16 +57,13 @@ export async function resolveMembershipGenerationPriority(
   const modelCapabilities = normalizeObject(row.capabilities_json);
   const planSnapshot = normalizeObject(row.plan_snapshot_json);
   const priorityRules = normalizeObject(planSnapshot.priorityRules);
+  const planEntitlements = normalizeStringArray(planSnapshot.entitlements);
   const modelFamily = normalizeText(modelCapabilities.modelFamily).toLowerCase();
   const allowedFamilies = normalizeStringArray(priorityRules.modelFamilies)
     .map((family) => family.toLowerCase());
 
   const eligible =
-    row.subscription_status === "professional_active" &&
-    row.current_tier === "professional" &&
-    isFuture(row.current_period_end_at, input.now) &&
-    row.entitlement_status === "active" &&
-    isFutureOrOpen(row.entitlement_expires_at, input.now) &&
+    planEntitlements.includes("priority_generation") &&
     modelCapabilities.membershipPriorityEligible === true &&
     modelFamily.length > 0 &&
     allowedFamilies.includes(modelFamily);
@@ -111,14 +93,6 @@ function normalizePriority(value: unknown) {
     return 1;
   }
   return numberValue;
-}
-
-function isFuture(value: Date | string | null, now: Date) {
-  return Boolean(value && new Date(value).getTime() > now.getTime());
-}
-
-function isFutureOrOpen(value: Date | string | null, now: Date) {
-  return value === null || isFuture(value, now);
 }
 
 function normalizeJson(value: unknown): unknown {

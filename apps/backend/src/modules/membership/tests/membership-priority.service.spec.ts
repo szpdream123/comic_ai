@@ -68,6 +68,42 @@ describe("membership priority service", { concurrency: false }, () => {
     }
   });
 
+  it("keeps professional priority when a later experience subscription overwrote the current tier", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const organizationId = await seedOrganization(db);
+      await seedProfessionalMembership(db, {
+        organizationId,
+        priorityRules: { modelFamilies: ["seedance"] },
+        periodEndAt: "2026-07-08T00:00:00.000Z",
+      });
+      await overwriteSubscriptionTier(db, {
+        organizationId,
+        tier: "experience",
+        periodEndAt: "2026-06-15T00:00:00.000Z",
+      });
+      await configureModelCapabilities(db, "seedance-i2v-pro", {
+        modelFamily: "seedance",
+        membershipPriorityEligible: true,
+      });
+
+      const priority = await resolveMembershipGenerationPriority(db, {
+        organizationId,
+        modelCode: "seedance-i2v-pro",
+        now: new Date("2026-06-09T00:00:00.000Z"),
+      });
+
+      assert.deepEqual(priority, {
+        enabled: true,
+        priority: 1,
+        reason: "professional_membership_model_family_priority",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not grant priority when the model family is outside the plan priority rules", async () => {
     const db = await createMigratedTestDb();
 
@@ -312,6 +348,27 @@ async function seedMembership(
       [randomUUID(), input.organizationId, entitlementKey, input.periodEndAt],
     );
   }
+}
+
+async function overwriteSubscriptionTier(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    organizationId: string;
+    tier: "experience" | "professional";
+    periodEndAt: string;
+  },
+) {
+  await db.query(
+    `
+      UPDATE organization_membership_subscriptions
+      SET status = $2,
+          current_tier = $3,
+          current_period_end_at = $4,
+          updated_at = '2026-06-09T00:00:00.000Z'
+      WHERE organization_id = $1
+    `,
+    [input.organizationId, `${input.tier}_active`, input.tier, input.periodEndAt],
+  );
 }
 
 async function configureModelCapabilities(

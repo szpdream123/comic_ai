@@ -370,7 +370,7 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   const reason = String(input.reason ?? "").trim();
   const idempotencyKey = input.idempotencyKey?.trim() || null;
   const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
-  const seatLimit = input.seatLimit ?? 1;
+  const seatLimit = input.seatLimit ?? 0;
   const validFrom = parseOptionalDate(input.validFrom);
   const validUntil = parseOptionalDate(input.validUntil);
 
@@ -393,8 +393,8 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   if (!Number.isInteger(input.giftCredits) || input.giftCredits < 0) {
     return { error: error(400, "invalid_gift_credits", "gift credits must be a non-negative integer") };
   }
-  if (!Number.isInteger(seatLimit) || seatLimit < 1) {
-    return { error: error(400, "invalid_seat_limit", "seat limit must be a positive integer") };
+  if (!Number.isInteger(seatLimit) || seatLimit < 0) {
+    return { error: error(400, "invalid_seat_limit", "seat limit must be a non-negative integer") };
   }
   if (!allowedStatuses.has(status)) {
     return { error: error(400, "invalid_status", "membership plan status is invalid") };

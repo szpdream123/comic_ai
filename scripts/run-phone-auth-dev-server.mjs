@@ -19,6 +19,9 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath);
+if (process.env.LOCAL_DATABASE_DIR?.trim() && !process.env.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE) {
+  delete process.env.DATABASE_URL;
+}
 if (process.env.NODE_ENV === "production") {
   console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
   process.exit(1);

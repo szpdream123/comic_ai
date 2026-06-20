@@ -434,6 +434,77 @@ describe("team service", { concurrency: false }, () => {
     }
   });
 
+  it("uses current professional plan entitlements when an active paid period snapshot is stale", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { seatLimit: 0, credits: 1200 });
+      await seedProfessionalPlanEntitlementSource(db, {
+        snapshotEntitlements: ["priority_generation"],
+        currentPlanEntitlements: [
+          "priority_generation",
+          "team_member_management",
+          "team_dashboard",
+        ],
+        seatLimit: 50,
+      });
+
+      const overview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.entitlements.teamDashboard, true);
+      assert.equal(overview.seats.limit, 50);
+      assert.equal(overview.seats.remaining, 50);
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director_plan",
+        displayName: "Plan Entitled Director",
+        businessRole: "director",
+        projectIds: [],
+        initialCredits: 0,
+        now,
+      });
+
+      assert.equal(created.member.teamAccount, "director_plan");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not grant team management from an active experience period after professional expires", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { seatLimit: 5, credits: 1200 });
+      await seedExpiredProfessionalAndActiveExperiencePeriods(db);
+
+      const overview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(overview.entitlements.teamMemberManagement, false);
+      assert.equal(overview.entitlements.teamAssetLibrary, false);
+      assert.equal(overview.entitlements.teamDashboard, false);
+      await assert.rejects(
+        createTeamMember(db, {
+          actor: ownerActor(),
+          teamAccount: "director_exp",
+          displayName: "Experience Member",
+          businessRole: "director",
+          projectIds: [],
+          initialCredits: 0,
+          now,
+        }),
+        teamError("team_member_management_required"),
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("uses the admin runtime config as the default team subaccount limit", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -626,6 +697,332 @@ async function seedTeamEntitlement(
         'team_member_management',
         'active',
         'dev_seed'
+      )
+    `,
+    [organizationId],
+  );
+}
+
+async function seedProfessionalPlanEntitlementSource(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: {
+    snapshotEntitlements: string[];
+    currentPlanEntitlements: string[];
+    seatLimit: number;
+  },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '3a000000-0000-4000-8000-000000000091',
+        'professional_plan_source',
+        'Professional Plan Source',
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        $1,
+        $2::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        'active',
+        '2026-05-20T10:00:00.000Z',
+        '2026-05-20T10:00:00.000Z'
+      )
+    `,
+    [input.seatLimit, JSON.stringify(input.currentPlanEntitlements)],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        status,
+        product_type,
+        membership_plan_id,
+        amount_minor,
+        currency,
+        credits,
+        product_snapshot_json,
+        package_snapshot_json,
+        paid_at,
+        expires_at
+      )
+      VALUES (
+        '39000000-0000-4000-8000-000000000091',
+        $1,
+        $2,
+        'ORD-TEAM-PLAN-SOURCE',
+        'pending_payment',
+        'membership_plan',
+        '3a000000-0000-4000-8000-000000000091',
+        29900,
+        'CNY',
+        3000,
+        $3::jsonb,
+        $3::jsonb,
+        NULL,
+        '2026-05-20T10:15:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      ownerUserId,
+      JSON.stringify({
+        id: "3a000000-0000-4000-8000-000000000091",
+        code: "professional_plan_source",
+        tier: "professional",
+        entitlements: input.snapshotEntitlements,
+      }),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '38000000-0000-4000-8000-000000000091',
+        $1,
+        '39000000-0000-4000-8000-000000000091',
+        '3a000000-0000-4000-8000-000000000091',
+        'professional',
+        '2026-05-20T10:00:00.000Z',
+        '2026-06-28T10:00:00.000Z',
+        3000,
+        $2::jsonb,
+        'active',
+        '2026-05-20T10:00:00.000Z',
+        '2026-05-20T10:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      JSON.stringify({
+        id: "3a000000-0000-4000-8000-000000000091",
+        code: "professional_plan_source",
+        tier: "professional",
+        entitlements: input.snapshotEntitlements,
+        seatLimit: 0,
+      }),
+    ],
+  );
+}
+
+async function seedExpiredProfessionalAndActiveExperiencePeriods(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES
+        (
+          '3a000000-0000-4000-8000-000000000001',
+          'expired_professional_plan',
+          'Expired Professional Plan',
+          'professional',
+          'month',
+          1,
+          29900,
+          'CNY',
+          3000,
+          5,
+          '["team_member_management","team_asset_library","team_dashboard"]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'active',
+          '2026-05-01T10:00:00.000Z',
+          '2026-05-01T10:00:00.000Z'
+        ),
+        (
+          '3a000000-0000-4000-8000-000000000002',
+          'active_experience_plan',
+          'Active Experience Plan',
+          'experience',
+          'day',
+          7,
+          990,
+          'CNY',
+          300,
+          0,
+          '["canvas_access","team_member_management","team_asset_library","team_dashboard"]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'active',
+          '2026-05-21T10:00:00.000Z',
+          '2026-05-21T10:00:00.000Z'
+        )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        status,
+        product_type,
+        membership_plan_id,
+        amount_minor,
+        currency,
+        credits,
+        product_snapshot_json,
+        package_snapshot_json,
+        paid_at,
+        expires_at
+      )
+      VALUES
+        (
+          '39000000-0000-4000-8000-000000000001',
+          $1,
+          $2,
+          'ORD-TEAM-EXPIRED-PRO',
+          'pending_payment',
+          'membership_plan',
+          '3a000000-0000-4000-8000-000000000001',
+          29900,
+          'CNY',
+          3000,
+          '{"tier":"professional","entitlements":["team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          '{"tier":"professional","entitlements":["team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          NULL,
+          '2026-05-01T10:15:00.000Z'
+        ),
+        (
+          '39000000-0000-4000-8000-000000000002',
+          $1,
+          $2,
+          'ORD-TEAM-ACTIVE-EXP',
+          'pending_payment',
+          'membership_plan',
+          '3a000000-0000-4000-8000-000000000002',
+          990,
+          'CNY',
+          300,
+          '{"tier":"experience","entitlements":["canvas_access","team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          '{"tier":"experience","entitlements":["canvas_access","team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          NULL,
+          '2026-05-21T10:15:00.000Z'
+        )
+    `,
+    [organizationId, ownerUserId],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES
+        (
+          '38000000-0000-4000-8000-000000000001',
+          $1,
+          '39000000-0000-4000-8000-000000000001',
+          '3a000000-0000-4000-8000-000000000001',
+          'professional',
+          '2026-05-01T10:00:00.000Z',
+          '2026-05-20T10:00:00.000Z',
+          3000,
+          '{"tier":"professional","entitlements":["team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          'active',
+          '2026-05-01T10:00:00.000Z',
+          '2026-05-01T10:00:00.000Z'
+        ),
+        (
+          '38000000-0000-4000-8000-000000000002',
+          $1,
+          '39000000-0000-4000-8000-000000000002',
+          '3a000000-0000-4000-8000-000000000002',
+          'experience',
+          '2026-05-21T10:00:00.000Z',
+          '2026-06-01T10:00:00.000Z',
+          300,
+          '{"tier":"experience","entitlements":["canvas_access","team_member_management","team_asset_library","team_dashboard"]}'::jsonb,
+          'active',
+          '2026-05-21T10:00:00.000Z',
+          '2026-05-21T10:00:00.000Z'
+        )
+    `,
+    [organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO organization_entitlements (
+        id,
+        organization_id,
+        entitlement_key,
+        status,
+        source,
+        expires_at
+      )
+      VALUES (
+        '34000000-0000-4000-8000-000000000099',
+        $1,
+        'team_member_management',
+        'active',
+        'payment',
+        '2026-06-01T10:00:00.000Z'
       )
     `,
     [organizationId],

@@ -208,6 +208,8 @@ describe("membership order service", { concurrency: false }, () => {
         currentTier: null,
         currentPeriodEndAt: null,
         entitlements: {
+          canvasAccess: false,
+          fullFlowAgent: false,
           priorityGeneration: false,
           teamAssetLibrary: false,
           teamDashboard: false,
@@ -241,8 +243,10 @@ describe("membership order service", { concurrency: false }, () => {
         currentTier: "professional",
         currentPeriodEndAt: "2026-07-08T08:00:00.000Z",
         entitlements: {
+          canvasAccess: false,
+          fullFlowAgent: false,
           priorityGeneration: true,
-          teamAssetLibrary: false,
+          teamAssetLibrary: true,
           teamDashboard: true,
           teamMemberManagement: true,
         },
@@ -250,6 +254,229 @@ describe("membership order service", { concurrency: false }, () => {
           seatLimit: 50,
         },
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("prefers an unexpired professional period over a later experience subscription", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedActiveProfessionalStatus(db, { subscriptionTier: "experience" });
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "professional_active");
+      assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.currentPeriodEndAt, "2026-07-08T08:00:00.000Z");
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
+      assert.equal(response.body.membership.team.seatLimit, 50);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("derives professional entitlements from the active professional period when entitlement rows were expired by a later experience purchase", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedActiveProfessionalStatus(db, { subscriptionTier: "experience" });
+      await db.query(
+        `
+          UPDATE organization_entitlements
+          SET status = 'expired',
+              expires_at = '2026-06-09T07:00:00.000Z'
+          WHERE organization_id = $1
+            AND source = 'payment'
+        `,
+        [organizationId],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "professional_active");
+      assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.entitlements.priorityGeneration, true);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
+      assert.equal(response.body.membership.entitlements.teamDashboard, true);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
+      assert.equal(response.body.membership.team.seatLimit, 50);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("derives team entitlement and seat limit from the current professional plan when the paid period snapshot is stale", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedProfessionalPeriodWithCurrentPlanEntitlements(db, {
+        snapshotEntitlements: ["priority_generation"],
+        currentPlanEntitlements: [
+          "priority_generation",
+          "team_asset_library",
+          "team_dashboard",
+          "team_member_management",
+        ],
+        seatLimit: 36,
+      });
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "professional_active");
+      assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
+      assert.equal(response.body.membership.entitlements.teamDashboard, true);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
+      assert.equal(response.body.membership.team.seatLimit, 36);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("falls back to active experience after professional expires without team entitlements", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedActiveProfessionalStatus(db, {
+        periodStartAt: "2026-06-01T08:00:00.000Z",
+        periodEndAt: "2026-06-08T07:59:59.000Z",
+        subscriptionTier: "experience",
+      });
+      await seedActiveExperiencePeriod(db, {
+        periodStartAt: "2026-06-08T08:00:00.000Z",
+        periodEndAt: "2026-06-15T08:00:00.000Z",
+        entitlements: ["canvas_access", "team_member_management", "team_asset_library"],
+      });
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (
+            id,
+            organization_id,
+            entitlement_key,
+            status,
+            source,
+            expires_at
+          )
+          VALUES (
+            $1,
+            $2,
+            'team_member_management',
+            'active',
+            'payment',
+            '2026-06-15T08:00:00.000Z'
+          )
+          ON CONFLICT (organization_id, entitlement_key)
+          DO UPDATE SET
+            status = EXCLUDED.status,
+            source = EXCLUDED.source,
+            expires_at = EXCLUDED.expires_at
+        `,
+        [randomUUID(), organizationId],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "experience_active");
+      assert.equal(response.body.membership.currentTier, "experience");
+      assert.equal(response.body.membership.currentPeriodEndAt, "2026-06-15T08:00:00.000Z");
+      assert.equal(response.body.membership.entitlements.canvasAccess, true);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
+      assert.equal(response.body.membership.entitlements.teamDashboard, false);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
+      assert.equal(response.body.membership.team.seatLimit, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("ignores stale payment entitlement rows after the current membership period expires", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await db.query(
+        `
+          INSERT INTO organization_membership_subscriptions (
+            id,
+            organization_id,
+            status,
+            current_tier,
+            current_period_start_at,
+            current_period_end_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1,
+            $2,
+            'professional_active',
+            'professional',
+            '2026-06-01T08:00:00.000Z',
+            '2026-06-08T07:59:59.000Z',
+            '2026-06-01T08:00:00.000Z',
+            '2026-06-01T08:00:00.000Z'
+          )
+        `,
+        [randomUUID(), organizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (
+            id,
+            organization_id,
+            entitlement_key,
+            status,
+            source,
+            expires_at
+          )
+          VALUES
+            ($1, $2, 'canvas_access', 'active', 'payment', '2026-06-15T08:00:00.000Z'),
+            ($3, $2, 'team_member_management', 'active', 'payment', '2026-06-15T08:00:00.000Z'),
+            ($4, $2, 'priority_generation', 'active', 'payment', '2026-06-15T08:00:00.000Z')
+        `,
+        [randomUUID(), organizationId, randomUUID(), randomUUID()],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "expired");
+      assert.equal(response.body.membership.currentTier, null);
+      assert.equal(response.body.membership.entitlements.canvasAccess, false);
+      assert.equal(response.body.membership.entitlements.priorityGeneration, false);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
+      assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
       await db.close();
     }
@@ -277,6 +504,8 @@ describe("membership order service", { concurrency: false }, () => {
         currentTier: null,
         currentPeriodEndAt: "2026-06-08T07:59:59.000Z",
         entitlements: {
+          canvasAccess: false,
+          fullFlowAgent: false,
           priorityGeneration: false,
           teamAssetLibrary: false,
           teamDashboard: false,
@@ -446,10 +675,34 @@ async function seedPlan(
 
 async function seedActiveProfessionalStatus(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  input: { periodStartAt?: string; periodEndAt?: string } = {},
+  input: { periodStartAt?: string; periodEndAt?: string; subscriptionTier?: "professional" | "experience" } = {},
 ) {
   const periodStartAt = input.periodStartAt ?? "2026-06-08T08:00:00.000Z";
   const periodEndAt = input.periodEndAt ?? "2026-07-08T08:00:00.000Z";
+  const subscriptionTier = input.subscriptionTier ?? "professional";
+  const planSnapshot = {
+    tier: "professional",
+    entitlements: [
+      "priority_generation",
+      "team_asset_library",
+      "team_dashboard",
+      "team_member_management",
+    ],
+  };
+  const planId = await seedPlan(db, {
+    code: `professional_status_${randomUUID().slice(0, 8)}`,
+    tier: "professional",
+    giftCredits: 3000,
+    entitlements: planSnapshot.entitlements,
+    seatLimit: 50,
+  });
+  const orderId = await seedMembershipBillingOrder(db, {
+    planId,
+    credits: 3000,
+    amountMinor: 29900,
+    productSnapshot: planSnapshot,
+    createdAt: periodStartAt,
+  });
   await db.query(
     `
       INSERT INTO organization_membership_subscriptions (
@@ -465,15 +718,55 @@ async function seedActiveProfessionalStatus(
       VALUES (
         $1,
         $2,
-        'professional_active',
-        'professional',
         $3,
         $4,
+        $5,
+        $6,
         '2026-06-08T08:00:00.000Z',
         '2026-06-08T08:00:00.000Z'
       )
     `,
-    [randomUUID(), organizationId, periodStartAt, periodEndAt],
+    [
+      randomUUID(),
+      organizationId,
+      `${subscriptionTier}_active`,
+      subscriptionTier,
+      subscriptionTier === "professional" ? periodStartAt : "2026-06-09T08:00:00.000Z",
+      subscriptionTier === "professional" ? periodEndAt : "2026-06-16T08:00:00.000Z",
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'professional',
+        $5,
+        $6,
+        3000,
+        '{"tier":"professional","entitlements":["priority_generation","team_asset_library","team_dashboard","team_member_management"]}'::jsonb,
+        'active',
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+    `,
+    [randomUUID(), organizationId, orderId, planId, periodStartAt, periodEndAt],
   );
   await db.query(
     `
@@ -490,6 +783,7 @@ async function seedActiveProfessionalStatus(
 
   for (const entitlementKey of [
     "priority_generation",
+    "team_asset_library",
     "team_dashboard",
     "team_member_management",
   ]) {
@@ -508,6 +802,233 @@ async function seedActiveProfessionalStatus(
       [randomUUID(), organizationId, entitlementKey, periodEndAt],
     );
   }
+}
+
+async function seedProfessionalPeriodWithCurrentPlanEntitlements(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    snapshotEntitlements: string[];
+    currentPlanEntitlements: string[];
+    seatLimit: number;
+  },
+) {
+  const periodSnapshot = {
+    tier: "professional",
+    entitlements: input.snapshotEntitlements,
+    seatLimit: 0,
+  };
+  const planId = await seedPlan(db, {
+    code: `professional_current_${randomUUID().slice(0, 8)}`,
+    tier: "professional",
+    seatLimit: input.seatLimit,
+    entitlements: input.currentPlanEntitlements,
+  });
+  const orderId = await seedMembershipBillingOrder(db, {
+    planId,
+    credits: 3000,
+    amountMinor: 29900,
+    productSnapshot: periodSnapshot,
+    createdAt: "2026-06-08T08:00:00.000Z",
+  });
+  await db.query(
+    `
+      INSERT INTO organization_membership_subscriptions (
+        id,
+        organization_id,
+        status,
+        current_tier,
+        current_period_start_at,
+        current_period_end_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        'professional_active',
+        'professional',
+        '2026-06-08T08:00:00.000Z',
+        '2026-07-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+    `,
+    [randomUUID(), organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'professional',
+        '2026-06-08T08:00:00.000Z',
+        '2026-07-08T08:00:00.000Z',
+        3000,
+        $5::jsonb,
+        'active',
+        '2026-06-08T08:00:00.000Z',
+        '2026-06-08T08:00:00.000Z'
+      )
+    `,
+    [
+      randomUUID(),
+      organizationId,
+      orderId,
+      planId,
+      JSON.stringify(periodSnapshot),
+    ],
+  );
+}
+
+async function seedActiveExperiencePeriod(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: { periodStartAt: string; periodEndAt: string; entitlements?: string[] },
+) {
+  const entitlements = input.entitlements ?? ["canvas_access"];
+  const planSnapshot = {
+    tier: "experience",
+    entitlements,
+  };
+  const planId = await seedPlan(db, {
+    code: `experience_status_${randomUUID().slice(0, 8)}`,
+    displayName: "Experience Weekly",
+    tier: "experience",
+    periodUnit: "day",
+    periodCount: 7,
+    giftCredits: 300,
+    amountMinor: 990,
+    seatLimit: 0,
+    entitlements,
+  });
+  const orderId = await seedMembershipBillingOrder(db, {
+    planId,
+    credits: 300,
+    amountMinor: 990,
+    productSnapshot: planSnapshot,
+    createdAt: input.periodStartAt,
+  });
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'experience',
+        $5,
+        $6,
+        300,
+        $7::jsonb,
+        'active',
+        $5,
+        $5
+      )
+    `,
+    [
+      randomUUID(),
+      organizationId,
+      orderId,
+      planId,
+      input.periodStartAt,
+      input.periodEndAt,
+      JSON.stringify(planSnapshot),
+    ],
+  );
+}
+
+async function seedMembershipBillingOrder(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    planId: string;
+    credits: number;
+    amountMinor: number;
+    productSnapshot: Record<string, unknown>;
+    createdAt: string;
+  },
+) {
+  const orderId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        credit_package_id,
+        membership_plan_id,
+        product_type,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        NULL,
+        $5,
+        'membership_plan',
+        $6::jsonb,
+        $6::jsonb,
+        $7,
+        $8,
+        'CNY',
+        'pending_payment',
+        $9::timestamptz + interval '15 minutes',
+        $9,
+        $9
+      )
+    `,
+    [
+      orderId,
+      organizationId,
+      ownerUserId,
+      `ORD-TEST-${randomUUID()}`,
+      input.planId,
+      JSON.stringify(input.productSnapshot),
+      input.credits,
+      input.amountMinor,
+      input.createdAt,
+    ],
+  );
+  return orderId;
 }
 
 function createRecordingPaymentProviderAdapter(

@@ -9,7 +9,7 @@ import {
 } from "./script-page.js";
 import { getProjectDetailState } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
-import { renderLibraryTeam } from "../library-team/index.js";
+import { renderLibraryTeam, renderPricingModal } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
@@ -175,7 +175,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
           ${renderProjectInteriorShell({ state, ui, detailState })}
         </section>
       </section>
@@ -203,7 +203,7 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
-      ${renderAccountSettingsDrawer(ui, session)}
+      ${renderGlobalOverlays(ui, session)}
     `;
   }
 
@@ -237,7 +237,7 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
-      ${renderAccountSettingsDrawer(ui, session)}
+      ${renderGlobalOverlays(ui, session)}
     `;
   }
 
@@ -249,7 +249,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance })}
+        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
         ${renderMainPanel({ state, ui, session, detailState, progress, activeNavTab })}
       </section>
     </section>
@@ -306,8 +306,36 @@ export function renderProjectDetail(context = {}) {
         ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
     })}
     ${renderGenerationQueueJobConfirmModal(ui)}
+    ${renderGlobalOverlays(ui, session)}
+  `;
+}
+
+function renderGlobalOverlays(ui = {}, session = {}) {
+  return `
     ${renderCreditLedgerDrawer(ui)}
+    ${renderGlobalPricingModal(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
+  `;
+}
+
+function renderGlobalPricingModal(ui = {}) {
+  const pricingModal = renderPricingModal({
+    open: ui.isLibraryPricingModalOpen === true,
+    packages: ui.billingPackages ?? null,
+    membershipPlans: ui.membershipPlans ?? null,
+    membershipStatus: ui.membershipStatus ?? null,
+    billingOrder: ui.lastBillingOrder ?? null,
+    paymentIntent: ui.lastPaymentIntent ?? null,
+    paymentAction: ui.lastPaymentAction ?? null,
+    membershipPaymentState: resolveMembershipPaymentState(ui),
+  });
+  if (!pricingModal) {
+    return "";
+  }
+  return `
+    <div class="library-team-page official-library-page library-team-global-pricing-scope" style="display: contents">
+      ${pricingModal}
+    </div>
   `;
 }
 
@@ -351,13 +379,9 @@ function renderCreditLedgerDrawer(ui = {}) {
           <table class="credit-ledger-table">
             <thead>
               <tr>
-                <th>任务ID</th>
-                <th>类型</th>
-                <th>说明</th>
-                <th>可用变化</th>
-                <th>失败|成功</th>
-                <th>来源</th>
                 <th>时间</th>
+                <th>类型</th>
+                <th>积分变化</th>
               </tr>
             </thead>
             <tbody>
@@ -383,247 +407,29 @@ function renderCreditLedgerRow(row = {}) {
   const entry = normalizeCreditLedgerEntry(row);
   return `
     <tr>
-      <td>${renderCreditLedgerTaskId(entry.taskId)}</td>
-      <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
-      <td>${renderCreditLedgerDescription(entry)}</td>
-      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
-      <td><span class="credit-ledger-type ${entry.result === "失败" ? "consume" : entry.result === "成功" ? "grant" : "neutral"}">${escapeHtml(entry.result)}</span></td>
-      <td><span class="credit-ledger-source">${escapeHtml(entry.source)}</span></td>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
+      <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
+      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
     </tr>
   `;
 }
 
-function renderCreditLedgerDescription(entry = {}) {
-  const title = String(entry.title ?? "").trim();
-  const detail = String(entry.detail ?? "").trim();
-  const text = [title, detail].filter(Boolean).join(" ");
-  if (!text) {
-    return `<span class="credit-ledger-description empty">-</span>`;
-  }
-  return `<span class="credit-ledger-description" data-full-text="${escapeAttr(text)}" tabindex="0"><span class="credit-ledger-description-text">${escapeHtml(text)}</span></span>`;
-}
-
-function renderCreditLedgerTaskId(taskId) {
-  const fullId = String(taskId ?? "").trim();
-  if (!fullId) {
-    return `<code class="credit-ledger-task-id empty">-</code>`;
-  }
-  return `<code class="credit-ledger-task-id" data-full-id="${escapeAttr(fullId)}" tabindex="0">${escapeHtml(fullId.slice(0, 6))}</code>`;
-}
-
 function normalizeCreditLedgerEntry(row = {}) {
   const type = String(row.entryType ?? "");
-  const metadata = normalizeLedgerMetadata(row.metadata);
-  const labels = {
-    grant: ["充值/发放", "grant"],
-    consume: ["生成扣减", "consume"],
-    reservation: ["生成扣减", "consume"],
-    reserve: ["生成扣减", "consume"],
-    release: ["释放返还", "release"],
-  };
-  const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
   const amount = Number(row.amount ?? 0);
   const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
-  const reason = String(row.reason ?? metadata.reason ?? "").trim();
-  const model = creditLedgerModelLabel(metadata);
-  const task = String(metadata.taskId ?? metadata.task_id ?? row.sourceId ?? "").trim();
-  const event = String(metadata.billingEvent ?? metadata.outcome ?? metadata.status ?? "").trim();
-  const eventLabel = ledgerBillingEventLabel(event);
-  const duration = formatLedgerDuration(metadata.durationMs ?? metadata.duration_ms);
-  const promptPreview = String(metadata.promptPreview ?? metadata.prompt_preview ?? "").trim();
-  const failureCode = String(metadata.failureCode ?? metadata.failure_code ?? "").trim();
-  const errorMessage = String(metadata.errorMessage ?? metadata.error_message ?? "").trim();
-  const source = creditLedgerSourceLabel(row, metadata);
-  const content = promptPreview ? `内容：${promptPreview}` : "";
-  const failure = creditLedgerFailureLabel(failureCode, errorMessage);
-  const result = creditLedgerResultLabel({ event, failure });
-  const description = failure
-    ? `失败：${failure}`
-    : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
-  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || label;
+  const fallbackDelta = type === "consume" || type === "reservation" || type === "reserve"
+    ? -Math.abs(amount)
+    : amount;
+  const signedDelta = Number.isFinite(availableDelta) && availableDelta !== 0 ? availableDelta : fallbackDelta;
+  const isConsume = signedDelta < 0;
   return {
-    label,
-    tone,
-    amount: type === "consume" ? -Math.abs(amount) : amount,
-    availableDelta,
+    label: isConsume ? "消耗" : "充值",
+    tone: isConsume ? "consume" : "grant",
+    amount: signedDelta,
+    availableDelta: signedDelta,
     createdAt: row.createdAt,
-    taskId: task || String(row.sourceId ?? "").trim(),
-    title,
-    detail: description,
-    result,
-    source,
   };
-}
-
-function normalizeLedgerMetadata(metadata) {
-  if (metadata && typeof metadata === "object") {
-    return metadata;
-  }
-  if (typeof metadata !== "string" || !metadata.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(metadata);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function creditLedgerSourceLabel(row = {}, metadata = {}) {
-  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
-  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
-  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
-  if (targetType === "canvas") {
-    if (mediaType === "video") {
-      return "画布视频生成";
-    }
-    return "画布图片生成";
-  }
-  if (sourceType === "episode_generation_task") {
-    return mediaType === "video" ? "分镜视频生成" : "分镜图片生成";
-  }
-  if (sourceType === "payment_order") {
-    return "订单充值";
-  }
-  if (sourceType.includes("admin") || sourceType.includes("manual")) {
-    return "人工调整";
-  }
-  if (mediaType === "video") {
-    return "视频生成";
-  }
-  if (mediaType === "image") {
-    return "图片生成";
-  }
-  return "积分账本";
-}
-
-function creditLedgerModelLabel(metadata = {}) {
-  const explicit = String(metadata.modelLabel ?? metadata.model_label ?? "").trim();
-  if (explicit) {
-    return explicit;
-  }
-  const code = String(metadata.modelCode ?? metadata.model_code ?? metadata.providerExecutor ?? metadata.provider ?? "").trim();
-  const normalized = code.toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.includes("jimeng")) {
-    return normalized.includes("video") ? "即梦视频模型" : "即梦图片模型";
-  }
-  if (normalized.includes("seedance")) {
-    return "豆包视频模型";
-  }
-  if (normalized.includes("gpt")) {
-    return "OpenAI 图片模型";
-  }
-  if (normalized.includes("liblib")) {
-    return "哩布哩布模型";
-  }
-  if (normalized.includes("kling")) {
-    return "可灵模型";
-  }
-  if (normalized.includes("wan") || normalized.includes("qwen")) {
-    return "通义生成模型";
-  }
-  return `模型 ${code}`;
-}
-
-function translateCreditLedgerReason(reason, metadata = {}) {
-  const normalized = String(reason ?? "").trim().toLowerCase();
-  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
-  const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized === "image generation") {
-    return targetType === "canvas" ? "画布图片生成" : "图片生成";
-  }
-  if (normalized === "video generation") {
-    return targetType === "canvas" ? "画布视频生成" : "视频生成";
-  }
-  if (normalized === "reservation allocation released") {
-    return mediaType === "video" ? "视频生成积分返还" : "图片生成积分返还";
-  }
-  if (normalized === "reservation allocation consumed") {
-    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
-  }
-  if (normalized.includes("reservation") || normalized.includes("reserve")) {
-    return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
-  }
-  return reason;
-}
-
-function creditLedgerFailureLabel(code, message) {
-  const normalizedCode = String(code ?? "").trim();
-  const normalizedMessage = String(message ?? "").trim();
-  const labels = {
-    task_timeout: "任务超时，积分已返还",
-    provider_poll_timeout: "模型处理超时，积分已返还",
-    provider_failed: "模型处理失败，积分已返还",
-    provider_submission_failed: "发送模型失败，积分已返还",
-    provider_submission_ambiguous: "模型接收状态不明确，已进入失败处理",
-    provider_output_download_failed: "模型结果下载失败，积分已返还",
-    provider_output_upload_failed: "结果保存失败，积分已返还",
-    provider_output_persist_failed: "结果入库失败，积分已返还",
-    provider_result_unknown: "模型结果状态未知，积分已返还",
-    worker_crashed_after_external_start: "后台处理意外中断，积分已返还",
-    generation_queue_unavailable: "生成队列未启动，未继续扣减",
-  };
-  const translated = labels[normalizedCode];
-  if (translated && normalizedMessage) {
-    return `${translated}（${normalizedMessage}）`;
-  }
-  if (translated) {
-    return translated;
-  }
-  if (normalizedMessage) {
-    return normalizedMessage;
-  }
-  return normalizedCode ? `失败代码：${normalizedCode}` : "";
-}
-
-function creditLedgerResultLabel({ event, failure } = {}) {
-  const normalized = String(event ?? "").toLowerCase();
-  if (failure || normalized.includes("failed") || normalized.includes("timeout")) {
-    return "失败";
-  }
-  if (["consumed", "released", "succeeded", "reserved"].includes(normalized)) {
-    return "成功";
-  }
-  return "-";
-}
-
-function ledgerBillingEventLabel(value) {
-  const labels = {
-    reserved: "已扣减",
-    consumed: "已扣减",
-    released: "已返还",
-    manual_review_required: "待复核",
-    failed: "失败",
-    succeeded: "成功",
-  };
-  return labels[value] ?? "";
-}
-
-function formatLedgerDuration(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return "";
-  }
-  if (numeric < 1000) {
-    return `${Math.round(numeric)}ms`;
-  }
-  return `${Math.round(numeric / 100) / 10}s`;
-}
-
-function shortLedgerId(value) {
-  const text = String(value ?? "").trim();
-  if (text.length <= 12) {
-    return text;
-  }
-  return `${text.slice(0, 8)}...${text.slice(-4)}`;
 }
 
 function renderCreditLedgerLoadingRows() {
@@ -659,6 +465,49 @@ function formatLedgerDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatMembershipDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}/${month}/${day}`;
+}
+
+function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
+  const user = session.user ?? {};
+  const displayName = String(user.displayName ?? user.nickname ?? "").trim();
+  const phone = String(user.phone ?? user.phoneE164 ?? "").trim();
+  const primaryText = displayName || phone || "未命名创作者";
+  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
+  const periodEndAt =
+    membershipStatus?.currentPeriodEndAt ??
+    membershipStatus?.membership?.currentPeriodEndAt ??
+    null;
+  const dateLabel = formatMembershipDate(periodEndAt);
+
+  if (status === "professional_active") {
+    return {
+      primaryText,
+      secondaryText: `专业版会员${dateLabel ? ` · 有效期至 ${dateLabel}` : ""}`,
+    };
+  }
+
+  if (status === "experience_active") {
+    return {
+      primaryText,
+      secondaryText: `体验版会员${dateLabel ? ` · 有效期至 ${dateLabel}` : ""}`,
+    };
+  }
+
+  return {
+    primaryText,
+    secondaryText: "升级专业版，创建协作团队",
+  };
 }
 
 function renderAccountSettingsDrawer(ui = {}, session = {}) {
@@ -3624,7 +3473,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         libraryError: ui.libraryError,
         libraryDetailAssetId: ui.libraryDetailAssetId,
         libraryDetailView: ui.libraryDetailView,
-        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        pricingOpen: false,
         billingPackages: ui.billingPackages ?? [],
         membershipPlans: ui.membershipPlans ?? [],
         membershipStatus: ui.membershipStatus ?? null,
@@ -3659,7 +3508,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
-        pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
+        pricingOpen: false,
         billingPackages: ui.billingPackages ?? [],
         membershipPlans: ui.membershipPlans ?? [],
         membershipStatus: ui.membershipStatus ?? null,
@@ -3675,9 +3524,11 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         dashboardRoleFilter: ui.teamDashboardRoleFilter ?? "all",
         dashboardStatusFilter: ui.teamDashboardStatusFilter ?? "all",
         selectedDashboardMemberId: ui.selectedDashboardMemberId ?? null,
+        teamPanelTab: ui.teamPanelTab ?? "members",
         projectName: detailState.project.name,
-        members: ui.projectMembers ?? [],
-        stats: ui.projectStats ?? null,
+        overview: ui.teamOverview ?? null,
+        members: ui.teamMembers ?? [],
+        stats: ui.teamOverview ?? null,
         memberSearchQuery: ui.teamMemberSearchQuery ?? "",
         memberRoleFilter: ui.teamMemberRoleFilter ?? "all",
         memberStatusFilter: ui.teamMemberStatusFilter ?? "all",
@@ -3826,6 +3677,12 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
 }
 
 function renderToolsPanel(ui = {}, state = {}) {
+  if (ui.membershipStatus == null) {
+    return renderCanvasMembershipLoading();
+  }
+  if (!hasActiveCanvasMembership(ui.membershipStatus)) {
+    return renderCanvasMembershipGate();
+  }
   if (ui.canvasProjectView !== "detail") {
     return renderCanvasProjectGallery(ui);
   }
@@ -3938,6 +3795,36 @@ function renderToolsPanel(ui = {}, state = {}) {
           <strong>${escapeHtml(String(zoomPercent))}%</strong>
         </div>
       </main>
+    </section>
+  `;
+}
+
+function hasActiveCanvasMembership(membershipStatus) {
+  const status =
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "";
+  return status === "experience_active" || status === "professional_active";
+}
+
+function renderCanvasMembershipGate() {
+  return `
+    <section class="canvas-membership-gate" data-canvas-membership-gate aria-label="画布会员权益">
+      <div class="canvas-membership-lock-icon" aria-hidden="true"></div>
+      <h2 class="sr-only">开通须知</h2>
+      <p>画布功能为会员权益，体验版会员和专业版会员等所有有效会员均可使用。</p>
+      <button class="canvas-membership-gate-button" type="button" data-action="open-pricing">立即开通</button>
+    </section>
+  `;
+}
+
+function renderCanvasMembershipLoading() {
+  return `
+    <section class="canvas-membership-gate" data-canvas-membership-loading aria-label="画布会员状态">
+      <div class="canvas-membership-lock-icon" aria-hidden="true"></div>
+      <h2 class="sr-only">正在确认画布权益</h2>
+      <p>稍候片刻，系统正在同步当前账号的会员状态。</p>
     </section>
   `;
 }
@@ -5259,6 +5146,11 @@ function renderStatusbarActionIcon(icon) {
     cart: `
       <path d="M2.25 3h1.386a.75.75 0 0 1 .73.582L4.71 5.25H19.5a.75.75 0 0 1 .728.93l-1.5 6A.75.75 0 0 1 18 12.75H6.06a.75.75 0 0 1-.728-.57L3.39 4.5H2.25M7.5 16.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm9 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
     `,
+    wallet: `
+      <path d="M4.5 7.5A2.25 2.25 0 0 1 6.75 5.25h10.5A2.25 2.25 0 0 1 19.5 7.5v9a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 16.5v-9Z" />
+      <path d="M4.5 8.25h12.75A2.25 2.25 0 0 1 19.5 10.5v.75h-4.125a1.875 1.875 0 1 0 0 3.75H19.5v1.5" />
+      <path d="M15.75 13.125h.75" />
+    `,
     bell: `
       <path d="M14.857 17.082a23.848 23.848 0 0 0 4.182 1.022.75.75 0 0 1 .21 1.415 24.878 24.878 0 0 1-14.498 0 .75.75 0 0 1 .21-1.415 23.848 23.848 0 0 0 4.182-1.022M15 8.25a3 3 0 1 0-6 0c0 1.102-.412 2.105-1.091 2.867-.549.617-.879 1.398-.879 2.258v.375h9.94v-.375c0-.86-.33-1.64-.88-2.258A4.233 4.233 0 0 1 15 8.25Z" />
     `,
@@ -5278,7 +5170,8 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0 } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -5294,13 +5187,17 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
         </button>
-        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作">
+        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
           <span>商务合作</span>
         </button>
-        <button class="statusbar-quick-action credit-action" type="button" aria-label="积分余额" data-action="open-credit-ledger">
+        <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("sparkle")}</span>
-          <b>${escapeHtml(String(creditBalance))}</b>
           <span class="statusbar-action-icon trailing">${renderStatusbarActionIcon("cart")}</span>
+        </button>
+        <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("wallet")}</span>
+          <span>钱包</span>
+          <b>${escapeHtml(String(creditBalance))}</b>
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
@@ -5323,8 +5220,8 @@ function renderGlobalStatusbar(session, options = {}) {
           </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
-              <strong>创作者 ${escapeHtml(session.user.phone.slice(-8) || "442027442")}</strong>
-              <span>升级专业版，创建协作团队</span>
+              <strong>${escapeHtml(accountCard.primaryText)}</strong>
+              <span>${escapeHtml(accountCard.secondaryText)}</span>
             </div>
             <button class="popover-menu-item" type="button" role="menuitem">我的订阅</button>
             <button class="popover-menu-item" type="button" role="menuitem">订单开票</button>

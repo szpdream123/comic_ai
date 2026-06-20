@@ -214,6 +214,177 @@ test("admin user credit ledger returns balance and usage summary for account det
   }
 });
 
+test("admin user credit ledger includes membership gifted credits for owner wallet", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO team_member_profiles (
+          id,
+          organization_id,
+          workspace_id,
+          membership_id,
+          team_account,
+          display_name,
+          business_role,
+          member_group_id,
+          credit_balance_cached,
+          credit_used_cached,
+          created_by_user_id
+        )
+        VALUES (
+          '96000000-0000-4000-8000-000000002009',
+          '91000000-0000-4000-8000-000000002001',
+          '92000000-0000-4000-8000-000000002001',
+          '94000000-0000-4000-8000-000000002001',
+          'scope-owner',
+          'Scope Owner',
+          'owner',
+          '95000000-0000-4000-8000-000000002001',
+          8000,
+          0,
+          '93000000-0000-4000-8000-000000002001'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+          '98000000-0000-4000-8000-000000002007',
+          '91000000-0000-4000-8000-000000002001',
+          'grant',
+          3000,
+          3000,
+          0,
+          0,
+          'membership_gift',
+          '97000000-0000-4000-8000-000000002007',
+          'membership period gifted credits',
+          '{"orderId":"96000000-0000-4000-8000-000000002007","planId":"95000000-0000-4000-8000-000000002007","tier":"experience"}'::jsonb,
+          NULL,
+          '2026-06-05T07:15:00.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002001",
+      pageSize: 20,
+    });
+
+    assert.equal(result.data[0]?.sourceType, "membership_gift");
+    assert.equal(result.data[0]?.amount, 3000);
+    assert.equal(result.data[0]?.metadata.tier, "experience");
+    assert.equal(result.summary.totalGrantedCredits, 3120);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger can target the current workspace wallet", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status, credit_balance_cached)
+        VALUES ('91000000-0000-4000-8000-000000002099', 'Personal Wallet Org', 'active', 3000)
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES (
+          '92000000-0000-4000-8000-000000002099',
+          '91000000-0000-4000-8000-000000002099',
+          'Personal Wallet Workspace',
+          'active'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        VALUES (
+          '94000000-0000-4000-8000-000000002099',
+          '91000000-0000-4000-8000-000000002099',
+          '92000000-0000-4000-8000-000000002099',
+          '93000000-0000-4000-8000-000000002001',
+          'owner_admin',
+          'active'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+          '98000000-0000-4000-8000-000000002099',
+          '91000000-0000-4000-8000-000000002099',
+          'grant',
+          3000,
+          3000,
+          0,
+          0,
+          'membership_gift',
+          '97000000-0000-4000-8000-000000002099',
+          'membership period gifted credits',
+          '{"orderNo":"ORD-WORKSPACE-GIFT","planCode":"professional_monthly"}'::jsonb,
+          NULL,
+          '2026-06-05T07:20:00.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002001",
+      workspaceId: "92000000-0000-4000-8000-000000002099",
+      pageSize: 20,
+    });
+
+    assert.equal(result.data[0]?.sourceType, "membership_gift");
+    assert.equal(result.data[0]?.amount, 3000);
+    assert.equal(result.data[0]?.metadata.orderNo, "ORD-WORKSPACE-GIFT");
+    assert.equal(result.summary.displayAvailableCredits, 3000);
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin manual credit grant stores adjustment scenario metadata for future credit policies", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });

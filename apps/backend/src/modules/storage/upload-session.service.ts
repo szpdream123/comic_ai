@@ -23,6 +23,28 @@ type UploadSessionStatus =
   | "expired"
   | "failed";
 
+export class StorageCredentialError extends Error {
+  readonly providerCode: string | null;
+  readonly providerRequestId: string | null;
+
+  constructor(
+    readonly code:
+      | "storage_credentials_invalid"
+      | "storage_credentials_forbidden"
+      | "storage_credentials_unavailable",
+    input: {
+      providerCode?: string | null;
+      providerMessage?: string | null;
+      providerRequestId?: string | null;
+    } = {},
+  ) {
+    super(input.providerMessage || code);
+    this.name = "StorageCredentialError";
+    this.providerCode = input.providerCode ?? null;
+    this.providerRequestId = input.providerRequestId ?? null;
+  }
+}
+
 export interface StorageUploadSessionRecord {
   id: string;
   organizationId: string;
@@ -640,20 +662,13 @@ async function buildUploadSessionResponse(
   };
 
   if (runtime.mode === "cos" && runtime.stsSecretId && runtime.stsSecretKey) {
-    const credential = await qcloudCosSts.getCredential({
+    const credential = await createCosStsCredential({
       secretId: runtime.stsSecretId,
       secretKey: runtime.stsSecretKey,
       durationSeconds: runtime.stsDurationSeconds ?? 1800,
       bucket: object.bucket,
       region: runtime.region,
-      policy: qcloudCosSts.getPolicy([
-        { action: "name/cos:PutObject", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-        { action: "name/cos:PostObject", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-        { action: "name/cos:InitiateMultipartUpload", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-        { action: "name/cos:UploadPart", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-        { action: "name/cos:CompleteMultipartUpload", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-        { action: "name/cos:AbortMultipartUpload", bucket: object.bucket, region: runtime.region, prefix: object.objectKey },
-      ]),
+      objectKey: object.objectKey,
     });
 
     return {
@@ -669,6 +684,66 @@ async function buildUploadSessionResponse(
   }
 
   return base;
+}
+
+export async function createCosStsCredential(input: {
+  secretId: string;
+  secretKey: string;
+  durationSeconds: number;
+  bucket: string;
+  region: string;
+  objectKey: string;
+}) {
+  try {
+    return await qcloudCosSts.getCredential({
+      secretId: input.secretId,
+      secretKey: input.secretKey,
+      durationSeconds: input.durationSeconds,
+      bucket: input.bucket,
+      region: input.region,
+      policy: qcloudCosSts.getPolicy([
+        { action: "name/cos:PutObject", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+        { action: "name/cos:PostObject", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+        { action: "name/cos:InitiateMultipartUpload", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+        { action: "name/cos:UploadPart", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+        { action: "name/cos:CompleteMultipartUpload", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+        { action: "name/cos:AbortMultipartUpload", bucket: input.bucket, region: input.region, prefix: input.objectKey },
+      ]),
+    });
+  } catch (error) {
+    throw normalizeCosStsError(error);
+  }
+}
+
+export function normalizeCosStsError(error: unknown): StorageCredentialError {
+  const providerCode = readProviderErrorString(error, "Code") ?? readProviderErrorString(error, "code");
+  const providerMessage = readProviderErrorString(error, "Message") ?? readProviderErrorString(error, "message");
+  const providerRequestId = readProviderErrorString(error, "RequestId") ?? readProviderErrorString(error, "requestId");
+  const normalizedCode = normalizeCredentialFailureCode(providerCode ?? providerMessage ?? "");
+
+  return new StorageCredentialError(normalizedCode, {
+    providerCode,
+    providerMessage,
+    providerRequestId,
+  });
+}
+
+function normalizeCredentialFailureCode(value: string): StorageCredentialError["code"] {
+  if (/SecretIdNotFound|InvalidSecretId|InvalidAccessKeyId|Signature/i.test(value)) {
+    return "storage_credentials_invalid";
+  }
+  if (/AccessDenied|Unauthorized|Forbidden|not authorized/i.test(value)) {
+    return "storage_credentials_forbidden";
+  }
+  return "storage_credentials_unavailable";
+}
+
+function readProviderErrorString(error: unknown, key: string): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const value = (error as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function uploadSessionFromRow(row: StorageUploadSessionRow): StorageUploadSessionRecord {

@@ -56,11 +56,35 @@ describe("membership period credit consumer", { concurrency: false }, () => {
         "SELECT credit_balance_cached FROM organizations WHERE id = $1",
         [organizationId],
       );
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [orderId],
+      );
+      const ledger = await db.query<{
+        id: string;
+        order_no: string | null;
+        plan_code: string | null;
+      }>(
+        `
+          SELECT
+            id,
+            metadata_json->>'orderNo' AS order_no,
+            metadata_json->>'planCode' AS plan_code
+          FROM credit_ledger_entries
+          WHERE source_type = 'membership_gift'
+            AND source_id = $1
+        `,
+        [periodId],
+      );
 
       assert.equal(first.kind, "applied");
       assert.equal(first.creditGrant.amount, 800);
       assert.equal(replay.kind, "duplicate");
       assert.equal(organization.rows[0]?.credit_balance_cached, 800);
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, first.creditGrant.id);
+      assert.equal(ledger.rows[0]?.id, first.creditGrant.id);
+      assert.equal(ledger.rows[0]?.order_no, "ORD-MEMBERSHIP-PERIOD-CREDIT");
+      assert.equal(ledger.rows[0]?.plan_code, "experience_weekly_credit");
       assert.deepEqual(lot.rows.map((row) => ({
         source_type: row.source_type,
         source_id: row.source_id,
@@ -139,7 +163,7 @@ async function seedMembershipPeriod(
         status,
         expires_at
       )
-      VALUES ($1, $2, $3, 'ORD-MEMBERSHIP-PERIOD-CREDIT', 'membership_plan', $4, '{}'::jsonb, '{}'::jsonb, $5, 9900, 'CNY', 'pending_payment', '2026-06-08T08:30:00.000Z')
+      VALUES ($1, $2, $3, 'ORD-MEMBERSHIP-PERIOD-CREDIT', 'membership_plan', $4, '{}'::jsonb, '{}'::jsonb, $5, 9900, 'CNY', 'paid', '2026-06-08T08:30:00.000Z')
     `,
     [orderId, organizationId, userId, planId, input.giftCredits],
   );
@@ -159,7 +183,7 @@ async function seedMembershipPeriod(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, 'experience', '2026-06-08T08:00:00.000Z', '2026-06-15T08:00:00.000Z', $5, '{"tier":"experience"}'::jsonb, 'active', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
+      VALUES ($1, $2, $3, $4, 'experience', '2026-06-08T08:00:00.000Z', '2026-06-15T08:00:00.000Z', $5, '{"tier":"experience","code":"experience_weekly_credit"}'::jsonb, 'active', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
     `,
     [periodId, organizationId, orderId, planId, input.giftCredits],
   );

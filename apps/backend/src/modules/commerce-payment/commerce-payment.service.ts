@@ -40,6 +40,7 @@ import {
   type ProviderPayAction,
   type SignatureStatus,
 } from "./payment-provider-adapter.ts";
+import { enqueueMissingMembershipActivationForPaidOrder } from "../membership/payment-succeeded-membership-consumer.service.ts";
 
 const PAYMENT_INTENT_TTL_MS = 15 * 60 * 1000;
 
@@ -51,9 +52,14 @@ interface CreditPackageRow {
   id: string;
   code: string;
   display_name: string;
+  subtitle: string | null;
   credits: number;
+  gift_credits: number;
   amount_minor: number;
   currency: string;
+  badge: string | null;
+  sort_order: number;
+  metadata_json: Record<string, unknown> | string;
   status: string;
 }
 
@@ -222,7 +228,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           WHERE status = 'active'
             AND (valid_from IS NULL OR valid_from <= now())
             AND (valid_until IS NULL OR valid_until > now())
-          ORDER BY amount_minor ASC, code ASC
+          ORDER BY sort_order ASC, amount_minor ASC, code ASC
         `,
       );
 
@@ -275,12 +281,19 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
             }
 
             const orderId = randomUUID();
+            const totalCredits = creditPackage.credits + creditPackage.gift_credits;
             const packageSnapshot = {
               code: creditPackage.code,
               displayName: creditPackage.display_name,
-              credits: creditPackage.credits,
+              subtitle: creditPackage.subtitle,
+              baseCredits: creditPackage.credits,
+              giftCredits: creditPackage.gift_credits,
+              credits: totalCredits,
               amountMinor: creditPackage.amount_minor,
               currency: creditPackage.currency,
+              badge: creditPackage.badge,
+              sortOrder: creditPackage.sort_order,
+              metadata: normalizeJson(creditPackage.metadata_json),
             };
             const order = await queryOne<BillingOrderRow>(
               deps.db,
@@ -334,7 +347,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
                 createOrderNo(input.now),
                 creditPackage.id,
                 JSON.stringify(packageSnapshot),
-                creditPackage.credits,
+                totalCredits,
                 creditPackage.amount_minor,
                 creditPackage.currency,
                 idempotencyRecord.id,
@@ -582,12 +595,18 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         providerEventDedupKey: body.providerEventDedupKey,
       });
       if (existing) {
+        const compensation = await maybeEnqueuePaidMembershipCompensation(deps.db, {
+          providerEvent: existing,
+          merchantOrderNo: body.merchantOrderNo,
+          now: input.now,
+        });
         return {
           status: 200,
           body: {
             acknowledged: true,
             duplicate: true,
             providerEvent: providerEventViewFromRow(existing),
+            ...(compensation ? { membershipCompensation: compensation } : {}),
           },
         };
       }
@@ -630,7 +649,14 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
 
       await deps.db.query("BEGIN");
       try {
-        const paymentRisk = await paymentRiskForCallback(deps.db, {
+        const alreadyPaidOrder =
+          body.eventType === "payment_succeeded" &&
+          joined.status === "paid" &&
+          joined.successful_payment_intent_id === joined.payment_intent_id &&
+          joined.payment_intent_status === "succeeded";
+        const paymentRisk = alreadyPaidOrder
+          ? null
+          : await paymentRiskForCallback(deps.db, {
           joined,
           body,
           now: input.now,
@@ -653,10 +679,34 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           now: input.now,
         });
         if (providerEventInsert.kind === "duplicate") {
+          const compensation = await maybeEnqueuePaidMembershipCompensation(deps.db, {
+            providerEvent: providerEventInsert.providerEvent,
+            merchantOrderNo: body.merchantOrderNo,
+            now: input.now,
+          });
           await deps.db.query("COMMIT");
-          return duplicateProviderEventResponse(providerEventInsert.providerEvent);
+          return duplicateProviderEventResponse(providerEventInsert.providerEvent, compensation);
         }
         const providerEvent = providerEventInsert.providerEvent;
+
+        if (alreadyPaidOrder) {
+          const compensation = await maybeEnqueuePaidMembershipCompensation(deps.db, {
+            providerEvent,
+            merchantOrderNo: body.merchantOrderNo,
+            now: input.now,
+          });
+          await deps.db.query("COMMIT");
+          return {
+            status: 200,
+            body: {
+              acknowledged: true,
+              duplicate: false,
+              providerEvent: providerEventViewFromRow(providerEvent),
+              order: orderViewFromRow(joined),
+              ...(compensation ? { membershipCompensation: compensation } : {}),
+            },
+          };
+        }
 
         if (paymentRisk) {
           const riskResult = await recordPaymentCallbackRisk(deps.db, {
@@ -1792,9 +1842,14 @@ export async function ensureDefaultCreditPackage(
         id,
         code,
         display_name,
+        subtitle,
         credits,
+        gift_credits,
         amount_minor,
         currency,
+        badge,
+        sort_order,
+        metadata_json,
         status,
         created_at,
         updated_at
@@ -1803,18 +1858,28 @@ export async function ensureDefaultCreditPackage(
         '90000000-0000-4000-8000-000000000001',
         'starter_120',
         'Starter 120',
-        120,
+        'Base credits for image and video generation',
+        100,
+        20,
         9900,
         'CNY',
+        'entry',
+        10,
+        '{}'::jsonb,
         'active',
         $1,
         $1
       )
       ON CONFLICT (code) DO UPDATE
       SET display_name = EXCLUDED.display_name,
+          subtitle = EXCLUDED.subtitle,
           credits = EXCLUDED.credits,
+          gift_credits = EXCLUDED.gift_credits,
           amount_minor = EXCLUDED.amount_minor,
           currency = EXCLUDED.currency,
+          badge = EXCLUDED.badge,
+          sort_order = EXCLUDED.sort_order,
+          metadata_json = EXCLUDED.metadata_json,
           status = 'active',
           updated_at = EXCLUDED.updated_at
     `,
@@ -1914,15 +1979,55 @@ async function createCallbackRiskResponse(
   }
 }
 
-function duplicateProviderEventResponse(providerEvent: ProviderEventRow) {
+function duplicateProviderEventResponse(
+  providerEvent: ProviderEventRow,
+  membershipCompensation?: { kind: string; outboxEventId?: string; orderNo?: string },
+) {
   return {
     status: 200,
     body: {
       acknowledged: true,
       duplicate: true,
       providerEvent: providerEventViewFromRow(providerEvent),
+      ...(membershipCompensation ? { membershipCompensation } : {}),
     },
   };
+}
+
+async function maybeEnqueuePaidMembershipCompensation(
+  db: SqlDatabase,
+  input: { providerEvent: ProviderEventRow; merchantOrderNo: string; now: Date },
+) {
+  if (
+    input.providerEvent.event_type !== "payment_succeeded" ||
+    input.providerEvent.processing_status !== "processed"
+  ) {
+    return null;
+  }
+
+  const order = await queryOne<{ order_no: string; product_type: string; status: string }>(
+    db,
+    `
+      SELECT bo.order_no, bo.product_type, bo.status
+      FROM billing_orders bo
+      JOIN payment_intents pi
+        ON pi.organization_id = bo.organization_id
+       AND pi.order_id = bo.id
+      WHERE pi.provider = $1
+        AND pi.merchant_order_no = $2
+      ORDER BY pi.created_at DESC
+      LIMIT 1
+    `,
+    [input.providerEvent.provider, input.merchantOrderNo],
+  );
+  if (!order || order.product_type !== "membership_plan" || order.status !== "paid") {
+    return null;
+  }
+
+  return enqueueMissingMembershipActivationForPaidOrder(db, {
+    orderNo: order.order_no,
+    now: input.now,
+  });
 }
 
 function callbackMismatch(
@@ -2572,13 +2677,20 @@ async function appendPaymentSucceededOutboxEvent(
 }
 
 function packageViewFromRow(row: CreditPackageRow) {
+  const totalCredits = row.credits + row.gift_credits;
   return {
     id: row.id,
     code: row.code,
     displayName: row.display_name,
-    credits: row.credits,
+    subtitle: row.subtitle,
+    baseCredits: row.credits,
+    giftCredits: row.gift_credits,
+    credits: totalCredits,
     amountMinor: row.amount_minor,
     currency: row.currency,
+    badge: row.badge,
+    sortOrder: row.sort_order,
+    metadata: normalizeJson(row.metadata_json),
     status: row.status,
   };
 }

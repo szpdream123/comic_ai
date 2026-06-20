@@ -66,13 +66,28 @@ interface MembershipSubscriptionRow {
   current_period_end_at: Date | string | null;
 }
 
+interface MembershipPeriodStatusRow {
+  tier: "experience" | "professional";
+  period_end_at: Date | string;
+  plan_snapshot_json: unknown;
+  plan_entitlements_json: unknown | null;
+  plan_seat_limit: number | string | null;
+}
+
 interface ActiveEntitlementRow {
   entitlement_key: string;
+  source: string;
 }
 
 interface TeamPlanLimitRow {
   seat_limit: number | string;
 }
+
+const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = new Set([
+  "team_asset_library",
+  "team_dashboard",
+  "team_member_management",
+]);
 
 export function createMembershipOrderService(deps: {
   db: SqlDatabase;
@@ -274,11 +289,20 @@ async function getMembershipStatus(input: {
       `,
       [actor.organizationId],
     );
-    const activeEntitlements = await listActiveEntitlementKeys(input.db, {
+    const persistedEntitlements = await listActiveEntitlements(input.db, {
       organizationId: actor.organizationId,
       now: input.now,
     });
-    const subscriptionView = membershipSubscriptionView(subscription, input.now);
+    const preferredActivePeriod = await findPreferredActiveMembershipPeriod(input.db, {
+      organizationId: actor.organizationId,
+      now: input.now,
+    });
+    const subscriptionView = membershipSubscriptionView(subscription, input.now, preferredActivePeriod);
+    const activeEntitlements = resolveCurrentMembershipEntitlements({
+      persistedEntitlements,
+      preferredActivePeriod,
+      currentTier: subscriptionView.currentTier,
+    });
     const teamPlanLimit = await queryOne<TeamPlanLimitRow>(
       input.db,
       `
@@ -289,6 +313,11 @@ async function getMembershipStatus(input: {
       `,
       [actor.organizationId],
     );
+    const teamSeatLimit = resolveMembershipTeamSeatLimit({
+      activeEntitlements,
+      preferredActivePeriod,
+      teamPlanLimit,
+    });
 
     return {
       status: 200,
@@ -298,15 +327,15 @@ async function getMembershipStatus(input: {
           currentTier: subscriptionView.currentTier,
           currentPeriodEndAt: subscriptionView.currentPeriodEndAt,
           entitlements: {
+            canvasAccess: activeEntitlements.has("canvas_access"),
             priorityGeneration: activeEntitlements.has("priority_generation"),
             teamAssetLibrary: activeEntitlements.has("team_asset_library"),
             teamDashboard: activeEntitlements.has("team_dashboard"),
             teamMemberManagement: activeEntitlements.has("team_member_management"),
+            fullFlowAgent: activeEntitlements.has("full_flow_agent"),
           },
           team: {
-            seatLimit: activeEntitlements.has("team_member_management") && teamPlanLimit
-              ? Number(teamPlanLimit.seat_limit)
-              : null,
+            seatLimit: teamSeatLimit,
           },
         },
       },
@@ -319,7 +348,16 @@ async function getMembershipStatus(input: {
 function membershipSubscriptionView(
   subscription: MembershipSubscriptionRow | null | undefined,
   now: Date,
+  preferredActivePeriod?: MembershipPeriodStatusRow | null,
 ) {
+  if (preferredActivePeriod) {
+    return {
+      status: `${preferredActivePeriod.tier}_active`,
+      currentTier: preferredActivePeriod.tier,
+      currentPeriodEndAt: new Date(preferredActivePeriod.period_end_at).toISOString(),
+    };
+  }
+
   if (!subscription) {
     return {
       status: "none",
@@ -357,13 +395,105 @@ function membershipSubscriptionView(
   };
 }
 
-async function listActiveEntitlementKeys(
+async function findPreferredActiveMembershipPeriod(
+  db: SqlDatabase,
+  input: { organizationId: string; now: Date },
+) {
+  return queryOne<MembershipPeriodStatusRow>(
+    db,
+    `
+      SELECT
+        period.tier,
+        period.period_end_at,
+        period.plan_snapshot_json,
+        plan.entitlements_json AS plan_entitlements_json,
+        plan.seat_limit AS plan_seat_limit
+      FROM membership_periods period
+      LEFT JOIN membership_plans plan
+        ON plan.id = period.plan_id
+       AND plan.status = 'active'
+       AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
+       AND (plan.valid_until IS NULL OR plan.valid_until > $2)
+      WHERE period.organization_id = $1
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND period.tier IN ('experience', 'professional')
+      ORDER BY
+        CASE WHEN period.tier = 'professional' THEN 0 ELSE 1 END,
+        period.period_end_at DESC,
+        period.created_at DESC
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
+}
+
+function entitlementKeysFromMembershipPeriod(
+  period: MembershipPeriodStatusRow | null | undefined,
+) {
+  const planSnapshot = normalizeObject(period?.plan_snapshot_json);
+  return [
+    ...normalizeStringArray(planSnapshot.entitlements),
+    ...normalizeStringArray(period?.plan_entitlements_json),
+  ];
+}
+
+function resolveCurrentMembershipEntitlements(input: {
+  persistedEntitlements: ActiveEntitlementRow[];
+  preferredActivePeriod: MembershipPeriodStatusRow | null | undefined;
+  currentTier: string | null;
+}) {
+  const currentTier = input.preferredActivePeriod?.tier ?? input.currentTier;
+  const resolved = new Set<string>();
+  for (const entitlement of input.persistedEntitlements) {
+    if (entitlement.source === "payment") {
+      continue;
+    }
+    resolved.add(entitlement.entitlement_key);
+  }
+  for (const entitlementKey of entitlementKeysFromMembershipPeriod(input.preferredActivePeriod)) {
+    resolved.add(entitlementKey);
+  }
+
+  if (currentTier !== "professional") {
+    for (const entitlementKey of PROFESSIONAL_ONLY_ENTITLEMENT_KEYS) {
+      resolved.delete(entitlementKey);
+    }
+  }
+
+  return resolved;
+}
+
+function resolveMembershipTeamSeatLimit(input: {
+  activeEntitlements: Set<string>;
+  preferredActivePeriod: MembershipPeriodStatusRow | null | undefined;
+  teamPlanLimit: TeamPlanLimitRow | null | undefined;
+}) {
+  if (!input.activeEntitlements.has("team_member_management")) {
+    return null;
+  }
+
+  const planSnapshot = normalizeObject(input.preferredActivePeriod?.plan_snapshot_json);
+  const candidates = [
+    Number(input.teamPlanLimit?.seat_limit ?? 0),
+    Number(input.preferredActivePeriod?.plan_seat_limit ?? 0),
+    Number(planSnapshot.seatLimit ?? 0),
+  ].filter((value) => Number.isFinite(value) && value >= 0);
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  return Math.max(...candidates);
+}
+
+async function listActiveEntitlements(
   db: SqlDatabase,
   input: { organizationId: string; now: Date },
 ) {
   const result = await db.query<ActiveEntitlementRow>(
     `
-      SELECT entitlement_key
+      SELECT entitlement_key, source
       FROM organization_entitlements
       WHERE organization_id = $1
         AND status = 'active'
@@ -372,7 +502,7 @@ async function listActiveEntitlementKeys(
     [input.organizationId, input.now],
   );
 
-  return new Set(result.rows.map((row) => row.entitlement_key));
+  return result.rows;
 }
 
 async function findPurchasableMembershipPlan(

@@ -4729,6 +4729,7 @@ describe("asset generator and imported asset modals", () => {
       projectAssetTab: "character",
       validationMessage: "",
       toast: "",
+      membershipStatus: { status: "professional_active" },
       isScriptModalOpen: false,
       isCreateModalOpen: false,
       scriptTab: "script-upload",
@@ -4964,6 +4965,7 @@ describe("production workbench project tab", () => {
       projectLibrary: [],
       validationMessage: "",
       toast: "",
+      membershipStatus: { status: "professional_active" },
       isScriptModalOpen: false,
       isCreateModalOpen: false,
       scriptTab: "script-upload",
@@ -6450,6 +6452,8 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
     assert.equal(workbench.ui.membershipPlans.length, 1);
     assert.equal(workbench.ui.membershipStatus.status, "none");
+    assert.match(renderProductionWorkbench(workbench), /data-modal="pricing"/);
+    assert.match(renderProductionWorkbench(workbench), /library-team-pricing-modal/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: {
@@ -6471,7 +6475,115 @@ describe("production workbench project tab", () => {
     ]);
     assert.equal(workbench.ui.lastBillingOrder.id, "order-membership-1");
     assert.equal(workbench.ui.lastPaymentIntent.id, "intent-membership-1");
-    assert.match(workbench.ui.toast, /已创建会员支付意图/);
+    assert.equal(workbench.ui.toast, "");
+  });
+
+  it("renders membership pricing globally from the home status bar state", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000", availableCredits: 10000 } },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        isLibraryPricingModalOpen: true,
+        membershipStatus: { status: "none" },
+        membershipPlans: [{
+          id: "plan-pro-month",
+          code: "professional_monthly",
+          displayName: "专业版月卡",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 19900,
+          currency: "CNY",
+          giftCredits: 1000,
+        }],
+      }),
+    });
+
+    assert.match(html, /data-action="open-pricing"/);
+    assert.match(html, /data-modal="pricing"/);
+    assert.match(html, /library-team-pricing-modal/);
+    assert.match(html, /data-action="purchase-membership-plan"/);
+  });
+
+  it("renders a membership gate instead of the canvas workspace for non-members", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        membershipStatus: { status: "none" },
+      }),
+    });
+
+    assert.match(html, /data-canvas-membership-gate/);
+    assert.match(html, /data-action="open-pricing"/);
+    assert.match(html, /class="canvas-membership-lock-icon"/);
+    assert.match(html, /体验版会员/);
+    assert.doesNotMatch(html, /canvas-membership-gate-panel/);
+    assert.doesNotMatch(html, /class="canvas-workspace"/);
+  });
+
+  it("renders membership pricing globally from the canvas membership gate", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        isLibraryPricingModalOpen: true,
+        membershipStatus: { status: "none" },
+        membershipPlans: [{
+          id: "plan-pro-month",
+          code: "professional_monthly",
+          displayName: "专业版月卡",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 19900,
+          currency: "CNY",
+          giftCredits: 1000,
+        }],
+      }),
+    });
+
+    assert.match(html, /data-canvas-membership-gate/);
+    assert.match(html, /data-action="open-pricing"/);
+    assert.match(html, /data-modal="pricing"/);
+    assert.match(html, /library-team-pricing-modal/);
+    assert.match(html, /data-action="purchase-membership-plan"/);
+  });
+
+  it("waits for membership status before gating the canvas workspace", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        membershipStatus: null,
+      }),
+    });
+
+    assert.match(html, /data-canvas-membership-loading/);
+    assert.doesNotMatch(html, /data-canvas-membership-gate/);
+    assert.doesNotMatch(html, /class="canvas-workspace"/);
+  });
+
+  it("allows experience members to use the canvas workspace", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        membershipStatus: { status: "experience_active" },
+      }),
+    });
+
+    assert.match(html, /class="canvas-workspace"/);
+    assert.doesNotMatch(html, /data-canvas-membership-gate/);
   });
 
   it("starts polling after membership payment intent creation and refreshes entitlements when paid", async () => {
@@ -6563,7 +6675,7 @@ describe("production workbench project tab", () => {
     assert.ok(calls.some((call) => Array.isArray(call) && call[0] === "getPaymentIntent"));
     assert.equal(workbench.ui.membershipStatus.status, "professional_active");
     assert.equal(workbench.ui.libraryEntitlement.hasTeamAssetLibrary, true);
-    assert.match(workbench.ui.toast, /会员已开通/);
+    assert.equal(workbench.ui.toast, "");
   });
 
   it("can regenerate an expired membership payment qr code with a new order", async () => {
@@ -11881,6 +11993,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "tools",
+        membershipStatus: { status: "professional_active" },
         creditBalance: 720,
         episodeGenerationConfig: {
           defaultImageModelCode: "nano_banana_2",
@@ -16158,6 +16271,74 @@ describe("production workbench project tab", () => {
     assert.equal(createVideoTaskCalls[0].payload.model, "video-live");
     assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "把当前画面变成镜头推进的视频");
     assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-video-1");
+  });
+
+  it("opens membership pricing instead of a failure toast when canvas run requires membership", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async getBillingPackages() {
+          return { packages: [] };
+        },
+        async getMembershipPlans() {
+          return { data: { plans: [] } };
+        },
+        async getMembershipStatus() {
+          return { data: { membership: { status: "none" } } };
+        },
+        async runCanvasNode() {
+          const error = new Error("Active membership is required for canvas");
+          error.status = 403;
+          error.errorCode = "canvas_membership_required";
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000004",
+        selectedCanvasNodeId: "send-flow",
+        activeCanvasProjectId: "canvas-project-main",
+        canvasProjectView: "detail",
+        creditBalance: 99999,
+        episodeGenerationConfig: {
+          creditBalance: 99999,
+          models: [
+            { modelCode: "gpt-image-2-cn", modelLabel: "项目生图模型", supportedModes: ["image.generate"], creditCost: 90 },
+          ],
+        },
+        canvasDocument: {
+          ...createDefaultCanvasDocument({
+            projectId: "canvas-project-main",
+            episodeId: "10000000-0000-4000-8000-000000000004",
+          }),
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+    workbench.ui.canvasDocument.nodes.find((node) => node.id === "script-source").data.text = "第一幕剧本";
+    workbench.ui.canvasDocument.nodes.find((node) => node.id === "send-flow").data.prompt = "生成第一幕";
+    workbench.ui.canvasDocumentsByProject = {
+      [workbench.ui.selectedCanvasProjectId ?? "canvas-project-main"]: workbench.ui.canvasDocument,
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "run-canvas-node",
+        nodeId: "send-flow",
+      },
+    });
+
+    const sendNode = workbench.ui.canvasDocument.nodes.find((node) => node.id === "send-flow");
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+    assert.equal(workbench.ui.membershipStatus.status, "none");
+    assert.equal(workbench.ui.toast, "");
+    assert.equal(sendNode.data.status, "ready");
+    assert.equal(workbench.ui.canvasGeneratingNodeId, null);
   });
 
   it("maps canvas video image inputs to the selected video generation type", async () => {

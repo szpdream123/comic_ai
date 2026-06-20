@@ -44,10 +44,12 @@ import { createAdminUserService } from "../modules/admin-users/admin-user.servic
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
 import { resolveMembershipGenerationPriority } from "../modules/membership/membership-priority.service.ts";
+import { enqueueMissingMembershipActivationForPaidOrder } from "../modules/membership/payment-succeeded-membership-consumer.service.ts";
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
+import { createCreditPackageService } from "../modules/commerce-payment/credit-package.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
   createDefaultPaymentProviderRegistry,
@@ -116,6 +118,7 @@ import {
   createUploadSession,
   findUploadSession,
   runStorageRepairJob,
+  StorageCredentialError,
   type UploadSessionRuntime,
 } from "../modules/storage/upload-session.service.ts";
 import { createAssetVersionSnapshot } from "../modules/project/asset-version-record.service.ts";
@@ -134,6 +137,10 @@ import type { AssetType } from "../modules/project/asset.service.ts";
 import { createExportRecord } from "../modules/project/export-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
 import { InsufficientCreditsError, grantCreditsInTransaction, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
+import {
+  createCreditRechargeCenterService,
+  CreditRechargeCenterError,
+} from "../modules/credit-billing/credit-recharge-center.service.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
@@ -352,6 +359,7 @@ interface DevTenantScope {
 
 export interface PhoneAuthDevServer {
   origin: string;
+  db(): Promise<Awaited<ReturnType<typeof createDevDb>>>;
   listen(port: number): Promise<void>;
   close(): Promise<void>;
 }
@@ -808,6 +816,57 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
 
   if (error instanceof GenerationModelExecutionResolutionError) {
     writeJson(response, envelopedError(400, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CreditRechargeCenterError) {
+    const status =
+      error.code === "invalid_transfer_input"
+        ? 400
+        : error.code === "team_transfer_permission_missing"
+          ? 403
+          : error.code === "real_team_not_found"
+            ? 404
+            : 409;
+    writeJson(response, {
+      status,
+      body: {
+        error: {
+          code: error.code,
+          message:
+            error.code === "invalid_transfer_input"
+              ? "invalid transfer input"
+              : error.code === "team_transfer_permission_missing"
+                ? "team transfer permission missing"
+                : error.code === "real_team_not_found"
+                  ? "real team not found"
+                  : error.code === "insufficient_personal_credits"
+                    ? "insufficient personal credits"
+                    : "transfer replay conflict",
+        },
+      },
+    });
+    return true;
+  }
+
+  if (error instanceof StorageCredentialError) {
+    const status = error.code === "storage_credentials_forbidden" ? 403 : 502;
+    writeJson(
+      response,
+      envelopedError(
+        status,
+        error.code,
+        error.code === "storage_credentials_invalid"
+          ? "cloud storage credentials are invalid"
+          : error.code === "storage_credentials_forbidden"
+            ? "cloud storage credentials do not have permission"
+            : "cloud storage credentials are unavailable",
+        {
+          providerCode: error.providerCode,
+          providerRequestId: error.providerRequestId,
+        },
+      ),
+    );
     return true;
   }
 
@@ -7954,10 +8013,12 @@ async function ensureDefaultMembershipPlan(
     [
       input.now,
       JSON.stringify([
+        "canvas_access",
         "priority_generation",
         "team_asset_library",
         "team_dashboard",
         "team_member_management",
+        "full_flow_agent",
       ]),
       JSON.stringify({ modelFamilies: ["seedance"] }),
       JSON.stringify({ sortOrder: 20 }),
@@ -8267,18 +8328,65 @@ async function hasActiveOrganizationEntitlement(
   const entitlement = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id
+      SELECT id::text AS id
       FROM organization_entitlements
       WHERE organization_id = $1
         AND entitlement_key = $2
         AND status = 'active'
         AND (expires_at IS NULL OR expires_at > $3)
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
+        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $3
+        AND (period.plan_snapshot_json -> 'entitlements') ? $2
       LIMIT 1
     `,
     [input.organizationId, input.entitlementKey, input.now],
   );
 
   return Boolean(entitlement);
+}
+
+async function hasActiveOrganizationMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    now: Date;
+  },
+): Promise<boolean> {
+  const membership = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM organization_membership_subscriptions
+      WHERE organization_id = $1
+        AND status IN ('experience_active', 'professional_active')
+        AND current_period_end_at IS NOT NULL
+        AND current_period_end_at > $2
+      UNION ALL
+      SELECT id
+      FROM membership_periods
+      WHERE organization_id = $1
+        AND tier IN ('experience', 'professional')
+        AND status = 'active'
+        AND period_end_at > $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
+
+  return Boolean(membership);
+}
+
+function canvasMembershipRequiredError(): AuthHttpResponse<unknown> {
+  return envelopedError(
+    403,
+    "canvas_membership_required",
+    "Active membership is required for canvas",
+  );
 }
 
 function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
@@ -8413,11 +8521,16 @@ export function createPhoneAuthDevServer(
         return;
       }
 
-      if (
-        request.method === "GET" &&
-        (pathname === "/admin" || pathname.startsWith("/admin/"))
-      ) {
-        return await serveAdminStatic(pathname, response);
+      if (request.method === "GET") {
+        if (pathname.startsWith("/uploads/")) {
+          return await serveUploadedFile(request, pathname, response);
+        }
+        if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+          return await serveAdminStatic(pathname, response);
+        }
+        if (!pathname.startsWith("/api/")) {
+          return await serveStatic(pathname, response);
+        }
       }
 
       const db = await dbPromise;
@@ -8437,12 +8550,9 @@ export function createPhoneAuthDevServer(
           adapter: new OpenAICompatibleTextAdapter(),
           env: runtimeEnv,
         }),
-        organizationId: devOrganizationId,
-        workspaceId: devWorkspaceId,
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
       });
-      if (pathname.startsWith("/uploads/")) {
-        return await serveUploadedFile(request, pathname, response);
-      }
 
       if (pathname.startsWith("/vendor/")) {
         return await serveVendorFile(pathname, response);
@@ -10207,6 +10317,66 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/credit-packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        await ensureDefaultCreditPackage(db, { now: new Date() });
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await creditPackages.listPackages({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/credit-packages") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.savePackage({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            subtitle: body.subtitle === undefined || body.subtitle === null ? null : String(body.subtitle),
+            credits: Number(body.credits ?? body.baseCredits ?? 0),
+            giftCredits: Number(body.giftCredits ?? 0),
+            amountMinor: Number(body.amountMinor ?? 0),
+            currency: String(body.currency ?? "CNY"),
+            badge: body.badge === undefined || body.badge === null ? null : String(body.badge),
+            sortOrder: body.sortOrder === undefined || body.sortOrder === null ? 100 : Number(body.sortOrder),
+            metadata: objectBody(body.metadata),
+            status: String(body.status ?? "active"),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/settings") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -11252,14 +11422,26 @@ export function createPhoneAuthDevServer(
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);
         if (request.method === "GET" && orderMatch) {
-          return writeJson(
-            response,
-            await commercePayment.getBillingOrder({
-              user: { sessionToken: authenticated.sessionToken },
-              orderId: decodeURIComponent(orderMatch[1]),
-              now: new Date(),
-            }),
-          );
+          const now = new Date();
+          const orderResult = await commercePayment.getBillingOrder({
+            user: { sessionToken: authenticated.sessionToken },
+            orderId: decodeURIComponent(orderMatch[1]),
+            now,
+          });
+          const order = "order" in orderResult.body ? orderResult.body.order : null;
+          if (
+            orderResult.status === 200 &&
+            order?.orderNo &&
+            order?.status === "paid" &&
+            order.productType === "membership_plan"
+          ) {
+            await enqueueMissingMembershipActivationForPaidOrder(db, {
+              orderNo: order.orderNo,
+              now,
+            });
+            await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 20 });
+          }
+          return writeJson(response, orderResult);
         }
 
         if (request.method === "POST" && pathname === "/api/billing/orders") {
@@ -11627,17 +11809,24 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
+        const canvasWorkspaceId = pathname.startsWith("/api/canvas/")
+          ? await resolveDefaultWorkspaceForSession(db, authenticated, new Date())
+          : devWorkspaceId;
 
         const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
         if (request.method === "GET" && canvasNodeRunsMatch) {
           const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
+          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: canvasWorkspaceId,
             capability: capabilities.projectView,
-            now: new Date(),
+            now,
           });
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
+          }
           const canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -11658,12 +11847,16 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
           const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
           const body = (await readJsonBody(request)) as { selectionRole?: unknown };
+          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: canvasWorkspaceId,
             capability: capabilities.projectEdit,
-            now: new Date(),
+            now,
           });
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
+          }
           const canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -11698,12 +11891,16 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
           const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: canvasWorkspaceId,
             capability: capabilities.generationStart,
-            now: new Date(),
+            now,
           });
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
+          }
           const canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -12981,9 +13178,45 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: await adminUsers.listUserCreditLedger({
               userId: authenticated.user.id,
+              workspaceId: currentWorkspaceId,
               pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             }),
           });
+        }
+
+        if (request.method === "GET" && pathname === "/api/creator/credits/recharge-center") {
+          const rechargeCenter = createCreditRechargeCenterService({
+            db,
+            workspaceId: currentWorkspaceId,
+          });
+          return writeJson(
+            response,
+            await rechargeCenter.getRechargeCenter({
+              user: { sessionToken: authenticated.sessionToken },
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/credits/team-pool-transfers") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = objectBody(await readJsonBody(request));
+          const rechargeCenter = createCreditRechargeCenterService({
+            db,
+            workspaceId: currentWorkspaceId,
+          });
+          return writeJson(
+            response,
+            await rechargeCenter.transferToTeamPool({
+              user: { sessionToken: authenticated.sessionToken },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
         }
 
         if (request.method === "POST" && pathname === "/api/creator/team/members") {
@@ -13094,6 +13327,9 @@ export function createPhoneAuthDevServer(
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
           }
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
+          }
           try {
             if (request.method === "GET") {
               return writeJson(response, enveloped(200, {
@@ -13139,14 +13375,18 @@ export function createPhoneAuthDevServer(
         }
 
         if (pathname === "/api/creator/canvas-projects") {
+          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: currentWorkspaceId,
             capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
-            now: new Date(),
+            now,
           });
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
+          }
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
           }
           const ownedProjects = await listCanvasProjects(db, {
             organizationId: actor.organizationId,
@@ -13179,12 +13419,16 @@ export function createPhoneAuthDevServer(
         const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
+          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: devWorkspaceId,
+            workspaceId: currentWorkspaceId,
             capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
-            now: new Date(),
+            now,
           });
+          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
+            return writeJson(response, canvasMembershipRequiredError());
+          }
           const project = await findCanvasProjectRecord(db, {
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
@@ -15071,6 +15315,9 @@ export function createPhoneAuthDevServer(
 
   return {
     origin: "http://127.0.0.1:0",
+    async db() {
+      return dbPromise;
+    },
     async listen(port: number) {
       await new Promise<void>((resolve, reject) => {
         httpServer.once("error", reject);

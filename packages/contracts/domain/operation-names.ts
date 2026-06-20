@@ -18,6 +18,7 @@ export const operationNames = {
   membershipPlanSave: "membership.plan.save",
   membershipOrderCreate: "membership.order.create",
   membershipStatusGet: "membership.status.get",
+  creditPackageSave: "credit.package.save",
   opsManualSettleTask: "ops.manual_settle_task",
   opsRetryTask: "ops.retry_task",
   opsRetryFinalize: "ops.retry_finalize",

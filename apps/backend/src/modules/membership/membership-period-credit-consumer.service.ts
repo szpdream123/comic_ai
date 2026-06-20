@@ -25,6 +25,8 @@ interface MembershipPeriodRow {
   tier: string;
   period_end_at: Date | string;
   gift_credits: number;
+  order_no: string | null;
+  plan_code: string | null;
 }
 
 export async function consumeMembershipPeriodCreditGrant(
@@ -65,7 +67,9 @@ export async function consumeMembershipPeriodCreditGrant(
           reason: "membership period gifted credits",
           metadata: {
             orderId: period.order_id,
+            orderNo: period.order_no,
             planId: period.plan_id,
+            planCode: period.plan_code,
             tier: period.tier,
           },
           lot: {
@@ -79,6 +83,12 @@ export async function consumeMembershipPeriodCreditGrant(
             },
           },
           createdByUserId: null,
+          now: input.now,
+        });
+        await markBillingOrderCreditGranted(db, {
+          organizationId: period.organization_id,
+          orderId: period.order_id,
+          ledgerEntryId: grant.id,
           now: input.now,
         });
         await db.query("COMMIT");
@@ -109,12 +119,49 @@ async function findMembershipPeriodForCreditGrant(
   return queryOne<MembershipPeriodRow>(
     db,
     `
-      SELECT id, organization_id, order_id, plan_id, tier, period_end_at, gift_credits
-      FROM membership_periods
-      WHERE id = $1
+      SELECT
+        mp.id,
+        mp.organization_id,
+        mp.order_id,
+        mp.plan_id,
+        mp.tier,
+        mp.period_end_at,
+        mp.gift_credits,
+        bo.order_no,
+        mplan.code AS plan_code
+      FROM membership_periods mp
+      LEFT JOIN billing_orders bo
+        ON bo.organization_id = mp.organization_id
+       AND bo.id = mp.order_id
+      LEFT JOIN membership_plans mplan
+        ON mplan.id = mp.plan_id
+      WHERE mp.id = $1
       LIMIT 1
     `,
     [membershipPeriodId],
+  );
+}
+
+async function markBillingOrderCreditGranted(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    orderId: string;
+    ledgerEntryId: string;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE billing_orders
+      SET credit_grant_ledger_entry_id = $3,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND id = $2
+        AND product_type = 'membership_plan'
+        AND credit_grant_ledger_entry_id IS NULL
+    `,
+    [input.organizationId, input.orderId, input.ledgerEntryId, input.now],
   );
 }
 

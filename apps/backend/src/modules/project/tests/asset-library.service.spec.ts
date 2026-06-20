@@ -586,6 +586,60 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
+  it("does not keep team asset access from stale payment entitlements after professional membership expires", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenantAndProject(db);
+      await upsertLibraryAssetWithVersion(db, {
+        asset: {
+          id: "51000000-0000-4000-8000-000000000011",
+          scope: "team",
+          organizationId,
+          workspaceId,
+          createdByUserId: userId,
+          assetType: "character",
+          category: "character",
+          folder: "expired payment entitlement",
+          name: "Expired Payment Asset",
+          description: "Should stay hidden after membership expiry",
+          tags: ["team"],
+          status: "active",
+          requiresProEntitlement: true,
+          createdAt: new Date("2026-06-01T09:00:00.000Z"),
+          updatedAt: new Date("2026-06-01T09:00:00.000Z"),
+        },
+        version: {
+          id: "52000000-0000-4000-8000-000000000011",
+          versionNumber: 1,
+          storageObjectKey: "team/expired-payment.png",
+          previewUrl: "data:image/png;base64,expired-payment",
+          mimeType: "image/png",
+          width: 1024,
+          height: 1024,
+          metadata: { source: "test" },
+          createdAt: new Date("2026-06-01T09:00:00.000Z"),
+        },
+      });
+      await seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(db);
+
+      const blocked = await listLibraryAssetsForActor(db, {
+        actor,
+        scope: "team",
+        now: new Date("2026-06-16T08:00:00.000Z"),
+      });
+
+      assert.equal(blocked.entitlement.hasTeamAssetLibrary, false);
+      assert.equal(
+        blocked.entitlement.blockReason,
+        "team_asset_library_entitlement_required",
+      );
+      assert.deepEqual(blocked.assets, []);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not expose project-import behavior from the reusable asset library service", () => {
     assert.equal("importLibraryAssetToProject" in assetLibraryService, false);
   });
@@ -664,6 +718,153 @@ async function grantTeamAssetEntitlement(
         NULL,
         '2026-05-23T09:12:00.000Z',
         '2026-05-23T09:12:00.000Z'
+      )
+    `,
+    [organizationId],
+  );
+}
+
+async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status
+      )
+      VALUES (
+        '56000000-0000-4000-8000-000000000011',
+        'expired_professional_asset_test',
+        'Expired Professional Asset Test',
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        50,
+        '["team_asset_library"]'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        membership_plan_id,
+        product_type,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at
+      )
+      VALUES (
+        '54000000-0000-4000-8000-000000000011',
+        $1,
+        $2,
+        'ORD-ASSET-EXPIRED-PRO',
+        '56000000-0000-4000-8000-000000000011',
+        'membership_plan',
+        $3::jsonb,
+        $3::jsonb,
+        3000,
+        29900,
+        'CNY',
+        'pending_payment',
+        '2026-06-15T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      userId,
+      JSON.stringify({
+        tier: "professional",
+        entitlements: ["team_asset_library"],
+      }),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '55000000-0000-4000-8000-000000000011',
+        $1,
+        '54000000-0000-4000-8000-000000000011',
+        '56000000-0000-4000-8000-000000000011',
+        'professional',
+        '2026-06-01T08:00:00.000Z',
+        '2026-06-15T08:00:00.000Z',
+        3000,
+        $2::jsonb,
+        'active',
+        '2026-06-01T08:00:00.000Z',
+        '2026-06-01T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      JSON.stringify({
+        tier: "professional",
+        entitlements: ["team_asset_library"],
+      }),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO organization_entitlements (
+        id,
+        organization_id,
+        entitlement_key,
+        status,
+        source,
+        expires_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '53000000-0000-4000-8000-000000000011',
+        $1,
+        'team_asset_library',
+        'active',
+        'payment',
+        NULL,
+        '2026-06-01T08:00:00.000Z',
+        '2026-06-01T08:00:00.000Z'
       )
     `,
     [organizationId],

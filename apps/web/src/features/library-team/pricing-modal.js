@@ -69,8 +69,7 @@ export function renderPricingModal({
 function renderPricingPlan(plan, selectedPlanId) {
   const featured = plan.id === "pro";
   const selected = plan.id === selectedPlanId;
-  const actionLabel =
-    plan.id === "enterprise" ? "联系商务" : plan.id === "pro" ? "立即订阅" : "立即购买";
+  const actionLabel = plan.id === "enterprise" ? "联系商务" : "立即订阅";
   const actionName = plan.id === "enterprise"
     ? "request-enterprise-contact"
     : plan.membershipPlanId
@@ -84,11 +83,11 @@ function renderPricingPlan(plan, selectedPlanId) {
       class="library-team-plan-card${featured ? " is-featured" : ""}${selected ? " is-selected" : ""}"
       data-plan-tier="${escapeAttr(plan.tier ?? plan.id)}"
     >
-      ${featured ? '<span class="library-team-badge">推荐</span>' : ""}
+      <span class="library-team-badge${featured ? "" : " is-placeholder"}" aria-hidden="${featured ? "false" : "true"}">${featured ? "推荐" : ""}</span>
       <h3>${escapeHtml(plan.name)}</h3>
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
-      <p class="library-team-plan-note">${escapeHtml(planNote(plan.id))}</p>
+      <p class="library-team-plan-note">${escapeHtml(plan.note || planNote(plan.id))}</p>
       <button
         class="library-team-button${featured ? " library-team-button-primary" : ""}"
         type="button"
@@ -98,7 +97,7 @@ function renderPricingPlan(plan, selectedPlanId) {
         data-provider="wechat_pay"
       >${escapeHtml(actionLabel)}</button>
       <ul class="library-team-feature-list">
-        ${featuresForPlan(plan.id).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
+        ${(plan.features?.length ? plan.features : featuresForPlan(plan.id)).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
       </ul>
     </article>
   `;
@@ -127,6 +126,8 @@ function mapMembershipPlansToPricingPlans(plans) {
     periodUnit: plan?.periodUnit,
     periodCount: plan?.periodCount,
     tier: plan?.tier,
+    note: membershipPlanNoteFromMetadata(plan?.displayMetadata),
+    features: membershipPlanFeaturesFromMetadata(plan?.displayMetadata, plan?.entitlements),
     metadata: plan?.displayMetadata ?? {},
   })).filter((plan) => plan.membershipPlanId);
 
@@ -136,6 +137,44 @@ function mapMembershipPlansToPricingPlans(plans) {
     price: "联系商务",
     credits: "定制席位与权益",
   }];
+}
+
+function membershipPlanNoteFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return "";
+  }
+  const note = metadata.note ?? metadata.subtitle ?? metadata.description;
+  return typeof note === "string" ? note.trim() : "";
+}
+
+function membershipPlanFeaturesFromMetadata(metadata, entitlements) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return [];
+  }
+  const features = metadata.features ?? metadata.benefits;
+  if (!Array.isArray(features)) {
+    return [];
+  }
+  const normalizedFeatures = features.map((feature) => String(feature ?? "").trim()).filter(Boolean);
+  if (!Array.isArray(entitlements)) {
+    return normalizedFeatures;
+  }
+  const selectedEntitlementSet = new Set(
+    entitlements.map((item) => String(item ?? "").trim()).filter(Boolean),
+  );
+  return normalizedFeatures.filter((feature) => {
+    const entitlementKey = membershipKnownFeatureEntitlement(feature);
+    return !entitlementKey || selectedEntitlementSet.has(entitlementKey);
+  });
+}
+
+function membershipKnownFeatureEntitlement(feature) {
+  return new Map([
+    ["可使用画布功能", "canvas_access"],
+    ["Seedance 2.0 优先排队", "priority_generation"],
+    ["团队成员管理", "team_member_management"],
+    ["全流程 Agent", "full_flow_agent"],
+  ]).get(feature);
 }
 
 function membershipPricingId(plan) {
@@ -270,10 +309,7 @@ function renderPaymentSuccessState(orderNo) {
       <div class="library-team-payment-success-mark" aria-hidden="true">✓</div>
       <div class="library-team-payment-success-copy">
         <strong>会员权益已生效</strong>
-        <span>订单 ${escapeHtml(orderNo)}</span>
       </div>
-      <p>上传图片、优先生成和团队协作等权益已在当前页面开启。</p>
-      <button class="library-team-button library-team-button-primary" type="button" data-action="close-membership-payment">查看会员权益</button>
     </div>
   `;
 }
@@ -514,18 +550,18 @@ function planNote(id) {
 
 function featuresForPlan(id) {
   if (id === "enterprise") {
-    return ["大客户专属服务", "Agent 创意工作流定制", "更多团队席位支持", "快速响应技术支持"];
+    return ["可使用画布功能", "大客户专属服务", "Agent 创意工作流定制", "更多团队席位支持", "快速响应技术支持"];
   }
   if (id === "pro") {
-    return ["Seedance 2.0 优先队列", "全流程 Agent", "团队成员管理", "支持 50 人团队"];
+    return ["可使用画布功能", "Seedance 2.0 优先队列", "全流程 Agent", "团队成员管理", "支持 50 人团队"];
   }
   if (id === "pro-quarter" || id === "pro-year") {
-    return ["Seedance 系列优先队列", "团队成员管理", "会员积分到期清零", "适合长期项目"];
+    return ["可使用画布功能", "Seedance 系列优先队列", "团队成员管理", "会员积分到期清零", "适合长期项目"];
   }
   if (id === "experience") {
-    return ["体验专业会员权益", "会员赠送积分", "短周期试用", "到期自动回收权益"];
+    return ["可使用画布功能", "体验专业会员权益", "会员赠送积分", "短周期试用", "到期自动回收权益"];
   }
-  return ["全流程 Agent", "行业主流模型", "多剧集创作", "无团队管理"];
+  return ["可使用画布功能", "全流程 Agent", "行业主流模型", "多剧集创作", "无团队管理"];
 }
 
 function mapBillingPackagesToPlans(packages) {
