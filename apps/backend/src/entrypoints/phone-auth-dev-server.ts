@@ -2575,6 +2575,7 @@ async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
+  const scope = personalDevTenantScope(userId);
   const row = await queryOne<{
     available_credits: number | string | null;
     reserved_credits: number | string | null;
@@ -2601,10 +2602,13 @@ async function getUserCreditBalance(
       LEFT JOIN organizations o ON o.id = m.organization_id
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE u.id = $1
-      ORDER BY m.created_at ASC
+      ORDER BY
+        CASE WHEN tp.id IS NOT NULL THEN 0 ELSE 1 END,
+        CASE WHEN m.organization_id = $2 THEN 0 ELSE 1 END,
+        m.created_at ASC
       LIMIT 1
     `,
-    [userId],
+    [userId, scope.organizationId],
   );
   const availableCredits = Number(row?.available_credits ?? 0);
   return {
@@ -7963,9 +7967,9 @@ async function resolvePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
 ): Promise<string> {
-  await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+  const workspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
   await repairTeamWorkspaceProjectsToPersonalWorkspaces(db);
-  return personalProjectWorkspaceId(authenticated.user.id);
+  return workspaceId;
 }
 
 async function ensurePersonalProjectWorkspaceForSession(
@@ -7994,7 +7998,6 @@ async function ensureCachedPersonalProjectWorkspaceAccess(
     return cached;
   }
   const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
-    .then(() => personalProjectWorkspaceId(userId))
     .catch((error) => {
       promises?.delete(userId);
       throw error;
@@ -8006,7 +8009,8 @@ async function ensureCachedPersonalProjectWorkspaceAccess(
 async function ensurePersonalProjectWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
-) {
+): Promise<string> {
+  const scope = personalDevTenantScope(userId);
   const workspaceId = personalProjectWorkspaceId(userId);
 
   await db.query(
@@ -8020,14 +8024,43 @@ async function ensurePersonalProjectWorkspaceAccess(
     [devOrganizationId],
   );
   await repairDevOrganizationLegacyCreditLots(db);
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Personal Creator Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE
+      SET status = 'active'
+    `,
+    [scope.organizationId],
+  );
+  await ensurePersonalDevWorkspaceAccess(db, userId);
 
+  const existingWorkspace = await queryOne<{ organization_id: string }>(
+    db,
+    "SELECT organization_id FROM workspaces WHERE id = $1",
+    [workspaceId],
+  );
+  if (existingWorkspace && existingWorkspace.organization_id !== scope.organizationId) {
+    const repaired = await tryRepairLegacyPersonalProjectWorkspaceScope(db, {
+      userId,
+      workspaceId,
+      fromOrganizationId: existingWorkspace.organization_id,
+      toOrganizationId: scope.organizationId,
+    });
+    if (!repaired) {
+      return scope.workspaceId;
+    }
+  }
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
       VALUES ($1, $2, 'Personal Project Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
+      ON CONFLICT (id) DO UPDATE
+      SET
+        name = EXCLUDED.name,
+        status = 'active'
     `,
-    [workspaceId, devOrganizationId],
+    [workspaceId, scope.organizationId],
   );
   await db.query(
     `
@@ -8036,8 +8069,63 @@ async function ensurePersonalProjectWorkspaceAccess(
       ON CONFLICT (organization_id, workspace_id, user_id)
       DO UPDATE SET role = 'owner_admin', status = 'active'
     `,
-    [randomUUID(), devOrganizationId, workspaceId, userId],
+    [randomUUID(), scope.organizationId, workspaceId, userId],
   );
+  return workspaceId;
+}
+
+async function tryRepairLegacyPersonalProjectWorkspaceScope(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    workspaceId: string;
+    fromOrganizationId: string;
+    toOrganizationId: string;
+  },
+) {
+  const linkedProjects = await queryOne<{ count: number | string }>(
+    db,
+    `
+      SELECT count(*) AS count
+      FROM projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+    `,
+    [input.fromOrganizationId, input.workspaceId],
+  );
+  if (Number(linkedProjects?.count ?? 0) > 0) {
+    return false;
+  }
+
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        DELETE FROM memberships
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND user_id = $3
+      `,
+      [input.fromOrganizationId, input.workspaceId, input.userId],
+    );
+    await db.query(
+      `
+        UPDATE workspaces
+        SET organization_id = $1,
+            name = 'Personal Project Workspace',
+            status = 'active',
+            updated_at = now()
+        WHERE id = $2
+          AND organization_id = $3
+      `,
+      [input.toOrganizationId, input.workspaceId, input.fromOrganizationId],
+    );
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    return false;
+  }
 }
 
 async function repairDevOrganizationLegacyCreditLots(
@@ -8233,9 +8321,30 @@ async function runTeamWorkspaceProjectRepair(
         AND projects.workspace_id = $2
         AND projects.created_by_user_id IS NOT NULL
         AND projects.created_by_user_id = personal_scope.user_id
+        AND EXISTS (
+          SELECT 1
+          FROM workspaces personal_workspace
+          WHERE personal_workspace.id = personal_scope.workspace_id
+            AND personal_workspace.organization_id = projects.organization_id
+        )
     `,
     [devOrganizationId, devWorkspaceId],
   );
+}
+
+async function resolveOrganizationIdForWorkspace(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  workspaceId: string,
+) {
+  const workspace = await queryOne<{ organization_id: string }>(
+    db,
+    "SELECT organization_id FROM workspaces WHERE id = $1",
+    [workspaceId],
+  );
+  if (!workspace?.organization_id) {
+    throw new Error("workspace_organization_missing");
+  }
+  return workspace.organization_id;
 }
 
 function personalProjectWorkspaceId(userId: string) {
@@ -14103,7 +14212,7 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: await adminUsers.listUserCreditLedger({
               userId: authenticated.user.id,
-              organizationId: devOrganizationId,
+              organizationId: await resolveOrganizationIdForWorkspace(db, workspaceId),
               workspaceId,
               pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             }),

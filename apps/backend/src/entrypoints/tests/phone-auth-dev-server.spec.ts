@@ -326,6 +326,71 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("isolates new user wallet and team entitlements from the shared dev organization", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+          VALUES ($1, 'Comic AI Studio', 'active', 101160, 0)
+          ON CONFLICT (id) DO UPDATE
+          SET credit_balance_cached = EXCLUDED.credit_balance_cached,
+              credit_reserved_cached = EXCLUDED.credit_reserved_cached
+        `,
+        ["10000000-0000-4000-8000-000000000001"],
+      );
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (id, organization_id, entitlement_key, status, source)
+          VALUES
+            (gen_random_uuid(), $1, 'team_member_management', 'active', 'dev_seed'),
+            (gen_random_uuid(), $1, 'team_asset_library', 'active', 'dev_seed'),
+            (gen_random_uuid(), $1, 'team_dashboard', 'active', 'dev_seed')
+          ON CONFLICT (organization_id, entitlement_key)
+          DO UPDATE SET status = 'active', source = EXCLUDED.source
+        `,
+        ["10000000-0000-4000-8000-000000000001"],
+      );
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138124");
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const state = await stateResponse.json();
+      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie },
+      });
+      const ledger = await ledgerResponse.json();
+      const teamResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
+        headers: { cookie },
+      });
+      const team = await teamResponse.json();
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.availableCredits, 0);
+      assert.equal(session.user.creditBalance, 0);
+      assert.equal(stateResponse.status, 200);
+      assert.equal(state.availableCredits, 0);
+      assert.equal(ledgerResponse.status, 200);
+      assert.equal(ledger.summary.organizationAvailableCredits, 0);
+      assert.equal(ledger.summary.displayAvailableCredits, 0);
+      assert.equal(ledger.data.length, 0);
+      assert.equal(teamResponse.status, 200);
+      assert.equal(team.entitlements.teamMemberManagement, false);
+      assert.equal(team.entitlements.teamAssetLibrary, false);
+      assert.equal(team.entitlements.teamDashboard, false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("repairs legacy dev organization credit lots without changing cached balance", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
