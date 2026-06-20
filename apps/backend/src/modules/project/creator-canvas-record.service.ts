@@ -313,10 +313,14 @@ export async function findCanvasByCanvasProjectId(
     [input.organizationId, canvas.id, canvas.server_revision],
   );
   const documentProjectId = canvas.project_id ?? canvas.id;
-  const normalized = normalizeCanvasDocument(document?.document_json ?? {}, {
+  const normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
     canvasProjectId: canvas.id,
     projectId: documentProjectId,
     now: new Date().toISOString(),
+  }), {
+    canvasProjectId: canvas.id,
+    projectId: documentProjectId,
+    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
   });
   return {
     canvasProjectId: canvas.id,
@@ -367,14 +371,14 @@ export async function saveCanvasByCanvasProjectId(
   }
 
   const documentProjectId = canvas.project_id ?? canvas.id;
-  const document = normalizeCanvasDocument(input.document, {
+  const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(input.document, {
     canvasProjectId: canvas.id,
     projectId: documentProjectId,
     now: input.now.toISOString(),
-  });
-  validateCanvasDocumentOwnership(document, {
+  }), {
     canvasProjectId: canvas.id,
     projectId: documentProjectId,
+    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
   });
   validateCanvasDocumentGraph(document);
 
@@ -1214,16 +1218,35 @@ export function normalizeCanvasDocument(
   };
 }
 
+function canonicalizeCanvasDocumentOwnership(
+  document: CanvasDocument,
+  input: { canvasProjectId: string; projectId: string; acceptedProjectIds?: string[] },
+): CanvasDocument {
+  if (document.canvasProjectId !== input.canvasProjectId) {
+    throw new CanvasDocumentError("canvas_project_mismatch", "canvas project id mismatch");
+  }
+  const acceptedProjectIds = new Set([
+    input.projectId,
+    ...(input.acceptedProjectIds ?? []),
+  ].filter(Boolean));
+  if (!acceptedProjectIds.has(document.projectId)) {
+    throw new CanvasDocumentError("canvas_document_project_mismatch", "canvas document project id mismatch");
+  }
+  if (document.projectId === input.projectId) {
+    return document;
+  }
+  return {
+    ...document,
+    canvasProjectId: input.canvasProjectId,
+    projectId: input.projectId,
+  };
+}
+
 function validateCanvasDocumentOwnership(
   document: CanvasDocument,
   input: { canvasProjectId: string; projectId: string },
 ) {
-  if (document.canvasProjectId !== input.canvasProjectId) {
-    throw new CanvasDocumentError("canvas_project_mismatch", "canvas project id mismatch");
-  }
-  if (document.projectId !== input.projectId) {
-    throw new CanvasDocumentError("canvas_document_project_mismatch", "canvas document project id mismatch");
-  }
+  canonicalizeCanvasDocumentOwnership(document, input);
 }
 
 function normalizeCanvasNode(value: unknown): CanvasNode | null {

@@ -783,8 +783,17 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
-  async function listUserCreditLedger(input: { userId: string; pageSize?: number }) {
-    const target = await findUserCreditTarget(deps.db, input.userId);
+  async function listUserCreditLedger(input: {
+    userId: string;
+    pageSize?: number;
+    organizationId?: string | null;
+    workspaceId?: string | null;
+  }) {
+    const target = await findUserCreditTarget(deps.db, {
+      userId: input.userId,
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+    });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
     const ledgerScope = ledgerScopeForTarget(target);
@@ -1026,7 +1035,24 @@ async function countOrganizationActiveSubaccounts(db: SqlDatabase, organizationI
   return Number(result?.count ?? 0);
 }
 
-async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<UserCreditTarget | undefined> {
+async function findUserCreditTarget(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    organizationId?: string | null;
+    workspaceId?: string | null;
+  },
+): Promise<UserCreditTarget | undefined> {
+  const params: unknown[] = [input.userId];
+  const filters = ["u.id = $1"];
+  if (input.organizationId) {
+    params.push(input.organizationId);
+    filters.push(`m.organization_id = $${params.length}`);
+  }
+  if (input.workspaceId) {
+    params.push(input.workspaceId);
+    filters.push(`m.workspace_id = $${params.length}`);
+  }
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
@@ -1041,13 +1067,13 @@ async function findUserCreditTarget(db: SqlDatabase, userId: string): Promise<Us
       FROM users u
       JOIN memberships m ON m.user_id = u.id
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-      WHERE u.id = $1
+      WHERE ${filters.join(" AND ")}
       ORDER BY
         CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
-    [userId],
+    params,
   );
 
   if (!row) {

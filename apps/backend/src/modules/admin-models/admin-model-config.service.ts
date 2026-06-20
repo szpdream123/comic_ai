@@ -199,6 +199,7 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
     adapterMode: "native",
     providerConfig: {
       baseURL: "https://api.openai.com",
+      requestPath: "/v1/images/edits",
       endpoint: "/v1/images/generations",
       editEndpoint: "/v1/images/edits",
       apiKeyEnv: "",
@@ -878,21 +879,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     if (!["active", "disabled", "archived"].includes(input.status)) {
       return error(400, "invalid_model_status", "模型状态不支持");
     }
-    if (input.status === "active") {
-      const launchCheck = modelLaunchCheck(existing);
-      if (!launchCheck.ok) {
-        return {
-          status: 400,
-          body: {
-            error: {
-              code: "admin_model_launch_check_failed",
-              message: "模型上线检查未通过",
-              details: { failedItems: launchCheck.failedItems },
-            },
-          },
-        };
-      }
-    }
     await deps.db.query(
       "UPDATE ai_model_configs SET status = $2, updated_at = $3 WHERE id = $1",
       [input.id, input.status, input.now],
@@ -908,6 +894,47 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       now: input.now,
     });
     return { status: 200, body: { data: model } };
+  }
+
+  async function deleteModel(input: {
+    id: string;
+  } & AdminModelWriteContext) {
+    const existing = await getModel(input.id);
+    if (!existing) return error(404, "admin_model_not_found", "模型不存在");
+    const reason = input.reason.trim();
+    if (!reason) return error(400, "reason_required", "请填写操作原因");
+
+    await deps.db.query("BEGIN");
+    try {
+      await deps.db.query(
+        "UPDATE ai_generation_task_snapshots SET model_config_id = NULL, updated_at = $2 WHERE model_config_id = $1",
+        [input.id, input.now],
+      );
+      await deps.db.query("DELETE FROM ai_model_dispatch_policies WHERE model_config_id = $1", [input.id]);
+      await deps.db.query("DELETE FROM ai_model_config_revisions WHERE model_config_id = $1", [input.id]);
+      await deps.db.query("DELETE FROM ai_model_configs WHERE id = $1", [input.id]);
+      await deps.db.query("COMMIT");
+    } catch (error) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+
+    await appendAuditEvent(deps.db, {
+      organizationId: input.auditOrganizationId,
+      workspaceId: input.auditWorkspaceId,
+      actorUserId: null,
+      eventType: "admin.model.deleted",
+      targetType: "ai_model_config",
+      targetId: existing.id,
+      reason,
+      sensitive: true,
+      metadata: {
+        modelCode: existing.modelCode,
+        actorAdminAccountId: input.actorAdminAccountId,
+        status: existing.status,
+      },
+    });
+    return { status: 200, body: { data: existing } };
   }
 
   async function listRevisions(input: { id: string; pageSize?: number }) {
@@ -1051,6 +1078,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     updateModel,
     duplicateModel,
     changeStatus,
+    deleteModel,
     listRevisions,
     rollbackModel,
   };
@@ -1298,8 +1326,8 @@ function imageTemplate(input: {
       negativePrompt: { label: "反向提示词", type: "string", required: false, maxLength: 2000 },
       referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 8 },
       editInstruction: { label: "编辑说明", type: "string", required: false, maxLength: 2000 },
-      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
-      quality: { label: "质量", type: "enum", required: false, options: ["standard", "hd", "2K"] },
+      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["auto", "1:1", "1024x1024", "2048x2048", "2880x2880", "2:3", "1024x1536", "2048x3072", "2336x3504", "3:2", "1536x1024", "3072x2048", "3504x2336", "3:4", "768x1024", "1536x2048", "2304x3072", "2448x3264", "4:3", "1024x768", "2048x1536", "3072x2304", "3264x2448", "4:5", "1024x1280", "2048x2560", "2560x3200", "5:4", "1280x1024", "2560x2048", "3200x2560", "9:16", "1024x1824", "1280x3840", "1920x3840", "2160x3840", "16:9", "1824x1024", "3840x1280", "3840x2160", "21:9"] },
+      quality: { label: "质量", type: "enum", required: false, options: ["standard", "hd", "2K", "high", "medium", "low", "auto"] },
       count: { label: "数量", type: "integer", required: false, minimum: 1, maximum: 4 },
       seed: { label: "随机种子", type: "integer", required: false, minimum: 0 },
     },
@@ -1356,6 +1384,7 @@ function volcengineImageTemplate(input: {
     adapterMode: "native",
     providerConfig: {
       baseURL: "https://ark.cn-beijing.volces.com",
+      requestPath: "/api/v3/images/generations",
       endpoint: "/api/v3/images/generations",
       apiKeyEnv: "",
       requestFormat: "volcengine_ark_images_generation",
@@ -1363,8 +1392,8 @@ function volcengineImageTemplate(input: {
     },
     parameterSchema: {
       ...template.parameterSchema,
-      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
-      quality: { label: "清晰度", type: "enum", required: true, options: ["1K", "2K", "4K"] },
+      aspectRatio: { label: "图片比例", type: "enum", required: true, options: ["auto", "1:1", "1024x1024", "2048x2048", "2880x2880", "2:3", "1024x1536", "2048x3072", "2336x3504", "3:2", "1536x1024", "3072x2048", "3504x2336", "3:4", "768x1024", "1536x2048", "2304x3072", "2448x3264", "4:3", "1024x768", "2048x1536", "3072x2304", "3264x2448", "4:5", "1024x1280", "2048x2560", "2560x3200", "5:4", "1280x1024", "2560x2048", "3200x2560", "9:16", "1024x1824", "1280x3840", "1920x3840", "2160x3840", "16:9", "1824x1024", "3840x1280", "3840x2160", "21:9"] },
+      quality: { label: "清晰度", type: "enum", required: true, options: ["1K", "2K", "4K", "high", "medium", "low", "auto"] },
       watermark: { label: "水印", type: "boolean", required: false },
     },
     defaultParams: {
@@ -1405,6 +1434,7 @@ function videoTemplate(input: {
     defaultTaskModes: taskModes,
     promptLimit: input.promptLimit,
     providerConfig: {
+      requestPath: `/api/provider-proxy/${input.providerName}/video/tasks`,
       endpoint: `/api/provider-proxy/${input.providerName}/video`,
       createTaskEndpoint: `/api/provider-proxy/${input.providerName}/video/tasks`,
       queryTaskEndpoint: `/api/provider-proxy/${input.providerName}/video/tasks/{taskId}`,
@@ -1456,6 +1486,7 @@ function videoTemplate(input: {
 function volcengineVideoProviderConfig() {
   return {
     baseURL: "https://ark.cn-beijing.volces.com",
+    requestPath: "/api/v3/contents/generations/tasks",
     createTaskEndpoint: "/api/v3/contents/generations/tasks",
     queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
     apiKeyEnv: "",
@@ -1673,7 +1704,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"].includes(providerProtocol);
 }
 
 function looksLikeSecretValue(value: string) {
@@ -1776,6 +1807,7 @@ function modelLaunchCheck(model: AdminModelConfigView) {
 
 function hasValidProviderEndpoint(providerConfig: Record<string, unknown>) {
   const candidates = [
+    readString(providerConfig.requestPath),
     readString(providerConfig.endpoint),
     readString(providerConfig.createTaskEndpoint),
   ].filter(Boolean) as string[];

@@ -171,6 +171,16 @@ export function renderProjectDetail(context = {}) {
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
 
+  if (activeNavTab === "community") {
+    return `
+      <section class="production-community-window">
+        ${renderCommunityWindowHeader(session)}
+        ${renderCommunityPage({ ui, session })}
+        ${renderWorkspaceStatusToast(ui.toast, "community-window-toast")}
+      </section>
+    `;
+  }
+
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
     const workspaceContent = renderPageBoundary("项目工作台", activeNavTab, () => `
       ${renderProjectInteriorShell({ state, ui, detailState })}
@@ -207,6 +217,7 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
+      ${renderOverlayWorkspaceStatusToast(ui)}
       ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
@@ -244,6 +255,7 @@ export function renderProjectDetail(context = {}) {
         notice: ui.createProjectNotice ?? "",
       })}
       ${renderSingleEpisodeAiPreview(ui)}
+      ${renderOverlayWorkspaceStatusToast(ui)}
       ${renderAccountSettingsDrawer(ui, session)}
     `;
   }
@@ -316,7 +328,37 @@ export function renderProjectDetail(context = {}) {
     })}
     ${renderGenerationQueueJobConfirmModal(ui)}
     ${renderCreditLedgerDrawer(ui)}
+    ${renderOverlayWorkspaceStatusToast(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
+  `;
+}
+
+function renderCommunityWindowHeader(session = {}) {
+  const accountLabel = resolveStatusbarAccountLabel(session);
+  const phoneLabel = String(session?.user?.phone ?? "").trim() || "未绑定手机号";
+  return `
+    <header class="community-window-header" aria-label="灵曦社区顶部栏">
+      <div class="community-window-brand">
+        <span class="statusbar-n-mark" aria-hidden="true">灵</span>
+        <div>
+          <strong>灵曦剧场</strong>
+        </div>
+      </div>
+      <div class="community-window-title">灵曦社区</div>
+      <div class="community-window-actions">
+        <div class="community-window-account">
+          <button class="community-window-avatar" type="button" aria-haspopup="dialog" aria-label="查看当前登录用户">
+            <span>${escapeHtml(resolveAccountSettingsAvatarLabel({ displayName: accountLabel }, session))}</span>
+          </button>
+          <div class="community-window-account-popover" role="dialog" aria-label="当前登录用户信息">
+            <small>当前登录用户</small>
+            <strong>${escapeHtml(accountLabel)}</strong>
+            <span>${escapeHtml(phoneLabel)}</span>
+          </div>
+        </div>
+        <button class="community-window-back" type="button" data-action="set-nav-tab" data-tab="home">返回工作台</button>
+      </div>
+    </header>
   `;
 }
 
@@ -852,6 +894,16 @@ function resolveAccountSettingsAvatarLabel(form, session = {}) {
   return [...preferred].slice(0, 2).join("");
 }
 
+function resolveStatusbarAccountLabel(session = {}) {
+  const displayName = String(session?.user?.displayName ?? "").trim();
+  if (displayName) {
+    return displayName;
+  }
+  const phone = String(session?.user?.phone ?? "").trim();
+  const phoneTail = phone.slice(-8);
+  return `创作者 ${phoneTail || "442027442"}`;
+}
+
 function renderWorkspaceStatusToast(message, extraClassName = "") {
   const toast = normalizeWorkspaceToast(message);
   const normalizedMessage = toast.message;
@@ -869,6 +921,20 @@ function renderWorkspaceStatusToast(message, extraClassName = "") {
       <span>${escapeHtml(normalizedMessage)}</span>
     </div>
   `;
+}
+
+function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
+  if (ui.accountSettingsOpen) {
+    return "";
+  }
+  return renderWorkspaceStatusToast(ui.toast, extraClassName);
+}
+
+function renderOverlayWorkspaceStatusToast(ui = {}) {
+  if (!ui.accountSettingsOpen) {
+    return "";
+  }
+  return renderWorkspaceStatusToast(ui.toast, "account-settings-toast");
 }
 
 function normalizeWorkspaceToast(message) {
@@ -1087,7 +1153,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
         projectDetail: ui.projectDetail ?? null,
       })}
-      ${renderWorkspaceStatusToast(ui.toast, "interior-toast")}
+      ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
     </section>
   `;
 }
@@ -1268,7 +1334,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
                 episodeCount,
               })
         }
-        ${renderWorkspaceStatusToast(ui.toast, "interior-toast")}
+        ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
       </main>
       <button class="interior-help-button" type="button" aria-label="智能助手">✦</button>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
@@ -1674,10 +1740,10 @@ function renderSingleEpisodeAiPreview(ui) {
   const previewPayload = preview.data?.displayTables ? preview.data : preview;
   const tables = previewPayload?.displayTables ?? {};
   return `
-    <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
-      <div class="single-episode-ai-overlay-top">
-        <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
-        <div class="single-episode-ai-overlay-actions">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
+        <div class="single-episode-ai-overlay-top">
+          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <div class="single-episode-ai-overlay-actions">
           <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
           <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
         </div>
@@ -3607,6 +3673,381 @@ function getStatusTone(status) {
   return "muted";
 }
 
+function renderCommunityPage({ ui, session }) {
+  const posts = Array.isArray(ui.communityPosts) ? ui.communityPosts : [];
+  const features = Array.isArray(ui.communityFeatures) ? ui.communityFeatures : [];
+  const sortedPosts = sortCommunityPosts(posts);
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(sortedPosts.length / pageSize));
+  const currentPage = Math.min(Math.max(Number(ui.communityPostPage || 1), 1), pageCount);
+  const visiblePosts = sortedPosts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const sortedFeatures = [...features]
+    .sort((left, right) => Number(right.votes || 0) - Number(left.votes || 0))
+    .slice(0, 10);
+  const postRows = visiblePosts.length
+    ? visiblePosts.map((post) => renderCommunityPost(post, session, ui)).join("")
+    : `<article class="community-empty"><strong>还没有社区反馈</strong><span>提交你的第一个问题或想法，管理员会在后台看到。</span></article>`;
+  const pagination = sortedPosts.length > pageSize
+    ? `
+      <div class="community-pagination">
+        <button type="button" data-action="set-community-post-page" data-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+        <span>${currentPage} / ${pageCount}</span>
+        <button type="button" data-action="set-community-post-page" data-page="${currentPage + 1}" ${currentPage >= pageCount ? "disabled" : ""}>下一页</button>
+      </div>
+    `
+    : "";
+  const featureRows = sortedFeatures.length
+    ? sortedFeatures.map((feature) => renderCommunityFeature(feature, session)).join("")
+    : `<article class="community-empty"><strong>暂无功能投票</strong><span>暂时还没有功能建议。</span></article>`;
+  const composerMenu = `
+    <div class="community-fab-menu" role="menu" aria-label="社区快捷菜单">
+      <button type="button" role="menuitem" data-action="open-community-composer" data-mode="post">
+        <strong>社区发布</strong>
+        <span>分享心得、反馈问题或记录生成体验</span>
+      </button>
+      <button type="button" role="menuitem" data-action="open-community-composer" data-mode="feature">
+        <strong>功能投票</strong>
+        <span>提出希望优先开发的新功能</span>
+      </button>
+      <button type="button" role="menuitem" data-action="open-community-my-posts">
+        <strong>我的帖子</strong>
+        <span>查看、修改或删除自己发布的内容</span>
+      </button>
+    </div>
+  `;
+  const composerModal = renderCommunityComposerModal(ui.communityComposerMode);
+  const myPostsModal = renderCommunityMyPostsModal({ ui, session, posts });
+
+  return `
+    <section class="community-page" aria-label="灵曦社区">
+      <section class="community-layout">
+        <section class="community-column">
+          <div class="community-section-head"><div><h2>社区发布</h2><p>分享视频提示词心得，或记录 Bug、体验卡点、内容生成异常。</p></div></div>
+          <div class="community-feed">${postRows}</div>
+          ${pagination}
+        </section>
+        <aside class="community-column">
+          <div class="community-section-head"><div><h2>功能投票</h2><p>自发提出想让我们优先开发的功能，也可以给已有建议投票。</p></div></div>
+          <div class="community-feature-list">${featureRows}</div>
+        </aside>
+      </section>
+      <div class="community-fab-wrap">
+        ${composerMenu}
+        <button class="community-fab" type="button" aria-label="打开社区快捷菜单">+</button>
+      </div>
+      ${composerModal}
+      ${myPostsModal}
+    </section>
+  `;
+}
+
+function sortCommunityPosts(posts = []) {
+  return [...posts].sort((left, right) => getCommunityPostSortTime(right) - getCommunityPostSortTime(left));
+}
+
+function getCommunityPostSortTime(post = {}) {
+  const commentTimes = (Array.isArray(post.comments) ? post.comments : []).flatMap((comment) => [
+    communityTimeValue(comment.createdAt),
+    ...(Array.isArray(comment.replies) ? comment.replies.map((reply) => communityTimeValue(reply.createdAt)) : []),
+  ]);
+  const latestCommentTime = Math.max(0, ...commentTimes);
+  return latestCommentTime || communityTimeValue(post.createdAt);
+}
+
+function communityTimeValue(value) {
+  const time = Date.parse(String(value ?? ""));
+  return Number.isFinite(time) ? time : 0;
+}
+
+function renderCommunityComposerModal(mode) {
+  if (mode === "feature") {
+    return `
+      <div class="community-modal" role="dialog" aria-modal="true" aria-labelledby="community-composer-title">
+        <div class="community-modal-panel">
+          <div class="community-modal-head">
+            <div>
+              <p class="community-eyebrow">Feature Vote</p>
+              <h2 id="community-composer-title">发起功能投票</h2>
+              <span>写清楚这个功能能节省什么时间，其他创作者可以继续投票。</span>
+            </div>
+            <button class="community-modal-close" type="button" data-action="close-community-composer" aria-label="关闭">×</button>
+          </div>
+          <form class="community-form community-dialog-form compact" data-community-feature-form>
+            <label><span>功能名称</span><input name="title" maxlength="80" placeholder="例如：批量生成角色三视图" required autofocus /></label>
+            <label><span>为什么需要</span><textarea name="content" rows="5" maxlength="500" placeholder="一句话说明它能帮你节省什么时间。" required></textarea></label>
+            <button class="community-primary" type="button" data-action="submit-community-feature">发起投票</button>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+  if (mode === "post") {
+    return `
+      <div class="community-modal" role="dialog" aria-modal="true" aria-labelledby="community-composer-title">
+        <div class="community-modal-panel">
+          <div class="community-modal-head">
+            <div>
+              <p class="community-eyebrow">Community Post</p>
+              <h2 id="community-composer-title">社区发布</h2>
+              <span>分享视频提示词心得，或把 Bug、体验卡点、生成质量问题写给管理员。</span>
+            </div>
+            <button class="community-modal-close" type="button" data-action="close-community-composer" aria-label="关闭">×</button>
+          </div>
+          <form class="community-form community-dialog-form" data-community-feedback-form>
+            <label><span>标题</span><input name="title" maxlength="80" placeholder="例如：首尾帧生视频如何避免人物漂移" required autofocus /></label>
+            <label><span>分类</span><select name="category"><option value="视频提示词心得">视频提示词心得</option><option value="问题反馈">问题反馈</option><option value="体验建议">体验建议</option><option value="生成质量">生成质量</option><option value="账号与付费">账号与付费</option></select></label>
+            <label><span>具体内容</span><textarea name="content" rows="6" maxlength="800" placeholder="写下你的提示词结构、适用场景、踩坑点，或反馈你遇到的问题。" required></textarea></label>
+            <button class="community-primary" type="button" data-action="submit-community-feedback">发布到社区</button>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function renderCommunityMyPostsModal({ ui, session, posts }) {
+  if (!ui.communityMyPostsOpen) return "";
+  const userKey = communitySessionKey(session);
+  const myPosts = userKey ? sortCommunityPosts(posts.filter((post) => isCommunityOwnPost(post, session))) : [];
+  const rows = myPosts.length
+    ? myPosts.map((post) => renderCommunityMyPostRow(post, ui)).join("")
+    : `<div class="community-my-empty">${userKey ? "你还没有发布过帖子。" : "请先登录后查看自己的帖子。"}</div>`;
+  return `
+    <div class="community-modal" role="dialog" aria-modal="true" aria-labelledby="community-my-posts-title">
+      <div class="community-modal-panel community-my-posts-panel">
+        <div class="community-modal-head">
+          <div>
+            <p class="community-eyebrow">My Posts</p>
+            <h2 id="community-my-posts-title">我的帖子</h2>
+            <span>只显示你自己发布的社区内容，可修改或删除。</span>
+          </div>
+          <button class="community-modal-close" type="button" data-action="close-community-my-posts" aria-label="关闭">×</button>
+        </div>
+        <div class="community-my-posts-list">${rows}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCommunityMyPostRow(post, ui = {}) {
+  const editing = String(ui.communityEditingPostId ?? "") === String(post.id ?? "");
+  const likedBy = Array.isArray(post.likedBy) ? post.likedBy : [];
+  const comments = Array.isArray(post.comments) ? post.comments : [];
+  const likeCount = Number(post.likes ?? likedBy.length ?? 0);
+  const commentCount = communityPostCommentCount(comments);
+  const commentsOpen = String(ui.communityCommentPostId ?? "") === String(post.id ?? "");
+  if (editing) {
+    return `
+      <form class="community-form community-my-post-editor" data-community-edit-post-form data-post-id="${escapeAttr(post.id || "")}">
+        <label><span>标题</span><input name="title" maxlength="80" value="${escapeAttr(post.title || "")}" required /></label>
+        <label><span>分类</span><select name="category">${["视频提示词心得", "问题反馈", "体验建议", "生成质量", "账号与付费"].map((category) => `<option value="${escapeAttr(category)}" ${post.category === category ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}</select></label>
+        <label><span>具体内容</span><textarea name="content" rows="4" maxlength="800" required>${escapeHtml(post.content || "")}</textarea></label>
+        <div class="community-my-post-actions">
+          <button type="button" data-action="save-community-post-edit">保存</button>
+          <button type="button" data-action="cancel-community-post-edit">取消</button>
+        </div>
+      </form>
+    `;
+  }
+  return `
+    <article class="community-my-post-row">
+      <div>
+        <h3>${escapeHtml(post.title || "未命名反馈")}</h3>
+        <p>${escapeHtml(post.content || "")}</p>
+        <div class="community-my-post-meta">
+          <span>${escapeHtml(post.category || "问题反馈")} · ${escapeHtml(post.createdAtLabel || post.createdAt || "")}</span>
+          <span>点赞 · ${likeCount}</span>
+          <button type="button" data-action="toggle-community-comments" data-post-id="${escapeAttr(post.id || "")}" aria-expanded="${commentsOpen ? "true" : "false"}">
+            ${commentsOpen ? "收起评论" : "查看评论"} · ${commentCount}
+          </button>
+        </div>
+        ${commentsOpen ? `<div class="community-my-post-comments">${renderCommunityCommentRows(post, { replyTarget: String(ui.communityReplyTarget ?? "") })}</div>` : ""}
+      </div>
+      <div class="community-my-post-actions">
+        <button type="button" data-action="edit-community-post" data-post-id="${escapeAttr(post.id || "")}">修改</button>
+        <button class="danger" type="button" data-action="delete-community-post" data-post-id="${escapeAttr(post.id || "")}">删除</button>
+      </div>
+    </article>
+  `;
+}
+
+function communityPostCommentCount(comments = []) {
+  return comments.reduce((sum, comment) => sum + 1 + (Array.isArray(comment.replies) ? comment.replies.length : 0), 0);
+}
+
+function renderCommunityPost(post, session = {}, ui = {}) {
+  const userKey = communitySessionKey(session);
+  const likedBy = Array.isArray(post.likedBy) ? post.likedBy.map(String) : [];
+  const comments = Array.isArray(post.comments) ? post.comments : [];
+  const liked = userKey ? likedBy.includes(userKey) : false;
+  const likeCount = Number(post.likes ?? likedBy.length ?? 0);
+  const commentCount = communityPostCommentCount(comments);
+  const commentsOpen = String(ui.communityCommentPostId ?? "") === String(post.id ?? "");
+  const replyTarget = String(ui.communityReplyTarget ?? "");
+  return `
+    <article class="community-post">
+      <div class="community-post-head"><h3>${escapeHtml(post.title || "未命名反馈")}</h3><span class="community-tag">${escapeHtml(post.category || "问题反馈")}</span></div>
+      <p>${escapeHtml(post.content || "")}</p>
+      <footer><span>${escapeHtml(post.author || "灵曦用户")}</span><span>${escapeHtml(post.createdAtLabel || post.createdAt || "")}</span></footer>
+      <div class="community-post-actions">
+        <button class="community-social-action comment" type="button" data-action="toggle-community-comments" data-post-id="${escapeAttr(post.id || "")}" aria-label="查看 ${commentCount} 条评论">
+          ${renderCommunitySocialIcon("comment")}
+          <span>评论 · ${commentCount}</span>
+        </button>
+        <button class="community-social-action like ${liked ? "liked" : ""}" type="button" data-action="like-community-post" data-post-id="${escapeAttr(post.id || "")}" aria-label="${liked ? "取消点赞" : "点赞"}，当前 ${likeCount} 个点赞">
+          ${renderCommunitySocialIcon("like")}
+          <span>点赞 · ${likeCount}</span>
+        </button>
+      </div>
+      <div class="community-comments">${renderCommunityCommentRows(post, { replyTarget })}</div>
+      ${commentsOpen ? `
+        <form class="community-comment-form" data-community-comment-form data-post-id="${escapeAttr(post.id || "")}">
+          <input name="content" maxlength="240" placeholder="写评论，补充经验或追问细节" />
+          <button type="button" data-action="submit-community-comment">评论</button>
+        </form>
+      ` : ""}
+    </article>
+  `;
+}
+
+function renderCommunityCommentRows(post = {}, { replyTarget = "" } = {}) {
+  const comments = Array.isArray(post.comments) ? post.comments : [];
+  if (!comments.length) {
+    return `<div class="community-comment-empty">暂无评论，写下你的补充或经验。</div>`;
+  }
+  return `${comments.slice(0, 5).map((comment) => `
+    <div class="community-comment">
+      <div class="community-comment-main">
+        <div class="community-comment-line"><strong>${escapeHtml(comment.author || "灵曦用户")}</strong><span>${escapeHtml(comment.content || "")}</span></div>
+        <div class="community-comment-meta"><small>${escapeHtml(comment.createdAtLabel || comment.createdAt || "")}</small><button type="button" data-action="toggle-community-reply" data-post-id="${escapeAttr(post.id || "")}" data-comment-id="${escapeAttr(comment.id || "")}" data-reply-author="${escapeAttr(comment.author || "灵曦用户")}">回复</button></div>
+      </div>
+      ${renderCommunityReplies(comment)}
+      ${replyTarget === `${post.id || ""}:${comment.id || ""}` ? `
+        <form class="community-comment-form reply" data-community-reply-form data-post-id="${escapeAttr(post.id || "")}" data-comment-id="${escapeAttr(comment.id || "")}">
+          <input name="content" maxlength="240" placeholder="回复 ${escapeAttr(comment.author || "灵曦用户")}" />
+          <button type="button" data-action="submit-community-reply">回复</button>
+        </form>
+      ` : ""}
+    </div>
+  `).join("")}${comments.length > 5 ? `<div class="community-comment-more">...</div>` : ""}`;
+}
+
+function renderCommunityReplies(comment = {}) {
+  const replies = Array.isArray(comment.replies) ? comment.replies : [];
+  if (!replies.length) return "";
+  return `
+    <div class="community-replies">
+      ${replies.slice(0, 5).map((reply) => `
+        <div class="community-reply">
+          <div class="community-comment-line"><strong>${escapeHtml(reply.author || "灵曦用户")}</strong><span>${escapeHtml(reply.content || "")}</span></div>
+          <small>${escapeHtml(reply.createdAtLabel || reply.createdAt || "")}</small>
+        </div>
+      `).join("")}
+      ${replies.length > 5 ? `<div class="community-comment-more">...</div>` : ""}
+    </div>
+  `;
+}
+
+function renderCommunitySocialIcon(type) {
+  if (type === "like") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M8.1 21H4.2A2.2 2.2 0 0 1 2 18.8v-7.2a2.2 2.2 0 0 1 2.2-2.2h3.9V21Zm2-11.5 3.4-6.8c.28-.56.96-.8 1.54-.54 1.65.73 2.45 2.62 1.84 4.32l-.95 2.67h3.74a2.45 2.45 0 0 1 2.42 2.83l-1.13 6.78A2.7 2.7 0 0 1 18.3 21h-8.2V9.5Z" />
+      </svg>
+    `;
+  }
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5.2 3h13.6A3.2 3.2 0 0 1 22 6.2v8.2a3.2 3.2 0 0 1-3.2 3.2H9.4l-5.7 3.9a.7.7 0 0 1-1.1-.58V6.2A3.2 3.2 0 0 1 5.2 3Z" />
+    </svg>
+  `;
+}
+
+function renderCommunityFeature(feature, session = {}) {
+  const userKey = communitySessionKey(session);
+  const voterIds = Array.isArray(feature.voterIds) ? feature.voterIds.map(String) : [];
+  const voted = userKey ? voterIds.includes(userKey) : false;
+  return `<article class="community-feature-card"><button class="community-vote ${voted ? "voted" : ""}" type="button" data-action="vote-community-feature" data-feature-id="${escapeAttr(feature.id || "")}" aria-label="为${escapeAttr(feature.title || "功能")}投票"><strong>${Number(feature.votes || 0)}</strong><span>${voted ? "已投" : "投票"}</span></button><div><h3>${escapeHtml(feature.title || "未命名功能")}</h3><p>${escapeHtml(feature.content || "")}</p><small>${escapeHtml(feature.author || "灵曦用户")} · ${escapeHtml(feature.createdAtLabel || feature.createdAt || "")}</small></div></article>`;
+}
+
+function communitySessionKey(session = {}) {
+  return String(session?.user?.id || session?.user?.phone || session?.user?.email || "").trim();
+}
+
+function isCommunityOwnPost(post = {}, session = {}) {
+  const userKey = communitySessionKey(session);
+  const phoneTail = String(session?.user?.phone ?? "").slice(-4);
+  return Boolean(userKey && (String(post.userId || "") === userKey || (phoneTail && String(post.author || "").endsWith(phoneTail))));
+}
+
+function renderCommunityPromptInsight(post) {
+  const meta = post.promptMeta || {};
+  const tags = Array.isArray(meta.tags) && meta.tags.length ? meta.tags : ["镜头", "动作", "稳定性"];
+  return `
+    <article class="community-insight-card">
+      <div class="community-insight-topline">
+        <span>${escapeHtml(meta.scene || "视频生成")}</span>
+        <strong>${escapeHtml(meta.model || "通用视频模型")}</strong>
+      </div>
+      <h3>${escapeHtml(post.title || "视频提示词心得")}</h3>
+      <p>${escapeHtml(post.content || "")}</p>
+      <div class="community-prompt-snippet">
+        <span>提示词片段</span>
+        <code>${escapeHtml(meta.prompt || "主体保持一致，镜头缓慢推进，动作自然连贯，柔和电影光。")}</code>
+      </div>
+      <footer>
+        <span>${escapeHtml(post.author || "灵曦用户")}</span>
+        <div>${tags.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</div>
+      </footer>
+    </article>
+  `;
+}
+
+function defaultCommunityPromptInsights() {
+  return [
+    {
+      title: "先锁定主体，再写镜头运动",
+      content: "我会把人物服装、发型、道具写在第一句，第二句才写镜头推进。主体信息越靠前，角色越不容易漂。",
+      author: "南城分镜师",
+      category: "视频提示词心得",
+      createdAtLabel: "6月18日 10:20",
+      promptMeta: {
+        scene: "角色口播",
+        model: "首帧生视频",
+        prompt: "同一位短发女主，白色风衣，手持咖啡杯，镜头缓慢推近，眼神看向窗外，柔和晨光。",
+        tags: ["主体一致", "推镜", "口播"],
+      },
+    },
+    {
+      title: "动作不要堆太多，拆成一个主动作",
+      content: "同一个镜头里让角色转身、跑步、回头、挥手，模型会发散。我通常只保留一个主动作，再补情绪。",
+      author: "阿泽导演台",
+      category: "视频提示词心得",
+      createdAtLabel: "6月18日 09:48",
+      promptMeta: {
+        scene: "动作镜头",
+        model: "参考生视频",
+        prompt: "少年向前奔跑，衣摆随风摆动，镜头平稳跟拍，背景轻微运动模糊，紧张但克制。",
+        tags: ["单动作", "跟拍", "运动模糊"],
+      },
+    },
+    {
+      title: "负面提示词只写会破坏画面的点",
+      content: "负面词太多会稀释主提示。我只写变形手、人物漂移、闪烁字幕、额外肢体这类高频问题。",
+      author: "镜头炼金室",
+      category: "视频提示词心得",
+      createdAtLabel: "6月17日 22:15",
+      promptMeta: {
+        scene: "稳定性",
+        model: "首尾帧",
+        prompt: "避免人物面部变形、额外手指、画面闪烁、字幕漂浮、主体身份变化。",
+        tags: ["负面词", "稳定", "首尾帧"],
+      },
+    },
+  ];
+}
+
 function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
   return `
     <button
@@ -3682,14 +4123,20 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         members: ui.projectMembers ?? [],
         stats: ui.projectStats ?? null,
       })}
-      ${renderWorkspaceStatusToast(ui.toast)}
+      ${renderInlineWorkspaceStatusToast(ui)}
+    `);
+  }
+
+  if (activeNavTab === "community") {
+    return renderScrollableWorkbenchSurface("community", `
+      ${renderCommunityPage({ ui, session })}
+      ${renderInlineWorkspaceStatusToast(ui)}
     `);
   }
 
   if (activeNavTab === "tools") {
     return `
       ${renderToolsPanel(ui, state)}
-      ${renderWorkspaceStatusToast(ui.toast)}
     `;
   }
 
@@ -3721,7 +4168,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         memberRoleFilter: ui.teamMemberRoleFilter ?? "all",
         memberStatusFilter: ui.teamMemberStatusFilter ?? "all",
       })}
-      ${renderWorkspaceStatusToast(ui.toast)}
+      ${renderInlineWorkspaceStatusToast(ui)}
     `);
   }
 
@@ -3846,7 +4293,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       busy: ui.busy,
       canPreview: Boolean(state.shots?.length),
     })}
-    ${renderWorkspaceStatusToast(ui.toast)}
+    ${renderInlineWorkspaceStatusToast(ui)}
   `;
 }
 
@@ -4362,15 +4809,7 @@ function resolveCanvasReferenceImagesForNode(node, document = {}) {
   if (direct.url) {
     return [direct];
   }
-  if (!(node?.type === "image" || node?.data?.mediaKind === "image")) {
-    return [];
-  }
-  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
-  const nodeMap = new Map(nodes.map((item) => [item.id, item]));
-  return (Array.isArray(document?.edges) ? document.edges : [])
-    .filter((edge) => edge.targetNodeId === node.id)
-    .map((edge) => resolveCanvasReferenceImage(nodeMap.get(edge.sourceNodeId)))
-    .filter((item) => item.url);
+  return [];
 }
 
 function resolveCanvasReferenceImage(node) {
@@ -5361,7 +5800,7 @@ function renderGlobalStatusbar(session, options = {}) {
           </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
-              <strong>创作者 ${escapeHtml(session.user.phone.slice(-8) || "442027442")}</strong>
+              <strong>${escapeHtml(resolveStatusbarAccountLabel(session))}</strong>
               <span>升级专业版，创建协作团队</span>
             </div>
             <button class="popover-menu-item" type="button" role="menuitem">我的订阅</button>
@@ -5370,7 +5809,6 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
-            <button class="popover-menu-item" type="button" role="menuitem">问题反馈</button>
             <button class="popover-menu-item" type="button" role="menuitem">政策广场</button>
             <button class="popover-menu-item" type="button" role="menuitem">专属服务支持</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
@@ -5464,7 +5902,7 @@ function renderProjectGallery({ ui }) {
             : renderEmptyProjectState(searchQuery, [])
         }
       </section>
-      ${renderWorkspaceStatusToast(ui.toast)}
+      ${renderInlineWorkspaceStatusToast(ui)}
       ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.pageProjects.length) : ""}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>

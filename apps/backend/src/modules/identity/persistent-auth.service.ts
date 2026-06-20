@@ -46,6 +46,7 @@ interface LoginChallengeRow {
 interface UserRow {
   id: string;
   phone_e164: string;
+  display_name?: string | null;
   status: "active" | "disabled";
   password_hash?: string | null;
 }
@@ -63,7 +64,7 @@ interface AuthSessionRow {
 
 export type PersistentLoginVerifyResult =
   | (Extract<VerifyLoginChallengeResult, { kind: "verified" }> & {
-      user: { id: string; phone: string };
+      user: { id: string; phone: string; displayName?: string | null };
       session: AuthSession;
       token: string;
     })
@@ -88,7 +89,7 @@ export type PersistentLoginCodeRequestResult =
 export type PersistentPasswordLoginResult =
   | {
       kind: "verified";
-      user: { id: string; phone: string };
+      user: { id: string; phone: string; displayName?: string | null };
       session: AuthSession;
       token: string;
     }
@@ -386,6 +387,7 @@ export async function verifyPersistentLoginChallenge(
       user: {
         id: user.id,
         phone: user.phone_e164,
+        displayName: user.display_name ?? null,
       },
       session: createdSession.session,
       token: createdSession.token,
@@ -410,6 +412,7 @@ export async function verifyPersistentPasswordLogin(
     db,
     `
       SELECT id, phone_e164, status, password_hash
+             , display_name
       FROM users
       WHERE phone_e164 = $1
       LIMIT 1
@@ -501,6 +504,7 @@ export async function verifyPersistentPasswordLogin(
     user: {
       id: user.id,
       phone: user.phone_e164,
+      displayName: user.display_name ?? null,
     },
     session: createdSession.session,
     token: createdSession.token,
@@ -591,6 +595,7 @@ async function findOrCreateUserByPhone(
         phone_e164 = EXCLUDED.phone_e164,
         password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash)
       RETURNING id, phone_e164, status, password_hash
+                , display_name
     `,
     [randomUUID(), phoneE164, passwordHash],
   );

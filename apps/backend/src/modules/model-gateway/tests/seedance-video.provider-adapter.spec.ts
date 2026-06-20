@@ -101,6 +101,7 @@ describe("seedance video provider adapter", () => {
         providerModel: "seedance-1-0-pro",
         providerConfig: {
           baseURL: "https://ark.example.com",
+          requestPath: "/provider/video/tasks",
           createTaskEndpoint: "/api/v3/contents/generations/tasks",
           queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
           apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
@@ -134,7 +135,7 @@ describe("seedance video provider adapter", () => {
 
     assert.equal(
       capturedUrl,
-      "https://ark.example.com/api/v3/contents/generations/tasks",
+      "https://ark.example.com/provider/video/tasks",
     );
     assert.equal(result.externalRequestId, "seedance-task-456");
     assert.equal(result.status, "accepted");

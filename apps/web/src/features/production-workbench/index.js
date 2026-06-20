@@ -555,6 +555,7 @@ const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
 export async function initProductionWorkbench({ root, session, api, onLogout }) {
+  const initialCommunityData = readLingxiCommunityData();
   const workbench = {
     root,
     session,
@@ -591,6 +592,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       createProjectType: "animation",
       createProjectNotice: "",
       projectStyles: [],
+      batchImageStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
       scriptLibraryRecords: [],
@@ -701,7 +703,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       deleteImportedAsset: null,
       customEpisodes: [],
       selectedEpisodeId: null,
+      episodeWorkbenchEnterRequestId: 0,
       episodeWorkbenchContext: null,
+      episodeWorkbenchContextLoadedEpisodeId: null,
+      episodeWorkbenchContextRequestEpisodeId: null,
       episodeWorkbenchError: "",
       episodeGenerationConfig: null,
       episodeStoryboardMap: {},
@@ -796,7 +801,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       lipSyncAudioItems: [],
       lipSyncPreviewAudioId: null,
       assetConversationHistory: {},
+      assetConversationHistoryLoadedKeys: {},
+      assetConversationHistoryPendingKeys: {},
       storyboardConversationHistory: {},
+      storyboardConversationHistoryLoadedKeys: {},
+      storyboardConversationHistoryPendingKeys: {},
       videoDurationSec: "5",
       videoResolution: "1080p",
       videoCount: 1,
@@ -859,6 +868,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       creditLedgerRows: [],
       creditLedgerSummary: null,
       creditLedgerMeta: null,
+      communityPosts: initialCommunityData.posts,
+      communityFeatures: initialCommunityData.features,
+      communityComposerMenuOpen: false,
+      communityComposerMode: null,
+      communityPostPage: 1,
     },
   };
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
@@ -1082,6 +1096,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
       actionTarget.matches?.('input[data-action="upload-script-cover"]') ||
       actionTarget.matches?.('input[data-action="select-script-upload-file"]') ||
+      actionTarget.matches?.('input[data-action="change-account-settings-field"]') ||
       actionTarget.matches?.('input[data-action="search-projects"]') ||
       actionTarget.matches?.('input[data-action="search-scripts"]') ||
       actionTarget.matches?.('select[data-action]') ||
@@ -1638,6 +1653,21 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
   root.addEventListener("input", async (event) => {
     const target = resolveEventElement(event.target);
+
+    if (target?.matches?.('input[data-action="change-account-settings-field"]')) {
+      const field = String(target.dataset.field ?? "").trim();
+      if (!field) {
+        return;
+      }
+      workbench.ui.accountSettingsOpen = true;
+      workbench.ui.accountSettingsDirty = true;
+      workbench.ui.accountSettingsNotice = "";
+      workbench.ui.accountSettingsForm = {
+        ...createDefaultAccountSettingsForm(workbench.session, workbench.ui.accountSettingsForm),
+        [field]: target.value ?? "",
+      };
+      return;
+    }
 
     if (target?.matches?.("[data-canvas-prompt-input]")) {
       const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
@@ -2295,6 +2325,8 @@ async function refresh(workbench) {
   const isToolsSurface = visibleTab === "tools";
   const isScriptSurface = visibleTab === "script";
   const isAssetLibrarySurface = visibleTab === "library";
+  const isEpisodeWorkbenchSurface =
+    visibleTab === "project" && workbench.ui.projectPanelMode === "episode-workbench";
 
   if (isProjectLibrary) {
     await syncProjectLibraryFromApi(workbench, { includeAssets: false });
@@ -2319,9 +2351,18 @@ async function refresh(workbench) {
         }
       }
     }
-    workbench.ui.exportHistory = workbench.state.project
-      ? await loadExportHistory(workbench)
-      : [];
+    if (isEpisodeWorkbenchSurface) {
+      runLazyWorkbenchTask(workbench, "export history", async () => {
+        workbench.ui.exportHistory = workbench.state.project
+          ? await loadExportHistory(workbench)
+          : [];
+        render(workbench);
+      });
+    } else {
+      workbench.ui.exportHistory = workbench.state.project
+        ? await loadExportHistory(workbench)
+        : [];
+    }
   }
 
   if (isTeamSurface) {
@@ -2361,6 +2402,7 @@ async function refresh(workbench) {
     workbench.ui.customEpisodes,
   );
   if (
+    !isEpisodeWorkbenchSurface &&
     workbench.ui.projectPanelMode === "episode-workbench" &&
     workbench.ui.selectedEpisodeId &&
     workbench.ui.selectedEpisodeId !== "episode-primary"
@@ -3032,6 +3074,20 @@ async function syncProjectStyles(workbench) {
   }
 }
 
+async function syncBatchImageStyles(workbench) {
+  if (typeof workbench.api?.getBatchImageStyles !== "function") {
+    workbench.ui.batchImageStyles = [];
+    return;
+  }
+
+  try {
+    const payload = await workbench.api.getBatchImageStyles();
+    workbench.ui.batchImageStyles = resolveProjectStyleList(payload);
+  } catch {
+    workbench.ui.batchImageStyles = [];
+  }
+}
+
 async function syncStoryboardPromptPackages(workbench) {
   if (typeof workbench.api?.getStoryboardPromptPackages !== "function") {
     workbench.ui.storyboardPromptPackages = [];
@@ -3044,6 +3100,25 @@ async function syncStoryboardPromptPackages(workbench) {
   } catch {
     workbench.ui.storyboardPromptPackages = [];
   }
+}
+
+function resolveEpisodeBatchPublicStyles(workbench) {
+  const styles = Array.isArray(workbench.ui.batchImageStyles) ? workbench.ui.batchImageStyles : [];
+  return styles
+    .map((style) => ({
+      id: String(style.id ?? style.code ?? ""),
+      label: String(style.name ?? style.label ?? ""),
+      preview: String(style.coverImageUrl ?? style.preview ?? ""),
+    }))
+    .filter((style) => style.id && style.label);
+}
+
+function resolveEpisodeBatchStyleSelection(modal, styleTab) {
+  const list =
+    styleTab === "custom"
+      ? Array.isArray(modal?.customStyles) ? modal.customStyles : []
+      : Array.isArray(modal?.publicStyles) ? modal.publicStyles : [];
+  return list[0]?.id ?? "";
 }
 
 function resolveStoryboardPromptPackageList(payload) {
@@ -3124,6 +3199,7 @@ async function loadTeamSurface(workbench) {
 }
 
 function render(workbench, options = {}) {
+  globalThis.document?.body?.classList?.toggle?.("community-window-body", workbench.ui?.activeNavTab === "community");
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   let renderFailed = false;
@@ -3703,6 +3779,24 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "open-credit-ledger",
     "close-credit-ledger",
     "refresh-credit-ledger",
+    "open-community",
+    "open-community-composer",
+    "close-community-composer",
+    "open-community-my-posts",
+    "close-community-my-posts",
+    "edit-community-post",
+    "cancel-community-post-edit",
+    "save-community-post-edit",
+    "delete-community-post",
+    "submit-community-feedback",
+    "submit-community-feature",
+    "vote-community-feature",
+    "like-community-post",
+    "toggle-community-comments",
+    "toggle-community-reply",
+    "set-community-post-page",
+    "submit-community-comment",
+    "submit-community-reply",
   ]);
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
     return;
@@ -3713,6 +3807,383 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.creditLedgerError = "";
     render(workbench);
     await loadCreditLedger(workbench);
+    return;
+  }
+
+  if (action === "open-community") {
+    openLingxiCommunityWindow();
+    return;
+  }
+
+  if (action === "open-community-composer") {
+    const mode = String(target.dataset.mode ?? "");
+    workbench.ui.communityComposerMode = mode === "feature" ? "feature" : "post";
+    workbench.ui.communityComposerMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-community-composer") {
+    workbench.ui.communityComposerMode = null;
+    workbench.ui.communityComposerMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-community-my-posts") {
+    if (!communitySessionKey(workbench.session)) {
+      workbench.ui.toast = "请先登录后查看自己的帖子。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.communityMyPostsOpen = true;
+    workbench.ui.communityEditingPostId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-community-my-posts") {
+    workbench.ui.communityMyPostsOpen = false;
+    workbench.ui.communityEditingPostId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "edit-community-post") {
+    workbench.ui.communityEditingPostId = String(target.dataset.postId ?? "");
+    render(workbench);
+    return;
+  }
+
+  if (action === "cancel-community-post-edit") {
+    workbench.ui.communityEditingPostId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "save-community-post-edit") {
+    const userKey = communitySessionKey(workbench.session);
+    const form = target.closest?.("[data-community-edit-post-form]");
+    const formData = form ? new FormData(form) : null;
+    const postId = String(form?.dataset.postId ?? "");
+    const title = String(formData?.get("title") ?? "").trim();
+    const content = String(formData?.get("content") ?? "").trim();
+    const category = String(formData?.get("category") ?? "问题反馈").trim();
+    if (!userKey || !postId || !title || !content) {
+      workbench.ui.toast = "请填写标题和内容后再保存。";
+      render(workbench);
+      return;
+    }
+    const data = readLingxiCommunityData();
+    data.posts = data.posts.map((post) => {
+      if (String(post.id) !== postId || !isCommunityOwnPostRecord(post, workbench.session)) return post;
+      return {
+        ...post,
+        title,
+        content,
+        category,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    writeLingxiCommunityData(data);
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityEditingPostId = "";
+    workbench.ui.toast = "帖子已更新。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "delete-community-post") {
+    const userKey = communitySessionKey(workbench.session);
+    const postId = String(target.dataset.postId ?? "");
+    if (!userKey || !postId) {
+      workbench.ui.toast = "请先登录后再删除帖子。";
+      render(workbench);
+      return;
+    }
+    const data = readLingxiCommunityData();
+    data.posts = data.posts.filter((post) => !(String(post.id) === postId && isCommunityOwnPostRecord(post, workbench.session)));
+    writeLingxiCommunityData(data);
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityEditingPostId = "";
+    workbench.ui.toast = "帖子已删除。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-community-feedback") {
+    const form = target.closest?.("[data-community-feedback-form]");
+    const formData = form ? new FormData(form) : null;
+    const title = String(formData?.get("title") ?? "").trim();
+    const content = String(formData?.get("content") ?? "").trim();
+    if (!title || !content) {
+      workbench.ui.toast = "请填写反馈标题和具体内容。";
+      render(workbench);
+      return;
+    }
+    let data = readLingxiCommunityData();
+    const input = {
+      title,
+      content,
+      category: String(formData?.get("category") ?? "问题反馈"),
+      author: communityAuthorLabel(workbench.session),
+      userId: communitySessionKey(workbench.session),
+    };
+    const submittedPost = createLingxiCommunityItem(input);
+    if (typeof workbench.api?.submitCommunityFeedback === "function") {
+      try {
+        data = await workbench.api.submitCommunityFeedback(input);
+      } catch {
+        data.posts = [submittedPost, ...data.posts].slice(0, 80);
+      }
+    } else {
+      data.posts = [submittedPost, ...data.posts].slice(0, 80);
+    }
+    data.posts = mergeLingxiCommunityItems([submittedPost], data.posts).slice(0, 80);
+    writeLingxiCommunityData(data);
+    form?.reset?.();
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityComposerMode = null;
+    workbench.ui.communityComposerMenuOpen = false;
+    workbench.ui.communityPostPage = 1;
+    workbench.ui.toast = input.category === "视频提示词心得" ? "已发布到社区。" : "反馈已提交，管理员可在后台查看。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-community-feature") {
+    const form = target.closest?.("[data-community-feature-form]");
+    const formData = form ? new FormData(form) : null;
+    const title = String(formData?.get("title") ?? "").trim();
+    const content = String(formData?.get("content") ?? "").trim();
+    if (!title || !content) {
+      workbench.ui.toast = "请填写功能名称和需求说明。";
+      render(workbench);
+      return;
+    }
+    let data = readLingxiCommunityData();
+    const input = {
+      title,
+      content,
+      author: communityAuthorLabel(workbench.session),
+    };
+    const userKey = communitySessionKey(workbench.session);
+    const submittedFeature = {
+      ...createLingxiCommunityItem({
+        ...input,
+        category: "功能建议",
+      }),
+      votes: 1,
+      voterIds: userKey ? [userKey] : [],
+    };
+    if (typeof workbench.api?.submitCommunityFeature === "function") {
+      try {
+        data = await workbench.api.submitCommunityFeature(input);
+      } catch {
+        data.features = [submittedFeature, ...data.features].slice(0, 80);
+      }
+    } else {
+      data.features = [submittedFeature, ...data.features].slice(0, 80);
+    }
+    data.features = mergeLingxiCommunityItems([submittedFeature], data.features).slice(0, 80);
+    writeLingxiCommunityData(data);
+    form?.reset?.();
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityComposerMode = null;
+    workbench.ui.communityComposerMenuOpen = false;
+    workbench.ui.toast = "功能建议已进入投票区。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "vote-community-feature") {
+    const userKey = communitySessionKey(workbench.session);
+    if (!userKey) {
+      workbench.ui.toast = "请先登录后再投票。";
+      render(workbench);
+      return;
+    }
+    const featureId = String(target.dataset.featureId ?? "");
+    let data = readLingxiCommunityData();
+    const currentFeature = data.features.find((feature) => String(feature.id) === featureId);
+    const voterIds = Array.isArray(currentFeature?.voterIds) ? currentFeature.voterIds.map(String) : [];
+    if (voterIds.includes(userKey)) {
+      workbench.ui.toast = "你已经给这个功能投过票了。";
+      render(workbench);
+      return;
+    }
+    data.features = data.features.map((feature) => {
+      if (String(feature.id) !== featureId) return feature;
+      return {
+        ...feature,
+        votes: Number(feature.votes || 0) + 1,
+        voterIds: [...voterIds, userKey],
+      };
+    });
+    writeLingxiCommunityData(data);
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.toast = "已投票。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "like-community-post") {
+    const userKey = communitySessionKey(workbench.session);
+    if (!userKey) {
+      workbench.ui.toast = "请先登录后再点赞。";
+      render(workbench);
+      return;
+    }
+    const postId = String(target.dataset.postId ?? "");
+    const data = readLingxiCommunityData();
+    data.posts = data.posts.map((post) => {
+      if (String(post.id) !== postId) return post;
+      const likedBy = Array.isArray(post.likedBy) ? post.likedBy.map(String) : [];
+      const liked = likedBy.includes(userKey);
+      const nextLikedBy = liked ? likedBy.filter((id) => id !== userKey) : [...likedBy, userKey];
+      return {
+        ...post,
+        likedBy: nextLikedBy,
+        likes: nextLikedBy.length,
+      };
+    });
+    writeLingxiCommunityData(data);
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.toast = "已更新点赞。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-community-comments") {
+    const postId = String(target.dataset.postId ?? "");
+    workbench.ui.communityCommentPostId = String(workbench.ui.communityCommentPostId ?? "") === postId ? "" : postId;
+    workbench.ui.communityReplyTarget = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-community-reply") {
+    const postId = String(target.dataset.postId ?? "");
+    const commentId = String(target.dataset.commentId ?? "");
+    const replyKey = `${postId}:${commentId}`;
+    workbench.ui.communityCommentPostId = postId;
+    workbench.ui.communityReplyTarget = String(workbench.ui.communityReplyTarget ?? "") === replyKey ? "" : replyKey;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-community-post-page") {
+    const data = readLingxiCommunityData();
+    const pageSize = 20;
+    const pageCount = Math.max(1, Math.ceil(data.posts.length / pageSize));
+    const page = Math.min(Math.max(Number(target.dataset.page || 1), 1), pageCount);
+    workbench.ui.communityPostPage = page;
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-community-comment") {
+    const userKey = communitySessionKey(workbench.session);
+    if (!userKey) {
+      workbench.ui.toast = "请先登录后再评论。";
+      render(workbench);
+      return;
+    }
+    const form = target.closest?.("[data-community-comment-form]");
+    const formData = form ? new FormData(form) : null;
+    const postId = String(form?.dataset.postId ?? "");
+    const content = String(formData?.get("content") ?? "").trim();
+    if (!postId || !content) {
+      workbench.ui.toast = "请先填写评论内容。";
+      render(workbench);
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const comment = {
+      id: `comment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      author: communityAuthorLabel(workbench.session),
+      userId: userKey,
+      content,
+      createdAt,
+      createdAtLabel: formatCommunityDate(createdAt),
+    };
+    const data = readLingxiCommunityData();
+    data.posts = data.posts.map((post) => {
+      if (String(post.id) !== postId) return post;
+      const comments = Array.isArray(post.comments) ? post.comments : [];
+      return {
+        ...post,
+        comments: [...comments, comment].slice(-80),
+      };
+    });
+    writeLingxiCommunityData(data);
+    form?.reset?.();
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityCommentPostId = postId;
+    workbench.ui.communityPostPage = 1;
+    workbench.ui.toast = "评论已发布。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-community-reply") {
+    const userKey = communitySessionKey(workbench.session);
+    if (!userKey) {
+      workbench.ui.toast = "请先登录后再回复。";
+      render(workbench);
+      return;
+    }
+    const form = target.closest?.("[data-community-reply-form]");
+    const formData = form ? new FormData(form) : null;
+    const postId = String(form?.dataset.postId ?? "");
+    const commentId = String(form?.dataset.commentId ?? "");
+    const content = String(formData?.get("content") ?? "").trim();
+    if (!postId || !commentId || !content) {
+      workbench.ui.toast = "请先填写回复内容。";
+      render(workbench);
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const reply = {
+      id: `reply-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      author: communityAuthorLabel(workbench.session),
+      userId: userKey,
+      content,
+      createdAt,
+      createdAtLabel: formatCommunityDate(createdAt),
+    };
+    const data = readLingxiCommunityData();
+    data.posts = data.posts.map((post) => {
+      if (String(post.id) !== postId) return post;
+      const comments = Array.isArray(post.comments) ? post.comments : [];
+      return {
+        ...post,
+        comments: comments.map((comment) => {
+          if (String(comment.id) !== commentId) return comment;
+          const replies = Array.isArray(comment.replies) ? comment.replies : [];
+          return {
+            ...comment,
+            replies: [...replies, reply].slice(-80),
+          };
+        }),
+      };
+    });
+    writeLingxiCommunityData(data);
+    form?.reset?.();
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+    workbench.ui.communityCommentPostId = postId;
+    workbench.ui.communityReplyTarget = "";
+    workbench.ui.communityPostPage = 1;
+    workbench.ui.toast = "回复已发布。";
+    render(workbench);
     return;
   }
 
@@ -4087,7 +4558,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           taskId: submittedTaskId,
           task,
         };
-        workbench.ui.toast = "画布节点已提交生成任务。";
         scheduleCanvasGenerationPolling(workbench, { ...preview, taskId: submittedTaskId }, { immediate: true });
       } else {
         if (previousBalance !== null) {
@@ -4398,9 +4868,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         notifications: { ...form.notifications },
       };
       const wantsPasswordChange = Boolean(form.currentPassword || form.newPassword || form.confirmPassword);
+      let savedProfile = null;
 
       if (typeof workbench.api?.updateAccountProfile === "function") {
-        await workbench.api.updateAccountProfile(profileInput);
+        savedProfile = await workbench.api.updateAccountProfile(profileInput);
       }
       if (wantsPasswordChange && typeof workbench.api?.changeAccountPassword === "function") {
         await workbench.api.changeAccountPassword({
@@ -4409,12 +4880,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         });
       }
 
+      const savedDisplayName = String(
+        savedProfile?.user?.displayName ?? profileInput.displayName,
+      ).trim();
+      const savedEmail = String(
+        savedProfile?.user?.email ?? profileInput.email,
+      ).trim();
+
       workbench.session = {
         ...(workbench.session ?? {}),
         user: {
           ...(workbench.session?.user ?? {}),
-          displayName: profileInput.displayName,
-          email: profileInput.email,
+          displayName: savedDisplayName,
+          email: savedEmail,
         },
       };
       workbench.ui.accountSettingsOpen = true;
@@ -5289,7 +5767,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-nav-tab") {
-    workbench.ui.activeNavTab = target.dataset.tab ?? "home";
+    const nextTab = target.dataset.tab ?? "home";
+    if (nextTab === "community") {
+      openLingxiCommunityWindow();
+      return;
+    }
+    workbench.ui.activeNavTab = nextTab;
     workbench.ui.projectPanelMode =
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
@@ -5645,6 +6128,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (assetKind) {
       workbench.ui.projectAssetTab = assetKind;
     }
+    if (workbench.ui.toast === "请选择图片后再批量生图。") {
+      workbench.ui.toast = "";
+    }
     workbench.ui.selectedEpisodeCardId = assetId;
     workbench.ui.selectedEpisodeAssetId = assetId;
     clearAssetPromptDraftForCurrentSelection(workbench);
@@ -5659,6 +6145,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const assetKind = target.dataset.assetKind ?? null;
     if (assetKind) {
       workbench.ui.projectAssetTab = assetKind;
+    }
+    if (workbench.ui.toast === "请选择图片后再批量生图。") {
+      workbench.ui.toast = "";
     }
     const current = new Set(workbench.ui.selectedEpisodeAssetIds ?? []);
     if (current.has(assetId)) {
@@ -5678,6 +6167,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       ...(assetBuckets.scene ?? []).map((item) => item.id),
       ...(assetBuckets.prop ?? []).map((item) => item.id),
     ];
+    if (workbench.ui.toast === "请选择图片后再批量生图。") {
+      workbench.ui.toast = "";
+    }
     const nextIds = allIds.length ? allIds : EPISODE_WORKBENCH_FALLBACK_ASSET_IDS;
     const isAllSelected =
       nextIds.length > 0 &&
@@ -5689,6 +6181,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-storyboard-selection") {
     const storyboardId = target.dataset.storyboardId ?? "";
+    if (workbench.ui.toast === "请选择图片后再批量生成视频。") {
+      workbench.ui.toast = "";
+    }
     const current = new Set(workbench.ui.selectedStoryboardIds ?? []);
     if (current.has(storyboardId)) {
       current.delete(storyboardId);
@@ -5702,6 +6197,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-storyboard-select-all") {
     const storyboardIds = getActiveStoryboards(workbench).map((item) => item.id).filter(Boolean);
+    if (workbench.ui.toast === "请选择图片后再批量生成视频。") {
+      workbench.ui.toast = "";
+    }
     const isAllSelected =
       storyboardIds.length > 0 &&
       storyboardIds.every((id) => (workbench.ui.selectedStoryboardIds ?? []).includes(id));
@@ -6247,6 +6745,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-muse-scope-mode") {
     stopLipSyncAudioPreview(workbench);
     const nextScopeMode = target.dataset.mode === "assets" ? "assets" : "storyboard";
+    if (workbench.ui.museScopeMode === nextScopeMode) {
+      return;
+    }
     workbench.ui.museScopeMode = nextScopeMode;
     if (workbench.ui.museScopeMode === "assets") {
       workbench.ui.episodeMediaMode = "image";
@@ -6258,22 +6759,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.videoAudioEnabled = false;
       workbench.ui.videoMusicEnabled = false;
       workbench.ui.videoLipSyncEnabled = false;
-      await ensureEpisodeWorkbenchAssetsHydrated(workbench);
-      const assetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
       clearAssetPromptDraftForCurrentSelection(workbench);
-      await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
     } else {
       if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
         workbench.ui.episodeMediaMode = "video";
       }
       normalizeStoryboardComposerState(workbench, workbench.ui.selectedStoryboardId);
-      await loadSelectedStoryboardConversationHistory(workbench, {
-        mediaKind: resolveStoryboardConversationMediaKind(workbench),
-      });
     }
     syncPromptFromCurrentScope(workbench);
     persistWorkbenchState(workbench);
     render(workbench);
+    await hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, nextScopeMode);
     return;
   }
 
@@ -6752,19 +7248,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-episode-batch-actions") {
     const storyboardScope = (workbench.ui.museScopeMode ?? "storyboard") === "storyboard";
-    const mode = storyboardScope
-      ? "video"
-      : (
-          workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync"
-            ? "video"
-            : "image"
-        );
+    const mode = storyboardScope ? "video" : "image";
     let items = [];
     let scope = "asset";
     if (storyboardScope) {
       const selectedIds = new Set(workbench.ui.selectedStoryboardIds ?? []);
       const storyboards = getActiveStoryboards(workbench);
-      const fallbackSelected = selectedIds.size ? [] : storyboards.slice(0, 2);
       items = selectedIds.size
         ? storyboards.filter((item) => selectedIds.has(item.id)).map((item) => ({
             id: item.id,
@@ -6772,12 +7261,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             kind: "storyboard",
             references: item.references ?? [],
           }))
-        : fallbackSelected.map((item) => ({
-            id: item.id,
-            name: item.displayTitle ?? item.title ?? `分镜 ${item.index ?? ""}`.trim(),
-            kind: "storyboard",
-            references: item.references ?? [],
-          }));
+        : [];
       scope = "storyboard";
     } else {
       const selectedIds = new Set(workbench.ui.selectedEpisodeAssetIds ?? []);
@@ -6786,10 +7270,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         ...(workbench.ui.importedAssets?.scene ?? []),
         ...(workbench.ui.importedAssets?.prop ?? []),
       ];
-      const fallbackSelected = selectedIds.size ? [] : allAssets.slice(0, 3);
       items = selectedIds.size
         ? allAssets.filter((item) => selectedIds.has(item.id))
-        : fallbackSelected;
+        : [];
+    }
+    if (!items.length) {
+      workbench.ui.toast = storyboardScope ? "请选择图片后再批量生成视频。" : "请选择图片后再批量生图。";
+      render(workbench);
+      return;
+    }
+    if (
+      mode === "image" &&
+      (!Array.isArray(workbench.ui.batchImageStyles) || workbench.ui.batchImageStyles.length === 0) &&
+      typeof workbench.api?.getBatchImageStyles === "function"
+    ) {
+      await syncBatchImageStyles(workbench);
     }
     workbench.ui.episodeBatchModal = buildEpisodeBatchModal(workbench, {
       scope,
@@ -6850,7 +7345,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
       ...workbench.ui.episodeBatchModal,
       styleTab,
-      selectedStyleId: styleTab === "custom" ? "custom-1" : "public-1",
+      selectedStyleId: resolveEpisodeBatchStyleSelection(workbench.ui.episodeBatchModal, styleTab),
     });
     render(workbench);
     return;
@@ -6919,6 +7414,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           },
         }));
       }
+      workbench.ui.selectedStoryboardIds = [];
       workbench.ui.episodeBatchModal = null;
       workbench.ui.toast = `已为 ${items.length} 条分镜创建视频任务。`;
       collectEpisodeWorkbenchEvent(workbench, "batch.submit", {
@@ -7003,6 +7499,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.imageGenerationResult = batchResults[firstItem.id];
       }
     }
+    workbench.ui.selectedEpisodeAssetIds = [];
     workbench.ui.episodeBatchModal = null;
     workbench.ui.toast = `已为 ${items.length} 项素材创建各自任务，可逐个切换查看结果。`;
     collectEpisodeWorkbenchEvent(workbench, "batch.submit", {
@@ -9722,7 +10219,21 @@ function syncActiveCanvasDocument(workbench) {
   if (!workbench?.ui) {
     return null;
   }
-  const projects = normalizeCanvasProjects(workbench.ui);
+  let projects = normalizeCanvasProjects(workbench.ui);
+  if (!projects.length && workbench.ui.canvasDocument && typeof workbench.ui.canvasDocument === "object") {
+    const documentProjectId = String(
+      workbench.ui.selectedCanvasProjectId ??
+      workbench.ui.canvasDocument.canvasProjectId ??
+      workbench.ui.canvasDocument.projectId ??
+      DEFAULT_CANVAS_PROJECT_ID,
+    ).trim() || DEFAULT_CANVAS_PROJECT_ID;
+    projects = [
+      createDefaultCanvasProjectRecord({
+        id: documentProjectId,
+        title: "画布项目",
+      }),
+    ];
+  }
   workbench.ui.canvasProjects = projects;
   if (!projects.length) {
     workbench.ui.selectedCanvasProjectId = null;
@@ -9855,7 +10366,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
 }
 
 function scheduleProjectCanvasSave(workbench, options = {}) {
-  const projectId = resolveActiveCanvasBusinessProjectId(workbench) ?? workbench.ui?.activeCanvasProjectId;
+  const projectId = resolveCanvasSaveProjectId(workbench);
   const canSaveProjectCanvas = Boolean(resolveActiveCanvasBusinessProjectId(workbench)) && typeof workbench.api?.saveProjectCanvas === "function";
   const canSaveStandaloneCanvas = !resolveActiveCanvasBusinessProjectId(workbench) && typeof workbench.api?.saveStandaloneCanvas === "function";
   if (!projectId || (!canSaveProjectCanvas && !canSaveStandaloneCanvas)) {
@@ -9882,7 +10393,7 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
 
 async function saveProjectCanvasNow(workbench) {
   const businessProjectId = resolveActiveCanvasBusinessProjectId(workbench);
-  const projectId = businessProjectId ?? workbench.ui?.activeCanvasProjectId;
+  const projectId = resolveCanvasSaveProjectId(workbench);
   if (!projectId) {
     return null;
   }
@@ -9943,6 +10454,18 @@ async function saveProjectCanvasNow(workbench) {
       workbench.canvasSaveInFlight = null;
     }
   }
+}
+
+function resolveCanvasSaveProjectId(workbench) {
+  return [
+    resolveActiveCanvasBusinessProjectId(workbench),
+    workbench?.ui?.activeCanvasProjectId,
+    workbench?.ui?.selectedCanvasProjectId,
+    workbench?.ui?.canvasDocument?.canvasProjectId,
+    workbench?.ui?.canvasDocument?.projectId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? null;
 }
 
 async function createCanvasProject(workbench) {
@@ -11307,10 +11830,7 @@ function applyCanvasGraphViewport(workbench) {
 }
 
 async function submitCanvasRunIfAvailable(workbench, preview) {
-  const episodeId = await ensureCanvasGenerationEpisodeId(workbench);
-  if (!episodeId) {
-    throw new Error("canvas_episode_context_missing");
-  }
+  const episodeId = resolveCanvasGenerationEpisodeId(workbench);
   const payload = {
     targetType: "canvas",
     targetId: preview.nodeId,
@@ -11332,27 +11852,44 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
   if (preview.creditCost !== undefined) {
     payload.estimatedCredits = preview.creditCost;
   }
-  await saveProjectCanvasNow(workbench);
-  const canvasProjectId = String(workbench.ui?.activeCanvasProjectId ?? workbench.ui?.canvasDocument?.canvasProjectId ?? "").trim();
+  const savedCanvas = await saveProjectCanvasNow(workbench);
+  const canvasProjectId = resolveCanvasRunProjectId(workbench, savedCanvas);
   if (canvasProjectId && typeof workbench.api?.runCanvasNode === "function") {
     return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, {
       ...payload,
-      episodeId,
+      ...(episodeId ? { episodeId } : {}),
       kind: preview.mediaKind === "video" ? "video" : "image",
       mediaKind: preview.mediaKind === "video" ? "video" : "image",
       ...(preview.mediaKind === "video" ? { motionPrompt: preview.prompt } : {}),
     });
   }
+  const fallbackEpisodeId = episodeId ?? await ensureCanvasGenerationEpisodeId(workbench);
+  if (!fallbackEpisodeId) {
+    throw new Error("canvas_episode_context_missing");
+  }
   if (preview.mediaKind === "video" && typeof workbench.api?.createVideoTask === "function") {
-    return workbench.api.createVideoTask(episodeId, {
+    return workbench.api.createVideoTask(fallbackEpisodeId, {
       ...payload,
       motionPrompt: preview.prompt,
     });
   }
   if (preview.mediaKind !== "video" && typeof workbench.api?.createImageTask === "function") {
-    return workbench.api.createImageTask(episodeId, payload);
+    return workbench.api.createImageTask(fallbackEpisodeId, payload);
   }
   throw new Error(preview.mediaKind === "video" ? "canvas_video_generation_api_missing" : "canvas_image_generation_api_missing");
+}
+
+function resolveCanvasRunProjectId(workbench, savedCanvas = null) {
+  return [
+    savedCanvas?.canvasProjectId,
+    savedCanvas?.projectId && !resolveActiveCanvasBusinessProjectId(workbench) ? savedCanvas.projectId : null,
+    workbench?.ui?.activeCanvasProjectId,
+    workbench?.ui?.canvasDocument?.canvasProjectId,
+    workbench?.ui?.selectedCanvasProjectId,
+    workbench?.ui?.canvasDocument?.projectId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? "";
 }
 
 function validateCanvasRunBeforeSubmit(canvasDocument, preview) {
@@ -11559,15 +12096,7 @@ function collectCanvasImageReferencesForNode(node, document = {}) {
   if (direct.url || direct.assetVersionId) {
     return [direct];
   }
-  if (!(node?.type === "image" || node?.data?.mediaKind === "image")) {
-    return [];
-  }
-  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
-  const nodeMap = new Map(nodes.map((item) => [item.id, item]));
-  return (Array.isArray(document?.edges) ? document.edges : [])
-    .filter((edge) => edge.targetNodeId === node.id)
-    .map((edge) => canvasImageReferenceFromNode(nodeMap.get(edge.sourceNodeId)))
-    .filter((item) => item.url || item.assetVersionId);
+  return [];
 }
 
 function canvasImageReferenceFromNode(node) {
@@ -12011,6 +12540,9 @@ async function runAction(workbench, message, action, options = {}) {
       workbench.ui.toast = successToast;
     }
   } catch (error) {
+    if (typeof options.onError === "function") {
+      options.onError(error);
+    }
     workbench.ui.toast = `操作失败：${friendlyError(error)}`;
   } finally {
     workbench.ui.busy = false;
@@ -12115,6 +12647,12 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     return;
   }
 
+  workbench.ui.singleEpisodeAiPreview = {
+    ...previewState,
+    status: "submitting",
+    error: "",
+  };
+
   await runAction(workbench, "正在创建章节...", async () => {
     const result = await workbench.api.commitAiStoryboardPreview(projectId, {
       episodeTitle: workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
@@ -12144,6 +12682,13 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     });
   }, {
     successToast: "已创建章节并进入分镜工作台。",
+    onError: () => {
+      workbench.ui.singleEpisodeAiPreview = {
+        ...previewState,
+        status: "ready",
+        error: "",
+      };
+    },
   });
 }
 
@@ -12880,6 +13425,8 @@ function toggleSingleEpisodeLookPackage(workbench, input = {}) {
 }
 
 async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
+  const requestId = Number(workbench.ui.episodeWorkbenchEnterRequestId ?? 0) + 1;
+  workbench.ui.episodeWorkbenchEnterRequestId = requestId;
   const previousStoryboardId = workbench.ui.selectedStoryboardId ?? null;
   const availableEpisodes = getDetailEpisodes(workbench.state);
   const hasRealEpisodes = availableEpisodes.some((episode) => episode?.id && episode.id !== "episode-primary");
@@ -12893,35 +13440,6 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
   workbench.ui.episodeWorkbenchError = "";
   resetEpisodeWorkbenchAssets(workbench);
-
-  if (
-    resolvedEpisodeId &&
-    resolvedEpisodeId !== "episode-primary" &&
-    typeof workbench.api.getEpisodeWorkbench === "function"
-  ) {
-    try {
-      const context = await workbench.api.getEpisodeWorkbench(resolvedEpisodeId);
-      const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
-      workbench.ui.episodeWorkbenchContext = context;
-      workbench.ui.selectedProjectCardId =
-        resolvedContext?.project?.projectId ??
-        resolvedContext?.episode?.projectId ??
-        context?.project?.projectId ??
-        context?.episode?.projectId ??
-        workbench.ui.selectedProjectCardId;
-      applyEpisodeWorkbenchAssetsFromContext(workbench, context);
-      await loadEpisodeGenerationConfig(workbench, resolvedEpisodeId);
-      storyboards = await loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId);
-    } catch (error) {
-      workbench.ui.episodeWorkbenchContext = null;
-      workbench.ui.episodeWorkbenchError = friendlyError(error);
-      if (!storyboards.length) {
-        storyboards = ensureEpisodeStoryboards(workbench, resolvedEpisodeId);
-      }
-    }
-  } else if (resolvedEpisodeId && !storyboards.length) {
-    storyboards = ensureEpisodeStoryboards(workbench, resolvedEpisodeId);
-  }
 
   if (!resolvedEpisodeId) {
     workbench.ui.episodeWorkbenchContext = null;
@@ -12942,36 +13460,17 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   workbench.ui.projectInteriorStatusMenuOpen = false;
   workbench.ui.episodeCardMenuId = null;
   workbench.ui.museScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
-  syncSelectedEpisodeAssetForCurrentTab(workbench);
-  syncPromptFromCurrentScope(workbench);
-  if (workbench.ui.museScopeMode === "assets") {
-    await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
-  }
-  await restoreEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
+  workbench.ui.selectedStoryboard = null;
   if (workbench.ui.museScopeMode === "storyboard") {
+    workbench.ui.selectedStoryboardId = previousStoryboardId;
     if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
       workbench.ui.episodeMediaMode = "video";
     }
-    const activeStoryboards = getEpisodeStoryboards(workbench, resolvedEpisodeId, storyboards);
-    const preferredStoryboardId = activeStoryboards.some((storyboard) => storyboard.id === previousStoryboardId)
-      ? previousStoryboardId
-      : (activeStoryboards[0]?.id ?? null);
-    workbench.ui.selectedStoryboardId = preferredStoryboardId;
-    if (preferredStoryboardId) {
-      await loadSelectedStoryboardConversationHistory(workbench, {
-        storyboardId: preferredStoryboardId,
-        mediaKind: resolveStoryboardConversationMediaKind(workbench),
-      });
-    } else {
-      workbench.ui.imageGenerationResult = null;
-      workbench.ui.videoGenerationResult = null;
-    }
+  } else {
+    workbench.ui.selectedStoryboardId = null;
   }
-  if (options.toast) {
-    workbench.ui.toast = options.toast;
-  } else if (workbench.ui.episodeWorkbenchError) {
-    workbench.ui.toast = `剧集工作台加载失败：${workbench.ui.episodeWorkbenchError}`;
-  }
+  syncSelectedEpisodeAssetForCurrentTab(workbench);
+  syncPromptFromCurrentScope(workbench);
   if (!options.preserveRoute) {
     const projectId =
       workbench.ui.selectedProjectCardId ??
@@ -12990,6 +13489,106 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   if (options.shouldRender !== false) {
     render(workbench);
   }
+
+  if (
+    resolvedEpisodeId &&
+    resolvedEpisodeId !== "episode-primary" &&
+    typeof workbench.api.getEpisodeWorkbench === "function"
+  ) {
+    try {
+      const context = await workbench.api.getEpisodeWorkbench(resolvedEpisodeId);
+      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+        return;
+      }
+      const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
+      workbench.ui.episodeWorkbenchContext = context;
+      workbench.ui.episodeWorkbenchContextLoadedEpisodeId = resolvedEpisodeId;
+      workbench.ui.selectedProjectCardId =
+        resolvedContext?.project?.projectId ??
+        resolvedContext?.episode?.projectId ??
+        context?.project?.projectId ??
+        context?.episode?.projectId ??
+        workbench.ui.selectedProjectCardId;
+      applyEpisodeWorkbenchAssetsFromContext(workbench, context);
+      const [_, loadedStoryboards] = await Promise.all([
+        loadEpisodeGenerationConfig(workbench, resolvedEpisodeId),
+        loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId),
+      ]);
+      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+        return;
+      }
+      storyboards = loadedStoryboards;
+    } catch (error) {
+      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+        return;
+      }
+      workbench.ui.episodeWorkbenchContext = null;
+      workbench.ui.episodeWorkbenchError = friendlyError(error);
+      if (!storyboards.length) {
+        storyboards = ensureEpisodeStoryboards(workbench, resolvedEpisodeId);
+      }
+    }
+  } else if (resolvedEpisodeId && !storyboards.length) {
+    storyboards = ensureEpisodeStoryboards(workbench, resolvedEpisodeId);
+  }
+  if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+    return;
+  }
+  if (workbench.ui.museScopeMode === "storyboard") {
+    if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
+      workbench.ui.episodeMediaMode = "video";
+    }
+    const activeStoryboards = getEpisodeStoryboards(workbench, resolvedEpisodeId, storyboards);
+    const preferredStoryboardId = activeStoryboards.some((storyboard) => storyboard.id === previousStoryboardId)
+      ? previousStoryboardId
+      : (activeStoryboards[0]?.id ?? null);
+    workbench.ui.selectedStoryboardId = preferredStoryboardId;
+    workbench.ui.selectedStoryboard = getSelectedStoryboard(activeStoryboards, preferredStoryboardId);
+    if (preferredStoryboardId) {
+      await loadSelectedStoryboardConversationHistory(workbench, {
+        storyboardId: preferredStoryboardId,
+        mediaKind: resolveStoryboardConversationMediaKind(workbench),
+      });
+      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+        return;
+      }
+    } else {
+      workbench.ui.imageGenerationResult = null;
+      workbench.ui.videoGenerationResult = null;
+    }
+  }
+  if (options.toast) {
+    workbench.ui.toast = options.toast;
+  } else if (workbench.ui.episodeWorkbenchError) {
+    workbench.ui.toast = `剧集工作台加载失败：${workbench.ui.episodeWorkbenchError}`;
+  }
+  syncPromptFromCurrentScope(workbench);
+  if (options.shouldRender !== false) {
+    render(workbench);
+  }
+  runLazyWorkbenchTask(workbench, "episode workbench history hydration", async () => {
+    if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+      return;
+    }
+    if (workbench.ui.museScopeMode === "assets") {
+      await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+    }
+    await restoreEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
+    if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+      return;
+    }
+    if (workbench.ui.museScopeMode === "storyboard" && workbench.ui.selectedStoryboardId) {
+      await loadSelectedStoryboardConversationHistory(workbench, {
+        storyboardId: workbench.ui.selectedStoryboardId,
+        mediaKind: resolveStoryboardConversationMediaKind(workbench),
+      });
+    }
+    if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+      return;
+    }
+    syncPromptFromCurrentScope(workbench);
+    render(workbench);
+  });
 }
 
 function resetEpisodeWorkbenchAssets(workbench) {
@@ -13072,16 +13671,35 @@ async function ensureEpisodeWorkbenchAssetsHydrated(workbench) {
     return workbench.ui.importedAssets;
   }
 
-  const context = await workbench.api.getEpisodeWorkbench(workbench.ui.selectedEpisodeId);
-  const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
-  workbench.ui.episodeWorkbenchContext = context;
-  workbench.ui.selectedProjectCardId =
-    resolvedContext?.project?.projectId ??
-    resolvedContext?.episode?.projectId ??
-    context?.project?.projectId ??
-    context?.episode?.projectId ??
-    workbench.ui.selectedProjectCardId;
-  return applyEpisodeWorkbenchAssetsFromContext(workbench, context);
+  const episodeId = workbench.ui.selectedEpisodeId;
+  if (
+    workbench.ui.episodeWorkbenchContextLoadedEpisodeId === episodeId &&
+    workbench.ui.episodeWorkbenchContext
+  ) {
+    return applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
+  }
+  if (workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
+    return workbench.ui.importedAssets;
+  }
+
+  workbench.ui.episodeWorkbenchContextRequestEpisodeId = episodeId;
+  try {
+    const context = await workbench.api.getEpisodeWorkbench(episodeId);
+    const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
+    workbench.ui.episodeWorkbenchContext = context;
+    workbench.ui.episodeWorkbenchContextLoadedEpisodeId = episodeId;
+    workbench.ui.selectedProjectCardId =
+      resolvedContext?.project?.projectId ??
+      resolvedContext?.episode?.projectId ??
+      context?.project?.projectId ??
+      context?.episode?.projectId ??
+      workbench.ui.selectedProjectCardId;
+    return applyEpisodeWorkbenchAssetsFromContext(workbench, context);
+  } finally {
+    if (workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
+      workbench.ui.episodeWorkbenchContextRequestEpisodeId = null;
+    }
+  }
 }
 
 function resolveEpisodeWorkbenchContextPayload(context) {
@@ -14543,6 +15161,35 @@ function syncPromptInputFromDom(workbench) {
 
 function syncPromptFromCurrentScope(workbench) {
   workbench.ui.prompt = getCurrentScopePrompt(workbench, { allowPromptFallback: false });
+}
+
+async function hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, scopeMode) {
+  if ((workbench.ui.museScopeMode ?? "storyboard") !== scopeMode) {
+    return;
+  }
+  if (scopeMode === "assets") {
+    await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+    if ((workbench.ui.museScopeMode ?? "storyboard") !== scopeMode) {
+      return;
+    }
+    syncSelectedEpisodeAssetForCurrentTab(workbench);
+    clearAssetPromptDraftForCurrentSelection(workbench);
+    const assetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+    await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
+  } else {
+    if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
+      workbench.ui.episodeMediaMode = "video";
+    }
+    normalizeStoryboardComposerState(workbench, workbench.ui.selectedStoryboardId);
+    await loadSelectedStoryboardConversationHistory(workbench, {
+      mediaKind: resolveStoryboardConversationMediaKind(workbench),
+    });
+  }
+  if ((workbench.ui.museScopeMode ?? "storyboard") !== scopeMode) {
+    return;
+  }
+  syncPromptFromCurrentScope(workbench);
+  render(workbench);
 }
 
 function clearAssetPromptDraftForCurrentSelection(workbench) {
@@ -16455,9 +17102,19 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
   const mediaKind = options.mediaKind === "video" ? "video" : "image";
   const storyboardId = options.storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
+  const historyKey = buildStoryboardConversationHistoryKey(storyboardId, mediaKind);
+  const force = options.force === true;
   if (!storyboardId) {
     workbench.ui[targetKey] = null;
     return [];
+  }
+  if (!force && workbench.ui.storyboardConversationHistoryLoadedKeys?.[historyKey]) {
+    syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
+  }
+  if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
+    syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
   if (
     !isRealEpisodeWorkbench(workbench) ||
@@ -16467,6 +17124,10 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
   try {
+    workbench.ui.storyboardConversationHistoryPendingKeys = {
+      ...(workbench.ui.storyboardConversationHistoryPendingKeys ?? {}),
+      [historyKey]: true,
+    };
     const response = await workbench.api.getStoryboardConversationHistory(
       workbench.ui.selectedEpisodeId,
       resolveStoryboardConversationApiId(workbench, storyboardId),
@@ -16474,11 +17135,21 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     );
     const entries = Array.isArray(response?.entries) ? response.entries : [];
     replaceStoryboardConversationHistoryEntries(workbench, storyboardId, entries, mediaKind);
+    workbench.ui.storyboardConversationHistoryLoadedKeys = {
+      ...(workbench.ui.storyboardConversationHistoryLoadedKeys ?? {}),
+      [historyKey]: true,
+    };
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     return entries;
   } catch {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
+  } finally {
+    if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
+      const nextPending = { ...(workbench.ui.storyboardConversationHistoryPendingKeys ?? {}) };
+      delete nextPending[historyKey];
+      workbench.ui.storyboardConversationHistoryPendingKeys = nextPending;
+    }
   }
 }
 
@@ -16621,9 +17292,19 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     workbench.ui.selectedEpisodeCardId ??
     null;
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
+  const historyKey = buildAssetConversationHistoryKey(assetId, mediaKind);
+  const force = options.force === true;
   if (!assetId) {
     workbench.ui[targetKey] = null;
     return [];
+  }
+  if (!force && workbench.ui.assetConversationHistoryLoadedKeys?.[historyKey]) {
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  }
+  if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
   if (
     !isRealEpisodeWorkbench(workbench) ||
@@ -16633,6 +17314,10 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
   try {
+    workbench.ui.assetConversationHistoryPendingKeys = {
+      ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}),
+      [historyKey]: true,
+    };
     const response = await workbench.api.getAssetConversationHistory(
       workbench.ui.selectedEpisodeId,
       assetId,
@@ -16640,11 +17325,21 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     );
     const entries = Array.isArray(response?.entries) ? response.entries : [];
     replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+    workbench.ui.assetConversationHistoryLoadedKeys = {
+      ...(workbench.ui.assetConversationHistoryLoadedKeys ?? {}),
+      [historyKey]: true,
+    };
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     return entries;
   } catch {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  } finally {
+    if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
+      const nextPending = { ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}) };
+      delete nextPending[historyKey];
+      workbench.ui.assetConversationHistoryPendingKeys = nextPending;
+    }
   }
 }
 
@@ -16724,18 +17419,31 @@ function inferEpisodeAssetKind(name = "") {
 function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", items = [] } = {}) {
   const imageResolution = String(workbench.ui.imageResolution ?? "2K").toUpperCase();
   const aspectRatio = workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9";
+  const publicStyles = resolveEpisodeBatchPublicStyles(workbench);
+  const imageModelOptions = resolveEpisodeBatchImageModelOptions(workbench);
+  const batchPromptPresetCategories = resolveBatchPromptPresetCategories(workbench);
+  const defaultImageModelId =
+    resolveConfiguredImageModelCode(workbench, "multi-image", imageModelOptions[0]?.value ?? "tnb-pro");
+  const defaultScenePresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.scene, "");
+  const defaultRolePresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.character, "");
+  const defaultPropPresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.prop, "");
   const nextModal = {
     show: true,
     scope,
     mode,
     items,
+    anchorTop: resolveEpisodeBatchAnchorTop(workbench),
     openField: null,
-    imageModelId: "tnb-pro",
+    imageModelId: defaultImageModelId,
+    imageModelOptions,
     styleTab: "public",
-    selectedStyleId: "public-1",
-    scenePresetId: "scene-wide",
-    rolePresetId: "character-triple",
-    propPresetId: "prop-triple",
+    publicStyles,
+    customStyles: [],
+    selectedStyleId: publicStyles[0]?.id ?? "",
+    batchPromptPresetCategories,
+    scenePresetId: defaultScenePresetId,
+    rolePresetId: defaultRolePresetId,
+    propPresetId: defaultPropPresetId,
     aspectRatio,
     size: ["1K", "2K"].includes(imageResolution) ? imageResolution : "2K",
     videoModelId: workbench.ui.selectedModelId ?? "vidu-q3-pro",
@@ -16743,6 +17451,16 @@ function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", it
     videoResolution: String(workbench.ui.videoResolution ?? "720P").toUpperCase(),
   };
   return syncEpisodeBatchModal(nextModal);
+}
+
+function resolveEpisodeBatchAnchorTop(workbench) {
+  const trigger = workbench.root?.querySelector?.('[data-action="open-episode-batch-actions"]');
+  if (!trigger || typeof trigger.getBoundingClientRect !== "function") {
+    return 80;
+  }
+  const rect = trigger.getBoundingClientRect();
+  const anchorTop = Number(rect?.bottom ?? 0) + 8;
+  return Number.isFinite(anchorTop) ? Math.max(anchorTop, 16) : 80;
 }
 
 function syncEpisodeBatchModal(modal) {
@@ -16777,6 +17495,79 @@ function resolveEpisodeBatchUnitCredit(modal) {
     return size === "1K" ? 110 : 120;
   }
   return size === "1K" ? 80 : 90;
+}
+
+function resolveEpisodeBatchImageModelOptions(workbench) {
+  const configuredModels = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  const options = configuredModels
+    .filter((model) => normalizeGenerationModelMediaKind(model) === "image")
+    .filter((model) => modelSupportsGenerationMode(model, "multi-image"))
+    .map((model) => {
+      const modelCode = String(model?.modelCode ?? model?.id ?? "").trim();
+      if (!modelCode) {
+        return null;
+      }
+      const providerGroup = String(model?.providerGroup ?? model?.group ?? model?.providerName ?? "").trim();
+      return {
+        value: modelCode,
+        label: String(model?.modelLabel ?? model?.label ?? modelCode).trim() || modelCode,
+        group: providerGroup || "后台配置",
+      };
+    })
+    .filter(Boolean);
+  if (options.length) {
+    return options;
+  }
+  return [
+    { value: "tnb-pro", label: "nano banana 2（链路G）", group: "Nano banana" },
+    { value: "tnb-fast", label: "nano banana fast（链路G）", group: "Nano banana" },
+    { value: "tnb-ultra", label: "nano banana pro（链路G）", group: "Nano banana" },
+    { value: "jimeng-4-5", label: "gpt image 2（链路G）", group: "Gpt image" },
+    { value: "jimeng-4-5-vip", label: "gpt image 2 VIP（链路G）", group: "Gpt image" },
+  ];
+}
+
+function resolveBatchPromptPresetCategories(workbench) {
+  const configured = workbench.ui?.episodeGenerationConfig?.batchPromptPresetCategories;
+  return {
+    scene: normalizeBatchPromptPresetCategoryList(configured?.scene),
+    character: normalizeBatchPromptPresetCategoryList(configured?.character),
+    prop: normalizeBatchPromptPresetCategoryList(configured?.prop),
+  };
+}
+
+function normalizeBatchPromptPresetCategoryList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set();
+  const options = value
+    .map((item) => {
+      const id = String(item?.id ?? "").trim();
+      const label = String(item?.label ?? "").trim();
+      if (!id || !label || id === "none") {
+        return null;
+      }
+      return { id, label };
+    })
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item.id)) {
+        return false;
+      }
+      seen.add(item.id);
+      return true;
+    });
+  return options;
+}
+
+function resolveDefaultBatchPromptPresetId(options, fallbackId) {
+  if (Array.isArray(options) && options.some((option) => option.id === fallbackId)) {
+    return fallbackId;
+  }
+  return options?.[0]?.id ?? "none";
 }
 
 export async function generateAssetImages(workbench) {
@@ -21643,6 +22434,200 @@ function deriveInitialNavTab(hash) {
   return "project";
 }
 
+const LINGXI_COMMUNITY_STORAGE_KEY = "lingxi-community-board";
+
+function openLingxiCommunityWindow() {
+  const url = new URL(window.location.href);
+  url.hash = "community";
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
+function readLingxiCommunityData() {
+  const fallback = createDefaultLingxiCommunityData();
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LINGXI_COMMUNITY_STORAGE_KEY) || "null");
+    return {
+      posts: normalizeLingxiCommunityPosts(Array.isArray(parsed?.posts) ? parsed.posts : fallback.posts),
+      features: normalizeLingxiCommunityFeatures(Array.isArray(parsed?.features) ? parsed.features : fallback.features),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLingxiCommunityData(data) {
+  try {
+    localStorage.setItem(LINGXI_COMMUNITY_STORAGE_KEY, JSON.stringify({
+      posts: Array.isArray(data?.posts) ? data.posts : [],
+      features: Array.isArray(data?.features) ? data.features : [],
+    }));
+  } catch {
+    // Keep the community usable even if storage is unavailable.
+  }
+}
+
+function mergeLingxiCommunityItems(primaryItems = [], nextItems = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...primaryItems, ...nextItems]) {
+    const id = String(item?.id ?? "").trim();
+    const key = id || `${String(item?.title ?? "").trim()}::${String(item?.content ?? "").trim()}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function normalizeLingxiCommunityPosts(posts = []) {
+  return posts.map((post) => {
+    const likedBy = Array.isArray(post?.likedBy) ? post.likedBy.map(String) : [];
+    const comments = Array.isArray(post?.comments)
+      ? post.comments.map((comment) => ({
+        ...comment,
+        replies: Array.isArray(comment?.replies) ? comment.replies : [],
+      }))
+      : [];
+    return {
+      ...post,
+      userId: String(post?.userId || inferCommunityUserIdFromAuthor(post?.author) || ""),
+      likedBy,
+      likes: Number(post?.likes ?? likedBy.length ?? 0),
+      comments,
+    };
+  });
+}
+
+function normalizeLingxiCommunityFeatures(features = []) {
+  return features.map((feature) => ({
+    ...feature,
+    votes: Number(feature?.votes ?? 0),
+    voterIds: Array.isArray(feature?.voterIds) ? feature.voterIds.map(String) : [],
+  }));
+}
+
+async function loadLingxiCommunityBoard(workbench) {
+  if (typeof workbench.api?.getCommunityBoard !== "function") {
+    return;
+  }
+  try {
+    const data = await workbench.api.getCommunityBoard();
+    writeLingxiCommunityData(data);
+    workbench.ui.communityPosts = Array.isArray(data?.posts) ? data.posts : [];
+    workbench.ui.communityFeatures = Array.isArray(data?.features) ? data.features : [];
+    render(workbench);
+  } catch {
+    const data = readLingxiCommunityData();
+    workbench.ui.communityPosts = data.posts;
+    workbench.ui.communityFeatures = data.features;
+  }
+}
+
+function createDefaultLingxiCommunityData() {
+  return {
+    posts: [
+      createLingxiCommunityItem({
+        id: "prompt-seed-subject-first",
+        title: "先锁定主体，再写镜头运动",
+        content: "我会把人物服装、发型、道具写在第一句，第二句才写镜头推进。主体信息越靠前，角色越不容易漂。",
+        category: "视频提示词心得",
+        author: "南城分镜师",
+        createdAt: "2026-06-18T10:20:00.000Z",
+        promptMeta: {
+          scene: "角色口播",
+          model: "首帧生视频",
+          prompt: "同一位短发女主，白色风衣，手持咖啡杯，镜头缓慢推近，眼神看向窗外，柔和晨光。",
+          tags: ["主体一致", "推镜", "口播"],
+        },
+      }),
+      createLingxiCommunityItem({
+        id: "prompt-seed-one-action",
+        title: "动作不要堆太多，拆成一个主动作",
+        content: "同一个镜头里让角色转身、跑步、回头、挥手，模型会发散。我通常只保留一个主动作，再补情绪。",
+        category: "视频提示词心得",
+        author: "阿泽导演台",
+        createdAt: "2026-06-18T09:48:00.000Z",
+        promptMeta: {
+          scene: "动作镜头",
+          model: "参考生视频",
+          prompt: "少年向前奔跑，衣摆随风摆动，镜头平稳跟拍，背景轻微运动模糊，紧张但克制。",
+          tags: ["单动作", "跟拍", "运动模糊"],
+        },
+      }),
+    ],
+    features: [
+      {
+        ...createLingxiCommunityItem({
+          id: "feature-seed-batch-character-views",
+          title: "批量生成角色三视图",
+          content: "上传人物设定后，一次生成正面、侧面、背面，方便后续视频保持一致。",
+          category: "功能建议",
+          author: "创作者共创",
+          createdAt: "2026-06-18T09:20:00.000Z",
+        }),
+        votes: 18,
+        voterIds: [],
+      },
+      {
+        ...createLingxiCommunityItem({
+          id: "feature-seed-shot-copy",
+          title: "跨项目复用分镜模板",
+          content: "常用镜头运动、字幕样式和画面比例可以保存成模板，在新项目中直接套用。",
+          category: "功能建议",
+          author: "灵曦体验官",
+          createdAt: "2026-06-18T09:10:00.000Z",
+        }),
+        votes: 12,
+        voterIds: [],
+      },
+    ],
+  };
+}
+
+function createLingxiCommunityItem(input = {}) {
+  const createdAt = input.createdAt || new Date().toISOString();
+  return {
+    id: input.id || `community-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: String(input.title || "").trim(),
+    content: String(input.content || "").trim(),
+    category: String(input.category || "问题反馈"),
+    author: String(input.author || "灵曦用户"),
+    userId: String(input.userId || ""),
+    createdAt,
+    createdAtLabel: formatCommunityDate(createdAt),
+    likedBy: Array.isArray(input.likedBy) ? input.likedBy : [],
+    likes: Number(input.likes ?? 0),
+    comments: Array.isArray(input.comments) ? input.comments : [],
+    promptMeta: input.promptMeta && typeof input.promptMeta === "object" ? input.promptMeta : null,
+  };
+}
+
+function formatCommunityDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function communityAuthorLabel(session) {
+  const phone = String(session?.user?.phone ?? "");
+  return phone ? `创作者 ${phone.slice(-4)}` : "灵曦用户";
+}
+
+function communitySessionKey(session = {}) {
+  return String(session?.user?.id || session?.user?.phone || session?.user?.email || "").trim();
+}
+
+function isCommunityOwnPostRecord(post = {}, session = {}) {
+  const userKey = communitySessionKey(session);
+  const phoneTail = String(session?.user?.phone ?? "").slice(-4);
+  return Boolean(userKey && (String(post.userId || "") === userKey || (phoneTail && String(post.author || "").endsWith(phoneTail))));
+}
+
+function inferCommunityUserIdFromAuthor(author) {
+  const match = String(author ?? "").match(/创作者\s*(\d{4})$/);
+  return match ? match[1] : "";
+}
+
 function deriveInitialCanvasProjectView(hash) {
   const token = String(hash || "").replace(/^#/, "");
   return token === "tools-canvas" ? "detail" : "list";
@@ -21844,7 +22829,18 @@ function mapEpisodeStoryboardContract(storyboard) {
   const generationDrafts = normalizeEpisodeStoryboardGenerationDrafts(storyboard?.generationDrafts);
   const videoDraft = generationDrafts.find((draft) => draft.mode === "video") ?? null;
   const imageDraft = generationDrafts.find((draft) => draft.mode === "image") ?? null;
-  const activeDraft = videoDraft ?? imageDraft;
+  const fallbackVideoPrompt = resolveEpisodeStoryboardVideoPrompt(storyboard);
+  const fallbackImagePrompt = resolveEpisodeStoryboardImagePrompt(storyboard);
+  const activeDraft = videoDraft ?? imageDraft ?? (
+    fallbackVideoPrompt || fallbackImagePrompt
+      ? {
+          mode: fallbackVideoPrompt ? "video" : "image",
+          prompt: fallbackVideoPrompt || fallbackImagePrompt,
+          payload: {},
+          updatedAt: null,
+        }
+      : null
+  );
   return {
     id: storyboardId,
     linkedShotId: apiStoryboardId ?? storyboard?.linkedShotId ?? storyboard?.shotId ?? storyboard?.storyboardId ?? storyboardId,
@@ -21879,10 +22875,47 @@ function mapEpisodeStoryboardContract(storyboard) {
     generationState: {
       ...createEmptyGenerationState(),
       prompt: activeDraft?.prompt ?? "",
-      imagePrompt: imageDraft?.prompt ?? "",
-      videoPrompt: videoDraft?.prompt ?? "",
+      imagePrompt: imageDraft?.prompt ?? fallbackImagePrompt,
+      videoPrompt: videoDraft?.prompt ?? fallbackVideoPrompt,
     },
   };
+}
+
+function resolveEpisodeStoryboardVideoPrompt(storyboard) {
+  const candidates = [
+    storyboard?.chapterVideoPrompt,
+    storyboard?.videoPrompt,
+    storyboard?.video_prompt,
+    storyboard?.motionPrompt,
+    storyboard?.motion_prompt,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  const description = String(storyboard?.description ?? "").trim();
+  return description.includes("[场景分析]") || description.includes("动态视频提示词")
+    ? description
+    : "";
+}
+
+function resolveEpisodeStoryboardImagePrompt(storyboard) {
+  const candidates = [
+    storyboard?.chapterImagePrompt,
+    storyboard?.imagePrompt,
+    storyboard?.image_prompt,
+    storyboard?.staticImagePrompt,
+    storyboard?.static_image_prompt,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function normalizeEpisodeStoryboardGenerationDrafts(drafts) {
@@ -22286,8 +23319,34 @@ async function syncCanvasProjectsFromApi(workbench) {
     workbench.ui.toast = `画布项目同步失败：${friendlyError(error)}`;
     workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
   }
+  if (workbench.ui.canvasProjectView === "detail") {
+    await loadSelectedStandaloneCanvasDocument(workbench);
+  }
   syncActiveCanvasDocument(workbench);
   persistWorkbenchState(workbench);
+}
+
+async function loadSelectedStandaloneCanvasDocument(workbench) {
+  if (typeof workbench.api?.getStandaloneCanvas !== "function") {
+    return false;
+  }
+  const projects = normalizeCanvasProjects(workbench.ui);
+  const selectedProjectId = projects.some((project) => project.id === workbench.ui.selectedCanvasProjectId)
+    ? workbench.ui.selectedCanvasProjectId
+    : projects[0]?.id ?? "";
+  if (!selectedProjectId) {
+    return false;
+  }
+  workbench.ui.selectedCanvasProjectId = selectedProjectId;
+  workbench.ui.activeCanvasBusinessProjectId = null;
+  workbench.ui.activeCanvasProjectId = selectedProjectId;
+  try {
+    await loadStandaloneCanvasProject(workbench, selectedProjectId);
+    return true;
+  } catch (error) {
+    workbench.ui.toast = `画布加载失败：${friendlyError(error)}`;
+    return false;
+  }
 }
 
 async function syncScriptLibraryFromApi(workbench) {

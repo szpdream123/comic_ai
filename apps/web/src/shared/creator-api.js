@@ -122,6 +122,10 @@ function cacheFetchJson(key, promise) {
   });
 }
 
+function clearFetchJsonCache(key) {
+  fetchJsonCache.delete(key);
+}
+
 export function resolveApiUrl(url) {
   if (typeof window === "undefined") {
     return url;
@@ -217,6 +221,10 @@ function parseSseMessage(raw) {
     return { event: eventName, data: dataText };
   }
 }
+
+export const creatorApiTestHooks = {
+  postJsonSse,
+};
 
 async function postMultipart(url, formData) {
   return fetchJson(url, {
@@ -577,6 +585,27 @@ export const creatorApi = {
     return fetchJson("/api/auth/session", { dedupeKey: "GET /api/auth/session" });
   },
 
+  async updateAccountProfile(input) {
+    const result = await patchJson("/api/auth/profile", {
+      displayName: String(input?.displayName ?? ""),
+    });
+    clearFetchJsonCache("GET /api/auth/session");
+    return result;
+  },
+
+  async changeAccountPassword(input) {
+    const result = await postJsonWithIdempotency(
+      "/api/auth/password",
+      {
+        currentPassword: String(input?.currentPassword ?? ""),
+        newPassword: String(input?.newPassword ?? ""),
+      },
+      { action: "auth.password.change" },
+    );
+    clearFetchJsonCache("GET /api/auth/session");
+    return result;
+  },
+
   logout() {
     return postJson("/api/auth/logout");
   },
@@ -593,6 +622,22 @@ export const creatorApi = {
     }
     const query = params.toString();
     return fetchJson(`/api/creator/credits/ledger${query ? `?${query}` : ""}`);
+  },
+
+  getCommunityBoard() {
+    return fetchJson("/api/community", { dedupeKey: "GET /api/community" });
+  },
+
+  submitCommunityFeedback(input) {
+    return postJson("/api/community/feedback", input);
+  },
+
+  submitCommunityFeature(input) {
+    return postJson("/api/community/features", input);
+  },
+
+  voteCommunityFeature(featureId) {
+    return postJson(`/api/community/features/${encodeURIComponent(featureId)}/vote`, {});
   },
 
   getTeamOverview() {
@@ -1004,6 +1049,12 @@ export const creatorApi = {
 
   getProjectStyles() {
     return fetchJson("/api/creator/project-styles?category=official&status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
+    });
+  },
+
+  getBatchImageStyles() {
+    return fetchJson("/api/creator/project-styles?category=batch&status=enabled&pageSize=500", {
       unwrapEnvelope: false,
     });
   },

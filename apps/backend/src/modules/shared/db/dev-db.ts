@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { Pool, type PoolClient } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
@@ -18,11 +16,7 @@ export async function createDevDb(): Promise<DevDatabase> {
   const pool = new Pool({
     connectionString,
   });
-  const configuredSchemaName = process.env.DATABASE_SCHEMA?.trim();
-  const autoTestSchemaName = !configuredSchemaName && isTestRuntime()
-    ? `test_${randomUUID().replaceAll("-", "_")}`
-    : undefined;
-  const schemaName = configuredSchemaName || autoTestSchemaName;
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || undefined;
 
   try {
     if (schemaName) {
@@ -30,9 +24,6 @@ export async function createDevDb(): Promise<DevDatabase> {
     }
     const db = createPostgresDatabase(pool, schemaName);
     await ensureFoundationSchema(db);
-    if (autoTestSchemaName) {
-      return withSchemaCleanup(db, autoTestSchemaName);
-    }
     return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
@@ -149,27 +140,6 @@ function transactionSqlCommand(sql: string) {
 
 async function prepareSchema(pool: Pool, schemaName: string) {
   await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`);
-}
-
-function withSchemaCleanup(db: DevDatabase, schemaName: string): DevDatabase {
-  const close = db.close.bind(db);
-  return {
-    async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
-      return db.query<T>(sql, params);
-    },
-    async close() {
-      try {
-        await db.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } finally {
-        await close();
-      }
-    },
-  };
-}
-
-function isTestRuntime() {
-  const callerFile = process.argv[1]?.replaceAll("\\", "/") ?? "";
-  return process.env.NODE_ENV === "test" || /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
 }
 
 export async function ensureFoundationSchema(db: SqlDatabase) {
@@ -326,6 +296,12 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await columnExists(db, "image_prompt_styles", "is_default"))) {
       await db.query("ALTER TABLE image_prompt_styles ADD COLUMN is_default boolean NOT NULL DEFAULT false");
     }
+    await ensureCategoryConstraint(db, {
+      tableName: "image_prompt_styles",
+      constraintName: "image_prompt_styles_category_check",
+      columnName: "category",
+      allowedValues: ["official", "batch", "custom"],
+    });
   }
 
   if (!(await tableExists(db, "character_prompt_templates"))) {
@@ -468,6 +444,41 @@ async function ensureProviderConstraint(
   await db.query(`ALTER TABLE ${input.tableName} DROP CONSTRAINT IF EXISTS ${input.constraintName}`);
   await db.query(
     `ALTER TABLE ${input.tableName} ADD CONSTRAINT ${input.constraintName} CHECK (provider IN (${allowedSql}))`,
+  );
+}
+
+async function ensureCategoryConstraint(
+  db: SqlDatabase,
+  input: {
+    tableName: string;
+    constraintName: string;
+    columnName: string;
+    allowedValues: string[];
+  },
+) {
+  if (!(await tableExists(db, input.tableName))) {
+    return;
+  }
+
+  const current = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = $1
+      LIMIT 1
+    `,
+    [input.constraintName],
+  );
+  const definition = current.rows[0]?.definition ?? "";
+  const hasExpectedValues = input.allowedValues.every((value) => definition.includes(value));
+  if (hasExpectedValues) {
+    return;
+  }
+
+  const allowedSql = input.allowedValues.map((value) => `'${value}'`).join(", ");
+  await db.query(`ALTER TABLE ${input.tableName} DROP CONSTRAINT IF EXISTS ${input.constraintName}`);
+  await db.query(
+    `ALTER TABLE ${input.tableName} ADD CONSTRAINT ${input.constraintName} CHECK (${input.columnName} IN (${allowedSql}))`,
   );
 }
 
@@ -837,17 +848,16 @@ async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
         AND (
           (
             model_code = 'gpt-image-2-cn'
-            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
-            AND provider_config_json->>'endpoint' = '/v1/images/generations'
-            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+            AND provider_protocol = 'openai_images'
+            AND provider_model = 'gpt-image-2'
+            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
           )
           OR (
             model_code = 'gpt-image-2-reference-cn'
             AND provider_protocol = 'openai_images'
             AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
-            AND provider_config_json->>'endpoint' = '/v1/images/generations'
-            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
+            AND provider_config_json->>'baseURL' = 'https://image.shoestravel.xin'
           )
         )
     `,

@@ -15,7 +15,6 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
     "后台管理",
     "运营总览",
     "模型配置",
-    "模型参数详情",
     "用户积分",
     "风控审计",
     "系统设置",
@@ -29,6 +28,7 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
 
   assert.match(html, /Created By Deerflow/);
   assert.match(html, /https:\/\/deerflow\.tech/);
+  assert.doesNotMatch(html, /模型参数详情|参数详情|model-workbench/);
 });
 
 test("admin shell wires final design actions to real admin APIs", () => {
@@ -85,8 +85,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "duplicate",
     "revisions",
     "模型修订历史",
-    "模型上线检查",
     "isValidProviderEndpoint",
+    "requestPath",
     "createTaskEndpoint",
     "queryTaskEndpoint",
     "invocationMode === \"async_polling\"",
@@ -105,10 +105,6 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "fillManualParameterEditor",
     "removeManualParameterFromSchema",
     "adminEditableOptions",
-    "failedItems",
-    "renderLaunchCheckFailure",
-    "!launchCheck.ok",
-    "admin_model_launch_check_failed",
     "loadDashboardModelHealth",
     "loadDashboardRecentEvents",
     "admin_account_locked",
@@ -176,6 +172,17 @@ test("admin shell wires final design actions to real admin APIs", () => {
   new vm.Script(script);
 });
 
+test("admin shell lazy-loads page data instead of blocking startup on every admin API", () => {
+  assert.match(script, /ADMIN_PAGE_LOADERS/);
+  assert.match(script, /ensureAdminPageData/);
+  assert.match(script, /preloadAdminShellData/);
+  assert.match(script, /state\.loadingPromises/);
+  assert.match(script, /state\.loadedPages/);
+  assert.match(script, /ensureAdminPageData\(state\.page\)/);
+  assert.match(script, /ensureAdminPageData\(page\)/);
+  assert.doesNotMatch(script, /await Promise\.all\(\[loadDashboard\(\), loadModels\(\), loadUsers\(\), loadPromptManagement\(\), loadSettings\(\), loadLegalDocuments\(\), loadRiskAudit\(\), loadAdminSessions\(\)\]\)/);
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",
@@ -208,7 +215,7 @@ test("model editor defaults new configs to an identifiable image model template"
 });
 
 test("admin video models expose the four backend management categories", () => {
-  for (const categoryLabel of ["首帧视频", "首尾帧", "全能参考", "AI改视频"]) {
+  for (const categoryLabel of ["首帧视频", "首尾帧", "参考生视频", "AI改视频"]) {
     assert.match(script, new RegExp(categoryLabel));
   }
 
@@ -234,12 +241,31 @@ test("model editor lets admins choose a secret reference for providerConfig apiK
   assert.match(script, /modelSecretReferenceOptions/);
   assert.match(script, /modelApiKeyEnv/);
   assert.match(script, /setModelEditorProviderConfigApiKeyEnv/);
-  assert.match(script, /modelApiKey/);
-  assert.match(script, /setModelEditorProviderConfigApiKey/);
   assert.match(script, /state\.settings\.secretReferences/);
+  assert.match(script, /data-provider-name/);
   assert.match(script, /providerConfig\.apiKeyEnv/);
-  assert.match(script, /providerConfig\.apiKey/);
+  assert.match(script, /delete config\.apiKey/);
+  assert.doesNotMatch(script, /未在系统设置中找到/);
+  assert.doesNotMatch(script, /name="modelApiKey"/);
+  assert.doesNotMatch(script, /setModelEditorProviderConfigApiKey\(/);
   assert.match(script, /form\.elements\.providerConfig\.value = JSON\.stringify\(config, null, 2\)/);
+});
+
+test("secret reference purpose is optional and hidden from the settings list row", () => {
+  assert.match(script, /name="purpose" rows="4" placeholder=/);
+  assert.doesNotMatch(script, /name="purpose" rows="4" required/);
+  assert.doesNotMatch(script, /secretReferenceRow\(secret\)[\s\S]*secret\.purpose/);
+  assert.match(script, /name="requestDomain"/);
+  assert.match(script, /secret\.requestDomain \|\| secret\.baseUrl/);
+  assert.match(script, /\\u8bf7\\u6c42\\u57df\\u540d/);
+});
+
+test("model editor exposes requestPath as the primary provider request path", () => {
+  assert.match(script, /name="requestPath"/);
+  assert.match(script, /modelEditorRequestPathFromProviderConfig/);
+  assert.match(script, /setModelEditorProviderConfigRequestPath/);
+  assert.match(script, /providerConfig\.requestPath/);
+  assert.match(script, /form\.get\("requestPath"\)/);
 });
 
 test("model editor exposes base credit pricing as dedicated fields", () => {
@@ -250,17 +276,15 @@ test("model editor exposes base credit pricing as dedicated fields", () => {
   assert.match(script, /pricing\.unit = String\(form\.elements\.pricingUnit\.value/);
 });
 
-test("model status drawer refreshes model detail before launch checks", () => {
+test("model status drawer changes status without launch checks", () => {
   assert.match(script, /async function openModelStatusDrawer\(modelId, status\)/);
   assert.match(script, /api\(`\/api\/admin\/models\/\$\{modelId\}`\)/);
   assert.match(script, /state\.models\[modelIndex\] = model/);
-  assert.match(script, /const launchCheck = modelLaunchCheckUi\(model\)/);
+  assert.doesNotMatch(script, /const launchCheck = modelLaunchCheckUi\(model\)/);
 });
 
 test("model parameter builder displays known image parameters in Chinese", () => {
-  assert.match(script, /manualParameterVisible/);
-  assert.match(script, /parameter\.visible !== false/);
-  assert.match(script, /是否显示/);
+  assert.doesNotMatch(script, /manualParameterVisible|parameterVisible:\$\{template\.key\}|是否显示|前台显示|默认前台显示/);
   assert.match(script, /modelParameterDisplayName/);
   assert.match(script, /parameterTypeLabel/);
   assert.match(script, /manualParameterLabel\.value = modelParameterDisplayName\(parameterKey, parameter\)/);
@@ -274,6 +298,102 @@ test("model parameter builder displays known image parameters in Chinese", () =>
   assert.match(script, /整数/);
   assert.match(script, /文本/);
   assert.match(script, /选项/);
+});
+
+test("admin model management uses parameter templates and a simplified model editor", () => {
+  for (const contract of [
+    "MODEL_PARAMETER_TEMPLATES_CONFIG_KEY",
+    "model.parameter_templates",
+    "DEFAULT_MODEL_PARAMETER_TEMPLATES",
+    "parameterTemplatesPage",
+    "openParameterTemplateDrawer",
+    "deleteParameterTemplate",
+    "saveParameterTemplates",
+    "parameterOptionEditorMarkup",
+    "addParameterTemplateOption",
+    "moveParameterTemplateOption",
+    "removeParameterTemplateOption",
+    "readParameterOptionEditorValues",
+    "data-parameter-option-row",
+    "parameterTemplateSelectionRows",
+    "schemaFromSelectedParameterTemplates",
+    "parameterOptionSelectMarkup",
+    "parameterSelectedValuesMarkup",
+    "updateParameterSelectedPreview",
+    "data-parameter-selected-values",
+    "parameter-value-chip",
+    "template.mediaTypes.join",
+    "simplifiedModelPayloadFromForm",
+    "fixedModelTemplate",
+    "parameterSupported:${template.key}",
+    "parameterRequired:${template.key}",
+    "form.getAll(`parameterOptions:${template.key}`)",
+    "name.startsWith(\"parameterOptions:\")",
+    "name=\"inputSchema\"",
+    "name=\"outputSchema\"",
+    "providerConfig.inputSchema = parseJsonTextarea(form, \"inputSchema\")",
+    "providerConfig.outputSchema = parseJsonTextarea(form, \"outputSchema\")",
+    "MODEL_KIND_OPTIONS",
+    "modelKindOptionsMarkup",
+    "inferModelKind",
+    "modelKindLabel",
+    "name=\"modelKind\"",
+    "modelKind: kind.value",
+    "modelKindLabel: kind.label",
+    "text.script",
+    "scriptPrompt",
+    "scriptGenre",
+    "episodeCount",
+    "scriptStyle",
+    "openai_compatible_chat",
+    "generation-submit-text",
+    "openModelDeleteDrawer",
+    "admin-ui-model-delete",
+    "method: \"DELETE\"",
+    "modelSortValue",
+    "sortedModelRows",
+    "saveModelSortOrder",
+    "moveModelSortOrder",
+    "admin-ui-model-sort",
+    "window.saveModelSortOrder",
+    "window.moveModelSortOrder",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  for (const label of [
+    "\\u53c2\\u6570\\u6a21\\u677f\\u5e93",
+    "\\u6a21\\u578b\\u7f16\\u7801",
+    "\\u5c55\\u793a\\u540d\\u79f0",
+    "\\u771f\\u5b9e\\u6a21\\u578b\\u540d",
+    "\\u7c7b\\u578b",
+    "\\u6587\\u751f\\u56fe",
+    "\\u53c2\\u8003\\u751f\\u56fe",
+    "\\u9996\\u5e27\\u751f\\u89c6\\u9891",
+    "\\u9996\\u5c3e\\u5e27\\u751f\\u89c6\\u9891",
+    "\\u53c2\\u8003\\u751f\\u89c6\\u9891",
+    "\\u5267\\u672c\\u6a21\\u578b",
+    "\\u5267\\u672c\\u9700\\u6c42",
+    "\\u5267\\u672c\\u9898\\u6750",
+    "\\u5267\\u672c\\u98ce\\u683c",
+    "\\u57fa\\u7840\\u79ef\\u5206",
+    "API \\u5bc6\\u94a5",
+    "\\u5907\\u6ce8",
+    "\\u53c2\\u6570\\u80fd\\u529b",
+    "\\u7ba1\\u7406\\u53c2\\u6570\\u6a21\\u677f",
+    "\\u9875\\u9762\\u663e\\u793a\\u6570\\u636e",
+    "\\u7ed3\\u6784\\u914d\\u7f6e",
+    "\\u5165\\u53c2\\u7ed3\\u6784",
+    "\\u51fa\\u53c2\\u7ed3\\u6784",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(label)));
+  }
+
+  assert.match(script, /navButton\("parameterTemplates", "\\u53c2\\u6570\\u6a21\\u677f"\)/);
+  assert.match(script, /providerProtocol: fixed\.providerProtocol/);
+  assert.match(script, /invocationMode: fixed\.invocationMode/);
+  assert.match(script, /taskModes: kind\.taskModes/);
+  assert.doesNotMatch(script, /filter\(\(template\) => template\.mediaTypes\.includes\(mediaType\)\)/);
 });
 
 test("admin user credit table uses a single edit entry for row actions", () => {
@@ -619,6 +739,16 @@ test("admin shell constrains dense tables and drawers for 1366px review", () => 
     "position: sticky",
     "right: 0",
     ".drawer-panel",
+    ".drawer-resize-handle",
+    "setupDrawerInteractions",
+    "hydrateDrawerPanel",
+    "beginDrawerResize",
+    "activeDrawerElement",
+    "document.addEventListener(\"pointerdown\"",
+    "event.target === drawer",
+    "is-drawer-resizing",
+    "pointermove",
+    "setupDrawerInteractions();",
     "max-height: 100vh",
     "overflow-y: auto",
     "overscroll-behavior: contain",
@@ -702,21 +832,54 @@ test("admin dashboard exposes trend feedback and partial refresh copy", () => {
 test("admin prompt manager separates script prompts and image prompt styles", () => {
   for (const contract of [
     "promptManagementMode",
+    "batchImagePromptTarget",
+    "batchImagePromptKeywords",
     "script",
     "image",
+    "batchImage",
     "剧本提示词",
     "生图题词",
+    "批量生图提示词",
     "人物提示词",
     "场景提示词",
     "分镜提示词",
     "promptManagementTabs",
+    "batchImagePromptTargets",
+    "batchImagePromptTemplatesPage",
+    "loadBatchImagePromptTemplates",
+    "saveBatchImagePromptTemplates",
+    "batchImagePromptTemplatesFromSettings",
+    "batchImagePromptTemplateRow",
+    "batchImagePromptTemplateById",
+    "openBatchImagePromptTemplateDrawer",
+    "openBatchCharacterPromptTemplateDrawer",
+    "openBatchScenePromptTemplateDrawer",
+    "openBatchPropPromptTemplateDrawer",
+    "copyBatchImagePromptTemplate",
+    "moveBatchImagePromptTemplate",
+    "batchImagePromptPreview",
+    "creator.batch_image_prompt_preset_categories",
+    "batchImagePromptPresetCategoriesConfigKey",
+    "batchImagePromptPresetCategories",
+    "batchImagePromptLoadError",
+    "updateBatchImagePromptTarget",
+    "updateBatchImagePromptKeyword",
+    "batchImagePromptScope",
+    "角色",
+    "场景",
+    "道具",
     "scriptPromptPackages",
     "imagePromptStyles",
     "imagePromptStyleFallback",
+    "normalizeImagePromptStyle",
+    "normalizedImagePromptCategory",
+    "batchImagePromptStyleCodes",
+    "batchImagePromptStyleNames",
     "loadPromptManagement",
     "loadScriptPrompts",
     "loadImagePromptStyles",
     "/api/admin/storyboard-prompt/packages",
+    "/api/admin/batch-image-prompt-presets",
     "openScriptPromptPackageDrawer",
     "copyScriptPromptPackage",
     "toggleScriptPromptPackageStatus",
@@ -732,6 +895,7 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
     "toggleImagePromptStyleStatus",
     "cover_image_url",
     "coverImageUrl",
+    "batch",
     "prompt-cover-thumb",
     "prompt-cover-empty",
     "prompt-cover-col",
@@ -746,6 +910,10 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
     "chinese_style",
     "animation",
     "three_d_render",
+    "national_xia",
+    "brother_style",
+    "chinese_wuxia",
+    "china_ancient",
     "cyberpunk",
     "cg_animation",
     "ink_wash",
@@ -763,6 +931,11 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
     "children_drawing",
     "abstract_art",
     "sharp_pen_illustration",
+    "国风仙侠",
+    "废土科幻",
+    "国风3D",
+    "中国古代国风动漫",
+    "批量生图样式",
     "ink_print",
     "printmaking",
     "monet_impressionism",
@@ -782,6 +955,14 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
+  assert.match(script, /{ key: "shot", label: "分镜提示词"[\s\S]*{ key: "batchImage", label: "批量生图提示词"/);
+  assert.doesNotMatch(script, /个视角预设|batchImagePromptPresetCount/);
+  assert.doesNotMatch(script, /openCharacterPromptTemplateDrawer\(\)" .*新增角色提示词/);
+  assert.match(script, /function batchImagePromptTemplatesPage\(\)[\s\S]*?<th>名称<\/th><th>编码<\/th><th>排序<\/th><th class="actions">操作<\/th>/);
+  assert.match(script, /function openBatchCharacterPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("character"/);
+  assert.match(script, /function openBatchScenePromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("scene"/);
+  assert.match(script, /function openBatchPropPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("prop"/);
+  assert.match(script, /function openBatchImagePresetDrawer\([\s\S]*?编辑\$\{title\}预设[\s\S]*?<span>名称<\/span>[\s\S]*?<span>编码<\/span>/);
 });
 
 test("admin prompt manager adds the shot prompt workflow tab", () => {

@@ -214,6 +214,47 @@ test("admin user credit ledger returns balance and usage summary for account det
   }
 });
 
+test("admin user credit ledger can be scoped to a specific creator organization and workspace", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+
+    const result = await service.listUserCreditLedger({
+      userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
+      organizationId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "caf8d99f-a74d-4a80-8610-3c0e725d420b",
+      pageSize: 10,
+    });
+
+    assert.deepEqual(
+      result.data.slice(0, 2).map((entry) => ({
+        sourceType: entry.sourceType,
+        entryType: entry.entryType,
+        amount: entry.amount,
+        taskId: entry.metadata.taskId,
+      })),
+      [
+        {
+          sourceType: "credit_reservation_allocation",
+          entryType: "release",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+        {
+          sourceType: "episode_generation_task",
+          entryType: "reservation",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+      ],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin manual credit grant stores adjustment scenario metadata for future credit policies", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });

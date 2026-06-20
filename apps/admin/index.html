@@ -769,6 +769,211 @@
         height: 16px;
         accent-color: var(--primary);
       }
+      #model-parameter-template-list table {
+        min-width: 920px;
+        table-layout: fixed;
+        font-size: 12px;
+      }
+      #model-parameter-template-list th,
+      #model-parameter-template-list td {
+        padding: 10px;
+        vertical-align: top;
+      }
+      #model-parameter-template-list th:nth-child(1) { width: 160px; }
+      #model-parameter-template-list th:nth-child(2) { width: 86px; }
+      #model-parameter-template-list th:nth-child(3) { width: 190px; }
+      #model-parameter-template-list th:nth-child(4) { width: 180px; }
+      #model-parameter-template-list th:nth-child(5) { width: 118px; }
+      #model-parameter-template-list th:nth-child(6),
+      #model-parameter-template-list th:nth-child(7) { width: 86px; }
+      #model-parameter-template-list input[name^="parameterDefault:"] {
+        width: 72px;
+        max-width: 100%;
+        min-width: 0;
+        height: 28px;
+        padding: 4px 6px;
+        font-size: 12px;
+      }
+      .parameter-option-picker {
+        position: relative;
+      }
+      .parameter-option-picker details {
+        position: relative;
+      }
+      .parameter-option-picker summary {
+        min-height: 32px;
+        border: 1px solid #c9d6e8;
+        border-radius: 6px;
+        background: linear-gradient(180deg, #ffffff, #f7faff);
+        color: #1f3554;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        list-style: none;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+      }
+      .parameter-option-picker summary::-webkit-details-marker { display: none; }
+      .parameter-option-picker summary::after {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-right: 1.5px solid #426083;
+        border-bottom: 1.5px solid #426083;
+        transform: rotate(45deg) translateY(-2px);
+        flex: 0 0 auto;
+      }
+      .parameter-option-picker details[open] summary {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+      }
+      .parameter-option-menu {
+        position: static;
+        margin-top: 6px;
+        width: 100%;
+        min-width: 180px;
+        max-height: 190px;
+        overflow: auto;
+        border: 1px solid #c9d6e8;
+        border-radius: 8px;
+        background: #fff;
+        padding: 6px;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.7);
+      }
+      .parameter-option-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 30px;
+        border-radius: 6px;
+        padding: 5px 7px;
+        color: #203653;
+        cursor: pointer;
+      }
+      .parameter-option-item:hover {
+        background: #eef5ff;
+      }
+      .parameter-option-item:has(input:checked) {
+        background: #e8f1ff;
+        color: #1d4ed8;
+        font-weight: 700;
+      }
+      .parameter-option-item input {
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border: 1px solid #adc0da;
+        border-radius: 5px;
+        background: #fff;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+      }
+      .parameter-option-item input:checked {
+        border-color: var(--primary);
+        background: var(--primary);
+      }
+      .parameter-option-item input:checked::after {
+        content: "";
+        width: 8px;
+        height: 5px;
+        border-left: 2px solid #fff;
+        border-bottom: 2px solid #fff;
+        transform: rotate(-45deg) translateY(-1px);
+      }
+      .parameter-selected-values {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        min-height: 28px;
+        align-items: center;
+      }
+      .parameter-value-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        max-width: 100%;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: #eaf2ff;
+        color: #1d4ed8;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .parameter-empty-note {
+        color: #8a9bb2;
+        font-size: 12px;
+      }
+      .parameter-option-editor {
+        border: 1px solid #d9e4f2;
+        border-radius: 8px;
+        background: #f8fbff;
+        padding: 10px;
+        display: grid;
+        gap: 10px;
+      }
+      .parameter-option-editor-list {
+        display: grid;
+        gap: 6px;
+        max-height: 320px;
+        overflow: auto;
+        padding-right: 2px;
+      }
+      .parameter-option-editor-row {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        border: 1px solid #d9e4f2;
+        border-radius: 7px;
+        background: #fff;
+        padding: 5px;
+      }
+      .parameter-option-editor-index {
+        color: #7890ad;
+        font-size: 12px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      .parameter-option-editor-row input {
+        width: 100%;
+        height: 30px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        padding: 4px 7px;
+        background: #f8fbff;
+        color: #172033;
+      }
+      .parameter-option-editor-row input:focus {
+        outline: none;
+        border-color: #2563eb;
+        background: #fff;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+      }
+      .parameter-option-row-actions {
+        display: inline-flex;
+        gap: 4px;
+      }
+      .parameter-option-editor-add {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+      .parameter-option-editor-add input {
+        height: 34px;
+      }
+      .parameter-option-editor-empty {
+        min-height: 42px;
+        display: grid;
+        place-items: center;
+        color: #7890ad;
+        border: 1px dashed #c9d6e8;
+        border-radius: 7px;
+        background: #fff;
+      }
       .json-box {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -789,8 +994,9 @@
         position: fixed;
         inset: 0;
         background: rgba(15, 23, 42, .32);
-        display: grid;
-        justify-items: end;
+        display: flex;
+        justify-content: flex-end;
+        align-items: stretch;
         z-index: 10;
       }
       .drawer-panel {
@@ -802,6 +1008,49 @@
         overscroll-behavior: contain;
         padding: 20px;
         box-shadow: -20px 0 50px rgba(15, 23, 42, .18);
+        position: relative;
+        min-width: min(360px, 100vw);
+        max-width: calc(100vw - 24px);
+      }
+      .drawer-resize-handle {
+        width: 28px;
+        min-height: 100vh;
+        flex: 0 0 28px;
+        cursor: grab;
+        z-index: 11;
+        touch-action: none;
+        position: relative;
+        background: linear-gradient(90deg, transparent, rgba(37, 99, 235, .08));
+      }
+      .drawer-resize-handle::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: 4px;
+        border-radius: 999px;
+        background: #2563eb;
+        transition: background .16s ease, box-shadow .16s ease, width .16s ease, opacity .16s ease;
+        opacity: .75;
+      }
+      .drawer-resize-handle:hover::after,
+      .drawer-resize-handle.is-dragging::after {
+        background: #1d4ed8;
+        width: 6px;
+        opacity: 1;
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, .14);
+      }
+      .drawer-resize-handle:active,
+      .drawer-resize-handle.is-dragging {
+        cursor: grabbing;
+      }
+      body.is-drawer-resizing {
+        cursor: grabbing;
+        user-select: none;
+      }
+      .drawer.is-boundary-hover {
+        cursor: grab;
       }
       .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
       .drawer-head h3 { margin: 0; }
@@ -909,7 +1158,9 @@
         .drawer-panel {
           width: 100%;
           padding: 16px;
+          max-width: 100%;
         }
+        .drawer-resize-handle { display: none; }
         .deerflow-signature { display: none; }
       }
     </style>
@@ -921,7 +1172,6 @@
       const pages = {
         dashboard: "运营总览",
         models: "模型配置",
-        "model-workbench": "模型参数详情",
         users: "用户与积分",
         membership: "会员权益",
         prompts: "提示词管理",
@@ -942,6 +1192,8 @@
         membershipPlans: [],
         membershipLoadError: "",
         promptManagementMode: "script",
+        batchImagePromptTarget: "character",
+        batchImagePromptKeywords: { character: "", scene: "", prop: "" },
         scriptPromptPackageType: "genre",
         scriptPromptKeyword: "",
         imagePromptCategory: "all",
@@ -950,6 +1202,11 @@
         scriptPromptLoadError: "",
         imagePromptStyles: [],
         imagePromptLoadError: "",
+        batchImagePromptPresetCategories: { character: [], scene: [], prop: [] },
+        batchImagePromptLoadError: "",
+        batchCharacterPromptTemplates: [],
+        batchScenePromptTemplates: [],
+        batchPropPromptTemplates: [],
         characterPromptStage: "extract",
         characterPromptKeyword: "",
         characterPromptTemplates: [],
@@ -992,6 +1249,8 @@
         adminSessions: [],
         adminSessionLoadError: "",
         loadingPages: {},
+        loadedPages: {},
+        loadingPromises: {},
         forbiddenPages: {},
       };
 
@@ -1002,6 +1261,18 @@
           valueType: "number",
           scope: "creator",
           description: "默认团队子账号上限",
+          updatedAt: null,
+        },
+        {
+          key: "creator.batch_image_prompt_preset_categories",
+          value: {
+            scene: [],
+            character: [],
+            prop: [],
+          },
+          valueType: "json",
+          scope: "creator",
+          description: "批量生图弹框的场景、角色、道具视角预设分类",
           updatedAt: null,
         },
         {
@@ -1062,7 +1333,7 @@
 
       function routeFromPath() {
         const path = location.pathname;
-        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
+        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
         if (path.includes("/membership")) return "membership";
@@ -1224,8 +1495,9 @@
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
           state.page = routeFromPath();
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           renderShell();
+          preloadAdminShellData();
+          ensureAdminPageData(state.page).catch(() => undefined);
         } catch {
           history.replaceState(null, "", "/admin/login");
           renderLogin("后台登录已过期，请重新登录");
@@ -1237,10 +1509,11 @@
         try {
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
           history.replaceState(null, "", "/admin/dashboard");
           state.page = "dashboard";
           renderShell();
+          preloadAdminShellData();
+          ensureAdminPageData(state.page).catch(() => undefined);
         } catch {
           renderLogin();
         }
@@ -1294,10 +1567,11 @@
               clearRememberedLogin();
             }
             state.session = result.data;
-            await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadMembershipPlans(), loadPromptManagement(), loadSettings(), loadRiskAudit(), loadAdminSessions()]);
             history.replaceState(null, "", "/admin/dashboard");
             state.page = "dashboard";
             renderShell();
+            preloadAdminShellData();
+            ensureAdminPageData(state.page).catch(() => undefined);
           } catch (err) {
             error.textContent = err.payload?.error?.code === "admin_account_locked"
               ? "账号已临时锁定，请稍后再试"
@@ -1316,7 +1590,6 @@
               <nav class="nav">
                 ${navButton("dashboard", "总览")}
                 ${navButton("models", "模型配置")}
-                ${navButton("model-workbench", "参数详情")}
                 ${navButton("users", "用户积分")}
                 ${navButton("membership", "会员权益")}
                 ${navButton("prompts", "提示词管理")}
@@ -1348,22 +1621,18 @@
 
       async function loadModels() {
         setPageLoading("models", true);
-        setPageLoading("model-workbench", true);
         try {
           const result = await api("/api/admin/models?pageSize=100");
           state.models = result.data || [];
           state.selectedModelId = state.selectedModelId || state.models[0]?.id || null;
           state.modelLoadError = "";
           clearPageForbidden("models");
-          clearPageForbidden("model-workbench");
         } catch (error) {
           setPageForbidden("models", error);
-          setPageForbidden("model-workbench", error);
           state.modelLoadError = error.payload?.error?.message || "模型配置加载失败";
           state.models = [];
         } finally {
           setPageLoading("models", false);
-          setPageLoading("model-workbench", false);
         }
       }
 
@@ -1411,6 +1680,7 @@
         setPageLoading("prompts", true);
         try {
           await Promise.allSettled([loadScriptPrompts(), loadImagePromptStyles(), loadCharacterPromptTemplates(), loadScenePromptTemplates(), loadPropPromptTemplates(), loadShotPromptTemplates()]);
+          await loadBatchImagePromptTemplates();
           clearPageForbidden("prompts");
         } catch (error) {
           setPageForbidden("prompts", error);
@@ -1548,7 +1818,129 @@
           state.shotPromptLoadError = error.payload?.error?.message || "分镜提示词接口暂不可用，当前展示内置样例";
         }
       }
+
+      const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
+      const batchCharacterPromptTemplateFallback = [
+      ];
+      const batchScenePromptTemplateFallback = [
+      ];
+      const batchPropPromptTemplateFallback = [
+      ];
+
+      function cloneJson(value) {
+        return JSON.parse(JSON.stringify(value));
+      }
+
+      function batchImagePromptFallback(target) {
+        if (target === "scene") return cloneJson(batchScenePromptTemplateFallback);
+        if (target === "prop") return cloneJson(batchPropPromptTemplateFallback);
+        return cloneJson(batchCharacterPromptTemplateFallback);
+      }
+
+      function normalizeBatchImagePromptTemplates(target, items) {
+        const fallback = batchImagePromptFallback(target);
+        const source = Array.isArray(items) && items.length ? items : fallback;
+        return source.map((item, index) => ({
+          id: String(item?.id || `${target}-batch-prompt-${index + 1}`),
+          label: String(item?.label || item?.name || `${batchImagePromptDrawerTitle(target)}${index + 1}`),
+          sort_order: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
+          sortOrder: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
+        }));
+      }
+
+      function batchImagePromptTemplatesFromSettings(target) {
+        const runtimeConfig = state.batchImagePromptPresetCategories;
+        if (Array.isArray(runtimeConfig?.[target])) {
+          return normalizeBatchImagePromptTemplates(target, runtimeConfig[target]);
+        }
+        return batchImagePromptFallback(target);
+      }
+
+      function getBatchImagePromptTemplates(target) {
+        if (target === "scene") return state.batchScenePromptTemplates || [];
+        if (target === "prop") return state.batchPropPromptTemplates || [];
+        return state.batchCharacterPromptTemplates || [];
+      }
+
+      function setBatchImagePromptTemplates(target, items) {
+        const normalized = normalizeBatchImagePromptTemplates(target, items);
+        if (target === "scene") {
+          state.batchScenePromptTemplates = normalized;
+        } else if (target === "prop") {
+          state.batchPropPromptTemplates = normalized;
+        } else {
+          state.batchCharacterPromptTemplates = normalized;
+        }
+      }
+
+      function batchImagePromptTemplatesPayload() {
+        return {
+          scene: normalizeBatchImagePromptTemplates("scene", getBatchImagePromptTemplates("scene"))
+            .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
+            .map((item) => ({ id: item.id, label: item.label })),
+          character: normalizeBatchImagePromptTemplates("character", getBatchImagePromptTemplates("character"))
+            .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
+            .map((item) => ({ id: item.id, label: item.label })),
+          prop: normalizeBatchImagePromptTemplates("prop", getBatchImagePromptTemplates("prop"))
+            .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
+            .map((item) => ({ id: item.id, label: item.label })),
+        };
+      }
+
+      async function loadBatchImagePromptTemplates() {
+        try {
+          const result = await api("/api/admin/batch-image-prompt-presets");
+          state.batchImagePromptPresetCategories = result.data && typeof result.data === "object"
+            ? result.data
+            : { scene: [], character: [], prop: [] };
+          state.batchImagePromptLoadError = "";
+        } catch (error) {
+          state.batchImagePromptPresetCategories = { scene: [], character: [], prop: [] };
+          state.batchImagePromptLoadError = error.payload?.error?.message || "批量生图预设接口暂不可用";
+        }
+        setBatchImagePromptTemplates("character", batchImagePromptTemplatesFromSettings("character"));
+        setBatchImagePromptTemplates("scene", batchImagePromptTemplatesFromSettings("scene"));
+        setBatchImagePromptTemplates("prop", batchImagePromptTemplatesFromSettings("prop"));
+      }
+
+      async function saveBatchImagePromptTemplates(target, items) {
+        const normalized = normalizeBatchImagePromptTemplates(target, items);
+        setBatchImagePromptTemplates(target, normalized);
+        const value = batchImagePromptTemplatesPayload();
+        await api("/api/admin/batch-image-prompt-presets", {
+          method: "PATCH",
+          headers: { "idempotency-key": `admin-ui-${target}-batch-image-preset-${Date.now()}` },
+          body: JSON.stringify({
+            value,
+            reason: "批量生图预设更新",
+          }),
+        });
+        state.batchImagePromptPresetCategories = value;
+      }
       const imagePromptNegativeFallback = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
+      const batchImagePromptStyleNames = new Set(["国风仙侠", "国漫仙侠", "废土科幻", "国风3D", "国风动漫", "邵氏兄弟风", "中国武侠", "中国古代国风动漫", "中国古代画风动漫", "赛博朋克"]);
+      const batchImagePromptStyleCodePrefixes = ["national_man", "wasteland"];
+      const batchImagePromptStyleCodes = new Set(["national_xianxia", "national", "chinese_anime", "brother_style", "chinese_wuxia", "china_ancient", "cyberpunk"]);
+
+      function normalizedImagePromptCategory(item) {
+        const category = String(item?.category || "").trim();
+        const code = String(item?.code || "").trim().toLowerCase();
+        const name = String(item?.name || "").trim();
+        if (category === "batch") return "batch";
+        if (batchImagePromptStyleNames.has(name)) return "batch";
+        if (batchImagePromptStyleCodes.has(code)) return "batch";
+        if (batchImagePromptStyleCodePrefixes.some((prefix) => code.startsWith(prefix))) return "batch";
+        return category || "official";
+      }
+
+      function normalizeImagePromptStyle(item) {
+        return { ...item, category: normalizedImagePromptCategory(item) };
+      }
+
+      function normalizeImagePromptStyles(items) {
+        return (items || []).map(normalizeImagePromptStyle);
+      }
+
       const imagePromptStyleFallback = [
         {
           id: "image-style-portrait-photography",
@@ -1948,11 +2340,11 @@
             : Array.isArray(result.data?.data)
               ? result.data.data
               : [];
-          state.imagePromptStyles = loadedStyles.length ? loadedStyles : imagePromptStyleFallback;
+          state.imagePromptStyles = normalizeImagePromptStyles(loadedStyles.length ? loadedStyles : imagePromptStyleFallback);
           state.imagePromptLoadError = "";
         } catch (error) {
           state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用，当前展示内置豆包样例";
-          state.imagePromptStyles = imagePromptStyleFallback;
+          state.imagePromptStyles = normalizeImagePromptStyles(imagePromptStyleFallback);
         }
       }
 
@@ -2085,7 +2477,6 @@
         const pathMap = {
           dashboard: "/admin/dashboard",
           models: "/admin/models",
-          "model-workbench": "/admin/models/new",
           users: "/admin/users",
           membership: "/admin/membership",
           prompts: "/admin/prompts",
@@ -2109,7 +2500,6 @@
         if (pageState) return pageState;
         if (state.page === "dashboard") return dashboardPage();
         if (state.page === "models") return modelsPage();
-        if (state.page === "model-workbench") return modelWorkbenchPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
@@ -2278,7 +2668,7 @@
       const VIDEO_MODEL_CATEGORIES = [
         { value: "first_frame", label: "首帧视频", taskModes: ["video.image_to_video"] },
         { value: "first_last_frame", label: "首尾帧", taskModes: ["video.first_last_frame_to_video"] },
-        { value: "reference", label: "全能参考", taskModes: ["video.reference_image_to_video"] },
+        { value: "reference", label: "参考生视频", taskModes: ["video.reference_image_to_video"] },
         { value: "video_edit", label: "AI改视频", taskModes: ["video.video_to_video", "video.image_video_to_video"] },
       ];
 
@@ -2333,10 +2723,9 @@
       function modelsPage() {
         const rows = state.models.length
           ? state.models.map((model) => modelRow(model)).join("")
-          : `<tr><td colspan="9">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
-        const videoCategoryOptionsHtml = VIDEO_MODEL_CATEGORIES.map((item) => `<option>${item.label}</option>`).join("");
-        return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码 / 供应商" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option>${videoCategoryOptionsHtml}</select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
-          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>供应商</th><th>媒体 / 视频分类</th><th>任务模式</th><th>价格摘要</th><th>调度</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
+          : `<tr><td colspan="6">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
+        return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>媒体类型</th><th>价格摘要</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
           ${rows}
         </tbody></table></div>`;
       }
@@ -2347,13 +2736,10 @@
 
       function modelRow(model) {
         const price = priceSummary(model.pricing);
-        const dispatch = model.dispatchPolicy
-          ? `RPM ${model.dispatchPolicy.providerRpmLimit} / 并发 ${model.dispatchPolicy.providerConcurrentLimit}`
-          : "待配置";
         const statusLabel = model.status === "active" ? "启用" : model.status === "disabled" ? "禁用" : "归档";
         const nextStatus = model.status === "active" ? "disabled" : "active";
         const nextStatusTitle = model.status === "active" ? "禁用" : "启用";
-        return `<tr><td>${model.modelCode}</td><td>${model.displayName}</td><td>${model.providerName}</td><td>${modelMediaLabel(model)}</td><td>${model.taskModes.join(" / ")}</td><td>${price}</td><td>${dispatch}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="查看" onclick="selectModel('${model.id}')">查</button><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
+        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}</td><td>${escapeHtml(model.mediaType || "-")}</td><td>${price}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
       }
 
       function priceSummary(pricing = {}) {
@@ -2374,7 +2760,7 @@
           {
             key: "endpoint",
             label: "Endpoint",
-            ok: isValidProviderEndpoint(model?.providerConfig?.endpoint || model?.providerConfig?.createTaskEndpoint),
+            ok: isValidProviderEndpoint(model?.providerConfig?.requestPath || model?.providerConfig?.endpoint || model?.providerConfig?.createTaskEndpoint),
             message: "供应商 endpoint 必须是 http/https URL，或以 / 开头的接口路径。",
           },
           {
@@ -2424,11 +2810,11 @@
       }
 
       function hasModelProviderSecret(model) {
-        return Boolean(model?.providerConfig?.apiKey || model?.providerConfig?.apiKeyEnv);
+        return Boolean(model?.providerConfig?.apiKeyEnv);
       }
 
       function modelProviderSecretLabel(model) {
-        return model?.providerConfig?.apiKeyEnv || (model?.providerConfig?.apiKey ? "已配置 API 密钥" : "待配置");
+        return model?.providerConfig?.apiKeyEnv || "待配置";
       }
 
       function launchCheckHtml(checks) {
@@ -2442,31 +2828,13 @@
       }
 
       function selectModel(id) {
-        state.selectedModelId = id;
-        navigate("model-workbench");
+        openModelEditorDrawer(id);
       }
 
       function modelWorkbenchPage() {
-        const model = state.models.find((item) => item.id === state.selectedModelId) || state.models[0];
-        if (!model) {
-          return `<section class="card"><h3>模型参数详情</h3><p class="metric-note">${state.modelLoadError || "暂无模型配置，请先新增模型。"}</p></section>`;
-        }
-        const parameterTags = Object.entries(model.parameterSchema || {})
-          .slice(0, 8)
-          .map(([key, value]) => `<span class="tag blue">${key}: ${value.type || value.enum ? "enum" : "json"}</span>`)
-          .join("");
-        const parameterJson = escapeHtml(JSON.stringify(model.parameterSchema || {}, null, 2));
-        const providerJson = escapeHtml(JSON.stringify(model.providerConfig || {}, null, 2));
-        return `<div class="workbench">
-          <section class="card anchor-list"><a class="active">基础信息</a><a>任务模式</a><a>参数编辑器</a><a>参考素材</a><a>模型定价</a><a>请求映射</a><a>调度限流</a></section>
-          <section class="section">
-            <div class="card"><div class="toolbar"><h3>基础信息</h3><button class="btn primary" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>保存配置</button></div><div class="form-grid">${field("模型编码", model.modelCode)}${field("展示名称", model.displayName)}${field("供应商", model.providerName)}${field("真实模型名", model.providerModel)}${field("协议", model.providerProtocol)}${field("调用方式", model.invocationMode)}</div></div>
-            <div class="card"><h3>参数编辑器</h3><div class="toolbar"><div class="filters">${parameterTags || '<span class="tag warn">暂无参数</span>'}</div><button class="btn primary" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>新增参数</button></div><div class="json-box">${parameterJson}</div></div>
-            <div class="card"><h3>模型定价</h3><div class="form-grid">${field("基础积分", model.pricing?.baseCredits ?? "")}${field("计费单位", model.pricing?.unit ?? "")}${field("清晰度倍率", JSON.stringify(model.pricing?.qualityMultipliers || model.pricing?.resolutionMultipliers || {}))}${field("失败退款", JSON.stringify(model.pricing?.failureRefund || {}))}</div></div>
-            <div class="card"><h3>请求映射</h3><div class="json-box">${providerJson}</div></div>
-          </section>
-          <aside class="card workbench-aside"><h3>上线检查</h3><div class="check-list"><div><span>密钥引用</span><span class="tag ${hasModelProviderSecret(model) ? "green" : "warn"}">${modelProviderSecretLabel(model)}</span></div><div><span>参数校验</span><span class="tag ${Object.keys(model.parameterSchema || {}).length ? "green" : "warn"}">${Object.keys(model.parameterSchema || {}).length ? "通过" : "缺失"}</span></div><div><span>计费规则</span><span class="tag ${model.pricing?.baseCredits ? "green" : "warn"}">${model.pricing?.baseCredits ? "完整" : "待配置"}</span></div><div><span>调度策略</span><span class="tag ${model.dispatchPolicy ? "green" : "warn"}">${model.dispatchPolicy?.submitQueueName || "待配置"}</span></div></div><button class="btn primary full" style="margin-top:16px" onclick="openModelStatusDrawer('${model.id}','active')" ${permissionAttrs("model.publish")}>发布模型</button><button class="btn ghost full" style="margin-top:10px" onclick="openModelRevisionsDrawer('${model.id}')">修订历史</button></aside>
-        </div>`;
+        state.page = "models";
+        history.replaceState(null, "", "/admin/models");
+        return modelsPage();
       }
 
       function escapeHtml(value) {
@@ -2910,7 +3278,6 @@
               <label class="field"><span>有效开始</span><input name="validFrom" value="${escapeAttribute(defaults.validFrom || "")}" placeholder="2026-06-09T00:00:00.000Z" /></label>
               <label class="field"><span>有效结束</span><input name="validUntil" value="${escapeAttribute(defaults.validUntil || "")}" placeholder="留空表示长期有效" /></label>
             </div>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：上线专业版月卡价格"></textarea></label>
             <div class="error-text" id="membership-plan-error"></div>
             <button class="btn primary full" type="submit">保存会员套餐</button>
           </form>
@@ -2962,7 +3329,7 @@
         };
         if (id) payload.id = id;
         if (!payload.code || !payload.displayName || !payload.reason) {
-          throw new Error("套餐编码、展示名称和操作原因必填");
+          throw new Error("套餐编码、展示名称必填");
         }
         if (!Number.isInteger(payload.periodCount) || payload.periodCount < 1) {
           throw new Error("周期数量必须是正整数");
@@ -3002,6 +3369,7 @@
       const imagePromptKinds = [
         { key: "all", title: "全部样式", note: "查看所有生图题词和画风预设" },
         { key: "official", title: "官方样式", note: "默认内置的豆包生图画风提示词" },
+        { key: "batch", title: "批量生图样式", note: "集中管理批量生图使用的项目风格和画风预设" },
         { key: "custom", title: "自定义样式", note: "运营手动新增和调优的项目样式" },
       ];
 
@@ -3012,6 +3380,13 @@
         { key: "scene", label: "场景提示词", note: "管理空间环境、时代氛围和镜头场景使用的提示词" },
         { key: "prop", label: "道具提示词", note: "管理剧本转道具清单和道具生图提示词" },
         { key: "shot", label: "分镜提示词", note: "管理剧本转分镜大纲时使用的提示词" },
+        { key: "batchImage", label: "批量生图提示词", note: "集中管理批量生图使用的角色、场景和道具提示词" },
+      ];
+
+      const batchImagePromptTargets = [
+        { key: "character", title: "角色", note: "对应批量生图弹框中的角色预设下拉选项" },
+        { key: "scene", title: "场景", note: "对应批量生图弹框中的场景预设下拉选项" },
+        { key: "prop", title: "道具", note: "对应批量生图弹框中的道具预设下拉选项" },
       ];
 
       function promptTabs() {
@@ -3031,6 +3406,7 @@
 
       function promptsPage() {
         if (state.promptManagementMode === "image") return imagePromptStylesPage();
+        if (state.promptManagementMode === "batchImage") return batchImagePromptTemplatesPage();
         if (state.promptManagementMode === "character") return characterPromptTemplatesPage();
         if (state.promptManagementMode === "scene") return scenePromptTemplatesPage();
         if (state.promptManagementMode === "prop") return propPromptTemplatesPage();
@@ -3174,6 +3550,166 @@
       function updateCharacterPromptKeyword(value) {
         state.characterPromptKeyword = value || "";
         renderShell();
+      }
+
+      function batchImagePromptScope(target) {
+        if (target === "scene") {
+          return {
+            title: "场景",
+            fieldLabel: "场景预设",
+            note: "管理批量生图弹框中“场景”下拉选项",
+            templates: state.batchScenePromptTemplates || [],
+            keyword: state.batchImagePromptKeywords.scene || "",
+            loadError: state.batchImagePromptLoadError || "",
+            reloadAction: "loadBatchImagePromptTemplates().then(renderShell)",
+            createAction: "openBatchImagePromptTemplateDrawer('scene')",
+            createLabel: "新增场景预设",
+            helperText: "这里维护的就是前台批量生图弹框里“场景”下拉列表的内容。",
+          };
+        }
+        if (target === "prop") {
+          return {
+            title: "道具",
+            fieldLabel: "道具预设",
+            note: "管理批量生图弹框中“道具预设”下拉选项",
+            templates: state.batchPropPromptTemplates || [],
+            keyword: state.batchImagePromptKeywords.prop || "",
+            loadError: state.batchImagePromptLoadError || "",
+            reloadAction: "loadBatchImagePromptTemplates().then(renderShell)",
+            createAction: "openBatchImagePromptTemplateDrawer('prop')",
+            createLabel: "新增道具预设",
+            helperText: "这里维护的就是前台批量生图弹框里“道具预设”下拉列表的内容。",
+          };
+        }
+        return {
+          title: "角色",
+          fieldLabel: "角色预设",
+          note: "管理批量生图弹框中“角色预设”下拉选项",
+          templates: state.batchCharacterPromptTemplates || [],
+          keyword: state.batchImagePromptKeywords.character || "",
+          loadError: state.batchImagePromptLoadError || "",
+          reloadAction: "loadBatchImagePromptTemplates().then(renderShell)",
+          createAction: "openBatchImagePromptTemplateDrawer('character')",
+          createLabel: "新增角色预设",
+          helperText: "这里维护的就是前台批量生图弹框里“角色预设”下拉列表的内容。",
+        };
+      }
+
+      function batchImagePromptTemplatesPage() {
+        const activeTarget = batchImagePromptTargets.find((item) => item.key === state.batchImagePromptTarget) || batchImagePromptTargets[0];
+        const scope = batchImagePromptScope(activeTarget.key);
+        const keyword = String(scope.keyword || "").trim().toLowerCase();
+        const filtered = (scope.templates || [])
+          .filter((item) => !keyword || [
+            item.label,
+            item.id,
+          ].join(" ").toLowerCase().includes(keyword))
+          .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0));
+        const rows = filtered.length
+          ? filtered.map((item) => batchImagePromptTemplateRow(item, activeTarget.key)).join("")
+          : `<tr><td colspan="4">${scope.loadError || `暂无${scope.title}预设`}</td></tr>`;
+        return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
+          <aside class="card">
+            <div class="prompt-kind-list">${batchImagePromptTargets.map((item) => `<button class="prompt-kind-card ${item.key === activeTarget.key ? "active" : ""}" onclick="updateBatchImagePromptTarget('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
+          </aside>
+          <section class="section">
+            <div class="toolbar">
+              <div class="prompt-toolbar-title"><h3>${scope.fieldLabel}</h3><div class="metric-note">${scope.note}</div></div>
+              <div class="filters">
+                <input value="${escapeAttribute(scope.keyword || "")}" placeholder="搜索名称 / 编码" oninput="updateBatchImagePromptKeyword('${activeTarget.key}', this.value)" />
+                <button class="btn primary" onclick="${scope.createAction}" ${permissionAttrs("storyboard_prompt:create")}>${scope.createLabel}</button>
+                <button class="btn ghost" onclick="${scope.reloadAction}">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap dense"><table><thead><tr><th>名称</th><th>编码</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          </section>
+          <aside class="card prompt-preview">
+            <div class="toolbar"><h3 style="margin:0;">预设预览</h3><button class="btn ghost" onclick="copyPromptPreview()">复制</button></div>
+            <div class="prompt-preview-box" id="prompt-preview">${batchImagePromptPreview(activeTarget.key, filtered)}</div>
+            <h3 style="margin:0;">对应关系</h3>
+            <textarea class="prompt-result-box" readonly>${scope.helperText}</textarea>
+          </aside>
+        </section>`;
+      }
+
+      function updateBatchImagePromptTarget(target) {
+        state.batchImagePromptTarget = batchImagePromptTargets.some((item) => item.key === target) ? target : "character";
+        renderShell();
+      }
+
+      function updateBatchImagePromptKeyword(target, value) {
+        state.batchImagePromptKeywords = {
+          ...(state.batchImagePromptKeywords || { character: "", scene: "", prop: "" }),
+          [target]: value || "",
+        };
+        renderShell();
+      }
+
+      function batchImagePromptTemplateById(target, id) {
+        return getBatchImagePromptTemplates(target).find((item) => String(item.id) === String(id));
+      }
+
+      function batchImagePromptTemplateRow(item, target) {
+        return `<tr>
+          <td><div class="prompt-title-cell">${escapeHtml(item.label || "-")}</div></td>
+          <td class="prompt-code-cell">${escapeHtml(item.id || "-")}</td>
+          <td>${Number(item.sort_order || item.sortOrder || 0)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑" onclick="openBatchImagePromptTemplateDrawer('${target}','${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:update")}>编</button><button class="icon-btn" title="复制" onclick="copyBatchImagePromptTemplate('${target}','${escapeAttribute(item.id)}')" ${permissionAttrs("storyboard_prompt:create")}>复</button><button class="icon-btn" title="上移" onclick="moveBatchImagePromptTemplate('${target}','${escapeAttribute(item.id)}',-1)" ${permissionAttrs("storyboard_prompt:update")}>上</button><button class="icon-btn" title="下移" onclick="moveBatchImagePromptTemplate('${target}','${escapeAttribute(item.id)}',1)" ${permissionAttrs("storyboard_prompt:update")}>下</button></div></td>
+        </tr>`;
+      }
+
+      function batchImagePromptPreview(target, items) {
+        const selected = items[0] || getBatchImagePromptTemplates(target)[0];
+        if (!selected) return "暂无可预览的预设。";
+        const scope = batchImagePromptScope(target);
+        return escapeHtml(`【${scope.fieldLabel}】\n名称：${selected.label || "-"}\n编码：${selected.id || "-"}\n排序：${Number(selected.sort_order || selected.sortOrder || 0)}`);
+      }
+
+      function batchImagePromptDrawerTitle(target) {
+        if (target === "scene") return "场景";
+        if (target === "prop") return "道具";
+        return "角色";
+      }
+
+      function openBatchImagePromptTemplateDrawer(target, templateId = "") {
+        if (target === "scene") return openBatchScenePromptTemplateDrawer(templateId);
+        if (target === "prop") return openBatchPropPromptTemplateDrawer(templateId);
+        return openBatchCharacterPromptTemplateDrawer(templateId);
+      }
+
+      async function copyBatchImagePromptTemplate(target, templateId) {
+        const existing = batchImagePromptTemplateById(target, templateId);
+        if (!existing) return;
+        const items = getBatchImagePromptTemplates(target);
+        const nextItems = [
+          ...items,
+          {
+            ...existing,
+            id: `${existing.id}-copy-${Date.now()}`,
+            label: `${existing.label} 副本`,
+            sort_order: Number(existing.sort_order || existing.sortOrder || 0) + 10,
+          },
+        ];
+        await saveBatchImagePromptTemplates(target, nextItems);
+        renderShell();
+        showToast(`${batchImagePromptDrawerTitle(target)}预设已复制`);
+      }
+
+      async function moveBatchImagePromptTemplate(target, templateId, direction) {
+        const items = [...getBatchImagePromptTemplates(target)].sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0));
+        const index = items.findIndex((item) => String(item.id) === String(templateId));
+        const swapIndex = index + Number(direction || 0);
+        if (index < 0 || swapIndex < 0 || swapIndex >= items.length) return;
+        const current = items[index];
+        const targetItem = items[swapIndex];
+        const currentSort = Number(current.sort_order || current.sortOrder || 0);
+        const targetSort = Number(targetItem.sort_order || targetItem.sortOrder || 0);
+        items[index] = { ...targetItem, sort_order: currentSort, sortOrder: currentSort };
+        items[swapIndex] = { ...current, sort_order: targetSort, sortOrder: targetSort };
+        const nextItems = items.sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0));
+        await saveBatchImagePromptTemplates(target, nextItems);
+        renderShell();
+        showToast("排序已更新");
       }
 
       const scenePromptStages = [
@@ -3708,7 +4244,7 @@
           : `<tr><td colspan="5">${state.settingsLoadError || "暂无运行配置"}</td></tr>`;
         const secretRows = state.settings.secretReferences.length
           ? state.settings.secretReferences.map(secretReferenceRow).join("")
-          : `<tr><td colspan="5">暂无密钥引用</td></tr>`;
+          : `<tr><td colspan="6">暂无密钥引用</td></tr>`;
         const accountRows = state.adminAccounts.length
           ? state.adminAccounts.map(adminAccountRow).join("")
           : `<tr><td colspan="5">暂无后台权限账户</td></tr>`;
@@ -3722,8 +4258,8 @@
             <div class="table-wrap settings compact"><table><thead><tr><th>配置键</th><th>作用域</th><th>类型</th><th>当前值</th><th class="actions">操作</th></tr></thead><tbody>${configRows}</tbody></table></div>
           </section>
           <section class="card">
-            <div class="toolbar"><h3>密钥引用</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>新增密钥引用</button></div>
-            <div class="table-wrap settings compact"><table><thead><tr><th>引用名</th><th>环境变量</th><th>供应商</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${secretRows}</tbody></table></div>
+            <div class="toolbar"><h3>&#23494;&#38053;&#31649;&#29702;</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>&#26032;&#22686;&#23494;&#38053;</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>&#24341;&#29992;&#21517;</th><th>&#23494;&#38053;&#26126;&#25991;</th><th>&#35831;&#27714;&#22495;&#21517;</th><th>&#20379;&#24212;&#21830;</th><th>&#29366;&#24577;</th><th class="actions">&#25805;&#20316;</th></tr></thead><tbody>${secretRows}</tbody></table></div>
           </section>
           <section class="card">
             <div class="toolbar"><h3>后台权限账户</h3><button class="btn primary" onclick="openAdminAccountDrawer()" ${permissionAttrs("admin_account.write")}>新增账户</button></div>
@@ -3739,9 +4275,10 @@
 
       function secretReferenceRow(secret) {
         const statusClass = secret.status === "configured" ? "green" : secret.status === "missing" ? "warn" : "blue";
-        const statusLabel = secret.status === "configured" ? "已配置" : secret.status === "missing" ? "缺失" : "未知";
-        const checkedText = secret.lastCheckedAt ? new Date(secret.lastCheckedAt).toLocaleString("zh-CN") : "未探测";
-        return `<tr><td>${secret.secretRef}<div class="metric-note">${secret.purpose}</div></td><td>${secret.envName}<div class="metric-note">${checkedText}</div></td><td>${secret.providerName || "-"}</td><td><span class="tag ${statusClass}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="探测密钥" onclick="probeSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>测</button></div></td></tr>`;
+        const statusLabel = secret.status === "configured" ? "\u5df2\u914d\u7f6e" : secret.status === "missing" ? "\u7f3a\u5931" : "\u672a\u77e5";
+        const checkedText = secret.lastCheckedAt ? new Date(secret.lastCheckedAt).toLocaleString("zh-CN") : "\u672a\u68c0\u6d4b";
+        const secretValue = secret.secretValue || "\u672a\u4fdd\u5b58";
+        return `<tr><td>${escapeHtml(secret.secretRef || "-")}<div class="metric-note">\u5f15\u7528\u952e\uff1a${escapeHtml(secret.envName || "-")}</div></td><td title="${escapeAttribute(secretValue)}">${escapeHtml(secretValue)}<div class="metric-note">${checkedText}</div></td><td>${escapeHtml(secret.requestDomain || secret.baseUrl || "-")}</td><td>${escapeHtml(secret.providerName || "-")}</td><td><span class="tag ${statusClass}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="\u63a2\u6d4b\u5bc6\u94a5" onclick="probeSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u6d4b</button><button class="icon-btn" title="\u7f16\u8f91\u5bc6\u94a5" onclick="openSecretReferenceDrawer('${secret.id}')" ${permissionAttrs("settings.write")}>\u6539</button><button class="icon-btn" title="\u5220\u9664\u5bc6\u94a5" onclick="deleteSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u5220</button></div></td></tr>`;
       }
 
       function adminAccountRow(account) {
@@ -3800,7 +4337,6 @@
                 <div id="legal-document-preview" class="agreement-rich-text" style="min-height:320px;border:1px solid var(--line);border-radius:8px;padding:14px;background:#fff;color:var(--text);overflow:auto;">${sanitizeRichTextHtml(documentValue.contentHtml)}</div>
               </div>
             </div>
-            <label class="field" style="margin-top:12px;"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：更新登录页协议内容 / 调整版本说明"></textarea></label>
             <div class="error-text" id="legal-document-error"></div>
             <div class="toolbar" style="margin-top:12px;">
               <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
@@ -3970,7 +4506,7 @@
       function openDrawer(title, body) {
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel"><div class="drawer-head"><h3>${title}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><p style="color:var(--muted);line-height:1.7">${body}</p><label class="field"><span>操作原因</span><textarea rows="4" placeholder="危险或敏感操作必须填写原因"></textarea></label><button class="btn primary full">确认</button></aside>`;
+        drawer.innerHTML = `<aside class="drawer-panel"><div class="drawer-head"><h3>${title}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><p style="color:var(--muted);line-height:1.7">${body}</p><button class="btn primary full">确认</button></aside>`;
       }
 
       function openRiskReviewDrawer(riskId) {
@@ -3986,7 +4522,6 @@
             <div><span>支付单</span><span>${risk?.orderId || risk?.paymentIntentId || "-"}</span></div>
           </div>
           <form id="risk-review-form" style="margin-top:16px;">
-            <label class="field"><span>复核结论</span><textarea name="reason" rows="4" required placeholder="例如：核对支付回调与订单金额一致，允许放行"></textarea></label>
             <div class="error-text" id="risk-review-error"></div>
             <button class="btn primary full" type="submit">确认复核</button>
           </form>
@@ -4021,7 +4556,6 @@
             <div><span>失败原因</span><span>${task?.failureCode || "-"}</span></div>
           </div>
           <form id="task-retry-form" style="margin-top:16px;">
-            <label class="field"><span>重试原因</span><textarea name="reason" rows="4" required placeholder="例如：供应商超时已恢复，允许重新排队"></textarea></label>
             <div class="error-text" id="task-retry-error"></div>
             <button class="btn primary full" type="submit">确认重试</button>
           </form>
@@ -4056,7 +4590,6 @@
             <div><span>支付时间</span><span>${issue?.paidAt ? new Date(issue.paidAt).toLocaleString("zh-CN") : "-"}</span></div>
           </div>
           <form id="payment-repair-form" style="margin-top:16px;">
-            <label class="field"><span>修复原因</span><textarea name="reason" rows="4" required placeholder="例如：支付成功事件已核对，补发购买积分"></textarea></label>
             <div class="error-text" id="payment-repair-error"></div>
             <button class="btn primary full" type="submit">确认修复</button>
           </form>
@@ -4091,7 +4624,6 @@
             <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
             <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("compensation")}</select></label>
             <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="例如：客服补偿 / 活动赠送" required></textarea></label>
             <div class="error-text" id="credit-grant-error"></div>
             <button class="btn primary full" type="submit">确认添加</button>
           </form>
@@ -4138,7 +4670,6 @@
             <div><span>冻结积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <form id="contact-reveal-form" style="margin-top:16px;">
-            <label class="field"><span>查看完整联系方式原因</span><textarea name="reason" rows="3" placeholder="例如：核对工单联系方式" required></textarea></label>
             <div class="error-text" id="contact-reveal-error"></div>
             <button class="btn ghost full" type="submit" ${userActionAttrs(user, "reveal", "user.write")}>查看完整联系方式</button>
           </form>
@@ -4199,7 +4730,6 @@
           <form id="user-profile-form">
             <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(user?.displayName || "")}" required /></label>
             <label class="field"><span>邮箱</span><input name="email" value="${escapeAttribute(user?.email || "")}" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：客服协助修改资料"></textarea></label>
             <div class="error-text" id="user-profile-error"></div>
             <button class="btn primary full" type="submit">保存资料</button>
           </form>
@@ -4276,7 +4806,6 @@
             <label class="field"><span>可创建子账号上限</span><input id="team-limit-seat-input" name="seatLimit" type="number" min="0" step="1" value="${effectiveSeatLimit}" required /></label>
             <small style="color:var(--muted);line-height:1.6;display:block;margin-top:-6px;">特殊团队可配置为任意非负整数；普通团队仍使用系统默认上限。</small>
             <div class="metric-note" id="team-limit-preview" style="margin-top:10px;"></div>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：企业客户申请扩容 / 合同降级恢复默认"></textarea></label>
             <div class="error-text" id="team-limit-error"></div>
             <button class="btn primary full" type="submit">保存团队额度</button>
             <button class="btn ghost full" type="button" style="margin-top:10px;" onclick="restoreTeamLimitDefault('${userId}')">恢复系统默认</button>
@@ -4367,7 +4896,6 @@
           ${userDrawerHead(`${action}账户`, userId)}
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}：${statusImpact}</p>
           <form id="user-status-form">
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="危险操作必须填写原因"></textarea></label>
             ${status === "archived" ? dangerConfirmField("确认归档账户") : ""}
             <div class="error-text" id="user-status-error"></div>
             <button class="btn ${isDangerStatus ? "danger" : "primary"} full" type="submit">确认${action}</button>
@@ -4403,7 +4931,6 @@
             <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
             <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
             <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：异常赠送扣回 / 账务修正"></textarea></label>
             <div class="error-text" id="credit-deduct-error"></div>
             <button class="btn danger full" type="submit">确认扣减</button>
           </form>
@@ -4450,7 +4977,6 @@
             <label class="field"><span>目标可用积分</span><input name="targetBalance" type="number" min="0" step="1" required /></label>
             <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
             <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：财务核账后修正用户可用积分"></textarea></label>
             <div class="error-text" id="credit-set-balance-error"></div>
             <button class="btn primary full" type="submit">确认调整积分</button>
           </form>
@@ -4512,14 +5038,13 @@
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>${existing ? "修改运行配置" : "新增运行配置"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">只保存非密钥业务配置。真实密钥继续使用环境变量或密钥管理系统，页面只维护引用状态。</p>
+          <p style="color:var(--muted);line-height:1.7">只保存非密钥业务配置。真实密钥请在密钥管理中维护。</p>
           <form id="runtime-config-form">
             <label class="field"><span>配置键</span><input name="key" value="${escapeAttribute(existing?.key || "")}" ${existing ? "readonly" : ""} placeholder="registration.enabled" required /></label>
             <label class="field"><span>作用域</span><select name="scope">${optionList(["global", "admin", "creator", "model", "billing", "risk"], existing?.scope || "global")}</select></label>
             <label class="field"><span>值类型</span><select name="valueType">${optionList(["string", "number", "boolean", "json", "string_array"], existing?.valueType || "string")}</select></label>
             <label class="field"><span>配置值</span><textarea name="value" rows="5" required>${escapeHtml(valueForTextarea(existing?.value, existing?.valueType))}</textarea><small style="color:var(--muted);line-height:1.6">值必须匹配声明类型：boolean 仅 true/false，number 仅数字，string_array 可填 JSON 数组或逗号分隔文本。</small></label>
             <label class="field"><span>说明</span><input name="description" value="${escapeAttribute(existing?.description || "")}" placeholder="配置用途说明" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：调整注册策略 / 更新上传限制"></textarea></label>
             ${dangerConfirmField("确认修改配置")}
             <div class="error-text" id="runtime-config-error"></div>
             <button class="btn primary full" type="submit">保存配置</button>
@@ -4586,7 +5111,6 @@
           <div class="drawer-head"><h3>回滚配置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <p style="color:var(--muted);line-height:1.7">${configKey} 将按所选修订记录回滚，提交后写入运行配置和审计记录。</p>
           <form id="config-rollback-form">
-            <label class="field"><span>回滚原因</span><textarea name="reason" rows="4" required placeholder="例如：新策略影响注册，回滚到上一版本"></textarea></label>
             ${dangerConfirmField("确认回滚配置")}
             <div class="error-text" id="config-rollback-error"></div>
             <button class="btn danger full" type="submit">确认回滚</button>
@@ -4613,34 +5137,41 @@
         });
       }
 
-      function openSecretReferenceDrawer() {
+      function openSecretReferenceDrawer(secretId = "") {
+        const secret = secretId ? state.settings.secretReferences.find((item) => item.id === secretId) : null;
+        const isEdit = Boolean(secret);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>新增密钥引用</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">这里只记录引用名、环境变量名、用途和供应商，不填写、不展示、不保存明文密钥。</p>
+          <div class="drawer-head"><h3>${isEdit ? "\u4fee\u6539\u5bc6\u94a5" : "\u65b0\u589e\u5bc6\u94a5"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">\u5bc6\u94a5\u4fdd\u5b58\u5728\u540e\u53f0\u6570\u636e\u5e93\u7684\u5bc6\u94a5\u8868\u4e2d\uff0c\u4e0d\u518d\u4ece .env \u8bfb\u53d6\uff1b\u5217\u8868\u548c\u7f16\u8f91\u65f6\u5747\u660e\u6587\u663e\u793a\u5bc6\u94a5\u503c\u3002</p>
           <form id="secret-reference-form">
-            <label class="field"><span>引用名</span><input name="secretRef" placeholder="volcengine_ark_primary" required /></label>
-            <label class="field"><span>环境变量名</span><input name="envName" placeholder="VOLCENGINE_ARK_API_KEY" required /></label>
-            <label class="field"><span>供应商</span><input name="providerName" placeholder="volcengine / openai / kling" /></label>
-            <label class="field"><span>用途</span><textarea name="purpose" rows="4" required placeholder="例如：火山视频模型调用"></textarea></label>
-            ${dangerConfirmField("确认保存密钥")}
+            <label class="field"><span>\u5f15\u7528\u540d</span><input name="secretRef" value="${escapeAttribute(secret?.secretRef || "")}" placeholder="openai_image2_primary" required /></label>
+            <label class="field"><span>\u5f15\u7528\u952e</span><input name="envName" value="${escapeAttribute(secret?.envName || "")}" placeholder="GPT_IMAGE2_API_KEY" required /></label>
+            <label class="field"><span>\u5bc6\u94a5\u503c</span><input name="secretValue" type="text" autocomplete="off" value="${escapeAttribute(secret?.secretValue || "")}" placeholder="\u586b\u5199\u4f9b\u5e94\u5546 API Key" required /></label>
+            <label class="field"><span>\u8bf7\u6c42\u57df\u540d</span><input name="requestDomain" value="${escapeAttribute(secret?.requestDomain || secret?.baseUrl || "")}" placeholder="https://api.example.com" /></label>
+            <label class="field"><span>\u4f9b\u5e94\u5546</span><input name="providerName" value="${escapeAttribute(secret?.providerName || "")}" placeholder="openai / volcengine / aliyun" /></label>
+            <label class="field"><span>\u7528\u9014</span><textarea name="purpose" rows="4" placeholder="\u4f8b\u5982\uff1aOpenAI Image 2 \u56fe\u7247\u6a21\u578b\u5bc6\u94a5">${escapeHtml(secret?.purpose || "")}</textarea></label>
+            ${dangerConfirmField(isEdit ? "\u786e\u8ba4\u4fee\u6539\u5bc6\u94a5" : "\u786e\u8ba4\u4fdd\u5b58\u5bc6\u94a5")}
             <div class="error-text" id="secret-reference-error"></div>
-            <button class="btn primary full" type="submit">保存密钥引用</button>
+            <button class="btn primary full" type="submit">${isEdit ? "\u4fdd\u5b58\u4fee\u6539" : "\u4fdd\u5b58\u5bc6\u94a5"}</button>
           </form>
         </aside>`;
         document.getElementById("secret-reference-form").addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("secret-reference-error");
-          if (!requireDangerConfirm(form, error, "确认保存密钥")) return;
+          const confirmText = isEdit ? "确认修改密钥" : "确认保存密钥";
+          if (!requireDangerConfirm(form, error, confirmText)) return;
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api("/api/admin/secret-references", {
-              method: "POST",
-              headers: { "idempotency-key": `admin-ui-secret-${Date.now()}` },
+            await api(isEdit ? `/api/admin/secret-references/${encodeURIComponent(secretId)}` : "/api/admin/secret-references", {
+              method: isEdit ? "PATCH" : "POST",
+              headers: { "idempotency-key": `admin-ui-secret-${secretId || "new"}-${Date.now()}` },
               body: JSON.stringify({
                 secretRef: String(form.get("secretRef") || ""),
                 envName: String(form.get("envName") || ""),
+                secretValue: String(form.get("secretValue") || ""),
+                requestDomain: String(form.get("requestDomain") || ""),
                 providerName: String(form.get("providerName") || ""),
                 purpose: String(form.get("purpose") || ""),
               }),
@@ -4648,29 +5179,29 @@
             await loadSettings();
             closeDrawer();
             renderShell();
-          }, "密钥引用已保存").catch(() => undefined);
+          }, isEdit ? "\u5bc6\u94a5\u5df2\u4fee\u6539" : "\u5bc6\u94a5\u5df2\u4fdd\u5b58").catch(() => undefined);
         });
       }
 
       function probeSecretReference(secretId) {
+        // 探测密钥
         const secret = state.settings.secretReferences.find((item) => item.id === secretId);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>探测密钥</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">将检查 ${secret?.envName || "该环境变量"} 是否存在，只更新引用状态和检查时间，不读取、不展示、不保存明文密钥。</p>
+          <div class="drawer-head"><h3>\u63a2\u6d4b\u5bc6\u94a5</h3><button class="icon-btn" onclick="closeDrawer()">?</button></div>
+          <p style="color:var(--muted);line-height:1.7">\u5c06\u68c0\u67e5 ${escapeHtml(secret?.envName || "\u8be5\u5f15\u7528\u952e")} \u662f\u5426\u5df2\u5728\u540e\u53f0\u4fdd\u5b58\u5bc6\u94a5\u503c\uff0c\u53ea\u66f4\u65b0\u72b6\u6001\u548c\u68c0\u6d4b\u65f6\u95f4\uff0c\u4e0d\u8bfb\u53d6 .env\u3002</p>
           <form id="secret-probe-form">
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required>后台系统设置手动探测密钥引用</textarea></label>
-            ${dangerConfirmField("确认探测密钥")}
+            ${dangerConfirmField("\u786e\u8ba4\u63a2\u6d4b\u5bc6\u94a5")}
             <div class="error-text" id="secret-probe-error"></div>
-            <button class="btn primary full" type="submit">开始探测</button>
+            <button class="btn primary full" type="submit">\u5f00\u59cb\u63a2\u6d4b</button>
           </form>
         </aside>`;
         document.getElementById("secret-probe-form").addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("secret-probe-error");
-          if (!requireDangerConfirm(form, error, "确认探测密钥")) return;
+          if (!requireDangerConfirm(form, error, "\u786e\u8ba4\u63a2\u6d4b\u5bc6\u94a5")) return;
           await runAdminMutation(event.currentTarget, error, async () => {
             const result = await api(`/api/admin/secret-references/${encodeURIComponent(secretId)}/probe`, {
               method: "POST",
@@ -4680,9 +5211,39 @@
             await loadSettings();
             closeDrawer();
             renderShell();
-            const label = result.data?.status === "configured" ? "已配置" : result.data?.status === "missing" ? "缺失" : "未知";
-            openDrawer("密钥探测完成", `密钥引用状态：${label}。页面不会读取、展示或保存明文密钥。`);
-          }, "密钥探测已完成").catch(() => undefined);
+            const label = result.data?.status === "configured" ? "\u5df2\u914d\u7f6e" : result.data?.status === "missing" ? "\u7f3a\u5931" : "\u672a\u77e5";
+            openDrawer("\u5bc6\u94a5\u63a2\u6d4b\u5b8c\u6210", `\u5bc6\u94a5\u72b6\u6001\uff1a${label}\u3002`);
+          }, "\u5bc6\u94a5\u63a2\u6d4b\u5df2\u5b8c\u6210").catch(() => undefined);
+        });
+      }
+
+      function deleteSecretReference(secretId) {
+        const secret = state.settings.secretReferences.find((item) => item.id === secretId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>\u5220\u9664\u5bc6\u94a5</h3><button class="icon-btn" onclick="closeDrawer()">?</button></div>
+          <p style="color:var(--muted);line-height:1.7">\u5c06\u5220\u9664 ${escapeHtml(secret?.secretRef || secretId)} \u7684\u540e\u53f0\u5bc6\u94a5\u8bb0\u5f55\u3002\u5df2\u9009\u62e9\u8be5\u5f15\u7528\u952e\u7684\u6a21\u578b\u9700\u8981\u91cd\u65b0\u914d\u7f6e\u5bc6\u94a5\u3002</p>
+          <form id="secret-delete-form">
+            ${dangerConfirmField("\u786e\u8ba4\u5220\u9664\u5bc6\u94a5")}
+            <div class="error-text" id="secret-delete-error"></div>
+            <button class="btn danger full" type="submit">\u5220\u9664\u5bc6\u94a5</button>
+          </form>
+        </aside>`;
+        document.getElementById("secret-delete-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("secret-delete-error");
+          if (!requireDangerConfirm(form, error, "\u786e\u8ba4\u5220\u9664\u5bc6\u94a5")) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/secret-references/${encodeURIComponent(secretId)}`, {
+              method: "DELETE",
+              headers: { "idempotency-key": `admin-ui-secret-delete-${secretId}-${Date.now()}` },
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "\u5bc6\u94a5\u5df2\u5220\u9664").catch(() => undefined);
         });
       }
 
@@ -4697,7 +5258,7 @@
             <label class="field"><span>初始密码</span><input name="password" type="password" autocomplete="new-password" required /></label>
             <label class="field"><span>显示名称</span><input name="displayName" required /></label>
             <label class="field"><span>角色</span><select name="role">${optionList(["super_admin", "ops_admin", "model_admin", "finance_admin", "support_admin", "audit_viewer"], "ops_admin")}</select></label>
-            <label class="field"><span>备注 / 原因</span><textarea name="remark" rows="4" required placeholder="例如：新增客服后台账号"></textarea></label>
+            <label class="field"><span>备注</span><textarea name="remark" rows="4" placeholder="例如：新增客服后台账号"></textarea></label>
             ${dangerConfirmField("确认创建账户")}
             <div class="error-text" id="admin-account-error"></div>
             <button class="btn primary full" type="submit">创建账户</button>
@@ -4741,7 +5302,6 @@
             <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], status)}</select></label>
             <label class="field"><span>角色</span><input name="roles" value="${escapeAttribute(account.roles.join(", "))}" required /></label>
             <label class="field"><span>备注</span><textarea name="remark" rows="3">${escapeHtml(account.remark || "")}</textarea></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：轮岗调整权限 / 风险账号临时禁用"></textarea></label>
             ${dangerConfirmField("确认修改账户")}
             <div class="error-text" id="admin-account-edit-error"></div>
             <button class="btn ${status === "disabled" || status === "archived" ? "danger" : "primary"} full" type="submit">保存账户</button>
@@ -4782,7 +5342,6 @@
           <form id="admin-account-password-reset-form">
             <label class="field"><span>新密码</span><input name="newPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
             <label class="field"><span>确认新密码</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
-            <label class="field"><span>重置原因</span><textarea name="reason" rows="4" required placeholder="例如：管理员忘记密码 / 账号交接后重置"></textarea></label>
             ${dangerConfirmField("确认重置密码")}
             <div class="error-text" id="admin-account-password-reset-error"></div>
             <button class="btn danger full" type="submit">确认重置密码</button>
@@ -4841,11 +5400,12 @@
               },
             },
             defaultParams: { aspectRatio: "16:9" },
-            providerConfig: {
-              baseURL: "",
-              createTaskEndpoint: "",
-              queryTaskEndpoint: "",
-              apiKeyEnv: "",
+          providerConfig: {
+            baseURL: "",
+            requestPath: "",
+            createTaskEndpoint: "",
+            queryTaskEndpoint: "",
+            apiKeyEnv: "",
               requestFormat: "json",
             },
             pricing: { unit: "video", baseCredits: 120 },
@@ -4924,6 +5484,7 @@
           defaultParams: { aspectRatio: "1:1", quality: "standard", count: 1 },
           providerConfig: {
             baseURL: "",
+            requestPath: "",
             createTaskEndpoint: "",
             apiKeyEnv: "",
             requestFormat: "json",
@@ -4964,8 +5525,11 @@
         if (form.elements.pricingBaseCredits) form.elements.pricingBaseCredits.value = Number(template.pricing.baseCredits || 0);
         if (form.elements.pricingUnit) form.elements.pricingUnit.value = template.pricing.unit || template.mediaType || "image";
         form.elements.providerConfig.value = JSON.stringify(template.providerConfig, null, 2);
-        if (form.elements.modelApiKeyEnv) form.elements.modelApiKeyEnv.value = template.providerConfig.apiKeyEnv || "";
-        if (form.elements.modelApiKey) form.elements.modelApiKey.value = template.providerConfig.apiKey || "";
+        if (form.elements.requestPath) form.elements.requestPath.value = modelEditorRequestPathFromProviderConfig(template.providerConfig);
+        if (form.elements.modelApiKeyEnv) {
+          form.elements.modelApiKeyEnv.innerHTML = modelSecretReferenceOptions(template.providerConfig.apiKeyEnv || "", template.providerName);
+          form.elements.modelApiKeyEnv.value = template.providerConfig.apiKeyEnv || "";
+        }
         form.elements.limits.value = JSON.stringify(template.limits, null, 2);
         form.elements.uiConfig.value = JSON.stringify(template.uiConfig, null, 2);
         form.elements.submitQueueName.value = template.dispatchPolicy.submitQueueName || "";
@@ -4990,11 +5554,19 @@
         form.elements.pricing.value = JSON.stringify(pricing, null, 2);
       }
 
-      function modelSecretReferenceOptions(selectedEnvName = "") {
-        const options = [`<option value="">Select secret reference</option>`];
-        for (const secret of state.settings.secretReferences || []) {
-          const label = `${secret.secretRef || secret.envName} / ${secret.envName}${secret.status ? ` (${secret.status})` : ""}`;
-          options.push(`<option value="${escapeAttribute(secret.envName)}" ${secret.envName === selectedEnvName ? "selected" : ""}>${escapeHtml(label)}</option>`);
+      function modelSecretReferenceOptions(selectedEnvName = "", selectedProviderName = "") {
+        const secrets = [...(state.settings.secretReferences || [])].sort((left, right) => {
+          const leftLabel = String(left.secretRef || left.envName || "");
+          const rightLabel = String(right.secretRef || right.envName || "");
+          return leftLabel.localeCompare(rightLabel, "zh-CN");
+        });
+        const options = [`<option value="">选择 API 密钥</option>`];
+        for (const secret of secrets) {
+          const envName = String(secret.envName || "");
+          const providerName = String(secret.providerName || "").trim();
+          const label = secret.secretRef || envName;
+          const selected = envName === selectedEnvName;
+          options.push(`<option value="${escapeAttribute(envName)}" data-provider-name="${escapeAttribute(providerName)}" ${selected ? "selected" : ""}>${escapeHtml(label)}</option>`);
         }
         return options.join("");
       }
@@ -5003,19 +5575,29 @@
         const form = document.getElementById("model-editor-form");
         if (!form) return;
         const config = parseJsonTextarea(new FormData(form), "providerConfig");
-        config.apiKeyEnv = String(envName || "").trim();
+        const value = String(envName || "").trim();
+        if (value) {
+          config.apiKeyEnv = value;
+        } else {
+          delete config.apiKeyEnv;
+        }
+        delete config.apiKey;
         form.elements.providerConfig.value = JSON.stringify(config, null, 2);
       }
 
-      function setModelEditorProviderConfigApiKey(apiKey) {
+      function modelEditorRequestPathFromProviderConfig(providerConfig = {}) {
+        return providerConfig.requestPath || providerConfig.createTaskEndpoint || providerConfig.endpoint || "";
+      }
+
+      function setModelEditorProviderConfigRequestPath(requestPath) {
         const form = document.getElementById("model-editor-form");
         if (!form) return;
         const config = parseJsonTextarea(new FormData(form), "providerConfig");
-        const value = String(apiKey || "").trim();
+        const value = String(requestPath || "").trim();
         if (value) {
-          config.apiKey = value;
+          config.requestPath = value;
         } else {
-          delete config.apiKey;
+          delete config.requestPath;
         }
         form.elements.providerConfig.value = JSON.stringify(config, null, 2);
       }
@@ -5048,6 +5630,7 @@
           defaultParams: { aspectRatio: "16:9" },
           providerConfig: {
             baseURL: "",
+            requestPath: "",
             createTaskEndpoint: "",
             queryTaskEndpoint: "",
             apiKeyEnv: "",
@@ -5068,7 +5651,7 @@
         };
         if (!model) Object.assign(defaults, modelEditorTemplateDefaults("image"));
         const selectedApiKeyEnv = defaults.providerConfig?.apiKeyEnv || "";
-        const selectedApiKey = defaults.providerConfig?.apiKey || "";
+        const selectedRequestPath = modelEditorRequestPathFromProviderConfig(defaults.providerConfig || {});
         const selectedVideoCategory = inferVideoCategory(defaults);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
@@ -5090,6 +5673,7 @@
               <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName)}" required /></label>
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
+              <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
               <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
@@ -5102,7 +5686,7 @@
               <div class="toolbar"><h4>手动添加参数</h4><span class="metric-note">用于视频比率、分辨率、时长、数量、质量等管理员自定义项</span></div>
               <div class="table-wrap" id="parameter-schema-list" style="margin-bottom:12px;">
                 <table>
-                  <thead><tr><th>现有参数</th><th>类型</th><th>选项</th><th class="parameter-visible-cell">是否显示</th><th class="actions">操作</th></tr></thead>
+                  <thead><tr><th>现有参数</th><th>类型</th><th>选项</th><th class="actions">操作</th></tr></thead>
                   <tbody>${parameterSchemaRows(defaults.parameterSchema || {})}</tbody>
                 </table>
               </div>
@@ -5113,7 +5697,6 @@
                 <label class="field"><span>选项内容</span><input name="manualParameterOptions" placeholder="16:9, 9:16, 1:1" /></label>
               </div>
               <label class="inline-check"><input name="manualParameterRequired" type="checkbox" checked /> 必填参数</label>
-              <label class="inline-check"><input name="manualParameterVisible" type="checkbox" checked /> 是否显示</label>
               <button class="btn ghost full" type="button" id="manual-parameter-add-btn">合并到参数 schema</button>
             </section>
             <label class="field"><span>参数 schema JSON</span><textarea name="parameterSchema" rows="8" required>${escapeHtml(JSON.stringify(defaults.parameterSchema || {}, null, 2))}</textarea></label>
@@ -5126,10 +5709,7 @@
               </div>
             </section>
             <label class="field"><span>模型定价 JSON</span><textarea name="pricing" rows="5" required>${escapeHtml(JSON.stringify(defaults.pricing || {}, null, 2))}</textarea></label>
-            <div class="form-grid">
-              <label class="field"><span>API 密钥</span><input name="modelApiKey" type="password" autocomplete="off" value="${escapeAttribute(selectedApiKey)}" placeholder="直接填写供应商 API Key" /></label>
-              <label class="field"><span>密钥引用</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv)}</select></label>
-            </div>
+            <label class="field"><span>API 密钥</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv, defaults.providerName)}</select></label>
             <label class="field"><span>供应商配置 JSON</span><textarea name="providerConfig" rows="7" required>${escapeHtml(JSON.stringify(defaults.providerConfig || {}, null, 2))}</textarea></label>
             <div class="form-grid">
               <label class="field"><span>提交队列</span><input name="submitQueueName" value="${escapeAttribute(defaults.dispatchPolicy?.submitQueueName || "")}" required /></label>
@@ -5142,7 +5722,6 @@
             <label class="field"><span>限制 JSON</span><textarea name="limits" rows="4">${escapeHtml(JSON.stringify(defaults.limits || {}, null, 2))}</textarea></label>
             <label class="field"><span>展示配置 JSON</span><textarea name="uiConfig" rows="4">${escapeHtml(JSON.stringify(defaults.uiConfig || {}, null, 2))}</textarea></label>
             <label class="field"><span>备注</span><input name="remark" value="${escapeAttribute(defaults.remark || "")}" /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：接入新视频模型 / 调整计费和参数"></textarea></label>
             <div class="error-text" id="model-editor-error"></div>
             <button class="btn primary full" type="submit">${isEdit ? "保存模型配置" : "创建模型配置"}</button>
           </form>
@@ -5151,15 +5730,17 @@
         modelEditorForm.elements.modelApiKeyEnv.addEventListener("change", (event) => {
           try {
             setModelEditorProviderConfigApiKeyEnv(event.target.value);
+            const providerName = event.target.selectedOptions[0]?.dataset?.providerName || "";
+            if (providerName) modelEditorForm.elements.providerName.value = providerName;
           } catch (err) {
             document.getElementById("model-editor-error").textContent = err.message || "密钥引用写入供应商配置失败";
           }
         });
-        modelEditorForm.elements.modelApiKey.addEventListener("input", (event) => {
+        modelEditorForm.elements.requestPath.addEventListener("input", (event) => {
           try {
-            setModelEditorProviderConfigApiKey(event.target.value);
+            setModelEditorProviderConfigRequestPath(event.target.value);
           } catch (err) {
-            document.getElementById("model-editor-error").textContent = err.message || "API 密钥写入供应商配置失败";
+            document.getElementById("model-editor-error").textContent = err.message || "requestPath write failed";
           }
         });
         modelEditorForm.elements.pricingBaseCredits.addEventListener("input", () => {
@@ -5241,7 +5822,6 @@
           <form id="model-duplicate-form">
             <label class="field"><span>新模型编码</span><input name="modelCode" value="${escapeAttribute(`${model.modelCode}-copy`)}" required /></label>
             <label class="field"><span>新展示名称</span><input name="displayName" value="${escapeAttribute(`${model.displayName} 副本`)}" required /></label>
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" required placeholder="例如：复制为新供应商测试版本"></textarea></label>
             <div class="error-text" id="model-duplicate-error"></div>
             <button class="btn primary full" type="submit">确认复制</button>
           </form>
@@ -5281,18 +5861,12 @@
           // The submit step will surface auth/API failures. Keep the cached row visible meanwhile.
         }
         const label = status === "active" ? "启用/发布" : status === "disabled" ? "禁用" : "归档";
-        const launchCheck = modelLaunchCheckUi(model);
-        const launchCheckBlock = status === "active"
-          ? `<h4>模型上线检查</h4>${launchCheckHtml(launchCheck.checks)}`
-          : "";
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>${label}模型</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">${model.displayName} 将变更为 ${status}。敏感操作必须填写原因并写入审计。</p>
-          ${launchCheckBlock}
+          <p style="color:var(--muted);line-height:1.7">${model.displayName} 将变更为 ${status}，系统会自动记录审计原因。</p>
           <form id="model-status-form">
-            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" required placeholder="例如：供应商维护暂停 / 上线检查通过发布"></textarea></label>
             <div class="error-text" id="model-status-error"></div>
             <button class="btn ${status === "disabled" || status === "archived" ? "danger" : "primary"} full" type="submit">确认${label}</button>
           </form>
@@ -5302,10 +5876,6 @@
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("model-status-error");
           error.textContent = "";
-          if (status === "active" && !launchCheck.ok) {
-            error.innerHTML = renderLaunchCheckFailure(launchCheck.failedItems);
-            return;
-          }
           await runAdminMutation(event.currentTarget, error, async () => {
             await api(`/api/admin/models/${modelId}/status`, {
               method: "PATCH",
@@ -5318,12 +5888,7 @@
             await loadModels();
             closeDrawer();
             renderShell();
-          }, "模型状态已更新").catch((err) => {
-            const failedItems = err.payload?.error?.details?.failedItems || [];
-            if (err.payload?.error?.code === "admin_model_launch_check_failed" && failedItems.length) {
-              error.innerHTML = renderLaunchCheckFailure(failedItems);
-            }
-          });
+          }, "模型状态已更新").catch(() => undefined);
         });
       }
 
@@ -5361,7 +5926,6 @@
           <div class="drawer-head"><h3>回滚模型配置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <p style="color:var(--muted);line-height:1.7">${model?.displayName || modelId} 将回滚到所选修订快照，提交后写入模型修订和审计记录。</p>
           <form id="model-rollback-form">
-            <label class="field"><span>回滚原因</span><textarea name="reason" rows="4" required placeholder="例如：新版配置生成失败，回滚到稳定版本"></textarea></label>
             <div class="error-text" id="model-rollback-error"></div>
             <button class="btn danger full" type="submit" ${permissionAttrs("model.publish")}>确认回滚</button>
           </form>
@@ -5626,6 +6190,20 @@
           uiConfig.videoCategory = videoCategory.value;
           uiConfig.videoCategoryLabel = videoCategory.label;
         }
+        const providerConfig = parseJsonTextarea(form, "providerConfig");
+        const requestPath = String(form.get("requestPath") || "").trim();
+        if (requestPath) {
+          providerConfig.requestPath = requestPath;
+        } else {
+          delete providerConfig.requestPath;
+        }
+        const apiKeyEnv = String(form.get("modelApiKeyEnv") || "").trim();
+        if (apiKeyEnv) {
+          providerConfig.apiKeyEnv = apiKeyEnv;
+        } else {
+          delete providerConfig.apiKeyEnv;
+        }
+        delete providerConfig.apiKey;
         return {
           modelCode: String(form.get("modelCode") || "").trim(),
           displayName: String(form.get("displayName") || "").trim(),
@@ -5640,7 +6218,7 @@
           parameterSchema: parameterSchemaFromForm(form),
           defaultParams: parseJsonTextarea(form, "defaultParams"),
           pricing: parseJsonTextarea(form, "pricing"),
-          providerConfig: parseJsonTextarea(form, "providerConfig"),
+          providerConfig,
           limits: parseJsonTextarea(form, "limits"),
           uiConfig,
           dispatchPolicy: {
@@ -5675,7 +6253,6 @@
           type: String(form.get("manualParameterType") || "string"),
           options: String(form.get("manualParameterOptions") || ""),
           required: Boolean(form.get("manualParameterRequired")),
-          visible: Boolean(form.get("manualParameterVisible")),
         });
       }
 
@@ -5710,13 +6287,12 @@
       function parameterSchemaRows(schema) {
         const entries = Object.entries(schema || {});
         if (entries.length === 0) {
-          return `<tr><td colspan="5">暂无现有参数</td></tr>`;
+          return `<tr><td colspan="4">暂无现有参数</td></tr>`;
         }
         return entries.map(([key, value]) => {
           const parameter = value && typeof value === "object" ? value : {};
           const options = Array.isArray(parameter.options) ? parameter.options.join(", ") : "-";
-          const visibleChecked = parameter.visible !== false ? "checked" : "";
-          return `<tr><td>${escapeHtml(modelParameterDisplayName(key, parameter))}<div class="metric-note">${escapeHtml(key)}</div></td><td><span class="tag blue">${escapeHtml(parameterTypeLabel(parameter.type || "json"))}</span></td><td>${escapeHtml(options)}</td><td class="parameter-visible-cell"><label class="parameter-visible-toggle"><input type="checkbox" ${visibleChecked} onchange="toggleParameterVisibilityInSchema('${escapeAttribute(key)}', this.checked)" /> 显示</label></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑参数" type="button" onclick="fillManualParameterEditor('${escapeAttribute(key)}')">编</button><button class="icon-btn" title="删除参数" type="button" onclick="removeManualParameterFromSchema('${escapeAttribute(key)}')">删</button></div></td></tr>`;
+          return `<tr><td>${escapeHtml(modelParameterDisplayName(key, parameter))}<div class="metric-note">${escapeHtml(key)}</div></td><td><span class="tag blue">${escapeHtml(parameterTypeLabel(parameter.type || "json"))}</span></td><td>${escapeHtml(options)}</td><td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑参数" type="button" onclick="fillManualParameterEditor('${escapeAttribute(key)}')">编</button><button class="icon-btn" title="删除参数" type="button" onclick="removeManualParameterFromSchema('${escapeAttribute(key)}')">删</button></div></td></tr>`;
         }).join("");
       }
 
@@ -5740,22 +6316,6 @@
         form.elements.manualParameterType.value = parameter.type || "string";
         form.elements.manualParameterOptions.value = Array.isArray(parameter.options) ? parameter.options.join(", ") : "";
         form.elements.manualParameterRequired.checked = Boolean(parameter.required);
-        form.elements.manualParameterVisible.checked = parameter.visible !== false;
-      }
-
-      function toggleParameterVisibilityInSchema(parameterKey, visible) {
-        const form = document.getElementById("model-editor-form");
-        if (!form) return;
-        const schema = currentModelEditorSchema();
-        const parameter = schema[parameterKey] && typeof schema[parameterKey] === "object" && !Array.isArray(schema[parameterKey])
-          ? schema[parameterKey]
-          : {};
-        schema[parameterKey] = {
-          ...parameter,
-          visible: Boolean(visible),
-        };
-        form.elements.parameterSchema.value = JSON.stringify(schema, null, 2);
-        refreshParameterSchemaList(schema);
       }
 
       function removeManualParameterFromSchema(parameterKey) {
@@ -5778,7 +6338,7 @@
           label: String(input.label || key).trim(),
           type,
           required: Boolean(input.required),
-          visible: input.visible !== false,
+          visible: true,
         };
         const options = String(input.options || "")
           .split(",")
@@ -6071,6 +6631,58 @@
         showToast("默认提示词已更新");
       }
 
+      function batchImagePromptTemplatePayloadFromForm(target, form, existing) {
+        const items = getBatchImagePromptTemplates(target);
+        const maxSortOrder = items.reduce((max, item) => Math.max(max, Number(item.sort_order || item.sortOrder || 0)), 0);
+        return {
+          id: existing?.id || String(form.get("id") || "").trim(),
+          label: String(form.get("label") || "").trim(),
+          sort_order: Number(form.get("sort_order") || (maxSortOrder + 100 || 100)),
+        };
+      }
+
+      function openBatchImagePresetDrawer(target, templateId = "") {
+        const existing = batchImagePromptTemplateById(target, templateId);
+        const drawer = document.getElementById("drawer");
+        const title = batchImagePromptDrawerTitle(target);
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(680px,100%);">
+          <div class="drawer-head"><h3>${existing ? `编辑${title}预设` : `新增${title}预设`}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="batch-image-preset-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="label" value="${escapeAttribute(existing?.label || "")}" required /></label>
+              <label class="field"><span>编码</span><input name="id" value="${escapeAttribute(existing?.id || "")}" pattern="[a-z0-9-]+" ${existing ? "readonly" : ""} required /></label>
+              <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
+            </div>
+            <div class="error-text" id="batch-image-preset-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存${title}预设</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("batch-image-preset-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("batch-image-preset-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = batchImagePromptTemplatePayloadFromForm(target, form, existing);
+            if (!payload.id || !payload.label) throw new Error("名称和编码必填");
+            const items = getBatchImagePromptTemplates(target);
+            const duplicated = items.find((item) => String(item.id) === String(payload.id) && String(item.id) !== String(existing?.id || ""));
+            if (duplicated) throw new Error("编码已存在，请更换后再保存");
+            const others = items.filter((item) => String(item.id) !== String(existing?.id || payload.id));
+            await saveBatchImagePromptTemplates(target, [...others, payload]);
+            closeDrawer();
+            renderShell();
+          }, `${title}预设已保存`).catch(() => undefined);
+        });
+      }
+
+      function openBatchCharacterPromptTemplateDrawer(templateId = "") {
+        return openBatchImagePresetDrawer("character", templateId);
+      }
+
       function openImagePromptStyleDrawer(styleId = "") {
         const existing = imagePromptStyleById(styleId);
         const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault);
@@ -6083,7 +6695,7 @@
             <div class="form-grid">
               <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(existing?.name || "")}" required /></label>
               <label class="field"><span>编码</span><input name="code" value="${escapeAttribute(existing?.code || "")}" pattern="[a-z0-9_]+" required /></label>
-              <label class="field"><span>分类</span><select name="category">${optionList(["official", "custom"], existing?.category || "official")}</select></label>
+              <label class="field"><span>分类</span><select name="category">${optionList(["official", "batch", "custom"], existing?.category || "official")}</select></label>
               <label class="field"><span>模型族</span><select name="model_family">${optionList(["doubao", "seedream", "general"], existing?.model_family || existing?.modelFamily || "doubao")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
@@ -6325,6 +6937,10 @@
         showToast("默认提示词已更新");
       }
 
+      function openBatchPropPromptTemplateDrawer(templateId = "") {
+        return openBatchImagePresetDrawer("prop", templateId);
+      }
+
       function scenePromptPayloadFromForm(form, existing) {
         const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
         return {
@@ -6457,6 +7073,10 @@
         showToast("默认提示词已更新");
       }
 
+      function openBatchScenePromptTemplateDrawer(templateId = "") {
+        return openBatchImagePresetDrawer("scene", templateId);
+      }
+
       function persistShotPromptTemplates() { localStorage.setItem("admin-shot-prompt-templates", JSON.stringify(state.shotPromptTemplates || [])); }
       function shotPromptPayloadFromForm(form, existing) {
         const splitList = (name) => String(form.get(name) || "").split(",").map((item) => item.trim()).filter(Boolean);
@@ -6520,6 +7140,100 @@
         document.getElementById("drawer").classList.add("hidden");
       }
 
+      function hydrateDrawerPanel() {
+        const drawer = document.getElementById("drawer");
+        const panel = drawer?.querySelector(".drawer-panel");
+        if (!panel || drawer.querySelector(".drawer-resize-handle")) return;
+        const handle = document.createElement("div");
+        handle.className = "drawer-resize-handle";
+        handle.setAttribute("role", "separator");
+        handle.setAttribute("aria-orientation", "vertical");
+        handle.setAttribute("title", "\u62d6\u52a8\u8fb9\u754c\u8c03\u6574\u7f16\u8f91\u533a\u5bbd\u5ea6");
+        drawer.insertBefore(handle, panel);
+      }
+
+      function drawerBoundaryHit(event, panel) {
+        if (!panel || !event) return false;
+        const rect = panel.getBoundingClientRect();
+        return Math.abs(event.clientX - rect.left) <= 22;
+      }
+
+      function activeDrawerElement() {
+        const drawer = document.getElementById("drawer");
+        return drawer && !drawer.classList.contains("hidden") ? drawer : null;
+      }
+
+      function beginDrawerResize(event, drawer, panel, dragHandle) {
+        if (!drawer || !panel) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        dragHandle?.setPointerCapture?.(event.pointerId);
+        dragHandle?.classList.add("is-dragging");
+        drawer.classList.add("is-boundary-hover");
+        document.body.classList.add("is-drawer-resizing");
+        const resize = (moveEvent) => {
+          const minWidth = Math.min(360, window.innerWidth);
+          const maxWidth = Math.max(minWidth, window.innerWidth - 24);
+          const width = Math.min(maxWidth, Math.max(minWidth, window.innerWidth - moveEvent.clientX));
+          panel.style.width = `${width}px`;
+        };
+        const stop = () => {
+          dragHandle?.releasePointerCapture?.(event.pointerId);
+          dragHandle?.classList.remove("is-dragging");
+          drawer.classList.remove("is-boundary-hover");
+          document.body.classList.remove("is-drawer-resizing");
+          drawer.dataset.dragJustEnded = "true";
+          window.removeEventListener("pointermove", resize);
+          window.removeEventListener("pointerup", stop);
+          window.removeEventListener("pointercancel", stop);
+          setTimeout(() => {
+            if (drawer.dataset.dragJustEnded === "true") delete drawer.dataset.dragJustEnded;
+          }, 0);
+        };
+        window.addEventListener("pointermove", resize);
+        window.addEventListener("pointerup", stop);
+        window.addEventListener("pointercancel", stop);
+        resize(event);
+        return true;
+      }
+
+      function setupDrawerInteractions() {
+        if (setupDrawerInteractions.ready) {
+          hydrateDrawerPanel();
+          return;
+        }
+        setupDrawerInteractions.ready = true;
+        document.addEventListener("click", (event) => {
+          const drawer = activeDrawerElement();
+          if (!drawer) return;
+          if (drawer.dataset.dragJustEnded === "true") {
+            delete drawer.dataset.dragJustEnded;
+            return;
+          }
+          if (event.target === drawer) closeDrawer();
+        });
+        document.addEventListener("pointermove", (event) => {
+          const drawer = activeDrawerElement();
+          if (!drawer) return;
+          if (document.body.classList.contains("is-drawer-resizing")) return;
+          const panel = drawer.querySelector(".drawer-panel");
+          drawer.classList.toggle("is-boundary-hover", drawerBoundaryHit(event, panel));
+        });
+        document.addEventListener("pointerdown", (event) => {
+          const drawer = activeDrawerElement();
+          if (!drawer) return;
+          const handle = event.target.closest?.(".drawer-resize-handle");
+          const panel = drawer.querySelector(".drawer-panel");
+          if (!panel) return;
+          const boundaryHit = drawerBoundaryHit(event, panel);
+          if (!handle && !boundaryHit) return;
+          const dragHandle = handle || drawer.querySelector(".drawer-resize-handle");
+          beginDrawerResize(event, drawer, panel, dragHandle);
+        }, true);
+        new MutationObserver(() => hydrateDrawerPanel()).observe(document.body, { childList: true, subtree: true });
+        hydrateDrawerPanel();
+      }
+
       legalDocumentSummaryHtml = function legalDocumentSummaryHtml(configKey) {
         const { config, runtimeConfig, documentValue } = legalDocumentEditor(configKey);
         const previewText = stripHtmlToText(documentValue.contentHtml).slice(0, 120) || "\u6682\u65e0\u534f\u8bae\u5185\u5bb9";
@@ -6558,7 +7272,7 @@
 
       routeFromPath = function routeFromPath() {
         const path = location.pathname;
-        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "model-workbench";
+        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
         if (path.includes("/prompts")) return "prompts";
@@ -6593,7 +7307,6 @@
         const pathMap = {
           dashboard: "/admin/dashboard",
           models: "/admin/models",
-          "model-workbench": "/admin/models/new",
           users: "/admin/users",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
@@ -6603,6 +7316,7 @@
         };
         history.pushState(null, "", pathMap[page] || "/admin/dashboard");
         renderShell();
+        ensureAdminPageData(page).catch(() => undefined);
       };
 
       renderShell = function renderShell() {
@@ -6613,7 +7327,6 @@
               <nav class="nav">
                 ${navButton("dashboard", "\u603b\u89c8")}
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
-                ${navButton("model-workbench", "\u53c2\u6570\u8be6\u60c5")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
@@ -6640,6 +7353,7 @@
           button.addEventListener("click", () => navigate(button.dataset.page));
         });
         document.getElementById("logout-btn").addEventListener("click", logout);
+        setupDrawerInteractions();
         bindUserFilterControls();
       };
 
@@ -6648,7 +7362,6 @@
         if (pageState) return pageState;
         if (state.page === "dashboard") return dashboardPage();
         if (state.page === "models") return modelsPage();
-        if (state.page === "model-workbench") return modelWorkbenchPage();
         if (state.page === "users") return usersPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
@@ -6664,7 +7377,7 @@
           : `<tr><td colspan="5">${state.settingsLoadError || "\u6682\u65e0\u8fd0\u884c\u914d\u7f6e"}</td></tr>`;
         const secretRows = state.settings.secretReferences.length
           ? state.settings.secretReferences.map(secretReferenceRow).join("")
-          : `<tr><td colspan="5">\u6682\u65e0\u5bc6\u94a5\u5f15\u7528</td></tr>`;
+          : `<tr><td colspan="6">\u6682\u65e0\u5bc6\u94a5\u5f15\u7528</td></tr>`;
         const accountRows = state.adminAccounts.length
           ? state.adminAccounts.map(adminAccountRow).join("")
           : `<tr><td colspan="5">\u6682\u65e0\u540e\u53f0\u6743\u9650\u8d26\u6237</td></tr>`;
@@ -6674,8 +7387,8 @@
             <div class="table-wrap settings compact"><table><thead><tr><th>\u914d\u7f6e\u952e</th><th>\u4f5c\u7528\u57df</th><th>\u7c7b\u578b</th><th>\u5f53\u524d\u503c</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${configRows}</tbody></table></div>
           </section>
           <section class="card">
-            <div class="toolbar"><h3>\u5bc6\u94a5\u5f15\u7528</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u5bc6\u94a5\u5f15\u7528</button></div>
-            <div class="table-wrap settings compact"><table><thead><tr><th>\u5f15\u7528\u540d</th><th>\u73af\u5883\u53d8\u91cf</th><th>\u4f9b\u5e94\u5546</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${secretRows}</tbody></table></div>
+            <div class="toolbar"><h3>\u5bc6\u94a5\u7ba1\u7406</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u5bc6\u94a5</button></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>\u5f15\u7528\u540d</th><th>\u5bc6\u94a5\u660e\u6587</th><th>\u8bf7\u6c42\u57df\u540d</th><th>\u4f9b\u5e94\u5546</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${secretRows}</tbody></table></div>
           </section>
           <section class="card">
             <div class="toolbar"><h3>\u540e\u53f0\u6743\u9650\u8d26\u6237</h3><button class="btn primary" onclick="openAdminAccountDrawer()" ${permissionAttrs("admin_account.write")}>\u65b0\u589e\u8d26\u6237</button></div>
@@ -7011,6 +7724,51 @@
         showToast("\u534f\u8bae\u5df2\u5220\u9664");
       };
 
+      const ADMIN_PAGE_LOADERS = {
+        dashboard: () => loadDashboard(),
+        models: () => loadModels(),
+        users: () => loadUsers(),
+        membership: () => loadMembershipPlans(),
+        prompts: () => loadPromptManagement(),
+        risks: () => loadRiskAudit(),
+        agreements: () => loadLegalDocuments(),
+        settings: () => loadSettings(),
+        account: () => loadAdminSessions(),
+        parameterTemplates: () => loadSettings(),
+      };
+
+      function markAdminPageLoaded(page) {
+        state.loadedPages[page] = true;
+        if (page === "settings" || page === "parameterTemplates") {
+          state.loadedPages.settings = true;
+          state.loadedPages.parameterTemplates = true;
+        }
+      }
+
+      async function ensureAdminPageData(page = state.page, options = {}) {
+        const loader = ADMIN_PAGE_LOADERS[page];
+        if (!loader) return;
+        if (!options.force && state.loadedPages[page]) return;
+        if (!options.force && state.loadingPromises[page]) return state.loadingPromises[page];
+        setPageLoading(page, true);
+        const promise = Promise.resolve()
+          .then(loader)
+          .then(() => markAdminPageLoaded(page))
+          .finally(() => {
+            delete state.loadingPromises[page];
+            renderShell();
+          });
+        state.loadingPromises[page] = promise;
+        renderShell();
+        return promise;
+      }
+
+      function preloadAdminShellData() {
+        if (!state.loadedPages.settings && !state.loadingPromises.settings) {
+          ensureAdminPageData("settings").catch(() => undefined);
+        }
+      }
+
       bootstrap = async function bootstrap() {
         if (location.pathname === "/admin/login") {
           await bootstrapAdminLoginRoute();
@@ -7021,8 +7779,9 @@
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
           state.page = routeFromPath();
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
           renderShell();
+          preloadAdminShellData();
+          ensureAdminPageData(state.page).catch(() => undefined);
         } catch {
           history.replaceState(null, "", "/admin/login");
           renderLogin("\u540e\u53f0\u767b\u5f55\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55");
@@ -7034,10 +7793,11 @@
         try {
           const me = await api("/api/admin/auth/me");
           state.session = me.data;
-          await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
           history.replaceState(null, "", "/admin/dashboard");
           state.page = "dashboard";
           renderShell();
+          preloadAdminShellData();
+          ensureAdminPageData(state.page).catch(() => undefined);
         } catch {
           renderLogin();
         }
@@ -7092,10 +7852,11 @@
                 clearRememberedLogin();
               }
               state.session = result.data;
-              await Promise.all([loadDashboard(), loadModels(), loadUsers(), loadPromptManagement(), loadSettings(), loadLegalDocuments(), loadRiskAudit(), loadAdminSessions()]);
               history.replaceState(null, "", "/admin/dashboard");
               state.page = "dashboard";
               renderShell();
+              preloadAdminShellData();
+              ensureAdminPageData(state.page).catch(() => undefined);
             } catch (err) {
               error.textContent = err.payload?.error?.code === "admin_account_locked"
                 ? "\u8d26\u53f7\u5df2\u88ab\u4e34\u65f6\u9501\u5b9a\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5"
@@ -7109,7 +7870,12 @@
 
       window.addEventListener("popstate", () => {
         state.page = routeFromPath();
-        state.session ? renderShell() : renderLogin();
+        if (state.session) {
+          renderShell();
+          ensureAdminPageData(state.page).catch(() => undefined);
+        } else {
+          renderLogin();
+        }
       });
       window.openDrawer = openDrawer;
       window.openCreditGrantDrawer = openCreditGrantDrawer;
@@ -7157,6 +7923,12 @@
       window.copyCharacterPromptTemplate = copyCharacterPromptTemplate;
       window.toggleCharacterPromptTemplateStatus = toggleCharacterPromptTemplateStatus;
       window.setCharacterPromptTemplateDefault = setCharacterPromptTemplateDefault;
+      window.openBatchCharacterPromptTemplateDrawer = openBatchCharacterPromptTemplateDrawer;
+      window.openBatchScenePromptTemplateDrawer = openBatchScenePromptTemplateDrawer;
+      window.openBatchPropPromptTemplateDrawer = openBatchPropPromptTemplateDrawer;
+      window.openBatchImagePromptTemplateDrawer = openBatchImagePromptTemplateDrawer;
+      window.copyBatchImagePromptTemplate = copyBatchImagePromptTemplate;
+      window.moveBatchImagePromptTemplate = moveBatchImagePromptTemplate;
       window.openScenePromptTemplateDrawer = openScenePromptTemplateDrawer;
       window.copyScenePromptTemplate = copyScenePromptTemplate;
       window.toggleScenePromptTemplateStatus = toggleScenePromptTemplateStatus;
@@ -7189,6 +7961,7 @@
       window.deleteLegalDocument = deleteLegalDocument;
       window.openSecretReferenceDrawer = openSecretReferenceDrawer;
       window.probeSecretReference = probeSecretReference;
+      window.deleteSecretReference = deleteSecretReference;
       window.openAdminAccountDrawer = openAdminAccountDrawer;
       window.openAdminAccountEditDrawer = openAdminAccountEditDrawer;
       window.openAdminAccountPasswordResetDrawer = openAdminAccountPasswordResetDrawer;
@@ -7197,7 +7970,992 @@
       window.openModelStatusDrawer = openModelStatusDrawer;
       window.fillManualParameterEditor = fillManualParameterEditor;
       window.removeManualParameterFromSchema = removeManualParameterFromSchema;
-      window.toggleParameterVisibilityInSchema = toggleParameterVisibilityInSchema;
+      const MODEL_PARAMETER_TEMPLATES_CONFIG_KEY = "model.parameter_templates";
+      const DEFAULT_MODEL_PARAMETER_TEMPLATES = [
+        { key: "prompt", label: "\u6b63\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: true, visible: true, options: [], defaultValue: "", sortOrder: 10 },
+        { key: "negativePrompt", label: "\u8d1f\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 20 },
+        { key: "referenceImages", label: "\u53c2\u8003\u56fe", type: "file[]", mediaTypes: ["image"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 30 },
+        { key: "editInstruction", label: "\u7f16\u8f91\u6307\u4ee4", type: "string", mediaTypes: ["image"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 40 },
+        { key: "aspectRatio", label: "\u753b\u9762\u6bd4\u4f8b", type: "enum", mediaTypes: ["image", "video"], required: true, visible: true, options: ["auto", "1:1", "1024x1024", "2048x2048", "2880x2880", "2:3", "1024x1536", "2048x3072", "2336x3504", "3:2", "1536x1024", "3072x2048", "3504x2336", "3:4", "768x1024", "1536x2048", "2304x3072", "2448x3264", "4:3", "1024x768", "2048x1536", "3072x2304", "3264x2448", "4:5", "1024x1280", "2048x2560", "2560x3200", "5:4", "1280x1024", "2560x2048", "3200x2560", "9:16", "1024x1824", "1280x3840", "1920x3840", "2160x3840", "16:9", "1824x1024", "3840x1280", "3840x2160", "21:9"], defaultValue: "1:1", sortOrder: 50 },
+        { key: "quality", label: "\u6e05\u6670\u5ea6", type: "enum", mediaTypes: ["image"], required: true, visible: true, options: ["standard", "hd", "2K", "high", "medium", "low", "auto"], defaultValue: "standard", sortOrder: 60 },
+        { key: "count", label: "\u751f\u6210\u6570\u91cf", type: "integer", mediaTypes: ["image"], required: true, visible: true, options: ["1", "2", "3", "4"], defaultValue: "1", sortOrder: 70 },
+        { key: "resolution", label: "\u5206\u8fa8\u7387", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["720p", "1080p"], defaultValue: "1080p", sortOrder: 80 },
+        { key: "durationSec", label: "\u89c6\u9891\u65f6\u957f", type: "integer", mediaTypes: ["video"], required: true, visible: true, options: ["5", "10"], defaultValue: "5", sortOrder: 90 },
+        { key: "firstFrame", label: "\u9996\u5e27", type: "file", mediaTypes: ["video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 100 },
+        { key: "lastFrame", label: "\u5c3e\u5e27", type: "file", mediaTypes: ["video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 110 },
+        { key: "seed", label: "\u968f\u673a\u79cd\u5b50", type: "integer", mediaTypes: ["image", "video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 120 },
+        { key: "scriptPrompt", label: "\u5267\u672c\u9700\u6c42", type: "string", mediaTypes: ["text"], required: true, visible: true, options: [], defaultValue: "", sortOrder: 130 },
+        { key: "scriptGenre", label: "\u5267\u672c\u9898\u6750", type: "enum", mediaTypes: ["text"], required: false, visible: true, options: ["\u90fd\u5e02", "\u7384\u5e7b", "\u79d1\u5e7b", "\u60ac\u7591", "\u7231\u60c5", "\u559c\u5267"], defaultValue: "", sortOrder: 140 },
+        { key: "episodeCount", label: "\u96c6\u6570", type: "integer", mediaTypes: ["text"], required: false, visible: true, options: ["1", "3", "5", "10"], defaultValue: "1", sortOrder: 150 },
+        { key: "scriptStyle", label: "\u5267\u672c\u98ce\u683c", type: "string", mediaTypes: ["text"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 160 },
+      ];
+
+      pages.parameterTemplates = "\u53c2\u6570\u6a21\u677f\u5e93";
+      runtimeConfigHints.push({
+        key: MODEL_PARAMETER_TEMPLATES_CONFIG_KEY,
+        value: { templates: DEFAULT_MODEL_PARAMETER_TEMPLATES },
+        valueType: "json",
+        scope: "creator",
+        description: "\u6a21\u578b\u53c2\u6570\u6a21\u677f\u5e93\uff0c\u7528\u4e8e\u6a21\u578b\u914d\u7f6e\u9875\u52fe\u9009\u652f\u6301\u7684\u53c2\u6570\u548c\u5fc5\u586b\u72b6\u6001\u3002",
+        updatedAt: null,
+      });
+
+      routeFromPath = function routeFromPath() {
+        const path = location.pathname;
+        if (path.includes("/parameter-templates")) return "parameterTemplates";
+        if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
+        if (path.includes("/models")) return "models";
+        if (path.includes("/users")) return "users";
+        if (path.includes("/prompts")) return "prompts";
+        if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/agreements")) return "agreements";
+        if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
+        if (path.includes("/account")) return "account";
+        return "dashboard";
+      };
+
+      navigate = function navigate(page) {
+        state.page = page;
+        const pathMap = {
+          dashboard: "/admin/dashboard",
+          models: "/admin/models",
+          parameterTemplates: "/admin/parameter-templates",
+          users: "/admin/users",
+          prompts: "/admin/prompts",
+          risks: "/admin/risks",
+          agreements: "/admin/agreements",
+          settings: "/admin/settings",
+          account: "/admin/account",
+        };
+        history.pushState(null, "", pathMap[page] || "/admin/dashboard");
+        renderShell();
+      };
+
+      renderShell = function renderShell() {
+        app.innerHTML = `
+          <div class="admin-shell">
+            <aside class="sidebar">
+              <div class="brand"><div class="brand-mark">\u7ba1</div><span>\u540e\u53f0\u7ba1\u7406</span></div>
+              <nav class="nav">
+                ${navButton("dashboard", "\u603b\u89c8")}
+                ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
+                ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
+                ${navButton("users", "\u7528\u6237\u79ef\u5206")}
+                ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
+                ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
+                ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
+              </nav>
+            </aside>
+            <section class="main">
+              <header class="topbar">
+                <h2>${pages[state.page] || "\u540e\u53f0\u7ba1\u7406"}</h2>
+                <div class="account-menu">
+                  <span>${state.session?.account?.displayName || "\u7ba1\u7406\u5458"}</span>
+                  <button class="btn ghost" data-page="account">\u8d26\u6237</button>
+                  <button class="btn ghost" id="logout-btn">\u9000\u51fa</button>
+                </div>
+              </header>
+              <main class="content">${renderPage()}</main>
+            </section>
+          </div>
+          <div id="drawer" class="drawer hidden"></div>
+          <div id="toast" class="toast-message hidden" role="status" aria-live="polite"></div>
+        `;
+        document.querySelectorAll("[data-page]").forEach((button) => {
+          button.addEventListener("click", () => navigate(button.dataset.page));
+        });
+        document.getElementById("logout-btn").addEventListener("click", logout);
+        bindUserFilterControls();
+      };
+
+      renderPage = function renderPage() {
+        const pageState = renderPageState(state.page);
+        if (pageState) return pageState;
+        if (state.page === "dashboard") return dashboardPage();
+        if (state.page === "models") return modelsPage();
+        if (state.page === "parameterTemplates") return parameterTemplatesPage();
+        if (state.page === "users") return usersPage();
+        if (state.page === "prompts") return promptsPage();
+        if (state.page === "risks") return risksPage();
+        if (state.page === "agreements") return agreementsPage();
+        if (state.page === "settings") return settingsPage();
+        return accountPage();
+      };
+
+      const LINGXI_ADMIN_COMMUNITY_STORAGE_KEY = "lingxi-community-board";
+
+      function readLingxiCommunityAdminData() {
+        const fallback = {
+          posts: [
+            {
+              id: "feedback-seed-render-waiting",
+              title: "分镜生成偶尔停在等待模型接收",
+              content: "希望能在任务卡片里看到当前排队原因、预计等待时间，以及一键重试入口。",
+              category: "问题反馈",
+              author: "灵曦体验官",
+              createdAtLabel: "6月18日 09:30",
+            },
+          ],
+          features: [
+            {
+              id: "feature-seed-batch-character-views",
+              title: "批量生成角色三视图",
+              content: "上传人物设定后，一次生成正面、侧面、背面，方便后续视频保持一致。",
+              author: "创作者共创",
+              createdAtLabel: "6月18日 09:20",
+              votes: 18,
+            },
+            {
+              id: "feature-seed-shot-copy",
+              title: "跨项目复用分镜模板",
+              content: "常用镜头运动、字幕样式和画面比例可以保存成模板，在新项目中直接套用。",
+              author: "灵曦体验官",
+              createdAtLabel: "6月18日 09:10",
+              votes: 12,
+            },
+          ],
+        };
+        try {
+          const parsed = JSON.parse(localStorage.getItem(LINGXI_ADMIN_COMMUNITY_STORAGE_KEY) || "null");
+          return {
+            posts: Array.isArray(parsed?.posts) ? parsed.posts : fallback.posts,
+            features: Array.isArray(parsed?.features) ? parsed.features : fallback.features,
+          };
+        } catch {
+          return fallback;
+        }
+      }
+
+      async function loadCommunityBoard() {
+        setPageLoading("community", true);
+        try {
+          const result = await api("/api/community");
+          const data = result.data || result;
+          state.communityBoard = {
+            posts: Array.isArray(data?.posts) ? data.posts : [],
+            features: Array.isArray(data?.features) ? data.features : [],
+          };
+          try {
+            localStorage.setItem(LINGXI_ADMIN_COMMUNITY_STORAGE_KEY, JSON.stringify(state.communityBoard));
+          } catch {}
+          clearPageForbidden("community");
+        } catch (error) {
+          state.communityBoard = readLingxiCommunityAdminData();
+        } finally {
+          setPageLoading("community", false);
+        }
+      }
+
+      function communityPage() {
+        const data = state.communityBoard || readLingxiCommunityAdminData();
+        const posts = data.posts || [];
+        const features = [...(data.features || [])].sort((left, right) => Number(right.votes || 0) - Number(left.votes || 0));
+        const topVotes = features.reduce((sum, item) => sum + Number(item.votes || 0), 0);
+        const postRows = posts.length
+          ? posts.map((item) => `<tr><td><strong>${escapeHtml(item.title || "未命名反馈")}</strong><div class="metric-note">${escapeHtml(item.content || "")}</div></td><td>${escapeHtml(item.category || "问题反馈")}</td><td>${escapeHtml(item.author || "灵曦用户")}</td><td>${escapeHtml(item.createdAtLabel || item.createdAt || "")}</td></tr>`).join("")
+          : `<tr><td colspan="4">暂无用户反馈</td></tr>`;
+        const featureRows = features.length
+          ? features.map((item, index) => `<tr><td><span class="tag blue">#${index + 1}</span></td><td><strong>${escapeHtml(item.title || "未命名功能")}</strong><div class="metric-note">${escapeHtml(item.content || "")}</div></td><td>${Number(item.votes || 0)}</td><td>${escapeHtml(item.author || "灵曦用户")}</td><td>${escapeHtml(item.createdAtLabel || item.createdAt || "")}</td></tr>`).join("")
+          : `<tr><td colspan="5">暂无功能投票</td></tr>`;
+        return `<div class="section-stack">
+          <section class="grid cards">
+            <article class="card"><div class="metric-label">反馈总数</div><div class="metric-value">${posts.length}</div><div class="metric-note">来自灵曦社区问题反馈表单</div></article>
+            <article class="card"><div class="metric-label">功能建议</div><div class="metric-value">${features.length}</div><div class="metric-note">用户自发提交的开发需求</div></article>
+            <article class="card"><div class="metric-label">总投票数</div><div class="metric-value">${topVotes}</div><div class="metric-note">用于评估研发优先级</div></article>
+            <article class="card"><div class="metric-label">最高票功能</div><div class="metric-value">${features[0] ? Number(features[0].votes || 0) : 0}</div><div class="metric-note">${escapeHtml(features[0]?.title || "暂无")}</div></article>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>用户问题反馈</h3><button class="btn ghost" onclick="renderShell()">刷新</button></div>
+            <div class="table-wrap"><table><thead><tr><th>内容</th><th>分类</th><th>用户</th><th>时间</th></tr></thead><tbody>${postRows}</tbody></table></div>
+          </section>
+          <section class="card">
+            <div class="toolbar"><h3>功能投票排行</h3><span class="metric-note">票数越高，越建议优先进入产品评审。</span></div>
+            <div class="table-wrap"><table><thead><tr><th>排行</th><th>功能</th><th>票数</th><th>用户</th><th>时间</th></tr></thead><tbody>${featureRows}</tbody></table></div>
+          </section>
+        </div>`;
+      }
+
+      (function installCommunityAdminPage() {
+        pages.community = "社区反馈";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/community")) return "community";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "community") return previousNavigate(page);
+          state.page = "community";
+          history.pushState(null, "", "/admin/community");
+          renderShell();
+          ensureAdminPageData("community").catch(() => undefined);
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="community"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "community";
+          button.innerHTML = "<span>社区反馈</span>";
+          if (state.page === "community") button.classList.add("active");
+          button.addEventListener("click", () => navigate("community"));
+          nav.insertBefore(button, settingsButton);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "community") return communityPage();
+          return previousRenderPage();
+        };
+      })();
+      ADMIN_PAGE_LOADERS.community = loadCommunityBoard;
+
+      function parameterTemplateConfig() {
+        return state.settings.configs.find((config) => config.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY) || {
+          key: MODEL_PARAMETER_TEMPLATES_CONFIG_KEY,
+          value: { templates: DEFAULT_MODEL_PARAMETER_TEMPLATES },
+          valueType: "json",
+          scope: "creator",
+          description: "\u6a21\u578b\u53c2\u6570\u6a21\u677f\u5e93",
+        };
+      }
+
+      function parameterTemplates() {
+        const value = parameterTemplateConfig().value || {};
+        const templates = Array.isArray(value.templates) ? value.templates : DEFAULT_MODEL_PARAMETER_TEMPLATES;
+        return templates
+          .map((template) => normalizeParameterTemplate(template))
+          .sort((left, right) => Number(left.sortOrder || 100) - Number(right.sortOrder || 100) || left.key.localeCompare(right.key));
+      }
+
+      function normalizeParameterTemplate(template = {}) {
+        return {
+          key: String(template.key || "").trim(),
+          label: String(template.label || template.key || "").trim(),
+          type: String(template.type || "string").trim(),
+          mediaTypes: Array.isArray(template.mediaTypes) ? template.mediaTypes.map(String) : ["image", "video"],
+          required: template.required === true,
+          visible: template.visible !== false,
+          options: Array.isArray(template.options) ? template.options.map(String) : [],
+          defaultValue: template.defaultValue ?? "",
+          sortOrder: Number(template.sortOrder || 100),
+          remark: String(template.remark || ""),
+        };
+      }
+
+      function parameterTemplatesPage() {
+        const rows = parameterTemplates().length
+          ? parameterTemplates().map(parameterTemplateRow).join("")
+          : `<tr><td colspan="6">\u6682\u65e0\u53c2\u6570\u6a21\u677f</td></tr>`;
+        return `<section class="card">
+          <div class="toolbar">
+            <div>
+              <h3>\u53c2\u6570\u6a21\u677f\u5e93</h3>
+              <div class="metric-note">\u7edf\u4e00\u7ef4\u62a4\u53ef\u9009\u53c2\u6570\uff0c\u6a21\u578b\u914d\u7f6e\u65f6\u53ea\u9700\u52fe\u9009\u652f\u6301\u548c\u5fc5\u586b\u72b6\u6001\u3002</div>
+            </div>
+            <button class="btn primary" onclick="openParameterTemplateDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u53c2\u6570</button>
+          </div>
+          <div class="table-wrap dense"><table><thead><tr><th>\u53c2\u6570</th><th>\u7c7b\u578b</th><th>\u5a92\u4f53</th><th>\u9ed8\u8ba4</th><th>\u9009\u9879</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${rows}</tbody></table></div>
+        </section>`;
+      }
+
+      function parameterTemplateRow(template) {
+        const media = template.mediaTypes.join(", ");
+        const options = template.options.length ? template.options.join(", ") : "-";
+        return `<tr>
+          <td>${escapeHtml(template.label)}<div class="metric-note">${escapeHtml(template.key)}${template.remark ? ` / ${escapeHtml(template.remark)}` : ""}</div></td>
+          <td><span class="tag blue">${escapeHtml(parameterTypeLabel(template.type))}</span></td>
+          <td>${escapeHtml(media)}</td>
+          <td>${template.required ? "\u5fc5\u586b" : "\u53ef\u9009"} / ${escapeHtml(String(template.defaultValue || "-"))}</td>
+          <td title="${escapeHtml(options)}">${escapeHtml(options)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openParameterTemplateDrawer('${escapeAttribute(template.key)}')" ${permissionAttrs("settings.write")}>\u6539</button><button class="icon-btn" onclick="deleteParameterTemplate('${escapeAttribute(template.key)}')" ${permissionAttrs("settings.write")}>\u5220</button></div></td>
+        </tr>`;
+      }
+
+      function openParameterTemplateDrawer(templateKey = "") {
+        const existing = parameterTemplates().find((item) => item.key === templateKey) || null;
+        const template = existing || normalizeParameterTemplate({ mediaTypes: ["image"], visible: true, sortOrder: 100 });
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(720px,100%);">
+          <div class="drawer-head"><h3>${existing ? "\u7f16\u8f91\u53c2\u6570\u6a21\u677f" : "\u65b0\u589e\u53c2\u6570\u6a21\u677f"}</h3><button class="icon-btn" onclick="closeDrawer()">\u00d7</button></div>
+          <form id="parameter-template-form">
+            <div class="form-grid">
+              <label class="field"><span>\u53c2\u6570\u952e</span><input name="key" value="${escapeAttribute(template.key)}" ${existing ? "readonly" : ""} placeholder="aspectRatio" required /></label>
+              <label class="field"><span>\u663e\u793a\u540d\u79f0</span><input name="label" value="${escapeAttribute(template.label)}" placeholder="\u753b\u9762\u6bd4\u4f8b" required /></label>
+              <label class="field"><span>\u53c2\u6570\u7c7b\u578b</span><select name="type">${optionList(["string", "number", "integer", "boolean", "enum", "array", "file", "file[]", "json"], template.type)}</select></label>
+              <label class="field"><span>\u9002\u7528\u5a92\u4f53</span><input name="mediaTypes" value="${escapeAttribute(template.mediaTypes.join(", "))}" placeholder="image, video" required /></label>
+              <label class="field"><span>\u9ed8\u8ba4\u503c</span><input name="defaultValue" value="${escapeAttribute(String(template.defaultValue || ""))}" /></label>
+              <label class="field"><span>\u6392\u5e8f</span><input name="sortOrder" type="number" value="${Number(template.sortOrder || 100)}" /></label>
+            </div>
+            <div class="field">
+              <span>\u9009\u9879\u5185\u5bb9</span>
+              ${parameterOptionEditorMarkup(template.options)}
+            </div>
+            <label class="inline-check"><input name="required" type="checkbox" ${template.required ? "checked" : ""} /> \u9ed8\u8ba4\u5fc5\u586b</label>
+            <label class="field"><span>\u5907\u6ce8</span><input name="remark" value="${escapeAttribute(template.remark || "")}" /></label>
+            <div class="error-text" id="parameter-template-error"></div>
+            <button class="btn primary full" type="submit">\u4fdd\u5b58\u53c2\u6570\u6a21\u677f</button>
+          </form>
+        </aside>`;
+        document.getElementById("parameter-template-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("parameter-template-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const key = String(form.get("key") || "").trim();
+            if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) throw new Error("\u53c2\u6570\u952e\u53ea\u80fd\u4f7f\u7528\u82f1\u6587\u3001\u6570\u5b57\u548c\u4e0b\u5212\u7ebf\uff0c\u5e76\u4e14\u5fc5\u987b\u4ee5\u5b57\u6bcd\u5f00\u5934");
+            const next = normalizeParameterTemplate({
+              key,
+              label: String(form.get("label") || "").trim(),
+              type: String(form.get("type") || "string"),
+              mediaTypes: splitCsv(form.get("mediaTypes")),
+              options: readParameterOptionEditorValues(event.currentTarget),
+              defaultValue: String(form.get("defaultValue") || "").trim(),
+              required: Boolean(form.get("required")),
+              visible: template.visible !== false,
+              sortOrder: Number(form.get("sortOrder") || 100),
+              remark: String(form.get("remark") || ""),
+            });
+            const templates = parameterTemplates().filter((item) => item.key !== key);
+            templates.push(next);
+            await saveParameterTemplates(templates, String(form.get("reason") || ""));
+            closeDrawer();
+            renderShell();
+          }, "\u53c2\u6570\u6a21\u677f\u5df2\u4fdd\u5b58").catch(() => undefined);
+        });
+      }
+
+      async function deleteParameterTemplate(templateKey) {
+        if (!window.confirm("\u786e\u8ba4\u5220\u9664\u8fd9\u4e2a\u53c2\u6570\u6a21\u677f\u5417\uff1f")) return;
+        const templates = parameterTemplates().filter((item) => item.key !== templateKey);
+        await saveParameterTemplates(templates, `\u5220\u9664\u53c2\u6570\u6a21\u677f ${templateKey}`);
+        renderShell();
+        showToast("\u53c2\u6570\u6a21\u677f\u5df2\u5220\u9664");
+      }
+
+      async function saveParameterTemplates(templates, reason) {
+        const config = parameterTemplateConfig();
+        const result = await api(`/api/admin/settings/${encodeURIComponent(MODEL_PARAMETER_TEMPLATES_CONFIG_KEY)}`, {
+          method: "PATCH",
+          headers: { "idempotency-key": `admin-ui-parameter-template-${Date.now()}` },
+          body: JSON.stringify({
+            value: { templates: templates.map(normalizeParameterTemplate) },
+            valueType: "json",
+            scope: String(config.scope || "creator"),
+            description: String(config.description || "\u6a21\u578b\u53c2\u6570\u6a21\u677f\u5e93"),
+            reason: reason || "\u66f4\u65b0\u6a21\u578b\u53c2\u6570\u6a21\u677f\u5e93",
+          }),
+        });
+        const savedConfig = result.data || {
+          ...config,
+          value: { templates: templates.map(normalizeParameterTemplate) },
+          valueType: "json",
+          scope: String(config.scope || "creator"),
+          description: String(config.description || "\u6a21\u578b\u53c2\u6570\u6a21\u677f\u5e93"),
+        };
+        const configs = Array.isArray(state.settings.configs) ? [...state.settings.configs] : [];
+        const index = configs.findIndex((item) => item.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY);
+        if (index >= 0) {
+          configs[index] = savedConfig;
+        } else {
+          configs.push(savedConfig);
+        }
+        state.settings = settingsWithRuntimeConfigHints({
+          ...(state.settings || {}),
+          configs,
+          secretReferences: state.settings?.secretReferences || [],
+        });
+      }
+
+      function splitCsv(value) {
+        return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+      }
+
+      function parameterOptionEditorMarkup(options = []) {
+        const rows = options.map((option) => parameterOptionEditorRow(option)).join("");
+        return `<div class="parameter-option-editor" data-parameter-option-editor>
+          <div class="parameter-option-editor-list" data-parameter-option-editor-list>
+            ${rows || `<div class="parameter-option-editor-empty" data-parameter-option-editor-empty>\u6682\u65e0\u9009\u9879\uff0c\u53ef\u624b\u52a8\u6dfb\u52a0</div>`}
+          </div>
+          <div class="parameter-option-editor-add">
+            <input data-parameter-option-new placeholder="\u8f93\u5165\u9009\u9879\uff0c\u4f8b\u5982 2048x2560" />
+            <button class="btn ghost" type="button" onclick="addParameterTemplateOption(this)">\u6dfb\u52a0</button>
+          </div>
+        </div>`;
+      }
+
+      function parameterOptionEditorRow(value = "") {
+        return `<div class="parameter-option-editor-row" data-parameter-option-row>
+          <span class="parameter-option-editor-index" data-parameter-option-index>1</span>
+          <input name="options" value="${escapeAttribute(value)}" placeholder="\u9009\u9879\u503c" />
+          <span class="parameter-option-row-actions">
+            <button class="icon-btn" type="button" title="\u4e0a\u79fb" onclick="moveParameterTemplateOption(this, -1)">↑</button>
+            <button class="icon-btn" type="button" title="\u4e0b\u79fb" onclick="moveParameterTemplateOption(this, 1)">↓</button>
+            <button class="icon-btn" type="button" title="\u5220\u9664" onclick="removeParameterTemplateOption(this)">删</button>
+          </span>
+        </div>`;
+      }
+
+      function refreshParameterOptionEditor(editor) {
+        const list = editor?.querySelector("[data-parameter-option-editor-list]");
+        if (!list) return;
+        list.querySelectorAll("[data-parameter-option-editor-empty]").forEach((item) => item.remove());
+        const rows = [...list.querySelectorAll("[data-parameter-option-row]")];
+        rows.forEach((row, index) => {
+          const marker = row.querySelector("[data-parameter-option-index]");
+          if (marker) marker.textContent = String(index + 1);
+        });
+        if (!rows.length) {
+          list.insertAdjacentHTML("beforeend", `<div class="parameter-option-editor-empty" data-parameter-option-editor-empty>\u6682\u65e0\u9009\u9879\uff0c\u53ef\u624b\u52a8\u6dfb\u52a0</div>`);
+        }
+      }
+
+      function addParameterTemplateOption(button) {
+        const editor = button.closest("[data-parameter-option-editor]");
+        const input = editor?.querySelector("[data-parameter-option-new]");
+        const list = editor?.querySelector("[data-parameter-option-editor-list]");
+        const value = String(input?.value || "").trim();
+        if (!editor || !list || !value) return;
+        list.querySelectorAll("[data-parameter-option-editor-empty]").forEach((item) => item.remove());
+        list.insertAdjacentHTML("beforeend", parameterOptionEditorRow(value));
+        input.value = "";
+        refreshParameterOptionEditor(editor);
+      }
+
+      function moveParameterTemplateOption(button, direction) {
+        const row = button.closest("[data-parameter-option-row]");
+        const editor = button.closest("[data-parameter-option-editor]");
+        if (!row || !editor) return;
+        if (direction < 0 && row.previousElementSibling?.matches("[data-parameter-option-row]")) {
+          row.parentNode.insertBefore(row, row.previousElementSibling);
+        }
+        if (direction > 0 && row.nextElementSibling?.matches("[data-parameter-option-row]")) {
+          row.parentNode.insertBefore(row.nextElementSibling, row);
+        }
+        refreshParameterOptionEditor(editor);
+      }
+
+      function removeParameterTemplateOption(button) {
+        const editor = button.closest("[data-parameter-option-editor]");
+        button.closest("[data-parameter-option-row]")?.remove();
+        refreshParameterOptionEditor(editor);
+      }
+
+      function readParameterOptionEditorValues(form) {
+        const seen = new Set();
+        return [...form.querySelectorAll("[data-parameter-option-row] input[name='options']")]
+          .map((input) => input.value.trim())
+          .filter((value) => {
+            if (!value || seen.has(value)) return false;
+            seen.add(value);
+            return true;
+          });
+      }
+
+      function fixedModelTemplate(mediaType, providerName = "") {
+        const provider = String(providerName || "").trim().toLowerCase();
+        const isVideo = mediaType === "video";
+        const isText = mediaType === "text";
+        const protocol = isText
+          ? "openai_compatible_chat"
+          : isVideo
+          ? (provider.includes("aliyun") || provider.includes("bailian") ? "aliyun_bailian_video" : provider.includes("volc") || provider.includes("doubao") || provider.includes("jimeng") ? "volcengine_ark_video" : "custom_http")
+          : (provider === "openai" ? "openai_images" : "custom_http");
+        return {
+          providerProtocol: protocol,
+          invocationMode: isText ? "stream" : isVideo ? "async_polling" : "sync",
+          taskModes: isText ? ["text.script"] : isVideo ? ["video.text_to_video", "video.image_to_video"] : ["image.generate", "image.edit", "image.reference_generate"],
+          status: "disabled",
+          sortOrder: 100,
+          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"] } : { input: ["prompt", "image"], output: ["image"] },
+          defaultParams: {},
+          providerConfig: isText
+            ? { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 }
+            : isVideo
+            ? { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
+            : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 },
+          pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },
+          limits: {},
+          uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
+          dispatchPolicy: {
+            submitQueueName: isText ? "generation-submit-text" : isVideo ? "generation-submit-video" : "generation-submit-image",
+            pollQueueName: isVideo ? "generation-poll-video" : null,
+            providerRpmLimit: 60,
+            providerConcurrentLimit: 5,
+            submitConcurrencyLimit: 5,
+            pollingIntervalMs: 15000,
+            pollingConcurrencyLimit: 20,
+          },
+        };
+      }
+
+      function schemaFromSelectedParameterTemplates(form, existingSchema = {}) {
+        const schema = {};
+        const defaults = {};
+        parameterTemplates().forEach((template) => {
+          if (!form.get(`parameterSupported:${template.key}`)) return;
+          const required = Boolean(form.get(`parameterRequired:${template.key}`));
+          const visible = existingSchema[template.key]?.visible ?? template.visible !== false;
+          const selectedOptionValues = form.getAll(`parameterOptions:${template.key}`).map(String).filter(Boolean);
+          const options = selectedOptionValues.length ? selectedOptionValues : splitCsv(form.get(`parameterOptions:${template.key}`));
+          const defaultValue = String(form.get(`parameterDefault:${template.key}`) || "").trim();
+          const parameter = {
+            ...(existingSchema[template.key] && typeof existingSchema[template.key] === "object" ? existingSchema[template.key] : {}),
+            label: template.label,
+            type: template.type,
+            required,
+            visible,
+          };
+          if (options.length) {
+            parameter.options = options;
+            parameter.adminEditableOptions = true;
+          }
+          schema[template.key] = parameter;
+          if (defaultValue !== "") {
+            if (template.type === "integer" || template.type === "number") {
+              defaults[template.key] = Number(defaultValue);
+            } else if (template.type === "boolean") {
+              defaults[template.key] = defaultValue === "true";
+            } else {
+              defaults[template.key] = defaultValue;
+            }
+          }
+        });
+        return { schema, defaults };
+      }
+
+      function parameterOptionSelectMarkup(template, selectedOptions) {
+        if (!template.options.length) {
+          return `<span class="metric-note">\u65e0\u56fa\u5b9a\u9009\u9879</span>`;
+        }
+        const selected = new Set(selectedOptions.length ? selectedOptions : template.options);
+        return `<div class="parameter-option-picker" data-parameter-options="${escapeAttribute(template.key)}">
+          <details>
+            <summary><span data-parameter-option-summary="${escapeAttribute(template.key)}">${selected.size ? `\u5df2\u9009 ${selected.size} \u9879` : "\u9009\u62e9\u9009\u9879"}</span></summary>
+            <div class="parameter-option-menu">
+              ${template.options.map((option) => `<label class="parameter-option-item"><input name="parameterOptions:${escapeAttribute(template.key)}" type="checkbox" value="${escapeAttribute(option)}" ${selected.has(option) ? "checked" : ""} /> <span>${escapeHtml(option)}</span></label>`).join("")}
+            </div>
+          </details>
+        </div>`;
+      }
+
+      function parameterSelectedValuesMarkup(parameterKey, selectedOptions) {
+        const values = selectedOptions.filter(Boolean);
+        if (!values.length) {
+          return `<div class="parameter-selected-values" data-parameter-selected-values="${escapeAttribute(parameterKey)}"><span class="parameter-empty-note">\u524d\u53f0\u6682\u65e0\u53ef\u9009\u503c</span></div>`;
+        }
+        return `<div class="parameter-selected-values" data-parameter-selected-values="${escapeAttribute(parameterKey)}">${values.map((value) => `<span class="parameter-value-chip">${escapeHtml(value)}</span>`).join("")}</div>`;
+      }
+
+      function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}) {
+        const defaultSupportedKeys = mediaType === "text"
+          ? ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"]
+          : ["prompt", "aspectRatio", "quality", "count", "durationSec"];
+        const rows = parameterTemplates()
+          .map((template) => {
+            const current = schema[template.key] || {};
+            const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
+            const required = current.required ?? template.required;
+            const visible = current.visible ?? template.visible;
+            const options = Array.isArray(current.options) ? current.options : template.options;
+            const defaultValue = defaultParams[template.key] ?? template.defaultValue ?? "";
+            return `<tr>
+              <td><label class="parameter-visible-toggle"><input name="parameterSupported:${escapeAttribute(template.key)}" type="checkbox" ${supported ? "checked" : ""} /> ${escapeHtml(template.label)}</label><div class="metric-note">${escapeHtml(template.key)} · ${escapeHtml(template.mediaTypes.join(", "))}</div></td>
+              <td><span class="tag blue">${escapeHtml(parameterTypeLabel(template.type))}</span></td>
+              <td>${parameterOptionSelectMarkup(template, options)}</td>
+              <td>${parameterSelectedValuesMarkup(template.key, options)}</td>
+              <td><input name="parameterDefault:${escapeAttribute(template.key)}" value="${escapeAttribute(String(defaultValue || ""))}" /></td>
+              <td class="parameter-visible-cell"><label class="parameter-visible-toggle"><input name="parameterRequired:${escapeAttribute(template.key)}" type="checkbox" ${required ? "checked" : ""} /> \u5fc5\u586b</label></td>
+            </tr>`;
+          }).join("");
+        return rows || `<tr><td colspan="6">\u53c2\u6570\u6a21\u677f\u5e93\u6682\u65e0\u53ef\u9009\u53c2\u6570</td></tr>`;
+      }
+
+      function cssAttributeValue(value) {
+        return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      }
+
+      function updateParameterSelectedPreview(parameterKey) {
+        const form = document.getElementById("model-editor-form");
+        if (!form) return;
+        const values = new FormData(form).getAll(`parameterOptions:${parameterKey}`).map(String).filter(Boolean);
+        const selectorKey = cssAttributeValue(parameterKey);
+        const preview = document.querySelector(`[data-parameter-selected-values="${selectorKey}"]`);
+        if (preview) {
+          preview.innerHTML = values.length
+            ? values.map((value) => `<span class="parameter-value-chip">${escapeHtml(value)}</span>`).join("")
+            : `<span class="parameter-empty-note">\u524d\u53f0\u6682\u65e0\u53ef\u9009\u503c</span>`;
+        }
+        const summary = document.querySelector(`[data-parameter-option-summary="${selectorKey}"]`);
+        if (summary) {
+          summary.textContent = values.length ? `\u5df2\u9009 ${values.length} \u9879` : "\u9009\u62e9\u9009\u9879";
+        }
+      }
+
+      function providerNameForSecretKey(secretKey) {
+        const key = String(secretKey || "").trim();
+        if (!key) return "";
+        const secret = (state.settings.secretReferences || []).find((item) => item.envName === key);
+        return String(secret?.providerName || "").trim();
+      }
+
+      const MODEL_KIND_OPTIONS = [
+        { value: "image.text_to_image", mediaType: "image", label: "\u6587\u751f\u56fe", taskModes: ["image.generate"] },
+        { value: "image.reference_image", mediaType: "image", label: "\u53c2\u8003\u751f\u56fe", taskModes: ["image.edit", "image.reference_generate", "image.image_to_image"] },
+        { value: "video.first_frame", mediaType: "video", label: "\u9996\u5e27\u751f\u89c6\u9891", videoCategory: "first_frame", taskModes: ["video.image_to_video"] },
+        { value: "video.first_last_frame", mediaType: "video", label: "\u9996\u5c3e\u5e27\u751f\u89c6\u9891", videoCategory: "first_last_frame", taskModes: ["video.first_last_frame_to_video", "video.image_to_video"] },
+        { value: "video.reference", mediaType: "video", label: "\u53c2\u8003\u751f\u89c6\u9891", videoCategory: "reference", taskModes: ["video.reference_image_to_video", "video.image_to_video"] },
+        { value: "text.script", mediaType: "text", label: "\u5267\u672c\u6a21\u578b", taskModes: ["text.script"] },
+      ];
+
+      function modelKindOption(value) {
+        return MODEL_KIND_OPTIONS.find((item) => item.value === value) || MODEL_KIND_OPTIONS[0];
+      }
+
+      function inferModelKind(model = {}) {
+        const mediaType = String(model.mediaType || "image");
+        const uiConfig = model.uiConfig || {};
+        const modes = Array.isArray(model.taskModes) ? model.taskModes.map(String) : [];
+        const supportedModes = Array.isArray(uiConfig.supportedModes) ? uiConfig.supportedModes.map(String) : [];
+        const allModes = [...modes, ...supportedModes];
+        if (mediaType === "text") {
+          const configuredKind = String(uiConfig.modelKind || "");
+          if (configuredKind === "text.script" || allModes.some((mode) => mode.includes("script"))) return "text.script";
+          return "text.script";
+        }
+        if (mediaType === "video") {
+          const category = String(uiConfig.modelKind || uiConfig.videoCategory || "");
+          if (category === "video.first_last_frame" || category === "first_last_frame" || allModes.some((mode) => mode.includes("first_last"))) return "video.first_last_frame";
+          if (category === "video.reference" || category === "reference" || allModes.some((mode) => mode.includes("reference"))) return "video.reference";
+          return "video.first_frame";
+        }
+        if (String(uiConfig.modelKind || "").startsWith("image.")) return String(uiConfig.modelKind);
+        if (allModes.some((mode) => mode.includes("reference") || mode.includes("image_to_image") || mode.includes("multi_reference") || mode.includes("edit"))) {
+          return "image.reference_image";
+        }
+        return "image.text_to_image";
+      }
+
+      function modelKindOptionsMarkup(selectedValue) {
+        return MODEL_KIND_OPTIONS.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === selectedValue ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+      }
+
+      function modelKindLabel(model) {
+        return modelKindOption(inferModelKind(model)).label;
+      }
+
+      openModelEditorDrawer = function openModelEditorDrawer(modelId = "") {
+        const model = modelId ? state.models.find((item) => item.id === modelId) : null;
+        const isEdit = Boolean(model);
+        const base = model || {
+          modelCode: "",
+          displayName: "",
+          providerName: "openai",
+          providerModel: "",
+          mediaType: "image",
+          pricing: { baseCredits: 90 },
+          providerConfig: {},
+          parameterSchema: {},
+          defaultParams: {},
+          remark: "",
+        };
+        const selectedModelKind = inferModelKind(base);
+        const selectedRequestPath = base.providerConfig?.requestPath || base.providerConfig?.createTaskEndpoint || base.providerConfig?.endpoint || "";
+        const selectedApiKeyEnv = base.providerConfig?.apiKeyEnv || "";
+        const inputSchemaText = JSON.stringify(base.providerConfig?.inputSchema || {}, null, 2);
+        const outputSchemaText = JSON.stringify(base.providerConfig?.outputSchema || {}, null, 2);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);">
+          <div class="drawer-head"><h3>${isEdit ? "\u7f16\u8f91\u6a21\u578b\u914d\u7f6e" : "\u65b0\u589e\u6a21\u578b\u914d\u7f6e"}</h3><button class="icon-btn" onclick="closeDrawer()">\u00d7</button></div>
+          <form id="model-editor-form">
+            <section class="card" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar"><h4>\u57fa\u7840\u4fe1\u606f</h4><span class="metric-note">\u53ea\u586b\u4e1a\u52a1\u5b57\u6bb5\uff0c\u534f\u8bae\u3001\u8c03\u7528\u65b9\u5f0f\u3001\u4efb\u52a1\u6a21\u5f0f\u3001\u8bf7\u6c42\u6620\u5c04\u548c\u8c03\u5ea6\u9650\u6d41\u7531\u7cfb\u7edf\u56fa\u5b9a\u751f\u6210\u3002</span></div>
+              <div class="form-grid">
+                <label class="field"><span>\u6a21\u578b\u7f16\u7801</span><input name="modelCode" value="${escapeAttribute(base.modelCode)}" required /></label>
+                <label class="field"><span>\u5c55\u793a\u540d\u79f0</span><input name="displayName" value="${escapeAttribute(base.displayName)}" required /></label>
+                <input name="providerName" type="hidden" value="${escapeAttribute(base.providerName || providerNameForSecretKey(selectedApiKeyEnv) || "custom")}" />
+                <label class="field"><span>\u771f\u5b9e\u6a21\u578b\u540d</span><input name="providerModel" value="${escapeAttribute(base.providerModel)}" required /></label>
+                <label class="field"><span>\u8bf7\u6c42\u8def\u5f84</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
+                <label class="field"><span>\u7c7b\u578b</span><select name="modelKind">${modelKindOptionsMarkup(selectedModelKind)}</select></label>
+                <label class="field"><span>\u57fa\u7840\u79ef\u5206</span><input name="baseCredits" type="number" min="1" step="1" value="${Number(base.pricing?.baseCredits || 90)}" required /></label>
+                <label class="field"><span>API \u5bc6\u94a5</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv, base.providerName)}</select></label>
+                <label class="field"><span>\u5907\u6ce8</span><input name="remark" value="${escapeAttribute(base.remark || "")}" /></label>
+              </div>
+            </section>
+            <section class="card" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar">
+                <h4>\u53c2\u6570\u80fd\u529b</h4>
+                <button class="btn ghost" type="button" onclick="navigate('parameterTemplates')">\u7ba1\u7406\u53c2\u6570\u6a21\u677f</button>
+              </div>
+              <div class="table-wrap dense" id="model-parameter-template-list">
+                <table><thead><tr><th>\u53c2\u6570</th><th>\u7c7b\u578b</th><th>\u9009\u9879</th><th>\u9875\u9762\u663e\u793a\u6570\u636e</th><th>\u9ed8\u8ba4\u503c</th><th>\u5fc5\u586b</th></tr></thead><tbody>${parameterTemplateSelectionRows(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {})}</tbody></table>
+              </div>
+            </section>
+            <section class="card" style="box-shadow:none;border:1px solid var(--border);">
+              <div class="toolbar"><h4>\u7ed3\u6784\u914d\u7f6e</h4><span class="metric-note">\u7528 JSON \u5bf9\u8c61\u8bb0\u5f55\u6a21\u578b\u8bf7\u6c42\u5165\u53c2\u548c\u54cd\u5e94\u51fa\u53c2\u7ed3\u6784\u3002</span></div>
+              <label class="field"><span>\u5165\u53c2\u7ed3\u6784</span><textarea name="inputSchema" rows="8" placeholder='{"prompt":{"type":"string","required":true}}'>${escapeHtml(inputSchemaText)}</textarea></label>
+              <label class="field"><span>\u51fa\u53c2\u7ed3\u6784</span><textarea name="outputSchema" rows="8" placeholder='{"images":{"type":"array","items":{"type":"string"}}}'>${escapeHtml(outputSchemaText)}</textarea></label>
+            </section>
+            <div class="error-text" id="model-editor-error"></div>
+            <button class="btn primary full" type="submit">${isEdit ? "\u4fdd\u5b58\u6a21\u578b\u914d\u7f6e" : "\u521b\u5efa\u6a21\u578b\u914d\u7f6e"}</button>
+          </form>
+        </aside>`;
+        const form = document.getElementById("model-editor-form");
+        form.elements.modelApiKeyEnv.addEventListener("change", (event) => {
+          const providerName = event.target.selectedOptions[0]?.dataset?.providerName || "";
+          if (providerName) form.elements.providerName.value = providerName;
+        });
+        form.elements.modelKind.addEventListener("change", () => {
+          const kind = modelKindOption(form.elements.modelKind.value);
+          document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {});
+        });
+        form.addEventListener("change", (event) => {
+          const name = event.target?.name || "";
+          if (name.startsWith("parameterOptions:")) {
+            updateParameterSelectedPreview(name.slice("parameterOptions:".length));
+          }
+        });
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const error = document.getElementById("model-editor-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = simplifiedModelPayloadFromForm(new FormData(event.currentTarget), model);
+            const result = await api(isEdit ? `/api/admin/models/${encodeURIComponent(model.id)}` : "/api/admin/models", {
+              method: isEdit ? "PATCH" : "POST",
+              headers: { "idempotency-key": `admin-ui-model-simple-${model?.id || payload.modelCode}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
+            await loadModels();
+            state.selectedModelId = result.data?.id || model?.id || state.selectedModelId;
+            closeDrawer();
+            renderShell();
+          }, isEdit ? "\u6a21\u578b\u914d\u7f6e\u5df2\u4fdd\u5b58" : "\u6a21\u578b\u914d\u7f6e\u5df2\u521b\u5efa").catch(() => undefined);
+        });
+      };
+
+      function simplifiedModelPayloadFromForm(form, existing) {
+        const kind = modelKindOption(String(form.get("modelKind") || ""));
+        const mediaType = kind.mediaType;
+        const providerName = String(form.get("providerName") || "").trim() || providerNameForSecretKey(form.get("modelApiKeyEnv")) || String(existing?.providerName || "").trim() || "custom";
+        const fixed = fixedModelTemplate(mediaType, providerName);
+        const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {});
+        const providerConfig = { ...fixed.providerConfig, ...(existing?.providerConfig || {}) };
+        const requestPath = String(form.get("requestPath") || "").trim();
+        if (requestPath) {
+          providerConfig.requestPath = requestPath;
+        } else {
+          delete providerConfig.requestPath;
+        }
+        const apiKeyEnv = String(form.get("modelApiKeyEnv") || "").trim();
+        if (apiKeyEnv) {
+          providerConfig.apiKeyEnv = apiKeyEnv;
+        } else {
+          delete providerConfig.apiKeyEnv;
+        }
+        providerConfig.inputSchema = parseJsonTextarea(form, "inputSchema");
+        providerConfig.outputSchema = parseJsonTextarea(form, "outputSchema");
+        delete providerConfig.apiKey;
+        const pricing = { ...fixed.pricing, ...(existing?.pricing || {}), unit: mediaType, baseCredits: Number(form.get("baseCredits") || 0) };
+        const uiConfig = {
+          ...fixed.uiConfig,
+          ...(existing?.uiConfig || {}),
+          modelKind: kind.value,
+          modelKindLabel: kind.label,
+          supportedModes: kind.mediaType === "text"
+            ? ["script"]
+            : kind.value.startsWith("image.")
+            ? (kind.value === "image.text_to_image" ? ["text_to_image"] : ["reference_image", "multi_reference", "image_to_image"])
+            : (kind.videoCategory === "first_frame" ? ["first_frame", "image_to_video"] : kind.videoCategory === "first_last_frame" ? ["first_last_frame", "first_last_frame_to_video"] : ["reference", "reference_image_to_video"]),
+        };
+        if (kind.mediaType === "video") {
+          uiConfig.videoCategory = kind.videoCategory;
+          uiConfig.videoCategoryLabel = kind.label;
+        } else {
+          delete uiConfig.videoCategory;
+          delete uiConfig.videoCategoryLabel;
+        }
+        return {
+          modelCode: String(form.get("modelCode") || "").trim(),
+          displayName: String(form.get("displayName") || "").trim(),
+          providerName,
+          providerModel: String(form.get("providerModel") || "").trim(),
+          providerProtocol: fixed.providerProtocol,
+          invocationMode: fixed.invocationMode,
+          mediaType,
+          taskModes: kind.taskModes,
+          status: existing?.status || fixed.status,
+          sortOrder: Number(existing?.sortOrder || fixed.sortOrder),
+          parameterSchema: selected.schema,
+          defaultParams: { ...fixed.defaultParams, ...selected.defaults },
+          capabilities: fixed.capabilities,
+          pricing,
+          providerConfig,
+          limits: fixed.limits,
+          uiConfig,
+          dispatchPolicy: existing?.dispatchPolicy ? { ...fixed.dispatchPolicy, ...existing.dispatchPolicy } : fixed.dispatchPolicy,
+          remark: String(form.get("remark") || ""),
+          reason: String(form.get("reason") || ""),
+        };
+      }
+
+      modelsPage = function modelsPage() {
+        const rows = state.models.length
+          ? sortedModelRows().map((model) => modelRow(model)).join("")
+          : `<tr><td colspan="7">${state.modelLoadError || "\u6682\u65e0\u6a21\u578b\u914d\u7f6e"}</td></tr>`;
+        return `<div class="toolbar"><div class="filters"><input placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0 / \u7f16\u7801" /><select><option>\u5168\u90e8\u72b6\u6001</option><option>\u542f\u7528</option><option>\u7981\u7528</option></select><select><option>\u5168\u90e8\u7c7b\u578b</option><option>\u6587\u751f\u56fe</option><option>\u53c2\u8003\u751f\u56fe</option><option>\u9996\u5e27\u751f\u89c6\u9891</option><option>\u9996\u5c3e\u5e27\u751f\u89c6\u9891</option><option>\u53c2\u8003\u751f\u89c6\u9891</option><option>\u5267\u672c\u6a21\u578b</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>\u65b0\u589e\u6a21\u578b</button></div>
+          <div class="table-wrap models dense"><table><thead><tr><th>\u6a21\u578b\u7f16\u7801</th><th>\u5c55\u793a\u540d</th><th>\u7c7b\u578b</th><th>\u4ef7\u683c\u6458\u8981</th><th>\u6392\u5e8f</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      };
+
+      function modelSortValue(model) {
+        const value = Number(model?.sortOrder ?? model?.sort_order ?? 100);
+        return Number.isFinite(value) ? value : 100;
+      }
+
+      function sortedModelRows() {
+        return [...state.models].sort((left, right) => modelSortValue(left) - modelSortValue(right) || String(left.modelCode || "").localeCompare(String(right.modelCode || "")));
+      }
+
+      modelRow = function modelRow(model) {
+        const price = priceSummary(model.pricing);
+        const statusLabel = model.status === "active" ? "\u542f\u7528" : model.status === "disabled" ? "\u7981\u7528" : "\u5f52\u6863";
+        const nextStatus = model.status === "active" ? "disabled" : "active";
+        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}</td><td><span class="tag blue">${escapeHtml(modelKindLabel(model))}</span></td><td>${price}</td><td><div class="actions-row"><button class="icon-btn" title="\u4e0a\u79fb" onclick="moveModelSortOrder('${model.id}', -1)" ${permissionAttrs("model.write")}>\u2191</button><input style="width:64px;height:28px;padding:4px 6px;" type="number" value="${modelSortValue(model)}" onchange="saveModelSortOrder('${model.id}', this.value)" ${hasPermission("model.write") ? "" : "disabled"} /><button class="icon-btn" title="\u4e0b\u79fb" onclick="moveModelSortOrder('${model.id}', 1)" ${permissionAttrs("model.write")}>\u2193</button></div></td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u7f16</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u590d</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "\u505c" : "\u542f"}</button><button class="icon-btn danger" onclick="openModelDeleteDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u5220</button></div></td></tr>`;
+      };
+
+      async function saveModelSortOrder(modelId, value) {
+        const model = state.models.find((item) => item.id === modelId);
+        if (!model) return;
+        const sortOrder = Number(value);
+        if (!Number.isFinite(sortOrder)) {
+          showToast("\u8bf7\u8f93\u5165\u6709\u6548\u6392\u5e8f\u503c");
+          renderShell();
+          return;
+        }
+        await api(`/api/admin/models/${encodeURIComponent(modelId)}`, {
+          method: "PATCH",
+          headers: { "idempotency-key": `admin-ui-model-sort-${modelId}-${Date.now()}` },
+          body: JSON.stringify({ sortOrder, reason: "\u8c03\u6574\u6a21\u578b\u6392\u5e8f" }),
+        });
+        model.sortOrder = sortOrder;
+        await loadModels();
+        renderShell();
+        showToast("\u6392\u5e8f\u5df2\u66f4\u65b0");
+      }
+
+      async function moveModelSortOrder(modelId, direction) {
+        const rows = sortedModelRows();
+        const index = rows.findIndex((item) => item.id === modelId);
+        const target = rows[index + direction];
+        if (index < 0 || !target) return;
+        const current = rows[index];
+        const currentSort = modelSortValue(current);
+        const targetSort = modelSortValue(target);
+        await Promise.all([
+          api(`/api/admin/models/${encodeURIComponent(current.id)}`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-model-sort-${current.id}-${Date.now()}` },
+            body: JSON.stringify({ sortOrder: targetSort, reason: "\u8c03\u6574\u6a21\u578b\u6392\u5e8f" }),
+          }),
+          api(`/api/admin/models/${encodeURIComponent(target.id)}`, {
+            method: "PATCH",
+            headers: { "idempotency-key": `admin-ui-model-sort-${target.id}-${Date.now()}` },
+            body: JSON.stringify({ sortOrder: currentSort, reason: "\u8c03\u6574\u6a21\u578b\u6392\u5e8f" }),
+          }),
+        ]);
+        current.sortOrder = targetSort;
+        target.sortOrder = currentSort;
+        await loadModels();
+        renderShell();
+        showToast("\u6392\u5e8f\u5df2\u66f4\u65b0");
+      }
+
+      function openModelDeleteDrawer(modelId) {
+        const model = state.models.find((item) => item.id === modelId);
+        if (!model) return;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          <div class="drawer-head"><h3>\u5220\u9664\u6a21\u578b</h3><button class="icon-btn" onclick="closeDrawer()">\u00d7</button></div>
+          <p style="color:var(--muted);line-height:1.7">\u5220\u9664\u540e\u8be5\u6a21\u578b\u5c06\u4ece\u914d\u7f6e\u5217\u8868\u79fb\u9664\uff0c\u5386\u53f2\u751f\u6210\u4efb\u52a1\u4f1a\u4fdd\u7559\u6a21\u578b\u7f16\u7801\u8bb0\u5f55\u3002</p>
+          <form id="model-delete-form">
+            <label class="field"><span>\u786e\u8ba4\u5220\u9664</span><input name="confirmText" placeholder="\u8f93\u5165 ${escapeAttribute(model.modelCode || "")}" /></label>
+            <div class="error-text" id="model-delete-error"></div>
+            <button class="btn danger full" type="submit">\u786e\u8ba4\u5220\u9664</button>
+          </form>
+        </aside>`;
+        document.getElementById("model-delete-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("model-delete-error");
+          const expected = String(model.modelCode || "").trim();
+          if (expected && String(form.get("confirmText") || "").trim() !== expected) {
+            error.textContent = "\u8bf7\u8f93\u5165\u6a21\u578b\u7f16\u7801\u786e\u8ba4\u5220\u9664";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/models/${encodeURIComponent(modelId)}`, {
+              method: "DELETE",
+              headers: { "idempotency-key": `admin-ui-model-delete-${modelId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            await loadModels();
+            closeDrawer();
+            renderShell();
+          }, "\u6a21\u578b\u5df2\u5220\u9664").catch(() => undefined);
+        });
+      }
+
+      window.openParameterTemplateDrawer = openParameterTemplateDrawer;
+      window.deleteParameterTemplate = deleteParameterTemplate;
+      window.parameterTemplatesPage = parameterTemplatesPage;
+      window.addParameterTemplateOption = addParameterTemplateOption;
+      window.moveParameterTemplateOption = moveParameterTemplateOption;
+      window.removeParameterTemplateOption = removeParameterTemplateOption;
+      window.openModelEditorDrawer = openModelEditorDrawer;
+      window.openModelDeleteDrawer = openModelDeleteDrawer;
+      window.saveModelSortOrder = saveModelSortOrder;
+      window.moveModelSortOrder = moveModelSortOrder;
+      const DEFAULT_ADMIN_OPERATION_REASON = "\u540e\u53f0\u7ba1\u7406\u5458\u64cd\u4f5c";
+
+      function stripAdminReasonFields(root = document) {
+        const forms = new Set();
+        root.querySelectorAll?.('textarea[name="reason"]').forEach((textarea) => {
+          const form = textarea.closest("form");
+          if (form) forms.add(form);
+          const field = textarea.closest(".field");
+          (field || textarea).remove();
+        });
+        root.querySelectorAll?.("form").forEach((form) => forms.add(form));
+        forms.forEach((form) => {
+          if (!form.querySelector('input[type="hidden"][name="reason"]')) {
+            const hidden = document.createElement("input");
+            hidden.type = "hidden";
+            hidden.name = "reason";
+            hidden.value = DEFAULT_ADMIN_OPERATION_REASON;
+            form.appendChild(hidden);
+          }
+        });
+        root.querySelectorAll?.("p").forEach((paragraph) => {
+          paragraph.textContent = paragraph.textContent
+            .replace(/\u654f\u611f\u64cd\u4f5c\u5fc5\u987b\u586b\u5199\u539f\u56e0/g, "\u7cfb\u7edf\u4f1a\u81ea\u52a8\u8bb0\u5f55\u5ba1\u8ba1\u539f\u56e0")
+            .replace(/\u5371\u9669\u64cd\u4f5c\u5fc5\u987b\u586b\u5199\u539f\u56e0/g, "\u7cfb\u7edf\u4f1a\u81ea\u52a8\u8bb0\u5f55\u5ba1\u8ba1\u539f\u56e0");
+        });
+      }
+
+      const adminReasonObserver = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) stripAdminReasonFields(node);
+          });
+        }
+      });
+      adminReasonObserver.observe(document.body, { childList: true, subtree: true });
+      stripAdminReasonFields(document);
+      setupDrawerInteractions();
       window.openPasswordChangeDrawer = openPasswordChangeDrawer;
       window.loadAdminSessions = loadAdminSessions;
       window.revokeOtherAdminSessions = revokeOtherAdminSessions;

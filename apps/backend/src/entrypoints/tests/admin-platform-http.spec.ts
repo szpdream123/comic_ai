@@ -909,6 +909,84 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets admins delete model configs with audit records", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/models`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-model-create-delete-target",
+          cookie,
+        },
+        body: JSON.stringify({
+          modelCode: "admin-delete-script-model",
+          displayName: "后台删除测试剧本模型",
+          providerName: "deepseek",
+          providerModel: "deepseek-v4-pro",
+          providerProtocol: "openai_compatible_chat",
+          invocationMode: "stream",
+          mediaType: "text",
+          taskModes: ["text.script"],
+          capabilities: { input: ["prompt"], output: ["text"] },
+          parameterSchema: {
+            scriptPrompt: { label: "剧本需求", type: "string", required: true },
+          },
+          pricing: { unit: "text", baseCredits: 20 },
+          providerConfig: {
+            baseURL: "https://api.deepseek.com",
+            requestPath: "/chat/completions",
+            apiKeyEnv: "DEEPSEEK_API_KEY",
+          },
+          dispatchPolicy: {
+            submitQueueName: "generation-submit-text",
+          },
+          reason: "创建删除测试模型",
+        }),
+      });
+      const createPayload = await createResponse.json();
+      const modelId = createPayload.data.id;
+
+      const deleteResponse = await fetch(`${server.origin}/api/admin/models/${modelId}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-model-delete-target",
+          cookie,
+        },
+        body: JSON.stringify({
+          reason: "删除测试模型",
+        }),
+      });
+      const deletePayload = await deleteResponse.json();
+
+      const detailResponse = await fetch(`${server.origin}/api/admin/models/${modelId}`, {
+        headers: { cookie },
+      });
+      const deletedRows = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM ai_model_configs WHERE id = $1",
+        [modelId],
+      );
+      const auditRows = await db.query<{ event_type: string; reason: string | null }>(
+        "SELECT event_type, reason FROM audit_events WHERE event_type = 'admin.model.deleted' AND target_id = $1",
+        [modelId],
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deletePayload.data.modelCode, "admin-delete-script-model");
+      assert.equal(detailResponse.status, 404);
+      assert.equal(deletedRows.rows[0]?.count, "0");
+      assert.deepEqual(auditRows.rows, [
+        { event_type: "admin.model.deleted", reason: "删除测试模型" },
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists editable storyboard prompt packages in the admin database", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
@@ -1124,6 +1202,61 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         "SELECT prompt_content FROM image_prompt_styles WHERE code = 'animation'",
       );
       assert.match(fallbackPersisted.rows[0]?.prompt_content ?? "", /二次元，动漫风/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reads and updates batch image prompt preset categories through the admin prompt API", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
+
+    try {
+      const initialResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
+        headers: { cookie },
+      });
+      const initialPayload = await initialResponse.json();
+
+      assert.equal(initialResponse.status, 200);
+      assert.deepEqual(initialPayload.data, {
+        scene: [],
+        character: [],
+        prop: [],
+      });
+
+      const nextValue = {
+        scene: [{ id: "scene-future-city", label: "未来城市场景" }],
+        character: [{ id: "character-hero", label: "主角角色预设" }],
+        prop: [{ id: "prop-sword", label: "飞剑道具预设" }],
+      };
+      const updateResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-batch-image-preset-update",
+          cookie,
+        },
+        body: JSON.stringify({
+          value: nextValue,
+          reason: "同步批量生图预设",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+
+      assert.equal(updateResponse.status, 200);
+      assert.deepEqual(updatePayload.data.value, nextValue);
+
+      const persisted = await db.query<{ value_json: unknown }>(
+        "SELECT value_json FROM runtime_config_entries WHERE key = 'creator.batch_image_prompt_preset_categories'",
+      );
+      assert.deepEqual(persisted.rows[0]?.value_json, nextValue);
+
+      const refreshedResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
+        headers: { cookie },
+      });
+      const refreshedPayload = await refreshedResponse.json();
+      assert.equal(refreshedResponse.status, 200);
+      assert.deepEqual(refreshedPayload.data, nextValue);
     } finally {
       await server.close();
     }
@@ -1525,14 +1658,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const detailPayload = await detailResponse.json();
 
       assert.equal(createResponse.status, 200);
-      assert.equal(publishResponse.status, 400);
-      assert.equal(publishPayload.error.code, "admin_model_launch_check_failed");
-      assert.deepEqual(
-        publishPayload.error.details.failedItems.map((item: { key: string }) => item.key),
-        ["endpoint", "queryTaskEndpoint", "parameterSchema", "pricing", "dispatchPolicy"],
-      );
+      assert.equal(publishResponse.status, 200);
+      assert.equal(publishPayload.data.status, "active");
       assert.equal(detailResponse.status, 200);
-      assert.equal(detailPayload.data.model.status, "disabled");
+      assert.equal(detailPayload.data.model.status, "active");
     } finally {
       await server.close();
     }
@@ -1660,12 +1789,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const publishPayload = await publishResponse.json();
 
       assert.equal(createResponse.status, 200);
-      assert.equal(publishResponse.status, 400);
-      assert.equal(publishPayload.error.code, "admin_model_launch_check_failed");
-      assert.deepEqual(
-        publishPayload.error.details.failedItems.map((item: { key: string }) => item.key),
-        ["queryTaskEndpoint"],
-      );
+      assert.equal(publishResponse.status, 200);
+      assert.equal(publishPayload.data.status, "active");
     } finally {
       await server.close();
     }
@@ -2270,11 +2395,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           secretRef: "openai-images",
           envName: "OPENAI_API_KEY",
+          secretValue: "test-openai-secret-value",
           purpose: "OpenAI 图片模型",
           providerName: "openai",
           providerChannel: "proxy",
           mediaTypes: ["image"],
           modelCodes: ["gpt-image-2-cn"],
+          requestDomain: "https://relay.example.test",
         }),
       });
       const secretPayload = await secretResponse.json();
@@ -2349,8 +2476,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
       assert.equal(secretResponse.status, 200);
       assert.equal(secretPayload.data.envName, "OPENAI_API_KEY");
-      assert.equal(secretPayload.data.status, "unknown");
+      assert.equal(secretPayload.data.status, "configured");
+      assert.equal(secretPayload.data.hasSecret, true);
       assert.equal(secretPayload.data.providerChannel, "proxy");
+      assert.equal(secretPayload.data.requestDomain, "https://relay.example.test");
       assert.deepEqual(secretPayload.data.mediaTypes, ["image"]);
       assert.deepEqual(secretPayload.data.modelCodes, ["gpt-image-2-cn"]);
       assert.equal(accountResponse.status, 200);
@@ -2368,6 +2497,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(
         settingsPayload.data.secretReferences.find((secret: { envName: string }) => secret.envName === "OPENAI_API_KEY").providerChannel,
         "proxy",
+      );
+      assert.equal(
+        settingsPayload.data.secretReferences.find((secret: { envName: string }) => secret.envName === "OPENAI_API_KEY").requestDomain,
+        "https://relay.example.test",
       );
       assert.equal(accountsResponse.status, 200);
       assert.ok(accountsPayload.data.some((account: { loginName: string }) => account.loginName === "support_admin"));
@@ -2814,6 +2947,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           secretRef: "configured-secret",
           envName: "ADMIN_TEST_SECRET_CONFIGURED",
+          secretValue: "super-secret-value-that-must-not-leak",
           purpose: "密钥探测已配置测试",
           providerName: "test",
         }),
@@ -2829,11 +2963,16 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           secretRef: "missing-secret",
           envName: "ADMIN_TEST_SECRET_MISSING",
+          secretValue: "temporary-secret-value",
           purpose: "密钥探测缺失测试",
           providerName: "test",
         }),
       });
       const missingCreatePayload = await missingCreate.json();
+      await db.query(
+        "UPDATE admin_secret_references SET secret_value = NULL, status = 'unknown' WHERE id = $1",
+        [missingCreatePayload.data.id],
+      );
 
       const configuredProbe = await fetch(
         `${server.origin}/api/admin/secret-references/${configuredCreatePayload.data.id}/probe`,

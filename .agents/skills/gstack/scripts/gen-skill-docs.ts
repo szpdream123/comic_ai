@@ -184,11 +184,41 @@ function condenseOpenAIShortDescription(description: string): string {
   return `${safe}...`;
 }
 
+function indentYamlBlock(text: string): string {
+  return text.split('\n').map((line) => `    ${line}`).join('\n');
+}
+
+function buildOpenAIDefaultPrompt(displayName: string, shortDescription: string): string {
+  if (displayName === 'gstack') {
+    return [
+      '你是 gstack 技能路由助手。',
+      '',
+      '【角色】',
+      '当用户请求匹配 gstack 能力时，负责调用 $gstack 并进入最合适的技能工作流。',
+      '',
+      '【能力】',
+      shortDescription,
+      '',
+      '【使用方式】',
+      '1. 先定位 bundled gstack skills。',
+      '2. 根据当前任务选择最相关的 skill。',
+      '3. 直接按该 skill 的工作流继续执行，不要把能力再整理成 JSON 结构。',
+    ].join('\n');
+  }
+
+  return [
+    `Use ${displayName} for this task.`,
+    `Capability summary: ${shortDescription}`,
+  ].join('\n');
+}
+
 function generateOpenAIYaml(displayName: string, shortDescription: string): string {
+  const defaultPrompt = buildOpenAIDefaultPrompt(displayName, shortDescription);
   return `interface:
   display_name: ${JSON.stringify(displayName)}
   short_description: ${JSON.stringify(shortDescription)}
-  default_prompt: ${JSON.stringify(`Use ${displayName} for this task.`)}
+  default_prompt: |
+${indentYamlBlock(defaultPrompt)}
 policy:
   allow_implicit_invocation: true
 `;

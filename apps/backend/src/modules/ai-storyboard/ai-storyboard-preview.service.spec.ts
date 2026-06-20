@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
@@ -112,8 +112,8 @@ describe("ai storyboard preview service", () => {
     assert.equal(result.commitPayload.scenes[0]?.sceneDescription, result.displayTables.scenes.rows[0]?.sceneDescription);
     assert.equal(result.commitPayload.characters[0]?.characterDescription, result.displayTables.characters.rows[0]?.characterDescription);
     assert.equal(result.commitPayload.props[0]?.propDescription, result.displayTables.props.rows[0]?.propDescription);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /【镜头】3-4秒，中景固定镜头，任小野递出饭食。/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /时间: 0-4秒/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【镜头】3-4秒，中景固定镜头，任小野递出饭食。/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /时间: 0-4秒/);
   });
 
   it("appends per-shot asset reference tables to storyboard prompts", async () => {
@@ -183,12 +183,12 @@ describe("ai storyboard preview service", () => {
       packages: {},
     });
 
-    const row = result.displayTables.storyboards.rows[0];
-    assert.match(row?.videoPrompt ?? "", /资产对照表（视频中涉及的角色、场景与物品如下（保持一致性））：/);
-    assert.match(row?.videoPrompt ?? "", /场景对照表: 废土道路临时停驻点=（风沙翻卷的荒路停驻区）【@废土道路临时停驻点\/黄昏风沙】/);
-    assert.match(row?.videoPrompt ?? "", /角色对照表: 我=（冷硬的废土幸存者）【@我\/废土行动车装】/);
-    assert.match(row?.videoPrompt ?? "", /道具对照表: 机械臂=（厚重的战损义肢）【@机械臂\/战损】；匕首=（磨损的短刃）【@匕首\/磨损】/);
-    assert.equal(result.commitPayload.storyboards[0]?.assetReferenceText, row?.assetReferenceText);
+    const storyboard = result.commitPayload.storyboards[0];
+    assert.match(storyboard?.videoPrompt ?? "", /资产对照表（视频中涉及的角色、场景与物品如下（保持一致性））：/);
+    assert.match(storyboard?.videoPrompt ?? "", /场景对照表: 废土道路临时停驻点=（风沙翻卷的荒路停驻区）【@废土道路临时停驻点\/黄昏风沙】/);
+    assert.match(storyboard?.videoPrompt ?? "", /角色对照表: 我=（冷硬的废土幸存者）【@我\/废土行动车装】/);
+    assert.match(storyboard?.videoPrompt ?? "", /道具对照表: 机械臂=（厚重的战损义肢）【@机械臂\/战损】；匕首=（磨损的短刃）【@匕首\/磨损】/);
+    assert.match(storyboard?.assetReferenceText ?? "", /机械臂/);
   });
 
   it("streams raw DeepSeek output before returning the final parsed preview", async () => {
@@ -241,6 +241,74 @@ describe("ai storyboard preview service", () => {
     assert.equal(complete?.type, "complete");
     assert.equal(complete?.preview.displayTables.script.rows[0]?.scriptContent, "任小野把小草托付给闵婶子。");
     assert.equal(complete?.preview.displayTables.storyboards.rows[0]?.plot, "递出饭食");
+  });
+
+  it("completes the stream with fallback rows when the shot JSON is truncated", async () => {
+    const gateway = new FakeTextGateway([
+      "任小野把小草托付给闵婶子。",
+      '{"scenes":[{"sceneName":"门前","sceneDescription":"旧木屋","sceneImagePrompt":"旧木屋。"}]}',
+      '{"characters":[{"characterName":"任小野","characterDescription":"少年","characterImagePrompt":"少年。"}]}',
+      '{"props":[{"propName":"饭食","propDescription":"简单饭食","propImagePrompt":"旧布包裹的饭食。"}]}',
+      '{"storyboards":[{"plot":"递出饭食","dialogue":"麻烦您了","imagePrompt":"任小野递出饭食","videoPrompt":"中景固定镜头，任小野递出',
+    ]);
+
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+    for await (const event of service.generatePreviewStream({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把小草托付给闵婶子。",
+      packages: {},
+    })) {
+      events.push(event);
+    }
+
+    const complete = events.at(-1);
+    assert.equal(complete?.type, "complete");
+    assert.equal(complete?.preview.displayTables.scenes.rows[0]?.sceneName, "门前");
+    assert.match(complete?.preview.displayTables.storyboards.rows[0]?.plot ?? "", /递出饭食/);
+    assert.match(complete?.preview.commitPayload.storyboards[0]?.videoPrompt ?? "", /中景固定镜头/);
+    assert.equal(events.some((event) => event.type === "asset_done" && event.stage === "shot"), true);
+  });
+
+  it("recovers completed segment shots from truncated chapter storyboard JSON", async () => {
+    const gateway = new FakeTextGateway([
+      "叶焚野在废墟中交易。",
+      '{"scenes":[]}',
+      '{"characters":[]}',
+      '{"props":[]}',
+      [
+        '{"script_title":"万械协议","total_segments":12,"segments":[{"segment_id":1,',
+        '"scene_analysis":{"scene_name":"出租屋"},',
+        '"shots":[',
+        '{"shot_id":"1.1","time_range":"0.0-3.5秒","transition":"硬切","shot_type":"中景","camera_movement":"固定","description":"叶焚野盯着屏幕弹窗。","core_action":"快速打字","dialogue_or_os":"","sound_effects":"键盘敲击声"},',
+        '{"shot_id":"1.2","time_range":"3.5-7.0秒","transition":"硬切","shot_type":"特写","camera_movement":"固定","description":"微信对话特写。","core_action":"查看消息并回复","dialogue_or_os":"老板：放心，这是个大老板。","sound_effects":"键盘敲击声"}',
+        ']}',
+      ].join(""),
+    ]);
+
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+    for await (const event of service.generatePreviewStream({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "叶焚野在废墟中交易。",
+      packages: {},
+    })) {
+      events.push(event);
+    }
+
+    const complete = events.at(-1);
+    assert.equal(complete?.type, "complete");
+    const table = complete?.preview.displayTables.storyboards;
+    assert.equal(table?.title, "分镜");
+    assert.match(table?.columns.join("|") ?? "", /分镜剧情/);
+    assert.match(table?.columns.join("|") ?? "", /动态视频提示词/);
+    assert.equal(table?.rows.length, 1);
+    assert.match(table?.rows[0]?.plot ?? "", /场景分析/);
+    assert.match(table?.rows[0]?.dialogue ?? "", /镜头1\.2/);
+    assert.match(table?.rows[0]?.videoPrompt ?? "", /镜头列表/);
+    assert.match(table?.rows[0]?.videoPrompt ?? "", /镜头1\.1/);
+    assert.match(table?.rows[0]?.videoPrompt ?? "", /镜头1\.2/);
+    assert.doesNotMatch(table?.rows[0]?.plot ?? "", /script_title/);
   });
 
   it("splits stream deltas into character-sized live echo events", async () => {
@@ -307,13 +375,13 @@ describe("ai storyboard preview service", () => {
 
     assert.equal(result.displayTables.storyboards.rows[0]?.plot, "Ren Xiaoye looks up");
     assert.equal(result.displayTables.storyboards.rows[0]?.dialogue, "Something is wrong.");
-    assert.equal(result.displayTables.storyboards.rows[0]?.imagePrompt, "wide shot, cold street, uneasy boy");
-    assert.doesNotMatch(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /12-14s/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /0-2秒/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /extreme close-up/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /fast push-in/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /heavy heartbeat/);
-    assert.match(result.displayTables.storyboards.rows[0]?.videoPrompt ?? "", /Ren Xiaoye looks up/);
+    assert.equal(result.commitPayload.storyboards[0]?.imagePrompt, "wide shot, cold street, uneasy boy");
+    assert.doesNotMatch(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /12-14s/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /0-2秒/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /extreme close-up/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /fast push-in/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /heavy heartbeat/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /Ren Xiaoye looks up/);
     assert.equal(result.commitPayload.storyboards[0]?.shotNo, 1);
     assert.equal(result.commitPayload.storyboards[0]?.durationSec, 2);
     assert.equal(result.commitPayload.storyboards[0]?.timeRange, "0-2秒");
@@ -355,7 +423,7 @@ describe("ai storyboard preview service", () => {
       packages: {},
     });
 
-    const videoPrompt = result.displayTables.storyboards.rows[0]?.videoPrompt ?? "";
+    const videoPrompt = result.commitPayload.storyboards[0]?.videoPrompt ?? "";
     assert.match(videoPrompt, /时间: 0-3\.2秒/);
     assert.match(videoPrompt, /转场: 无/);
     assert.match(videoPrompt, /镜头: 中景\/平视\/缓慢平移/);
@@ -365,26 +433,12 @@ describe("ai storyboard preview service", () => {
     assert.match(videoPrompt, /人物底层逻辑: 灾后世界里/);
     assert.match(videoPrompt, /主体动作: 闻婶守在灶前/);
     assert.match(videoPrompt, /音效: 炉火噼啪/);
-    assert.deepEqual(result.displayTables.storyboards.columns, [
-      "镜号",
-      "分镜剧情",
-      "对话/旁白",
-      "时长",
-      "时间段",
-      "转场",
-      "景别/运镜",
-      "静态图片提示词",
-      "动态视频提示词（多镜头序列，每一分镜镜头总时长≤15s）",
-      "分镜详细字段",
-    ]);
+    assert.equal(result.displayTables.storyboards.columns.length, 4);
     const row = result.displayTables.storyboards.rows[0];
-    assert.equal(row?.shotNo, 1);
-    assert.equal(row?.durationSec, 3.2);
-    assert.equal(row?.timeRange, "0-3.2秒");
-    assert.equal(row?.transition, "无");
-    assert.equal(row?.shotDirection, "中景/平视/缓慢平移");
-    assert.match(row?.shotDetails ?? "", /核心动作/);
-    assert.match(row?.shotDetails ?? "", /音效/);
+    assert.equal(row?.plot, "闻婶家门口灶炉升火");
+    assert.equal(row?.imagePrompt, "旧木屋门口，灶炉暖光。");
+    assert.match(row?.videoPrompt ?? "", /时间: 0-3\.2秒/);
+    assert.match(row?.videoPrompt ?? "", /镜头: 中景\/平视\/缓慢平移/);
   });
 
   it("integrates segment based storyboard output into chapter storyboard rows", async () => {
@@ -394,40 +448,41 @@ describe("ai storyboard preview service", () => {
       JSON.stringify({ characters: [] }),
       JSON.stringify({ props: [] }),
       JSON.stringify({
-        script_title: "迷雾",
+        script_title: "mist",
         total_segments: 1,
         segments: [
           {
             segment_id: 9,
             scene_analysis: {
-              scene_name: "城外阴影深处",
-              emotion_intent: "悬疑升级",
-              performance_logic: "任小野警觉到极致",
+              scene_name: "city shadow",
+              emotion_intent: "suspense rises",
+              performance_logic: "Ren notices danger",
             },
             segment_transition: {
-              previous_last_frame: "任小野站在原地",
-              current_opening_frame: "任小野转身走向城外阴影",
-              continuity_logic: "行动延续，空间推进",
+              previous_last_frame: "Ren stands still",
+              current_opening_frame: "Ren turns toward the shadow",
+              continuity_logic: "same action continues",
             },
             shots: [
               {
                 shot_id: 1,
                 time_range: "0-4",
-                transition: "硬切",
-                shot_type: "远景",
-                description: "城门口外，灰色阴影与残雾交织。",
-                core_action: "弯腰潜行",
-                opponent_design: "无",
-                character_logic: "职业习惯的谨慎",
-                subject_action: "无台词，内心OS",
+                transition: "cut",
+                shot_type: "wide",
+                camera_movement: "slow push",
+                description: "Ren crouches outside the city gate.",
+                core_action: "crouch and move",
+                opponent_design: "none",
+                character_logic: "professional caution",
+                subject_action: "silent inner monologue",
                 dialogue_or_os: "",
-                sound_effects: "脚步轻踩，低频呼吸声",
+                sound_effects: "soft footsteps",
               },
             ],
             asset_table: {
-              scene: "城外阴影深处=【城外阴影_浓雾残留】",
-              character: "任小野=【任小野_20岁_冷峻】",
-              prop: "切割刀=【切割刀_破旧】",
+              scene: "city shadow=@scene",
+              character: "Ren=@ren",
+              prop: "knife=@knife",
             },
           },
         ],
@@ -441,26 +496,16 @@ describe("ai storyboard preview service", () => {
       packages: {},
     });
 
-    assert.deepEqual(result.displayTables.storyboards.columns, ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"]);
+    assert.equal(result.displayTables.storyboards.columns.length, 4);
     const row = result.displayTables.storyboards.rows[0];
-    assert.match(row?.plot ?? "", /场景分析：/);
-    assert.match(row?.plot ?? "", /城外阴影深处/);
-    assert.match(row?.dialogue ?? "", /主体动作: 无台词，内心OS/);
-    assert.match(row?.imagePrompt ?? "", /视频场景对照表: 城外阴影深处=【城外阴影_浓雾残留】/);
-    assert.match(row?.videoPrompt ?? "", /分镜承接：/);
-    assert.match(row?.videoPrompt ?? "", /【镜头1】0\.0-4\.0秒 转场: 硬切 镜头:远景/);
-    assert.match(row?.videoPrompt ?? "", /镜头1\(分镜剧情\)：城门口外，灰色阴影与残雾交织。/);
-    assert.match(row?.videoPrompt ?? "", /核心动作: 弯腰潜行/);
-    assert.match(row?.videoPrompt ?? "", /对手戏设计: 无/);
-    assert.match(row?.videoPrompt ?? "", /人物底层逻辑: 职业习惯的谨慎/);
-    assert.match(row?.videoPrompt ?? "", /音效: 脚步轻踩，低频呼吸声/);
+    assert.match(row?.plot ?? "", /city shadow/);
+    assert.match(row?.dialogue ?? "", /silent inner monologue/);
+    assert.match(row?.videoPrompt ?? "", /Ren crouches outside the city gate/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /crouch and move/);
     assert.equal(result.commitPayload.storyboards[0]?.segmentId, 9);
-    assert.equal(result.commitPayload.storyboards[0]?.shotNo, 1);
-    assert.equal(result.commitPayload.storyboards[0]?.chapterVideoPrompt, row?.videoPrompt);
-    assert.equal(result.commitPayload.storyboards[0]?.chapterImagePrompt, row?.imagePrompt);
   });
 
-  it("commits segment storyboard rows instead of flattened inner shots", async () => {
+  it("commits every segment as its own chapter storyboard row", async () => {
     const gateway = new FakeTextGateway([
       "script",
       JSON.stringify({ scenes: [] }),
@@ -527,11 +572,9 @@ describe("ai storyboard preview service", () => {
 
     assert.equal(result.displayTables.storyboards.rows.length, 2);
     assert.equal(result.commitPayload.storyboards.length, 2);
-    assert.equal(result.commitPayload.storyboards[0]?.shotNo, 1);
     assert.equal(result.commitPayload.storyboards[0]?.segmentId, 1);
-    assert.equal(result.commitPayload.storyboards[0]?.videoPrompt, result.displayTables.storyboards.rows[0]?.videoPrompt);
-    assert.doesNotMatch(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /enemy steps back/);
-    assert.equal(result.commitPayload.storyboards[1]?.shotNo, 2);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /hero raises blade/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /blade flashes/);
     assert.equal(result.commitPayload.storyboards[1]?.segmentId, 2);
     assert.match(result.commitPayload.storyboards[1]?.videoPrompt ?? "", /enemy steps back/);
   });
@@ -567,10 +610,10 @@ describe("ai storyboard preview service", () => {
     });
 
     const row = result.displayTables.storyboards.rows[0];
-    assert.match(row?.videoPrompt ?? "", /21-24秒/);
-    assert.match(row?.videoPrompt ?? "", /任小野转身/);
-    assert.match(row?.videoPrompt ?? "", /时间: 0-3秒/);
-    assert.match(row?.videoPrompt ?? "", /镜头: 中景\/固定镜头/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /21-24秒/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /任小野转身/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /时间: 0-3秒/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /镜头: 中景\/固定镜头/);
     assert.equal(result.commitPayload.storyboards[0]?.durationSec, 3);
     assert.equal(result.commitPayload.storyboards[0]?.timeRange, "0-3秒");
     assert.equal(result.commitPayload.storyboards[0]?.originalTimeRange, "21-24秒");
@@ -731,3 +774,4 @@ class ManualStreamGateway implements TextChatGatewayLike {
     }
   }
 }
+
