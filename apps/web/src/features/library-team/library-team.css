@@ -410,6 +410,18 @@
   color: #04100d;
 }
 
+.library-team-button-alipay {
+  border-color: rgba(80, 158, 255, 0.46);
+  background: rgba(80, 158, 255, 0.1);
+  color: #d9e9ff;
+}
+
+.library-team-button-alipay:hover {
+  border-color: rgba(80, 158, 255, 0.68);
+  background: rgba(80, 158, 255, 0.18);
+  color: #ffffff;
+}
+
 .library-team-button-ghost {
   background: transparent;
   color: var(--color-muted, #8d929a);
@@ -2520,7 +2532,7 @@ body:has(.library-team-asset-detail-overlay),
   z-index: 20;
   display: grid;
   place-items: center;
-  padding: var(--space-xl, 24px);
+  padding: clamp(16px, 4vw, 56px);
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(8px);
 }
@@ -2534,7 +2546,7 @@ body:has(.library-team-asset-detail-overlay),
 }
 
 .library-team-pricing-modal {
-  width: min(100%, 1120px);
+  width: min(100%, 1480px);
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: var(--radius-sm, 8px);
@@ -2549,7 +2561,7 @@ body:has(.library-team-asset-detail-overlay),
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-xl, 24px);
-  padding: 24px 28px 20px;
+  padding: 28px 36px 22px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -2574,7 +2586,7 @@ body:has(.library-team-asset-detail-overlay),
 
 .library-team-subscription-plans {
   min-width: 0;
-  padding: 24px 28px 28px;
+  padding: 28px 36px 36px;
 }
 
 .library-team-subscription-summary {
@@ -2660,11 +2672,26 @@ body:has(.library-team-asset-detail-overlay),
   align-items: stretch;
 }
 
+.library-team-pricing-modal .library-team-plan-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
 .library-team-plan-card {
   display: grid;
   grid-template-rows: auto auto auto auto minmax(3.4em, auto) auto 1fr;
   gap: var(--space-sm, 8px);
   min-height: 100%;
+}
+
+.library-team-plan-payment-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm, 8px);
+}
+
+.library-team-plan-payment-actions .library-team-button {
+  width: 100%;
+  padding-inline: var(--space-md, 12px);
 }
 
 .library-team-plan-card.is-selected {
@@ -3365,6 +3392,10 @@ body:has(.library-team-asset-detail-overlay),
     grid-template-columns: 1fr;
   }
 
+  .library-team-pricing-modal .library-team-plan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .library-team-payment-panel {
     border-left: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -3538,6 +3569,10 @@ body:has(.library-team-asset-detail-overlay),
   .library-team-subscription-plans,
   .library-team-payment-panel {
     padding: 18px;
+  }
+
+  .library-team-pricing-modal .library-team-plan-grid {
+    grid-template-columns: 1fr;
   }
 
   .library-team-payment-modal-header,

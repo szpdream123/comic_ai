@@ -107,6 +107,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
             parameters: {
               aspectRatio: "9:16",
               quality: "high",
+              moderation: "auto",
             },
           }),
         },
@@ -387,7 +388,11 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.deepEqual(submitResult, { status: "submitted" });
       assert.equal(providerCalls[0]?.url, "https://image-gateway.example.test/v1/images/edits");
       assert.equal(providerCalls[0]?.body instanceof FormData, true);
-      assert.equal((providerCalls[0]?.body as FormData).getAll("image").length, 1);
+      assert.equal((providerCalls[0]?.body as FormData).getAll("image[]").length, 1);
+      assert.equal((providerCalls[0]?.body as FormData).get("n"), "1");
+      assert.equal((providerCalls[0]?.body as FormData).get("size"), "1024x1536");
+      assert.equal((providerCalls[0]?.body as FormData).get("quality"), "high");
+      assert.equal((providerCalls[0]?.body as FormData).get("moderation"), "auto");
     } finally {
       await server.close();
     }

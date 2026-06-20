@@ -225,9 +225,15 @@ describe("createDevDb", () => {
         "gpt-image-2-reference-cn",
       ]);
       for (const row of models.rows) {
+        if (row.model_code === "gpt-image-2-reference-cn") {
+          assert.equal(row.provider_config_json.baseURL, "https://image.shoestravel.xin");
+          assert.equal(row.provider_config_json.endpoint, "/v1/images/edits");
+          assert.equal(row.provider_config_json.editEndpoint, "https://image.shoestravel.xin/v1/images/edits");
+          continue;
+        }
         assert.equal(row.provider_config_json.baseURL, "https://code.shoestravel.xin");
         assert.equal(row.provider_config_json.endpoint, "/v1/images/generations");
-        assert.equal(row.provider_config_json.editEndpoint, "/v1/images/edits");
+        assert.equal(row.provider_config_json.editEndpoint, "https://image.shoestravel.xin/v1/images/edits");
       }
       assert.equal(policies.rows[0]?.count, 1);
     });
@@ -355,9 +361,9 @@ async function dropSchema(connectionString: string, schemaName: string) {
 }
 
 function requiredPostgresConnectionString() {
-  const connectionString = process.env.TEST_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
+  const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    throw new Error("TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL database tests");
+    throw new Error("DATABASE_URL is required for PostgreSQL database tests");
   }
   return connectionString;
 }

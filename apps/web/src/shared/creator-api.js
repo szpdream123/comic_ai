@@ -14,66 +14,116 @@
 async function fetchJson(url, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 10000;
   const unwrapEnvelope = options.unwrapEnvelope !== false;
+  const dedupeKey = options.dedupeKey ?? null;
+  const dedupeTtlMs = Number.isFinite(options.dedupeTtlMs) ? options.dedupeTtlMs : 1500;
+  if (dedupeKey) {
+    const cached = getCachedFetchJson(dedupeKey, dedupeTtlMs);
+    if (cached) {
+      return cached;
+    }
+  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, unwrapEnvelope: _unwrapEnvelope, ...fetchOptions } = options;
+  const {
+    timeoutMs: _timeoutMs,
+    unwrapEnvelope: _unwrapEnvelope,
+    dedupeKey: _dedupeKey,
+    dedupeTtlMs: _dedupeTtlMs,
+    ...fetchOptions
+  } = options;
 
-  let response;
-  try {
-    response = await fetch(resolveApiUrl(url), {
-      credentials: "include",
-      ...fetchOptions,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("request_timeout");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  const text = await response.text();
-  let payload = {};
-  if (text) {
+  const request = (async () => {
+    let response;
     try {
-      payload = JSON.parse(text);
-    } catch {
-      const error = new Error("unexpected_response");
-      error.status = response.status ?? 0;
-      error.errorCode = "unexpected_response";
-      error.details = {
-        contentType: response.headers?.get?.("content-type") ?? "",
-        preview: text.slice(0, 120),
-        url: response.url ?? "",
-      };
+      response = await fetch(resolveApiUrl(url), {
+        credentials: "include",
+        ...fetchOptions,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error("request_timeout");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    const text = await response.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        const error = new Error("unexpected_response");
+        error.status = response.status ?? 0;
+        error.errorCode = "unexpected_response";
+        error.details = {
+          contentType: response.headers?.get?.("content-type") ?? "",
+          preview: text.slice(0, 120),
+          url: response.url ?? "",
+        };
+        throw error;
+      }
+    }
+
+    if (!response.ok) {
+      const error = new Error(
+        payload.message ?? payload.error ?? payload.errorCode ?? `request_failed:${response.status}`,
+      );
+      error.status = response.status;
+      error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
+      error.details = payload.details ?? null;
+      error.requestId = payload.requestId ?? null;
       throw error;
     }
-  }
 
-  if (!response.ok) {
-    const error = new Error(
-      payload.message ?? payload.error ?? payload.errorCode ?? `request_failed:${response.status}`,
-    );
-    error.status = response.status;
-    error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
-    error.details = payload.details ?? null;
-    error.requestId = payload.requestId ?? null;
-    throw error;
-  }
+    if (
+      unwrapEnvelope &&
+      payload &&
+      typeof payload === "object" &&
+      Object.prototype.hasOwnProperty.call(payload, "data") &&
+      Object.prototype.hasOwnProperty.call(payload, "requestId")
+    ) {
+      return payload.data;
+    }
 
-  if (
-    unwrapEnvelope &&
-    payload &&
-    typeof payload === "object" &&
-    Object.prototype.hasOwnProperty.call(payload, "data") &&
-    Object.prototype.hasOwnProperty.call(payload, "requestId")
-  ) {
-    return payload.data;
+    return payload;
+  })();
+  if (dedupeKey) {
+    cacheFetchJson(dedupeKey, request);
   }
+  return request;
+}
 
-  return payload;
+const fetchJsonCache = new Map();
+
+function getCachedFetchJson(key, ttlMs) {
+  const cached = fetchJsonCache.get(key);
+  if (!cached) {
+    return null;
+  }
+  if (Date.now() - cached.createdAt > ttlMs) {
+    fetchJsonCache.delete(key);
+    return null;
+  }
+  return cached.promise;
+}
+
+function cacheFetchJson(key, promise) {
+  fetchJsonCache.set(key, {
+    createdAt: Date.now(),
+    promise,
+  });
+  promise.catch(() => {
+    if (fetchJsonCache.get(key)?.promise === promise) {
+      fetchJsonCache.delete(key);
+    }
+  });
+}
+
+function clearFetchJsonCache(key) {
+  fetchJsonCache.delete(key);
 }
 
 export function resolveApiUrl(url) {
@@ -171,6 +221,10 @@ function parseSseMessage(raw) {
     return { event: eventName, data: dataText };
   }
 }
+
+export const creatorApiTestHooks = {
+  postJsonSse,
+};
 
 async function postMultipart(url, formData) {
   return fetchJson(url, {
@@ -528,7 +582,28 @@ function uploadPreparedFileWithXhr(prepared, file, options = {}) {
 
 export const creatorApi = {
   getSession() {
-    return fetchJson("/api/auth/session");
+    return fetchJson("/api/auth/session", { dedupeKey: "GET /api/auth/session" });
+  },
+
+  async updateAccountProfile(input) {
+    const result = await patchJson("/api/auth/profile", {
+      displayName: String(input?.displayName ?? ""),
+    });
+    clearFetchJsonCache("GET /api/auth/session");
+    return result;
+  },
+
+  async changeAccountPassword(input) {
+    const result = await postJsonWithIdempotency(
+      "/api/auth/password",
+      {
+        currentPassword: String(input?.currentPassword ?? ""),
+        newPassword: String(input?.newPassword ?? ""),
+      },
+      { action: "auth.password.change" },
+    );
+    clearFetchJsonCache("GET /api/auth/session");
+    return result;
   },
 
   logout() {
@@ -536,7 +611,7 @@ export const creatorApi = {
   },
 
   getCreatorState() {
-    return fetchJson("/api/creator/state");
+    return fetchJson("/api/creator/state", { dedupeKey: "GET /api/creator/state" });
   },
 
   getCreditLedger(options = {}) {
@@ -549,12 +624,28 @@ export const creatorApi = {
     return fetchJson(`/api/creator/credits/ledger${query ? `?${query}` : ""}`);
   },
 
+  getCommunityBoard() {
+    return fetchJson("/api/community", { dedupeKey: "GET /api/community" });
+  },
+
+  submitCommunityFeedback(input) {
+    return postJson("/api/community/feedback", input);
+  },
+
+  submitCommunityFeature(input) {
+    return postJson("/api/community/features", input);
+  },
+
+  voteCommunityFeature(featureId) {
+    return postJson(`/api/community/features/${encodeURIComponent(featureId)}/vote`, {});
+  },
+
   getTeamOverview() {
-    return fetchJson("/api/creator/team/overview");
+    return fetchJson("/api/creator/team/overview", { dedupeKey: "GET /api/creator/team/overview" });
   },
 
   getTeamMembers() {
-    return fetchJson("/api/creator/team/members");
+    return fetchJson("/api/creator/team/members", { dedupeKey: "GET /api/creator/team/members" });
   },
 
   createTeamMember(input) {
@@ -570,11 +661,11 @@ export const creatorApi = {
   },
 
   getProjects() {
-    return fetchJson("/api/creator/projects");
+    return fetchJson("/api/creator/projects", { dedupeKey: "GET /api/creator/projects" });
   },
 
   getCanvasProjects() {
-    return fetchJson("/api/creator/canvas-projects");
+    return fetchJson("/api/creator/canvas-projects", { dedupeKey: "GET /api/creator/canvas-projects" });
   },
 
   createCanvasProject(input) {
@@ -589,6 +680,14 @@ export const creatorApi = {
 
   deleteCanvasProject(projectId) {
     return deleteJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`);
+  },
+
+  getStandaloneCanvas(canvasProjectId) {
+    return fetchJson(`/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`);
+  },
+
+  saveStandaloneCanvas(canvasProjectId, input) {
+    return putJson(`/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`, input);
   },
 
   getProjectCanvas(projectId) {
@@ -622,15 +721,17 @@ export const creatorApi = {
   },
 
   getWorkspaceScripts() {
-    return fetchJson("/api/creator/scripts");
+    return fetchJson("/api/creator/scripts", { dedupeKey: "GET /api/creator/scripts" });
   },
 
   getProjectDetail(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/detail`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/detail`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getProjectDetailV2(projectId) {
-    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}/detail`);
+    const path = `/api/projects/${encodeURIComponent(projectId)}/detail`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   selectProject(input) {
@@ -668,7 +769,7 @@ export const creatorApi = {
   },
 
   getAssetLibrary() {
-    return fetchJson("/api/creator/assets/library");
+    return fetchJson("/api/creator/assets/library", { dedupeKey: "GET /api/creator/assets/library" });
   },
 
   getLibraryAssets(input = {}) {
@@ -687,7 +788,8 @@ export const creatorApi = {
       params.set("q", input.query);
     }
     const query = params.toString();
-    return fetchJson(`/api/creator/library/assets${query ? `?${query}` : ""}`);
+    const path = `/api/creator/library/assets${query ? `?${query}` : ""}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   updateProjectAsset(assetId, input) {
@@ -788,16 +890,19 @@ export const creatorApi = {
   },
 
   getAssetVersions(assetId) {
-    return fetchJson(`/api/creator/assets/versions/${encodeURIComponent(assetId)}`);
+    const path = `/api/creator/assets/versions/${encodeURIComponent(assetId)}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getProjectEpisodes(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/episodes`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/episodes`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getScriptReaderSections(projectId, input = {}) {
     const query = input.scriptId ? `?scriptId=${encodeURIComponent(input.scriptId)}` : "";
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   createScriptReaderSection(projectId, input) {
@@ -840,7 +945,8 @@ export const creatorApi = {
   },
 
   getProjectMembers(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/members`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/members`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   createProjectMember(projectId, input, options = {}) {
@@ -862,7 +968,8 @@ export const creatorApi = {
   },
 
   getProjectStats(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/stats`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/stats`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getProjectTeamDashboardExportUrl(projectId, params = {}) {
@@ -946,6 +1053,12 @@ export const creatorApi = {
     });
   },
 
+  getBatchImageStyles() {
+    return fetchJson("/api/creator/project-styles?category=batch&status=enabled&pageSize=500", {
+      unwrapEnvelope: false,
+    });
+  },
+
   createBillingOrder(input, options = {}) {
     return postJsonWithIdempotency("/api/billing/orders", input, {
       action: "billing.order.create",
@@ -958,6 +1071,10 @@ export const creatorApi = {
       action: "billing.intent.create",
       idempotencyKey: options.idempotencyKey,
     });
+  },
+
+  simulatePaymentIntentSuccess(input) {
+    return postJson("/api/billing/payment-intents/simulate-success", input);
   },
 
   requestEnterpriseContact(input, options = {}) {

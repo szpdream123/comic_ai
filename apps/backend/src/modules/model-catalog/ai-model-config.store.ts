@@ -1,6 +1,67 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
+const adminSecretValueStoreReady = new WeakSet<SqlDatabase>();
+
+async function ensureAdminSecretValueStore(db: SqlDatabase) {
+  if (adminSecretValueStoreReady.has(db)) return;
+  await db.query(`
+    ALTER TABLE admin_secret_references
+      ADD COLUMN IF NOT EXISTS secret_value text NULL
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_secret_values (
+      id uuid PRIMARY KEY,
+      secret_ref text NOT NULL UNIQUE,
+      secret_key text NOT NULL UNIQUE,
+      secret_value text NOT NULL,
+      purpose text NOT NULL DEFAULT '',
+      provider_name text NULL,
+      status text NOT NULL DEFAULT 'configured',
+      last_checked_at timestamptz NULL,
+      created_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (status IN ('configured', 'missing', 'unknown')),
+      CHECK (btrim(secret_value) <> '')
+    )
+  `);
+  await db.query(`
+    INSERT INTO admin_secret_values (
+      id, secret_ref, secret_key, secret_value, purpose, provider_name, status,
+      last_checked_at, created_by_admin_id, created_at, updated_at
+    )
+    SELECT
+      id,
+      secret_ref,
+      env_name,
+      secret_value,
+      purpose,
+      provider_name,
+      CASE
+        WHEN secret_value IS NOT NULL AND btrim(secret_value) <> '' THEN 'configured'
+        ELSE 'missing'
+      END,
+      last_checked_at,
+      created_by_admin_id,
+      created_at,
+      updated_at
+    FROM admin_secret_references
+    WHERE secret_value IS NOT NULL
+      AND btrim(secret_value) <> ''
+    ON CONFLICT (secret_key)
+    DO UPDATE SET
+      secret_ref = EXCLUDED.secret_ref,
+      secret_value = EXCLUDED.secret_value,
+      purpose = EXCLUDED.purpose,
+      provider_name = EXCLUDED.provider_name,
+      status = EXCLUDED.status,
+      last_checked_at = EXCLUDED.last_checked_at,
+      updated_at = EXCLUDED.updated_at
+  `);
+  adminSecretValueStoreReady.add(db);
+}
+
 export interface AiModelConfigRecord {
   id: string;
   modelCode: string;
@@ -94,7 +155,7 @@ export async function findActiveAiModelConfigByCode(
     [normalizedModelCode],
   );
 
-  return row ? aiModelConfigFromRow(row) : undefined;
+  return row ? resolveModelConfigSecretReferences(db, aiModelConfigFromRow(row)) : undefined;
 }
 
 export async function listActiveAiModelConfigs(
@@ -121,6 +182,38 @@ export async function listActiveAiModelConfigs(
   );
 
   return result.rows.map(aiModelConfigFromRow);
+}
+
+async function resolveModelConfigSecretReferences(
+  db: SqlDatabase,
+  modelConfig: AiModelConfigRecord,
+): Promise<AiModelConfigRecord> {
+  const apiKeyEnv = readString(modelConfig.providerConfig.apiKeyEnv);
+  if (!apiKeyEnv || readString(modelConfig.providerConfig.apiKey)) {
+    return modelConfig;
+  }
+  await ensureAdminSecretValueStore(db);
+  const row = await queryOne<{ secret_value: string | null }>(
+    db,
+    `
+      SELECT secret_value
+      FROM admin_secret_values
+      WHERE secret_key = $1 OR secret_ref = $1
+      LIMIT 1
+    `,
+    [apiKeyEnv],
+  );
+  const secretValue = readString(row?.secret_value);
+  if (!secretValue) {
+    return modelConfig;
+  }
+  return {
+    ...modelConfig,
+    providerConfig: {
+      ...modelConfig.providerConfig,
+      apiKey: secretValue,
+    },
+  };
 }
 
 export async function findActiveAiModelDispatchPolicyByModelCode(
@@ -207,4 +300,8 @@ function parseJsonArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
     : [];
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }

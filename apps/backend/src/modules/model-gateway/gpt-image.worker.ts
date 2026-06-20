@@ -746,11 +746,19 @@ function fallbackGptImageModelConfig(env: NodeJS.ProcessEnv) {
     providerConfig: {
       baseURL: env.GPT_IMAGE2_BASE_URL?.trim() || "https://api.openai.com",
       endpoint: env.GPT_IMAGE2_ENDPOINT?.trim() || "/v1/images/generations",
+      editEndpoint: env.GPT_IMAGE2_EDIT_ENDPOINT?.trim() || joinProviderUrl(
+        env.GPT_IMAGE2_BASE_URL?.trim() || "https://api.openai.com",
+        "/v1/images/edits",
+      ),
       apiKeyEnv: env.GPT_IMAGE2_API_KEY_ENV?.trim() || "GPT_IMAGE2_API_KEY",
       resultFormat: env.GPT_IMAGE2_RESULT_FORMAT?.trim() || "b64_json",
       timeoutMs: parsePositiveInteger(env.GPT_IMAGE2_TIMEOUT_MS, 600_000, 30 * 60_000),
     },
   };
+}
+
+function joinProviderUrl(baseURL: string, endpoint: string): string {
+  return `${baseURL.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
 }
 
 function parseSnapshot(value: Record<string, unknown> | string) {

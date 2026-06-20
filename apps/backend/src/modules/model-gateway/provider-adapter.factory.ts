@@ -153,8 +153,15 @@ function resolveProviderEndpoint(
   providerConfig: Record<string, unknown>,
   endpointField = "endpoint",
 ): string | undefined {
-  const endpoint = readNonEmptyString(providerConfig[endpointField]);
+  const requestPath = endpointField === "endpoint" || endpointField === "createTaskEndpoint"
+    ? readNonEmptyString(providerConfig.requestPath)
+    : undefined;
+  const endpoint = requestPath ?? readNonEmptyString(providerConfig[endpointField]);
   const baseURL = readNonEmptyString(providerConfig.baseURL);
+
+  if (endpoint && isAbsoluteHttpUrl(endpoint)) {
+    return endpoint;
+  }
 
   if (baseURL && endpoint) {
     return joinUrl(baseURL, endpoint);
@@ -246,4 +253,8 @@ function resolveProviderResultFormat(providerConfig: Record<string, unknown>): s
 
 function joinUrl(baseURL: string, endpoint: string): string {
   return `${baseURL.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+}
+
+function isAbsoluteHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
 }

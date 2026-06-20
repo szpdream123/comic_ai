@@ -242,7 +242,7 @@ test("admin user credit ledger includes membership gifted credits for owner wall
           '94000000-0000-4000-8000-000000002001',
           'scope-owner',
           'Scope Owner',
-          'owner',
+          'admin',
           '95000000-0000-4000-8000-000000002001',
           8000,
           0,
@@ -380,6 +380,47 @@ test("admin user credit ledger can target the current workspace wallet", async (
     assert.equal(result.data[0]?.amount, 3000);
     assert.equal(result.data[0]?.metadata.orderNo, "ORD-WORKSPACE-GIFT");
     assert.equal(result.summary.displayAvailableCredits, 3000);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger can be scoped to a specific creator organization and workspace", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await seedCreatorScopedCreditLedgerFixture(db);
+    const result = await service.listUserCreditLedger({
+      userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
+      organizationId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "caf8d99f-a74d-4a80-8610-3c0e725d420b",
+      pageSize: 10,
+    });
+
+    assert.deepEqual(
+      result.data.slice(0, 2).map((entry) => ({
+        sourceType: entry.sourceType,
+        entryType: entry.entryType,
+        amount: entry.amount,
+        taskId: entry.metadata.taskId,
+      })),
+      [
+        {
+          sourceType: "credit_reservation_allocation",
+          entryType: "release",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+        {
+          sourceType: "episode_generation_task",
+          entryType: "reservation",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+      ],
+    );
   } finally {
     await db.close();
   }
@@ -1000,6 +1041,156 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           '{"billingEvent":"released","failureCode":"task_timeout"}'::jsonb,
           NULL,
           '2026-06-05T07:12:00.000Z'
+        )
+    `,
+  );
+}
+
+async function seedCreatorScopedCreditLedgerFixture(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO users (id, email, phone_e164, display_name, status)
+      VALUES (
+        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+        'creator-scoped@example.test',
+        '+8613800200101',
+        'Creator Scoped',
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+      VALUES (
+        '10000000-0000-4000-8000-000000000001',
+        'Creator Scoped Org',
+        'active',
+        901,
+        0
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES (
+        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
+        '10000000-0000-4000-8000-000000000001',
+        'Creator Scoped Workspace',
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES (
+        '9af8d99f-a74d-4a80-a610-3c0e725d420b',
+        '10000000-0000-4000-8000-000000000001',
+        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
+        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+        'owner_admin',
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO credit_reservations (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_id,
+        task_id,
+        amount_total,
+        amount_reserved,
+        amount_consumed,
+        amount_released,
+        status,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '21cac812-37b1-4d50-abb0-fc046d52259e',
+        '10000000-0000-4000-8000-000000000001',
+        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
+        NULL,
+        NULL,
+        NULL,
+        99,
+        0,
+        0,
+        99,
+        'released',
+        'episode_generation_task',
+        '11cac812-37b1-4d50-abb0-fc046d52259e',
+        'Scoped creator generation failed and refunded',
+        '{"targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
+        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+        '2026-06-05T08:00:00.000Z',
+        '2026-06-05T08:01:00.000Z'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        reservation_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES
+        (
+          '31cac812-37b1-4d50-abb0-fc046d52259e',
+          '10000000-0000-4000-8000-000000000001',
+          '21cac812-37b1-4d50-abb0-fc046d52259e',
+          'reservation',
+          99,
+          -99,
+          99,
+          0,
+          'episode_generation_task',
+          '11cac812-37b1-4d50-abb0-fc046d52259e',
+          'Scoped creator generation reserved credits',
+          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e","targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
+          NULL,
+          '2026-06-05T08:00:00.000Z'
+        ),
+        (
+          '41cac812-37b1-4d50-abb0-fc046d52259e',
+          '10000000-0000-4000-8000-000000000001',
+          '21cac812-37b1-4d50-abb0-fc046d52259e',
+          'release',
+          99,
+          99,
+          -99,
+          0,
+          'credit_reservation_allocation',
+          '51cac812-37b1-4d50-abb0-fc046d52259e',
+          'Scoped creator generation released credits',
+          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e","targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
+          NULL,
+          '2026-06-05T08:01:00.000Z'
         )
     `,
   );

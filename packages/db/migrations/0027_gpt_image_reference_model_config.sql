@@ -1,8 +1,9 @@
 UPDATE ai_model_configs
-SET provider_config_json = jsonb_build_object(
+SET provider_config_json = COALESCE(provider_config_json, '{}'::jsonb) || jsonb_build_object(
       'baseURL', 'https://code.shoestravel.xin',
       'endpoint', '/v1/images/generations',
-      'editEndpoint', '/v1/images/edits',
+      'requestPath', '/v1/images/generations',
+      'editEndpoint', 'https://image.shoestravel.xin/v1/images/edits',
       'apiKeyEnv', 'GPT_IMAGE2_API_KEY',
       'resultFormat', 'b64_json',
       'requestFormat', 'openai_images',
@@ -60,7 +61,7 @@ INSERT INTO ai_model_configs (
     "count":{"label":"数量","type":"integer","required":false,"minimum":1,"maximum":4}
   }'::jsonb,
   '{"quality":"2K","count":1,"aspectRatio":"9:16"}'::jsonb,
-  '{"baseURL":"https://code.shoestravel.xin","endpoint":"/v1/images/generations","editEndpoint":"/v1/images/edits","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json","requestFormat":"openai_images","timeoutMs":600000}'::jsonb,
+  '{"baseURL":"https://code.shoestravel.xin","endpoint":"/v1/images/generations","requestPath":"/v1/images/generations","editEndpoint":"https://image.shoestravel.xin/v1/images/edits","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json","requestFormat":"openai_images","timeoutMs":600000}'::jsonb,
   '{"baseCredits":99,"unit":"image","qualityMultipliers":{"standard":1,"hd":1.2,"2K":1.5}}'::jsonb,
   '{"maxPromptLength":4000,"maxReferences":8,"maxCount":4,"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/avif"]}'::jsonb,
   '{"label":"GPT Image 2 参考生图","group":"TravelToken","recommended":false,"visible":true,"pipeline":"G","supportedModes":["multi_reference","image_to_image"],"providerDocUrl":"https://code.shoestravel.xin/custom/a99e495b4c5372d7","parameterDisplayLanguage":"zh-CN"}'::jsonb,
@@ -79,7 +80,7 @@ ON CONFLICT (model_code) DO UPDATE SET
   capabilities_json = EXCLUDED.capabilities_json,
   parameter_schema_json = EXCLUDED.parameter_schema_json,
   default_params_json = EXCLUDED.default_params_json,
-  provider_config_json = EXCLUDED.provider_config_json,
+    provider_config_json = COALESCE(ai_model_configs.provider_config_json, '{}'::jsonb) || EXCLUDED.provider_config_json,
   pricing_json = EXCLUDED.pricing_json,
   limits_json = EXCLUDED.limits_json,
   ui_config_json = EXCLUDED.ui_config_json,

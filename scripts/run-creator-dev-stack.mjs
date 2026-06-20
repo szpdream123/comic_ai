@@ -13,6 +13,7 @@ mkdirSync(logDir, { recursive: true });
 
 process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED ??= "true";
 process.env.BULLMQ_WORKERS_ENABLED ??= "true";
+process.env.GENERATION_QUEUE_REQUIRED ??= "true";
 
 const redisUrl = new URL(process.env.REDIS_URL?.trim() || "redis://127.0.0.1:6379/0");
 const redisHost = redisUrl.hostname || "127.0.0.1";
@@ -64,7 +65,10 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 function startService(name, args) {
   const child = spawn(runtime, args, {
     cwd: process.cwd(),
-    env: process.env,
+    env: {
+      ...process.env,
+      CREATOR_DEV_STACK_MANAGED: "true",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);

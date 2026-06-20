@@ -40,6 +40,7 @@ import {
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
+import { readBatchImagePromptPresetCategoriesFromDb } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
@@ -48,14 +49,12 @@ import { enqueueMissingMembershipActivationForPaidOrder } from "../modules/membe
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
+  signPaymentCallback,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import { createCreditPackageService } from "../modules/commerce-payment/credit-package.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
-  createDefaultPaymentProviderRegistry,
-  createLocalPaymentProviderAdapter,
-  createPayLabAdapter,
-  createStaticPaymentProviderRegistry,
+  createEnvPaymentProviderRegistry,
   isPaymentProvider,
   type PaymentProvider,
 } from "../modules/commerce-payment/payment-provider-adapter.ts";
@@ -68,6 +67,11 @@ import {
 } from "../modules/identity/persistent-auth.service.ts";
 import { createAuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
+import {
+  createUserPasswordHash,
+  defaultPasswordFromPhone,
+  verifyTeamCredential,
+} from "../modules/identity/team-account-credentials.service.ts";
 import { CreatorDevApp } from "../modules/project/creator-dev-app.ts";
 import {
   createCreatorApplication,
@@ -82,6 +86,7 @@ import {
   getOrCreateProjectCanvas,
   listCanvasNodeRuns,
   markCanvasNodeRunQueued,
+  saveCanvasByCanvasProjectId,
   saveProjectCanvas,
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
@@ -90,6 +95,7 @@ import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
 } from "../modules/project/project-upload-record.service.ts";
+import { createEpisodeForProject } from "../modules/project/episode-record.service.ts";
 import {
   AuthorizationError,
   type ActorContext,
@@ -200,9 +206,20 @@ const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-
 const vendorRoot = join(process.cwd(), "node_modules");
 const devOrganizationId = "10000000-0000-4000-8000-000000000001";
 const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
+
+type LingxiCommunityItem = {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  author: string;
+  createdAt: string;
+  createdAtLabel: string;
+  votes?: number;
+  promptMeta?: Record<string, unknown> | null;
+};
 const devPaymentCallbackSecret = "dev-payment-secret";
 const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
-const devInitialCreditBalance = 10000;
 const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
 const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -289,21 +306,7 @@ const contentTypes: Record<string, string> = {
 };
 
 function createDevPaymentProviderRegistry() {
-  const paylabBaseUrl = process.env.PAYLAB_BASE_URL?.trim();
-  if (!paylabBaseUrl) {
-    return createDefaultPaymentProviderRegistry();
-  }
-
-  return createStaticPaymentProviderRegistry({
-    paylab: createPayLabAdapter({
-      baseUrl: paylabBaseUrl,
-      apiKey: process.env.PAYLAB_API_KEY?.trim(),
-      webhookSigningSecret: process.env.PAYLAB_WEBHOOK_SIGNING_SECRET?.trim(),
-      dashboardBaseUrl: process.env.PAYLAB_DASHBOARD_BASE_URL?.trim(),
-    }),
-    wechat_pay: createLocalPaymentProviderAdapter("wechat_pay"),
-    alipay: createLocalPaymentProviderAdapter("alipay"),
-  });
+  return createEnvPaymentProviderRegistry(process.env);
 }
 
 interface AuthHttpResponse<T> {
@@ -347,6 +350,7 @@ class GenerationRequestValidationError extends Error {
 interface AuthenticatedUser {
   id: string;
   phone: string | null;
+  displayName?: string | null;
   creditBalance: number;
   availableCredits: number;
   reservedCredits: number;
@@ -932,6 +936,72 @@ function envelopedError(
   };
 }
 
+function createDefaultLingxiCommunityBoard(): { posts: LingxiCommunityItem[]; features: LingxiCommunityItem[] } {
+  return {
+    posts: [
+      createLingxiCommunityItem({
+        id: "feedback-seed-render-waiting",
+        title: "分镜生成偶尔停在等待模型接收",
+        content: "希望能在任务卡片里看到当前排队原因、预计等待时间，以及一键重试入口。",
+        category: "问题反馈",
+        author: "灵曦体验官",
+        createdAt: "2026-06-18T09:30:00.000Z",
+      }),
+    ],
+    features: [
+      {
+        ...createLingxiCommunityItem({
+          id: "feature-seed-batch-character-views",
+          title: "批量生成角色三视图",
+          content: "上传人物设定后，一次生成正面、侧面、背面，方便后续视频保持一致。",
+          category: "功能建议",
+          author: "创作者共创",
+          createdAt: "2026-06-18T09:20:00.000Z",
+        }),
+        votes: 18,
+      },
+      {
+        ...createLingxiCommunityItem({
+          id: "feature-seed-shot-copy",
+          title: "跨项目复用分镜模板",
+          content: "常用镜头运动、字幕样式和画面比例可以保存成模板，在新项目中直接套用。",
+          category: "功能建议",
+          author: "灵曦体验官",
+          createdAt: "2026-06-18T09:10:00.000Z",
+        }),
+        votes: 12,
+      },
+    ],
+  };
+}
+
+function createLingxiCommunityItem(input: Partial<LingxiCommunityItem>): LingxiCommunityItem {
+  const createdAt = input.createdAt || new Date().toISOString();
+  return {
+    id: input.id || randomUUID(),
+    title: String(input.title || "").trim().slice(0, 80),
+    content: String(input.content || "").trim().slice(0, 800),
+    category: String(input.category || "问题反馈").trim().slice(0, 24),
+    author: String(input.author || "灵曦用户").trim().slice(0, 40),
+    createdAt,
+    createdAtLabel: formatLingxiCommunityDate(createdAt),
+    votes: input.votes,
+  };
+}
+
+function lingxiCommunitySnapshot(board: { posts: LingxiCommunityItem[]; features: LingxiCommunityItem[] }) {
+  return {
+    posts: board.posts.map((item) => ({ ...item })),
+    features: board.features.map((item) => ({ ...item })),
+  };
+}
+
+function formatLingxiCommunityDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 interface CanvasProjectRecord {
   id: string;
   projectId: string | null;
@@ -955,6 +1025,8 @@ interface CanvasProjectRow {
   server_revision?: number;
   latest_document_id?: string | null;
 }
+
+const standaloneCanvasRunProjectNamePrefix = "画布生成 - ";
 
 function formatCanvasProjectDate(now = new Date()): string {
   const date = now instanceof Date ? now : new Date(now);
@@ -998,15 +1070,34 @@ async function listCanvasProjects(
 ): Promise<CanvasProjectRecord[]> {
   const result = await db.query<CanvasProjectRow>(
     `
-      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      SELECT
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        title,
+        status,
+        created_by_user_id,
+        created_at
       FROM creator_canvas_projects
       WHERE organization_id = $1
         AND created_by_user_id = $2
-        AND project_id IS NULL
+        AND (
+          project_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM projects
+            WHERE projects.organization_id = creator_canvas_projects.organization_id
+              AND projects.workspace_id = creator_canvas_projects.workspace_id
+              AND projects.id = creator_canvas_projects.project_id
+              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
+              AND projects.name LIKE $3
+          )
+        )
         AND deleted_at IS NULL
       ORDER BY created_at ASC, id ASC
     `,
-    [input.organizationId, input.userId],
+    [input.organizationId, input.userId, `${standaloneCanvasRunProjectNamePrefix}%`],
   );
   return result.rows.map(canvasProjectFromRow);
 }
@@ -1067,11 +1158,22 @@ async function findCanvasProjectRecord(
       WHERE organization_id = $1
         AND created_by_user_id = $2
         AND id = $3
-        AND project_id IS NULL
+        AND (
+          project_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM projects
+            WHERE projects.organization_id = creator_canvas_projects.organization_id
+              AND projects.workspace_id = creator_canvas_projects.workspace_id
+              AND projects.id = creator_canvas_projects.project_id
+              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
+              AND projects.name LIKE $4
+          )
+        )
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.userId, input.projectId],
+    [input.organizationId, input.userId, input.projectId, `${standaloneCanvasRunProjectNamePrefix}%`],
   );
   return row ? canvasProjectFromRow(row) : null;
 }
@@ -1098,7 +1200,18 @@ async function updateCanvasProjectRecord(
       WHERE organization_id = $1
         AND created_by_user_id = $2
         AND id = $3
-        AND project_id IS NULL
+        AND (
+          project_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM projects
+            WHERE projects.organization_id = creator_canvas_projects.organization_id
+              AND projects.workspace_id = creator_canvas_projects.workspace_id
+              AND projects.id = creator_canvas_projects.project_id
+              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
+              AND projects.name LIKE $7
+          )
+        )
         AND deleted_at IS NULL
       RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
     `,
@@ -1109,6 +1222,7 @@ async function updateCanvasProjectRecord(
       input.title ?? null,
       input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
       input.now,
+      `${standaloneCanvasRunProjectNamePrefix}%`,
     ],
   );
   return row ? canvasProjectFromRow(row) : null;
@@ -1135,10 +1249,21 @@ async function deleteCanvasProjectRecord(
       WHERE organization_id = $1
         AND created_by_user_id = $2
         AND id = $3
-        AND project_id IS NULL
+        AND (
+          project_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM projects
+            WHERE projects.organization_id = creator_canvas_projects.organization_id
+              AND projects.workspace_id = creator_canvas_projects.workspace_id
+              AND projects.id = creator_canvas_projects.project_id
+              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
+              AND projects.name LIKE $5
+          )
+        )
         AND deleted_at IS NULL
     `,
-    [input.organizationId, input.userId, input.projectId, input.now],
+    [input.organizationId, input.userId, input.projectId, input.now, `${standaloneCanvasRunProjectNamePrefix}%`],
   );
   return result.rowCount > 0;
 }
@@ -1146,6 +1271,23 @@ async function deleteCanvasProjectRecord(
 function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
   response.write(`event: ${event}\n`);
   response.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function toSsePayload(event: { type: string } & Record<string, unknown>) {
+  const { type: _type, ...payload } = event;
+  return payload;
+}
+
+function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000) {
+  writeSseEvent(response, "ping", { ts: new Date().toISOString() });
+  const timer = setInterval(() => {
+    if (!response.destroyed && !response.writableEnded) {
+      writeSseEvent(response, "ping", { ts: new Date().toISOString() });
+    }
+  }, intervalMs);
+  response.on("close", () => clearInterval(timer));
+  response.on("finish", () => clearInterval(timer));
+  return () => clearInterval(timer);
 }
 
 async function retryTaskForBackendAdmin(input: {
@@ -2571,6 +2713,87 @@ async function resolveCanvasRunEpisodeId(
     [input.organizationId, input.projectId],
   );
   return fallback?.id ?? null;
+}
+
+async function ensureStandaloneCanvasRunProject(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    canvasProjectId: string;
+    userId: string;
+    now: Date;
+  },
+) {
+  const canvas = await queryOne<{
+    id: string;
+    project_id: string | null;
+    title: string | null;
+  }>(
+    db,
+    `
+      SELECT id, project_id, title
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.organizationId, input.workspaceId, input.canvasProjectId],
+  );
+  if (!canvas || canvas.project_id) {
+    return canvas?.project_id ?? null;
+  }
+
+  const projectId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO projects (
+        id,
+        organization_id,
+        workspace_id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, '9:16', '1080p', 'shot_generation', $5, $6, $6)
+    `,
+    [
+      projectId,
+      input.organizationId,
+      input.workspaceId,
+      `${standaloneCanvasRunProjectNamePrefix}${canvas.title || canvas.id}`,
+      input.userId,
+      input.now,
+    ],
+  );
+
+  await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET project_id = $4,
+          updated_by_user_id = $5,
+          updated_at = $6
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+    `,
+    [input.organizationId, input.workspaceId, input.canvasProjectId, projectId, input.userId, input.now],
+  );
+
+  await createEpisodeForProject(db, {
+    organizationId: input.organizationId,
+    projectId,
+    title: "画布生成",
+    createdByUserId: input.userId,
+    now: input.now,
+  });
+  return projectId;
 }
 
 async function resolveTaskContext(
@@ -7651,19 +7874,13 @@ async function ensureDevWorkspaceAccess(
 
   await db.query(
     `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Comic AI Studio', 'active', $2)
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Comic AI Studio', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET name = EXCLUDED.name,
-          credit_balance_cached = CASE
-            WHEN organizations.credit_balance_cached <= 0
-            THEN $2
-            ELSE organizations.credit_balance_cached
-          END
+      SET name = EXCLUDED.name
     `,
-    [devOrganizationId, devInitialCreditBalance],
+    [devOrganizationId],
   );
-  await ensureDevInitialCreditLot(db);
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
@@ -7716,19 +7933,13 @@ async function ensurePersonalDevWorkspaceAccess(
 
   await db.query(
     `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Personal Creator Workspace', 'active', $2)
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Personal Creator Workspace', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET status = 'active',
-          credit_balance_cached = CASE
-            WHEN organizations.credit_balance_cached <= 0
-            THEN $2
-            ELSE organizations.credit_balance_cached
-          END
+      SET status = 'active'
     `,
-    [scope.organizationId, devInitialCreditBalance],
+    [scope.organizationId],
   );
-  await ensureDevInitialCreditLot(db, scope.organizationId);
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
@@ -7748,33 +7959,288 @@ async function ensurePersonalDevWorkspaceAccess(
   );
 }
 
-async function resolveDefaultWorkspaceForSession(
+async function resolvePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
-  now: Date,
 ): Promise<string> {
-  const membership = await queryOne<{ workspace_id: string }>(
+  await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+  await repairTeamWorkspaceProjectsToPersonalWorkspaces(db);
+  return personalProjectWorkspaceId(authenticated.user.id);
+}
+
+async function ensurePersonalProjectWorkspaceForSession(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  authenticated: { sessionToken: string; user: AuthenticatedUser },
+): Promise<string> {
+  return ensureCachedPersonalProjectWorkspaceAccess(db, authenticated.user.id);
+}
+
+const personalProjectWorkspaceAccessPromises = new WeakMap<
+  Awaited<ReturnType<typeof createDevDb>>,
+  Map<string, Promise<string>>
+>();
+
+async function ensureCachedPersonalProjectWorkspaceAccess(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+): Promise<string> {
+  let promises = personalProjectWorkspaceAccessPromises.get(db);
+  if (!promises) {
+    promises = new Map();
+    personalProjectWorkspaceAccessPromises.set(db, promises);
+  }
+  const cached = promises.get(userId);
+  if (cached) {
+    return cached;
+  }
+  const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
+    .then(() => personalProjectWorkspaceId(userId))
+    .catch((error) => {
+      promises?.delete(userId);
+      throw error;
+    });
+  promises.set(userId, promise);
+  return promise;
+}
+
+async function ensurePersonalProjectWorkspaceAccess(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const workspaceId = personalProjectWorkspaceId(userId);
+
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Comic AI Studio', 'active')
+      ON CONFLICT (id) DO UPDATE
+      SET name = EXCLUDED.name,
+          status = 'active'
+    `,
+    [devOrganizationId],
+  );
+  await repairDevOrganizationLegacyCreditLots(db);
+
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Personal Project Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
+    `,
+    [workspaceId, devOrganizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET role = 'owner_admin', status = 'active'
+    `,
+    [randomUUID(), devOrganizationId, workspaceId, userId],
+  );
+}
+
+async function repairDevOrganizationLegacyCreditLots(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const row = await queryOne<{
+    credit_balance_cached: number | string;
+    lot_total: number | string;
+  }>(
     db,
     `
-      SELECT workspace_id
-      FROM memberships
-      WHERE user_id = $1
-        AND status = 'active'
-        AND workspace_id IS NOT NULL
-      ORDER BY
-        CASE WHEN workspace_id = $2 THEN 1 ELSE 0 END,
-        created_at DESC,
-        id DESC
+      SELECT
+        o.credit_balance_cached,
+        COALESCE(sum(l.total_amount), 0)::int AS lot_total
+      FROM organizations o
+      LEFT JOIN credit_lots l
+        ON l.organization_id = o.id
+      WHERE o.id = $1
+      GROUP BY o.id, o.credit_balance_cached
       LIMIT 1
     `,
-    [authenticated.user.id, devWorkspaceId],
+    [devOrganizationId],
   );
-  if (membership?.workspace_id) {
-    return membership.workspace_id;
+  const missingAmount = Number(row?.credit_balance_cached ?? 0) - Number(row?.lot_total ?? 0);
+  if (!Number.isFinite(missingAmount) || missingAmount <= 0) {
+    return;
   }
 
-  await ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
-  return personalDevTenantScope(authenticated.user.id).workspaceId;
+  const sourceId = devOrganizationId;
+  await db.query("BEGIN");
+  try {
+    let grantLedgerEntryId = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM credit_ledger_entries
+        WHERE organization_id = $1
+          AND entry_type = 'grant'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [devOrganizationId],
+    ).then((existing) => existing?.id ?? null);
+
+    if (!grantLedgerEntryId) {
+      const ledger = await queryOne<{ id: string }>(
+        db,
+        `
+          INSERT INTO credit_ledger_entries (
+            id,
+            organization_id,
+            reservation_id,
+            allocation_id,
+            entry_type,
+            amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
+            reason,
+            metadata_json,
+            created_by_user_id,
+            created_at
+          )
+          VALUES (
+            $1, $2, NULL, NULL, 'grant', $3, $3, 0, 0,
+            'dev_legacy_credit_lot_repair', $4, 'repair legacy dev credit lots',
+            $5::jsonb, NULL, now()
+          )
+          ON CONFLICT (organization_id, source_type, source_id, entry_type)
+          DO NOTHING
+          RETURNING id
+        `,
+        [
+          randomUUID(),
+          devOrganizationId,
+          missingAmount,
+          sourceId,
+          JSON.stringify({ repairedOrganizationId: devOrganizationId }),
+        ],
+      );
+      grantLedgerEntryId = ledger?.id ?? await queryOne<{ id: string }>(
+        db,
+        `
+          SELECT id
+          FROM credit_ledger_entries
+          WHERE organization_id = $1
+            AND source_type = 'dev_legacy_credit_lot_repair'
+            AND source_id = $2
+            AND entry_type = 'grant'
+          LIMIT 1
+        `,
+        [devOrganizationId, sourceId],
+      ).then((existing) => existing?.id ?? null);
+    }
+
+    if (!grantLedgerEntryId) {
+      throw new Error("dev_legacy_credit_lot_repair_ledger_missing");
+    }
+    await db.query(
+      `
+        INSERT INTO credit_lots (
+          id,
+          organization_id,
+          source_type,
+          source_id,
+          grant_ledger_entry_id,
+          total_amount,
+          available_amount,
+          reserved_amount,
+          consumed_amount,
+          expired_amount,
+          expires_at,
+          metadata_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1, $2, 'dev_legacy_credit_lot_repair', $3, $4,
+          $5, $5, 0, 0, 0, NULL, $6::jsonb, now(), now()
+        )
+        ON CONFLICT (organization_id, source_type, source_id, grant_ledger_entry_id)
+        DO NOTHING
+      `,
+      [
+        randomUUID(),
+        devOrganizationId,
+        sourceId,
+        grantLedgerEntryId,
+        missingAmount,
+        JSON.stringify({ repairedOrganizationId: devOrganizationId }),
+      ],
+    );
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+const teamWorkspaceProjectRepairPromises = new WeakMap<
+  Awaited<ReturnType<typeof createDevDb>>,
+  Promise<void>
+>();
+
+async function repairTeamWorkspaceProjectsToPersonalWorkspaces(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  let repairPromise = teamWorkspaceProjectRepairPromises.get(db);
+  if (!repairPromise) {
+    repairPromise = runTeamWorkspaceProjectRepair(db);
+    teamWorkspaceProjectRepairPromises.set(db, repairPromise);
+  }
+  return repairPromise;
+}
+
+async function runTeamWorkspaceProjectRepair(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const owners = await db.query<{ user_id: string }>(
+    `
+      SELECT DISTINCT created_by_user_id AS user_id
+      FROM projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND created_by_user_id IS NOT NULL
+    `,
+    [devOrganizationId, devWorkspaceId],
+  );
+
+  for (const owner of owners.rows) {
+    await ensurePersonalProjectWorkspaceAccess(db, owner.user_id);
+  }
+
+  await db.query(
+    `
+      UPDATE projects
+      SET workspace_id = personal_scope.workspace_id
+      FROM (
+        SELECT
+          u.id AS user_id,
+          (
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 1, 8) || '-' ||
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 9, 4) || '-' ||
+            '4' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 14, 3) || '-' ||
+            '8' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 18, 3) || '-' ||
+            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 21, 12)
+          )::uuid AS workspace_id
+        FROM users u
+      ) personal_scope
+      WHERE projects.organization_id = $1
+        AND projects.workspace_id = $2
+        AND projects.created_by_user_id IS NOT NULL
+        AND projects.created_by_user_id = personal_scope.user_id
+    `,
+    [devOrganizationId, devWorkspaceId],
+  );
+}
+
+function personalProjectWorkspaceId(userId: string) {
+  const normalized = userId.replace(/-/g, "");
+  return uuidFromHex(`c${normalized.slice(1, 32)}`);
 }
 
 function personalDevTenantScope(userId: string): DevTenantScope {
@@ -7788,64 +8254,6 @@ function personalDevTenantScope(userId: string): DevTenantScope {
 function uuidFromHex(hex: string) {
   const value = hex.padEnd(32, "0").slice(0, 32);
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
-}
-
-async function ensureDevInitialCreditLot(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  organizationId = devOrganizationId,
-) {
-  const sourceId = "00000000-0000-4000-8000-000000000001";
-  const existingLot = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM credit_lots
-      WHERE organization_id = $1
-        AND source_type = 'dev_seed_initial_credits'
-        AND source_id = $2
-      LIMIT 1
-    `,
-    [organizationId, sourceId],
-  );
-  if (existingLot) {
-    return;
-  }
-
-  const organization = await queryOne<{ credit_balance_cached: number | string }>(
-    db,
-    "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-    [organizationId],
-  );
-  const currentBalance = Number(organization?.credit_balance_cached ?? 0);
-  const balanceWithoutImplicitSeed = Math.max(0, currentBalance - devInitialCreditBalance);
-  const now = new Date();
-
-  await db.query("BEGIN");
-  try {
-    await db.query(
-      `
-        UPDATE organizations
-        SET credit_balance_cached = $2,
-            updated_at = $3
-        WHERE id = $1
-      `,
-      [organizationId, balanceWithoutImplicitSeed, now],
-    );
-    await grantCreditsInTransaction(db, {
-      organizationId,
-      amount: devInitialCreditBalance,
-      sourceType: "dev_seed_initial_credits",
-      sourceId,
-      reason: "dev initial credits",
-      createdByUserId: null,
-      metadata: { seededBy: "phone-auth-dev-server" },
-      now,
-    });
-    await db.query("COMMIT");
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
-  }
 }
 
 async function ensureDefaultMembershipPlan(
@@ -8251,8 +8659,9 @@ async function findAuthenticatedUser(
   const user = await queryOne<{
     id: string;
     phone_e164: string | null;
+    display_name: string | null;
     status: "active" | "disabled";
-  }>(db, "SELECT id, phone_e164, status FROM users WHERE id = $1", [session.userId]);
+  }>(db, "SELECT id, phone_e164, display_name, status FROM users WHERE id = $1", [session.userId]);
 
   if (!user || user.status !== "active") {
     return undefined;
@@ -8264,11 +8673,167 @@ async function findAuthenticatedUser(
     user: {
       id: user.id,
       phone: user.phone_e164,
+      displayName: user.display_name,
       creditBalance: credit.creditBalance,
       availableCredits: credit.availableCredits,
       reservedCredits: credit.reservedCredits,
     },
   };
+}
+
+async function updateAuthenticatedUserProfile(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    displayName: string;
+    now: Date;
+  },
+): Promise<
+  | {
+      ok: true;
+      user: {
+        id: string;
+        phone: string | null;
+        displayName: string | null;
+      };
+    }
+  | { ok: false; status: number; body: { error: string; message: string } }
+> {
+  const displayName = String(input.displayName ?? "").trim();
+  if (!displayName) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "display_name_required", message: "请输入显示昵称。" },
+    };
+  }
+  if ([...displayName].length > 40) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "display_name_too_long", message: "显示昵称最多 40 个字符。" },
+    };
+  }
+
+  const updated = await queryOne<{
+    id: string;
+    phone_e164: string | null;
+    display_name: string | null;
+  }>(
+    db,
+    `
+      UPDATE users
+      SET display_name = $2,
+          updated_at = $3
+      WHERE id = $1
+      RETURNING id, phone_e164, display_name
+    `,
+    [input.userId, displayName, input.now],
+  );
+
+  if (!updated) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: "user_not_found", message: "当前登录用户不存在。" },
+    };
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: updated.id,
+      phone: updated.phone_e164,
+      displayName: updated.display_name,
+    },
+  };
+}
+
+async function changeAuthenticatedUserPassword(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    currentPassword: string;
+    newPassword: string;
+    now: Date;
+  },
+): Promise<{ ok: true } | { ok: false; status: number; body: { error: string; message: string } }> {
+  const currentPassword = String(input.currentPassword ?? "");
+  const newPassword = String(input.newPassword ?? "");
+  if (!currentPassword) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "current_password_required", message: "请输入当前密码。" },
+    };
+  }
+  if (!newPassword) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "new_password_required", message: "请输入新密码。" },
+    };
+  }
+  if (newPassword.length < 8) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "new_password_too_short", message: "新密码至少需要 8 位。" },
+    };
+  }
+
+  const user = await queryOne<{
+    id: string;
+    phone_e164: string | null;
+    password_hash: string | null;
+  }>(
+    db,
+    `
+      SELECT id, phone_e164, password_hash
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [input.userId],
+  );
+  if (!user) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: "user_not_found", message: "当前登录用户不存在。" },
+    };
+  }
+
+  let validCurrentPassword = false;
+  if (user.password_hash) {
+    validCurrentPassword = await verifyTeamCredential({
+      password: currentPassword,
+      passwordHash: user.password_hash,
+    });
+  } else if (user.phone_e164) {
+    validCurrentPassword = currentPassword === defaultPasswordFromPhone(user.phone_e164);
+  }
+
+  if (!validCurrentPassword) {
+    return {
+      ok: false,
+      status: 401,
+      body: { error: "invalid_current_password", message: "当前密码不正确。" },
+    };
+  }
+
+  const nextPasswordHash = await createUserPasswordHash(newPassword);
+  await db.query(
+    `
+      UPDATE users
+      SET password_hash = $2,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.userId, nextPasswordHash, input.now],
+  );
+
+  return { ok: true };
 }
 
 function parseRepairSchedulerOptions(
@@ -8406,11 +8971,9 @@ function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
   }
 
   const hostname = parsed.hostname.toLowerCase();
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
-    return;
+  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "[::1]") {
+    throw new Error("phone_auth_dev_server_remote_database_forbidden");
   }
-
-  throw new Error("phone_auth_dev_server_remote_database_forbidden");
 }
 
 export function createPhoneAuthDevServer(
@@ -8435,6 +8998,7 @@ export function createPhoneAuthDevServer(
   void dbPromise
     .then((db) => {
       resolvedDb = db;
+      return repairDevOrganizationLegacyCreditLots(db);
     })
     .catch(() => undefined);
   const repairSchedulerOptions = parseRepairSchedulerOptions(options.repairScheduler);
@@ -8442,6 +9006,7 @@ export function createPhoneAuthDevServer(
   let repairSchedulerRunning = false;
   const debugChallengeCodes = new Map<string, string>();
   const wechatLoginStates = new Map<string, { createdAt: number }>();
+  const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
@@ -8556,6 +9121,56 @@ export function createPhoneAuthDevServer(
 
       if (pathname.startsWith("/vendor/")) {
         return await serveVendorFile(pathname, response);
+      }
+
+      if (request.method === "GET" && pathname === "/api/community") {
+        return writeJson(response, enveloped(200, lingxiCommunitySnapshot(lingxiCommunity)));
+      }
+
+      if (request.method === "POST" && pathname === "/api/community/feedback") {
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const item = createLingxiCommunityItem({
+          title: String(body.title ?? ""),
+          content: String(body.content ?? ""),
+          category: String(body.category ?? "问题反馈"),
+          author: String(body.author ?? "灵曦用户"),
+        });
+        if (!item.title || !item.content) {
+          return writeJson(response, envelopedError(400, "community_feedback_invalid", "Feedback title and content are required"));
+        }
+        lingxiCommunity.posts.unshift(item);
+        lingxiCommunity.posts.splice(80);
+        return writeJson(response, enveloped(201, lingxiCommunitySnapshot(lingxiCommunity)));
+      }
+
+      if (request.method === "POST" && pathname === "/api/community/features") {
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const item = {
+          ...createLingxiCommunityItem({
+            title: String(body.title ?? ""),
+            content: String(body.content ?? ""),
+            category: "功能建议",
+            author: String(body.author ?? "灵曦用户"),
+          }),
+          votes: 1,
+        };
+        if (!item.title || !item.content) {
+          return writeJson(response, envelopedError(400, "community_feature_invalid", "Feature title and content are required"));
+        }
+        lingxiCommunity.features.unshift(item);
+        lingxiCommunity.features.splice(80);
+        return writeJson(response, enveloped(201, lingxiCommunitySnapshot(lingxiCommunity)));
+      }
+
+      const communityVoteMatch = pathname.match(/^\/api\/community\/features\/([^/]+)\/vote$/);
+      if (request.method === "POST" && communityVoteMatch) {
+        const featureId = decodeURIComponent(communityVoteMatch[1]);
+        const feature = lingxiCommunity.features.find((item) => item.id === featureId);
+        if (!feature) {
+          return writeJson(response, envelopedError(404, "community_feature_not_found", "Feature request not found"));
+        }
+        feature.votes = Number(feature.votes || 0) + 1;
+        return writeJson(response, enveloped(200, lingxiCommunitySnapshot(lingxiCommunity)));
       }
 
       if (request.method === "POST" && pathname === "/api/admin/auth/login") {
@@ -8985,6 +9600,37 @@ export function createPhoneAuthDevServer(
       }
 
       const adminModelDetailMatch = pathname.match(/^\/api\/admin\/models\/([^/]+)$/);
+      if (request.method === "DELETE" && adminModelDetailMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.modelWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminModels = createAdminModelConfigService({ db });
+        return writeJson(
+          response,
+          await adminModels.deleteModel({
+            id: decodeURIComponent(adminModelDetailMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "PATCH" && adminModelDetailMatch) {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
         if (!idempotencyKey) {
@@ -10393,6 +11039,54 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/batch-image-prompt-presets") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.getBatchImagePromptPresetCategories(),
+        });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/batch-image-prompt-presets") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          value?: unknown;
+          reason?: string;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateBatchImagePromptPresetCategories({
+            value: body.value,
+            reason: String(body.reason ?? "更新批量生图预设"),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/settings/revisions") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -10690,12 +11384,14 @@ export function createPhoneAuthDevServer(
         const body = (await readJsonBody(request)) as {
           secretRef?: string;
           envName?: string;
+          secretValue?: string;
           purpose?: string;
           providerName?: string | null;
           providerChannel?: string | null;
           mediaTypes?: string[];
           modelCodes?: string[];
           baseUrl?: string | null;
+          requestDomain?: string | null;
           authHeaderName?: string | null;
           authScheme?: string | null;
           extraHeaders?: Record<string, string> | null;
@@ -10706,17 +11402,94 @@ export function createPhoneAuthDevServer(
           await adminSettings.createSecretReference({
             secretRef: String(body.secretRef ?? ""),
             envName: String(body.envName ?? ""),
+            secretValue: String(body.secretValue ?? ""),
             purpose: String(body.purpose ?? ""),
             providerName: body.providerName ?? null,
             providerChannel: body.providerChannel ?? null,
             mediaTypes: body.mediaTypes,
             modelCodes: body.modelCodes,
             baseUrl: body.baseUrl ?? null,
+            requestDomain: body.requestDomain ?? null,
             authHeaderName: body.authHeaderName ?? null,
             authScheme: body.authScheme ?? null,
             extraHeaders: body.extraHeaders ?? null,
             actorAdminAccountId: adminRoute.session.admin_account_id,
             now: new Date(),
+          }),
+        );
+      }
+
+      const adminSecretUpdateMatch = pathname.match(/^\/api\/admin\/secret-references\/([^/]+)$/);
+      if (request.method === "PATCH" && adminSecretUpdateMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          secretRef?: string;
+          envName?: string;
+          secretValue?: string;
+          purpose?: string;
+          providerName?: string | null;
+          providerChannel?: string | null;
+          mediaTypes?: string[];
+          modelCodes?: string[];
+          baseUrl?: string | null;
+          requestDomain?: string | null;
+          authHeaderName?: string | null;
+          authScheme?: string | null;
+          extraHeaders?: Record<string, string> | null;
+        };
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.updateSecretReference({
+            id: decodeURIComponent(adminSecretUpdateMatch[1]),
+            secretRef: String(body.secretRef ?? ""),
+            envName: String(body.envName ?? ""),
+            secretValue: String(body.secretValue ?? ""),
+            purpose: String(body.purpose ?? ""),
+            providerName: body.providerName ?? null,
+            providerChannel: body.providerChannel ?? null,
+            mediaTypes: body.mediaTypes,
+            modelCodes: body.modelCodes,
+            baseUrl: body.baseUrl ?? null,
+            requestDomain: body.requestDomain ?? null,
+            authHeaderName: body.authHeaderName ?? null,
+            authScheme: body.authScheme ?? null,
+            extraHeaders: body.extraHeaders ?? null,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "DELETE" && adminSecretUpdateMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(
+          response,
+          await adminSettings.deleteSecretReference({
+            id: decodeURIComponent(adminSecretUpdateMatch[1]),
           }),
         );
       }
@@ -10887,9 +11660,6 @@ export function createPhoneAuthDevServer(
             expiresAt: result.expiresAt.toISOString(),
             retryAfterSeconds: result.retryAfterSeconds,
             remainingToday: result.remainingToday,
-            ...(smsProvider.providerName === "dev"
-              ? { devCode: result.plainCode }
-              : {}),
           },
         });
       }
@@ -11039,6 +11809,7 @@ export function createPhoneAuthDevServer(
             user: {
               id: verified.user.id,
               phone: verified.user.phone,
+              displayName: verified.user.displayName ?? null,
             },
             session: {
               id: verified.session.id,
@@ -11090,6 +11861,7 @@ export function createPhoneAuthDevServer(
             user: {
               id: verified.user.id,
               phone: verified.user.phone,
+              displayName: verified.user.displayName ?? null,
             },
             session: {
               id: verified.session.id,
@@ -11127,6 +11899,81 @@ export function createPhoneAuthDevServer(
               expiresAt: session!.expiresAt.toISOString(),
             },
           },
+        });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/auth/profile") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+
+        const body = (await readJsonBody(request)) as {
+          displayName?: string;
+        };
+        const updated = await updateAuthenticatedUserProfile(db, {
+          userId: authenticated.user.id,
+          displayName: String(body.displayName ?? ""),
+          now: new Date(),
+        });
+        if (!updated.ok) {
+          return writeJson(response, {
+            status: updated.status,
+            body: updated.body,
+          });
+        }
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            user: {
+              ...authenticated.user,
+              displayName: updated.user.displayName,
+            },
+          },
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/auth/password") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+
+        const body = (await readJsonBody(request)) as {
+          currentPassword?: string;
+          newPassword?: string;
+        };
+        const changed = await changeAuthenticatedUserPassword(db, {
+          userId: authenticated.user.id,
+          currentPassword: String(body.currentPassword ?? ""),
+          newPassword: String(body.newPassword ?? ""),
+          now: new Date(),
+        });
+        if (!changed.ok) {
+          return writeJson(response, {
+            status: changed.status,
+            body: changed.body,
+          });
+        }
+
+        return writeJson(response, {
+          status: 200,
+          body: { ok: true },
         });
       }
 
@@ -11334,7 +12181,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         const membershipOrders = createMembershipOrderService({
           db,
@@ -11391,7 +12238,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         await ensureDefaultCreditPackage(db, { now: new Date() });
         const commercePayment = createCommercePaymentService({
@@ -11418,6 +12265,59 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname === "/api/billing/payment-intents/simulate-success"
+        ) {
+          const body = (await readJsonBody(request)) as {
+            paymentIntentId?: string | null;
+          };
+          const paymentIntentId = String(body.paymentIntentId ?? "").trim();
+          if (!paymentIntentId) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "payment_intent_id_required" },
+            });
+          }
+
+          const intentEnvelope = await commercePayment.getPaymentIntent({
+            user: { sessionToken: authenticated.sessionToken },
+            paymentIntentId,
+            now: new Date(),
+          });
+          if (intentEnvelope.status !== 200 || !("paymentIntent" in intentEnvelope.body)) {
+            return writeJson(response, intentEnvelope);
+          }
+
+          const intent = intentEnvelope.body.paymentIntent;
+          const callbackFacts = {
+            provider: intent.provider,
+            providerEventDedupKey: `local-simulated:${intent.provider}:${intent.merchantOrderNo}`,
+            merchantOrderNo: intent.merchantOrderNo,
+            providerTradeId: `local-simulated-trade:${intent.provider}:${intent.merchantOrderNo}`,
+            eventType: "payment_succeeded" as const,
+            amountMinor: intent.amountMinor,
+            currency: intent.currency,
+            merchantId: "comic-ai-dev-merchant",
+          };
+          const now = new Date();
+          const callbackResult = await commercePayment.processPaymentCallback({
+            body: {
+              ...callbackFacts,
+              signature: signPaymentCallback(callbackFacts, devPaymentCallbackSecret),
+            },
+            now,
+          });
+          await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 10 });
+          return writeJson(response, {
+            status: callbackResult.status,
+            body: {
+              simulated: true,
+              ...callbackResult.body,
+            },
+          });
         }
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);
@@ -11520,7 +12420,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
 
         if (request.method === "POST" && pathname === "/api/storage/upload-sessions") {
           if (!process.env.DATABASE_URL?.trim()) {
@@ -11795,6 +12695,8 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
+        pathname === "/api/creator/canvas-projects" ||
+        pathname.startsWith("/api/creator/canvas-projects/") ||
         pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
@@ -11809,8 +12711,8 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
-        const canvasWorkspaceId = pathname.startsWith("/api/canvas/")
-          ? await resolveDefaultWorkspaceForSession(db, authenticated, new Date())
+        const currentWorkspaceId = pathname.startsWith("/api/creator/canvas-projects") || pathname.startsWith("/api/canvas/")
+          ? await ensurePersonalProjectWorkspaceForSession(db, authenticated)
           : devWorkspaceId;
 
         const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
@@ -11820,7 +12722,7 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: canvasWorkspaceId,
+            workspaceId: currentWorkspaceId,
             capability: capabilities.projectView,
             now,
           });
@@ -11850,7 +12752,7 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: canvasWorkspaceId,
+            workspaceId: currentWorkspaceId,
             capability: capabilities.projectEdit,
             now,
           });
@@ -11894,20 +12796,37 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: canvasWorkspaceId,
+            workspaceId: currentWorkspaceId,
             capability: capabilities.generationStart,
             now,
           });
           if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
             return writeJson(response, canvasMembershipRequiredError());
           }
-          const canvas = await findCanvasByCanvasProjectId(db, {
+          let canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
             canvasProjectId,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          if (!canvas.projectId) {
+            await ensureStandaloneCanvasRunProject(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId!,
+              canvasProjectId,
+              userId: authenticated.user.id,
+              now: new Date(),
+            });
+            canvas = await findCanvasByCanvasProjectId(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId ?? undefined,
+              canvasProjectId,
+            });
+          }
+          if (!canvas?.projectId) {
+            return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
           }
           const node = canvas.document.nodes.find((item) => item.id === nodeKey);
           if (!node) {
@@ -12527,10 +13446,12 @@ export function createPhoneAuthDevServer(
           pathname === "/api/generation-config"
         ) {
           const credit = await getUserCreditBalance(db, authenticated.user.id);
+          const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
           return writeJson(
             response,
             enveloped(200, {
               ...(await buildGenerationConfigModelCatalog(db)),
+              batchPromptPresetCategories,
               creditBalance: credit.creditBalance,
               availableCredits: credit.availableCredits,
               reservedCredits: credit.reservedCredits,
@@ -12556,6 +13477,7 @@ export function createPhoneAuthDevServer(
           }
           const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
           const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+          const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
           const imageModels = activeImageModels.length
             ? activeImageModels.map(modelConfigToGenerationConfigModel)
             : [
@@ -12598,6 +13520,7 @@ export function createPhoneAuthDevServer(
                 ...videoModels,
               ],
               presets: [],
+              batchPromptPresetCategories,
               uploadLimits: episodeUploadLimits,
               defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
               defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
@@ -13143,13 +14066,14 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolveDefaultWorkspaceForSession(db, authenticated, new Date());
+        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
         const creatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
+        const teamCreatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
 
         if (request.method === "GET" && pathname === "/api/creator/team/overview") {
           return writeJson(
             response,
-            await creatorApplication.getTeamOverview({
+            await teamCreatorApplication.getTeamOverview({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -13162,7 +14086,7 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && pathname === "/api/creator/team/members") {
           return writeJson(
             response,
-            await creatorApplication.listTeamMembers({
+            await teamCreatorApplication.listTeamMembers({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -13174,11 +14098,13 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
           const adminUsers = createAdminUserService({ db });
+          const workspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
           return writeJson(response, {
             status: 200,
             body: await adminUsers.listUserCreditLedger({
               userId: authenticated.user.id,
-              workspaceId: currentWorkspaceId,
+              organizationId: devOrganizationId,
+              workspaceId,
               pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             }),
           });
@@ -13231,7 +14157,7 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.createTeamMember({
+            await teamCreatorApplication.createTeamMember({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -13416,6 +14342,72 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const standaloneCanvasMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)\/canvas$/);
+        if (standaloneCanvasMatch) {
+          if (request.method !== "GET" && request.method !== "PUT") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const canvasProjectId = decodeURIComponent(standaloneCanvasMatch[1] ?? "");
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            capability: request.method === "PUT" ? capabilities.projectEdit : capabilities.projectView,
+            now: new Date(),
+          });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
+          const project = await findCanvasProjectRecord(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+            projectId: canvasProjectId,
+          });
+          if (!project) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          const now = new Date();
+          try {
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, {
+                canvas: await findCanvasByCanvasProjectId(db, {
+                  organizationId: actor.organizationId,
+                  workspaceId: actor.workspaceId,
+                  canvasProjectId,
+                }),
+              }));
+            }
+            const body = (await readJsonBody(request)) as {
+              clientRevision?: unknown;
+              serverRevision?: unknown;
+              document?: unknown;
+              events?: Array<Record<string, unknown>>;
+            };
+            return writeJson(response, enveloped(200, {
+              canvas: await saveCanvasByCanvasProjectId(db, {
+                organizationId: actor.organizationId,
+                workspaceId: actor.workspaceId,
+                canvasProjectId,
+                userId: authenticated.user.id,
+                clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
+                document: body.document,
+                events: Array.isArray(body.events) ? body.events : [],
+                now,
+              }),
+            }));
+          } catch (error) {
+            if (error instanceof CanvasConflictError) {
+              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+                serverRevision: error.serverRevision,
+                serverDocument: error.serverDocument as Record<string, unknown>,
+              }));
+            }
+            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
         const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
@@ -13423,9 +14415,14 @@ export function createPhoneAuthDevServer(
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
-            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
+            capability: request.method === "PATCH" || request.method === "DELETE"
+              ? capabilities.projectEdit
+              : capabilities.projectView,
             now,
           });
+          if (!actor.workspaceId) {
+            throw new AuthorizationError("workspace_not_found");
+          }
           if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
             return writeJson(response, canvasMembershipRequiredError());
           }
@@ -13738,6 +14735,7 @@ export function createPhoneAuthDevServer(
           response.setHeader("cache-control", "no-cache, no-transform");
           response.setHeader("connection", "keep-alive");
           response.flushHeaders?.();
+          const stopHeartbeat = startSseHeartbeat(response);
           try {
             for await (const event of analysisService.generateScriptStream({
               projectId,
@@ -13749,10 +14747,12 @@ export function createPhoneAuthDevServer(
                 tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
               },
             })) {
-              writeSseEvent(response, event.type, event);
+              writeSseEvent(response, event.type, toSsePayload(event));
             }
+            stopHeartbeat();
             response.end();
           } catch (error) {
+            stopHeartbeat();
             writeSseEvent(response, "error", {
               error: error instanceof Error ? error.message : "ai_script_analysis_failed",
             });
@@ -13843,6 +14843,7 @@ export function createPhoneAuthDevServer(
             response.setHeader("cache-control", "no-cache, no-transform");
             response.setHeader("connection", "keep-alive");
             response.flushHeaders?.();
+            const stopHeartbeat = startSseHeartbeat(response);
             try {
               for await (const event of previewService.generatePreviewStream(previewInput)) {
                 if (event.type === "complete") {
@@ -13855,11 +14856,13 @@ export function createPhoneAuthDevServer(
                     },
                   });
                 } else {
-                  writeSseEvent(response, event.type, event);
+                  writeSseEvent(response, event.type, toSsePayload(event));
                 }
               }
+              stopHeartbeat();
               response.end();
             } catch (error) {
+              stopHeartbeat();
               writeSseEvent(response, "error", {
                 error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
               });

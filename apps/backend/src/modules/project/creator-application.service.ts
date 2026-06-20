@@ -14,6 +14,7 @@ import {
   TeamServiceError,
 } from "../organization/team.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { queryOne } from "../shared/db/sql.ts";
 import {
   beginOrReplayCommand,
   IdempotencyConflictError,
@@ -508,6 +509,16 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: overview,
         };
       } catch (error) {
+        if (isTeamPermissionMissing(error)) {
+          return {
+            status: 200,
+            body: await getLimitedTeamOverview(deps.db, {
+              sessionToken: input.user.sessionToken,
+              workspaceId: deps.workspaceId,
+              now: input.now,
+            }),
+          };
+        }
         return teamServiceErrorResponse(error);
       }
     },
@@ -569,6 +580,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { members },
         };
       } catch (error) {
+        if (isTeamPermissionMissing(error)) {
+          return {
+            status: 200,
+            body: { members: [] },
+          };
+        }
         return teamServiceErrorResponse(error);
       }
     },
@@ -3673,6 +3690,148 @@ function teamServiceErrorResponse(
     status,
     body: { error: error.code },
   };
+}
+
+function isTeamPermissionMissing(error: unknown) {
+  return error instanceof TeamServiceError && error.code === "team_permission_missing";
+}
+
+async function getLimitedTeamOverview(
+  db: SqlDatabase,
+  input: { sessionToken: string; workspaceId: string; now: Date },
+) {
+  const actor = await resolveActorContext(db, {
+    sessionToken: input.sessionToken,
+    workspaceId: input.workspaceId,
+    now: input.now,
+  });
+  const [planLimits, usedSeats, credits] = await Promise.all([
+    resolveLimitedTeamPlanLimits(db, actor.organizationId),
+    countLimitedTeamSubaccounts(db, {
+      organizationId: actor.organizationId,
+      workspaceId: actor.workspaceId,
+    }),
+    queryOne<{
+      credit_balance_cached: number;
+      credit_reserved_cached: number;
+    }>(
+      db,
+      `
+        SELECT credit_balance_cached, credit_reserved_cached
+        FROM organizations
+        WHERE id = $1
+      `,
+      [actor.organizationId],
+    ),
+  ]);
+
+  return {
+    entitlements: {
+      teamMemberManagement: await hasLimitedTeamEntitlement(db, {
+        organizationId: actor.organizationId,
+        entitlementKey: "team_member_management",
+        now: input.now,
+      }),
+      teamAssetLibrary: await hasLimitedTeamEntitlement(db, {
+        organizationId: actor.organizationId,
+        entitlementKey: "team_asset_library",
+        now: input.now,
+      }),
+      teamDashboard: await hasLimitedTeamEntitlement(db, {
+        organizationId: actor.organizationId,
+        entitlementKey: "team_dashboard",
+        now: input.now,
+      }),
+    },
+    seats: {
+      used: usedSeats,
+      limit: planLimits.seatLimit,
+      remaining: Math.max(0, planLimits.seatLimit - usedSeats),
+    },
+    team: {
+      activated: usedSeats > 0,
+      memberCount: usedSeats,
+    },
+    concurrency: {
+      singleAccountLimit: planLimits.singleAccountConcurrencyLimit,
+    },
+    credits: {
+      allocatable: Math.max(
+        0,
+        (credits?.credit_balance_cached ?? 0) -
+          (credits?.credit_reserved_cached ?? 0),
+      ),
+    },
+    permissions: {
+      canReadMembers: false,
+      canCreateMember: false,
+      canViewDashboard: false,
+      canManageAll: false,
+      canManageGroup: false,
+    },
+  };
+}
+
+async function hasLimitedTeamEntitlement(
+  db: SqlDatabase,
+  input: { organizationId: string; entitlementKey: string; now: Date },
+) {
+  const entitlement = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM organization_entitlements
+      WHERE organization_id = $1
+        AND entitlement_key = $2
+        AND status = 'active'
+        AND (expires_at IS NULL OR expires_at > $3)
+      LIMIT 1
+    `,
+    [input.organizationId, input.entitlementKey, input.now],
+  );
+
+  return Boolean(entitlement);
+}
+
+async function resolveLimitedTeamPlanLimits(db: SqlDatabase, organizationId: string) {
+  const limits = await queryOne<{
+    seat_limit: number;
+    single_account_concurrency_limit: number;
+  }>(
+    db,
+    `
+      SELECT seat_limit, single_account_concurrency_limit
+      FROM team_plan_limits
+      WHERE organization_id = $1
+      LIMIT 1
+    `,
+    [organizationId],
+  );
+
+  return {
+    seatLimit: Number(limits?.seat_limit ?? 50),
+    singleAccountConcurrencyLimit: Number(limits?.single_account_concurrency_limit ?? 1),
+  };
+}
+
+async function countLimitedTeamSubaccounts(
+  db: SqlDatabase,
+  input: { organizationId: string; workspaceId: string | null },
+) {
+  const result = await queryOne<{ count: string | number }>(
+    db,
+    `
+      SELECT COUNT(*) AS count
+      FROM memberships
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND role = 'sub_account'
+        AND status = 'active'
+    `,
+    [input.organizationId, input.workspaceId],
+  );
+
+  return Number(result?.count ?? 0);
 }
 
 async function releaseImageRetryClaimIfSafe(

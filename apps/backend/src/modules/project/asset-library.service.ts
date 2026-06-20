@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { ActorContext } from "../organization/actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
@@ -1332,6 +1332,27 @@ const officialAssets: Array<{
   },
 ];
 
+const officialLibrarySeedSignature = createHash("sha256")
+  .update(
+    JSON.stringify(
+      officialAssets.map((asset) => ({
+        id: asset.id,
+        category: asset.category,
+        folder: asset.folder,
+        name: asset.name,
+        width: asset.width,
+        height: asset.height,
+        previewAssetPath: asset.previewAssetPath ?? null,
+        detailAssetPath: asset.detailAssetPath ?? null,
+      })),
+    ),
+  )
+  .digest("hex")
+  .slice(0, 16);
+const officialLibrarySeedCheckTtlMs = 5 * 60 * 1000;
+let officialLibrarySeedCheckExpiresAt = 0;
+let officialLibrarySeedEnsurePromise: Promise<void> | null = null;
+
 const officialGeneratedAssetSlugs: Record<string, string> = {
   "character|国内仿真人-现代都市|保姆": "nanny",
   "character|国内仿真人-现代都市|医生": "doctor",
@@ -1531,6 +1552,28 @@ export async function ensureDefaultOfficialLibraryAssets(
   db: SqlDatabase,
   input: { now: Date },
 ) {
+  const nowMs = Date.now();
+  if (officialLibrarySeedCheckExpiresAt > nowMs) {
+    return;
+  }
+  if (!officialLibrarySeedEnsurePromise) {
+    officialLibrarySeedEnsurePromise = ensureDefaultOfficialLibraryAssetsUncached(db, input)
+      .finally(() => {
+        officialLibrarySeedEnsurePromise = null;
+      });
+  }
+  await officialLibrarySeedEnsurePromise;
+}
+
+async function ensureDefaultOfficialLibraryAssetsUncached(
+  db: SqlDatabase,
+  input: { now: Date },
+) {
+  if (await hasCurrentOfficialLibrarySeed(db)) {
+    officialLibrarySeedCheckExpiresAt = Date.now() + officialLibrarySeedCheckTtlMs;
+    return;
+  }
+
   for (const asset of officialAssets) {
     const generatedPreviewPath = asset.previewAssetPath ?? generatedOfficialPreviewPath(asset);
     const generatedDetailAssetPath =
@@ -1542,6 +1585,7 @@ export async function ensureDefaultOfficialLibraryAssets(
     const mimeType = generatedPreviewPath ? "image/png" : "image/svg+xml";
     const metadata: Record<string, unknown> = {
       source: generatedPreviewPath ? "official_seed_imagegen" : "official_seed",
+      officialSeedSignature: officialLibrarySeedSignature,
     };
 
     if (generatedDetailAssetPath) {
@@ -1590,6 +1634,25 @@ export async function ensureDefaultOfficialLibraryAssets(
       },
     });
   }
+  officialLibrarySeedCheckExpiresAt = Date.now() + officialLibrarySeedCheckTtlMs;
+}
+
+async function hasCurrentOfficialLibrarySeed(db: SqlDatabase) {
+  const result = await queryOne<{ count: number | string }>(
+    db,
+    `
+      SELECT count(*) AS count
+      FROM library_assets la
+      JOIN library_asset_versions lav
+        ON lav.library_asset_id = la.id
+       AND lav.version_number = 1
+      WHERE la.scope = 'official'
+        AND la.id = ANY($1::uuid[])
+    `,
+    [officialAssets.map((asset) => asset.id)],
+  );
+
+  return Number(result?.count ?? 0) === officialAssets.length;
 }
 
 export async function upsertLibraryAssetWithVersion(

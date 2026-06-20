@@ -6,8 +6,24 @@ import { queryOne } from "../shared/db/sql.ts";
 
 const seedUpdatedAt = new Date("2026-06-06T08:00:00.000Z");
 const defaultNegativePrompt = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
+const imagePromptStyleCategories = ["official", "batch", "custom"] as const;
+const batchPresetTargets = ["scene", "character", "prop"] as const;
+const batchImagePromptStyleNames = ["国风仙侠", "国漫仙侠", "废土科幻", "国风3D", "国风动漫", "邵氏兄弟风", "中国武侠", "中国古代国风动漫", "中国古代画风动漫", "赛博朋克"];
+const batchImagePromptStyleCodes = ["national_xianxia", "national", "chinese_anime", "brother_style", "chinese_wuxia", "china_ancient", "cyberpunk"];
+const batchImagePromptStyleCodePatterns = ["national_man%", "wasteland%"];
 
 type JsonValue = unknown;
+
+export interface BatchImagePromptPresetOption {
+  id: string;
+  label: string;
+}
+
+export interface BatchImagePromptPresetCategories {
+  scene: BatchImagePromptPresetOption[];
+  character: BatchImagePromptPresetOption[];
+  prop: BatchImagePromptPresetOption[];
+}
 
 interface ImagePromptStyleRow {
   id: string;
@@ -23,6 +39,7 @@ interface ImagePromptStyleRow {
   sort_order: number | string;
   status: string;
   remark: string | null;
+  batch_preset_target: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -49,6 +66,7 @@ interface SaveImagePromptStyleInput extends AdminMutationInput {
   sort_order?: number;
   status?: string;
   remark?: string | null;
+  batch_preset_target?: string | null;
 }
 
 export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
@@ -84,6 +102,35 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
     return { data: rows.rows.map(styleFromRow) };
   }
 
+  async function listBatchPromptPresetCategories(): Promise<BatchImagePromptPresetCategories> {
+    await ensureDefaultImagePromptStyles(deps.db);
+    const rows = await deps.db.query<Pick<ImagePromptStyleRow, "code" | "name" | "batch_preset_target">>(
+      `
+        SELECT code, name, batch_preset_target
+        FROM image_prompt_styles
+        WHERE deleted_at IS NULL
+          AND category = 'batch'
+          AND status = 'enabled'
+          AND batch_preset_target IS NOT NULL
+        ORDER BY sort_order DESC, updated_at DESC, id ASC
+      `,
+    );
+    const categories: BatchImagePromptPresetCategories = {
+      scene: [],
+      character: [],
+      prop: [],
+    };
+    for (const row of rows.rows) {
+      const target = normalizeBatchPresetTarget(row.batch_preset_target);
+      if (!target) continue;
+      categories[target].push({
+        id: row.code,
+        label: row.name,
+      });
+    }
+    return categories;
+  }
+
   async function saveStyle(input: SaveImagePromptStyleInput) {
     const validation = validateStylePayload(input);
     if (validation) return validation;
@@ -104,10 +151,10 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
       `
         INSERT INTO image_prompt_styles (
           id, name, code, category, model_family, tags, cover_image_url, prompt_content,
-          negative_prompt, is_default, sort_order, status, remark, created_by_admin_id,
+          negative_prompt, is_default, sort_order, status, remark, batch_preset_target, created_by_admin_id,
           updated_by_admin_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $14, $15, $15)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $16)
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -122,6 +169,7 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
           sort_order = EXCLUDED.sort_order,
           status = EXCLUDED.status,
           remark = EXCLUDED.remark,
+          batch_preset_target = EXCLUDED.batch_preset_target,
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `,
@@ -139,6 +187,7 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
         Number(input.sort_order || 0),
         input.status || "enabled",
         input.remark?.trim() || null,
+        normalizeBatchPresetTarget(input.batch_preset_target),
         input.actorAdminAccountId,
         input.now,
       ],
@@ -254,6 +303,7 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
 
   return {
     listStyles,
+    listBatchPromptPresetCategories,
     saveStyle,
     copyStyle,
     changeStyleStatus,
@@ -263,6 +313,8 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
 export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
   const existing = await queryOne<{ count: string | number }>(db, "SELECT COUNT(*) AS count FROM image_prompt_styles WHERE deleted_at IS NULL");
   if (Number(existing?.count || 0) > 0) {
+    await syncBatchImagePromptStyleCategories(db);
+    await ensureDefaultBatchPromptPresets(db);
     for (const item of defaultImagePromptStyles) {
       await db.query(
         "UPDATE image_prompt_styles SET cover_image_url = $2 WHERE code = $1 AND deleted_at IS NULL AND (cover_image_url IS NULL OR cover_image_url = '' OR cover_image_url LIKE 'data:image/svg+xml%')",
@@ -318,16 +370,18 @@ export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
       ],
     );
   }
+  await syncBatchImagePromptStyleCategories(db);
+  await ensureDefaultBatchPromptPresets(db);
 }
 
 function validateStylePayload(input: SaveImagePromptStyleInput) {
   if (!input.name?.trim() || !input.code?.trim()) {
     return error(400, "image_prompt_style_required", "名称和编码必填");
   }
-  if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
+  if (!/^[a-z0-9_-]+$/.test(input.code.trim())) {
     return error(400, "invalid_image_prompt_code", "编码只能包含小写字母、数字和下划线");
   }
-  if (input.category && !["official", "custom"].includes(input.category)) {
+  if (input.category && !imagePromptStyleCategories.includes(input.category as (typeof imagePromptStyleCategories)[number])) {
     return error(400, "invalid_image_prompt_category", "分类不支持");
   }
   if (input.model_family && !["doubao", "seedream", "general"].includes(input.model_family)) {
@@ -339,10 +393,17 @@ function validateStylePayload(input: SaveImagePromptStyleInput) {
   if (input.status && !["enabled", "disabled"].includes(input.status)) {
     return error(400, "invalid_image_prompt_status", "状态不支持");
   }
+  if (input.batch_preset_target && !batchPresetTargets.includes(input.batch_preset_target as (typeof batchPresetTargets)[number])) {
+    return error(400, "invalid_image_prompt_batch_preset_target", "batch preset target is not supported");
+  }
+  if ((input.category || "official") === "batch" && !normalizeBatchPresetTarget(input.batch_preset_target)) {
+    return error(400, "image_prompt_batch_preset_target_required", "batch image prompt styles require a preset target");
+  }
   return null;
 }
 
 function styleFromRow(row: ImagePromptStyleRow) {
+  const batchPresetTarget = normalizeBatchPresetTarget(row.batch_preset_target);
   return {
     id: row.id,
     name: row.name,
@@ -359,6 +420,8 @@ function styleFromRow(row: ImagePromptStyleRow) {
     sort_order: Number(row.sort_order || 0),
     status: row.status,
     remark: row.remark || "",
+    batch_preset_target: batchPresetTarget,
+    batchPresetTarget,
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
@@ -376,6 +439,23 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
 }
 
+async function syncBatchImagePromptStyleCategories(db: SqlDatabase) {
+  await db.query(
+    `
+      UPDATE image_prompt_styles
+      SET category = 'batch', updated_at = $1
+      WHERE deleted_at IS NULL
+        AND category <> 'batch'
+        AND (
+          code = ANY($2::text[])
+          OR code LIKE ANY($3::text[])
+          OR name = ANY($4::text[])
+        )
+    `,
+    [seedUpdatedAt, batchImagePromptStyleCodes, batchImagePromptStyleCodePatterns, batchImagePromptStyleNames],
+  );
+}
+
 function error(status: number, code: string, message: string) {
   return { status, body: { error: { code, message } } };
 }
@@ -389,6 +469,13 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function normalizeBatchPresetTarget(value: unknown): (typeof batchPresetTargets)[number] | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return batchPresetTargets.includes(normalized as (typeof batchPresetTargets)[number])
+    ? normalized as (typeof batchPresetTargets)[number]
+    : null;
+}
+
 function style(name: string, code: string, promptContent: string, sortOrder: number, tags: string[] = []) {
   return {
     id: stableUuid(`image-prompt-style:${code}`),
@@ -400,6 +487,27 @@ function style(name: string, code: string, promptContent: string, sortOrder: num
     sort_order: sortOrder,
     tags,
     remark: "豆包生图风格预设",
+  };
+}
+
+function batchPresetStyle(
+  name: string,
+  code: string,
+  batch_preset_target: (typeof batchPresetTargets)[number],
+  promptContent: string,
+  sortOrder: number,
+  tags: string[] = [],
+) {
+  return {
+    id: stableUuid(`image-prompt-style:${code}`),
+    name,
+    code,
+    cover_image_url: styleCoverDataUrl(code, name),
+    prompt_content: promptContent,
+    sort_order: sortOrder,
+    tags,
+    batch_preset_target,
+    remark: "batch image prompt preset",
   };
 }
 

@@ -26,7 +26,7 @@ export class CanvasDocumentError extends Error {
 
 export interface ProjectCanvasRecord {
   canvasProjectId: string;
-  projectId: string;
+  projectId: string | null;
   serverRevision: number;
   document: CanvasDocument;
   session?: {
@@ -92,7 +92,7 @@ interface CanvasProjectRow {
   id: string;
   organization_id: string;
   workspace_id: string;
-  project_id: string;
+  project_id: string | null;
   title: string;
   server_revision: number;
   latest_document_id: string | null;
@@ -300,11 +300,156 @@ export async function findCanvasByCanvasProjectId(
   if (!canvas) {
     return null;
   }
-  return findProjectCanvas(db, {
-    organizationId: input.organizationId,
-    workspaceId: canvas.workspace_id,
-    projectId: canvas.project_id,
+  const document = await queryOne<CanvasDocumentRow>(
+    db,
+    `
+      SELECT id, server_revision, document_json, viewport_json
+      FROM creator_canvas_documents
+      WHERE organization_id = $1
+        AND canvas_project_id = $2
+        AND server_revision = $3
+      LIMIT 1
+    `,
+    [input.organizationId, canvas.id, canvas.server_revision],
+  );
+  const documentProjectId = canvas.project_id ?? canvas.id;
+  const normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
+    canvasProjectId: canvas.id,
+    projectId: documentProjectId,
+    now: new Date().toISOString(),
+  }), {
+    canvasProjectId: canvas.id,
+    projectId: documentProjectId,
+    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
   });
+  return {
+    canvasProjectId: canvas.id,
+    projectId: canvas.project_id,
+    serverRevision: canvas.server_revision,
+    document: normalized,
+    session: {
+      viewport: document?.viewport_json ?? normalized.viewport,
+      selectedNodeIds: [],
+      selectedEdgeIds: [],
+    },
+  };
+}
+
+export async function saveCanvasByCanvasProjectId(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    canvasProjectId: string;
+    userId: string;
+    clientRevision: number;
+    document: unknown;
+    events?: Array<Record<string, unknown>>;
+    now: Date;
+  },
+): Promise<ProjectCanvasRecord> {
+  const canvas = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, server_revision, latest_document_id
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+        AND deleted_at IS NULL
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [input.organizationId, input.workspaceId, input.canvasProjectId],
+  );
+  if (!canvas) {
+    throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
+  }
+  if (Number(input.clientRevision) !== canvas.server_revision) {
+    const server = await findCanvasByCanvasProjectId(db, input);
+    throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
+  }
+
+  const documentProjectId = canvas.project_id ?? canvas.id;
+  const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(input.document, {
+    canvasProjectId: canvas.id,
+    projectId: documentProjectId,
+    now: input.now.toISOString(),
+  }), {
+    canvasProjectId: canvas.id,
+    projectId: documentProjectId,
+    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
+  });
+  validateCanvasDocumentGraph(document);
+
+  const nextRevision = canvas.server_revision + 1;
+  const documentId = randomUUID();
+  await insertCanvasDocument(db, {
+    documentId,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    projectId: canvas.project_id,
+    serverRevision: nextRevision,
+    document,
+    userId: input.userId,
+    now: input.now,
+  });
+
+  await syncCanvasNodesAndEdges(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    document,
+    userId: input.userId,
+    now: input.now,
+  });
+
+  await appendCanvasRevision(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    serverRevision: nextRevision,
+    operation: "autosave",
+    document,
+    userId: input.userId,
+    now: input.now,
+  });
+
+  await appendCanvasEvents(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    serverRevision: nextRevision,
+    events: input.events ?? [],
+    actorUserId: input.userId,
+  });
+
+  await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET server_revision = $4,
+          latest_document_id = $5,
+          updated_by_user_id = $6,
+          updated_at = $7
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+    `,
+    [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, input.userId, input.now],
+  );
+
+  return {
+    canvasProjectId: canvas.id,
+    projectId: canvas.project_id,
+    serverRevision: nextRevision,
+    document,
+    session: {
+      viewport: document.viewport,
+      selectedNodeIds: [],
+      selectedEdgeIds: [],
+    },
+  };
 }
 
 export async function saveProjectCanvas(
@@ -1073,16 +1218,35 @@ export function normalizeCanvasDocument(
   };
 }
 
+function canonicalizeCanvasDocumentOwnership(
+  document: CanvasDocument,
+  input: { canvasProjectId: string; projectId: string; acceptedProjectIds?: string[] },
+): CanvasDocument {
+  if (document.canvasProjectId !== input.canvasProjectId) {
+    throw new CanvasDocumentError("canvas_project_mismatch", "canvas project id mismatch");
+  }
+  const acceptedProjectIds = new Set([
+    input.projectId,
+    ...(input.acceptedProjectIds ?? []),
+  ].filter(Boolean));
+  if (!acceptedProjectIds.has(document.projectId)) {
+    throw new CanvasDocumentError("canvas_document_project_mismatch", "canvas document project id mismatch");
+  }
+  if (document.projectId === input.projectId) {
+    return document;
+  }
+  return {
+    ...document,
+    canvasProjectId: input.canvasProjectId,
+    projectId: input.projectId,
+  };
+}
+
 function validateCanvasDocumentOwnership(
   document: CanvasDocument,
   input: { canvasProjectId: string; projectId: string },
 ) {
-  if (document.canvasProjectId !== input.canvasProjectId) {
-    throw new CanvasDocumentError("canvas_project_mismatch", "canvas project id mismatch");
-  }
-  if (document.projectId !== input.projectId) {
-    throw new CanvasDocumentError("canvas_document_project_mismatch", "canvas document project id mismatch");
-  }
+  canonicalizeCanvasDocumentOwnership(document, input);
 }
 
 function normalizeCanvasNode(value: unknown): CanvasNode | null {
@@ -1167,7 +1331,7 @@ async function insertCanvasDocument(
     organizationId: string;
     workspaceId: string;
     canvasProjectId: string;
-    projectId: string;
+    projectId: string | null;
     serverRevision: number;
     document: CanvasDocument;
     userId: string;

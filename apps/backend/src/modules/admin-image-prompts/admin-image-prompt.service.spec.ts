@@ -130,4 +130,62 @@ describe("admin image prompt service", { concurrency: false }, () => {
       await (db as unknown as { close?: () => Promise<void> }).close?.();
     }
   });
+
+  it("accepts the batch image prompt category and persists matching styles into that group", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const service = createAdminImagePromptService({ db });
+      const organizationId = "10000000-0000-4000-8000-000000000001";
+      const workspaceId = "20000000-0000-4000-8000-000000000001";
+      const actorAdminAccountId = "81000000-0000-4000-8000-000000000001";
+      await db.query(
+        "INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')",
+        [organizationId, "Dev Organization"],
+      );
+      await db.query(
+        "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
+        [workspaceId, organizationId, "Dev Workspace"],
+      );
+      await db.query(
+        `
+          INSERT INTO admin_accounts (
+            id, login_name, password_hash, display_name, status
+          ) VALUES (
+            $1,
+            'image_prompt_admin',
+            'plain:test-password',
+            'Image Prompt Admin',
+            'active'
+          )
+        `,
+        [actorAdminAccountId],
+      );
+
+      const result = await service.saveStyle({
+        name: "国风仙侠",
+        code: "national_xia",
+        category: "batch",
+        model_family: "doubao",
+        prompt_content: "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
+        negative_prompt: "避免水印、文字、人物肢体错乱、构图凌乱和主体残缺。",
+        tags: ["国风", "仙侠"],
+        status: "enabled",
+        sort_order: 100,
+        actorAdminAccountId,
+        auditOrganizationId: organizationId,
+        auditWorkspaceId: workspaceId,
+        now: new Date("2026-06-19T08:00:00.000Z"),
+      });
+
+      assert.equal(result.status, 200);
+      assert.equal(result.body.data.category, "batch");
+
+      const rows = await db.query<{ category: string }>(
+        "SELECT category FROM image_prompt_styles WHERE code = 'national_xia'",
+      );
+      assert.equal(rows.rows[0]?.category, "batch");
+    } finally {
+      await (db as unknown as { close?: () => Promise<void> }).close?.();
+    }
+  });
 });

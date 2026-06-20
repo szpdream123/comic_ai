@@ -10,6 +10,13 @@ import {
   listTableNames,
 } from "../test-db.ts";
 
+function schemaSourceProvider(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = (value as Record<string, unknown>).source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return undefined;
+  return (source as Record<string, unknown>).provider;
+}
+
 describe("ai model configuration schema", () => {
   it("adds configurable model catalog and dispatch policy tables", async () => {
     const db = await createMigratedTestDb();
@@ -163,7 +170,7 @@ describe("ai model configuration schema", () => {
       assert.equal(result.rows[0]?.media_type, "image");
       assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://code.shoestravel.xin");
       assert.equal(result.rows[0]?.provider_config_json.endpoint, "/v1/images/generations");
-      assert.equal(result.rows[0]?.provider_config_json.editEndpoint, "/v1/images/edits");
+      assert.equal(result.rows[0]?.provider_config_json.editEndpoint, "https://image.shoestravel.xin/v1/images/edits");
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
       assert.deepEqual(result.rows[0]?.ui_config_json.supportedModes, [
         "text_to_image",
@@ -256,8 +263,10 @@ describe("ai model configuration schema", () => {
       assert.ok(model?.task_modes_json.includes("image.reference_generate"));
       assert.equal(model?.provider_config_json.baseURL, "https://code.shoestravel.xin");
       assert.equal(model?.provider_config_json.endpoint, "/v1/images/generations");
-      assert.equal(model?.provider_config_json.editEndpoint, "/v1/images/edits");
+      assert.equal(model?.provider_config_json.editEndpoint, "https://image.shoestravel.xin/v1/images/edits");
       assert.equal(model?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
+      assert.equal(schemaSourceProvider(model?.provider_config_json.inputSchema), "OpenAI Images API");
+      assert.ok((model?.provider_config_json.outputSchema as Record<string, unknown> | undefined)?.response);
       assert.equal(model?.pricing_json.baseCredits, 99);
       assert.equal(model?.limits_json.maxReferences, 8);
       assert.deepEqual(model?.ui_config_json.supportedModes, ["multi_reference", "image_to_image"]);
@@ -319,6 +328,8 @@ describe("ai model configuration schema", () => {
       assert.equal(result.rows[0]?.media_type, "video");
       assert.equal(result.rows[0]?.provider_config_json.baseURL, "https://dashscope.aliyuncs.com");
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "ALIYUNBAILIAN_API_KEY");
+      assert.equal(schemaSourceProvider(result.rows[0]?.provider_config_json.inputSchema), "Alibaba Cloud Model Studio / DashScope HappyHorse");
+      assert.ok((result.rows[0]?.provider_config_json.outputSchema as Record<string, unknown> | undefined)?.queryTaskResponse);
       assert.equal(result.rows[0]?.default_params_json.aspectRatio, "16:9");
       assert.equal(result.rows[0]?.pricing_json.baseCredits, 120);
 
@@ -396,6 +407,8 @@ describe("ai model configuration schema", () => {
         assert.ok(row.task_modes_json.includes("image.edit"));
         assert.equal(row.provider_config_json.apiKeyEnv, "VOLCENGINE_ARK_API_KEY");
         assert.equal(row.provider_config_json.requestFormat, "volcengine_ark_images_generation");
+        assert.equal(schemaSourceProvider(row.provider_config_json.inputSchema), "Volcengine Ark / Seedream image generation");
+        assert.ok((row.provider_config_json.outputSchema as Record<string, unknown> | undefined)?.syncResponse);
         assert.equal(row.pricing_json.unit, "image");
         assert.equal(row.ui_config_json.group, "即梦");
       }
@@ -414,6 +427,131 @@ describe("ai model configuration schema", () => {
         { model_code: "jimeng-4-5-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
         { model_code: "jimeng-4-0-image", submit_queue_name: "generation-submit-image", poll_queue_name: null },
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds Volcengine Seed 2.0 reference video models and official Seedance 2.0 video parameters", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seedReferenceVideoModels = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        parameter_schema_json: Record<string, unknown>;
+        default_params_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            display_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            parameter_schema_json,
+            default_params_json,
+            provider_config_json,
+            limits_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE model_code IN (
+            'doubao-seed-2-0-pro-260215',
+            'doubao-seed-2-0-lite-260428',
+            'doubao-seed-2-0-mini-260428'
+          )
+          ORDER BY sort_order ASC
+        `,
+      );
+
+      assert.deepEqual(seedReferenceVideoModels.rows.map((row) => row.model_code), [
+        "doubao-seed-2-0-pro-260215",
+        "doubao-seed-2-0-lite-260428",
+        "doubao-seed-2-0-mini-260428",
+      ]);
+      for (const row of seedReferenceVideoModels.rows) {
+        assert.equal(row.provider_model, row.model_code);
+        assert.equal(row.provider_protocol, "volcengine_ark_video");
+        assert.equal(row.invocation_mode, "async_polling");
+        assert.equal(row.media_type, "video");
+        assert.equal(row.provider_config_json.baseURL, "https://ark.cn-beijing.volces.com");
+        assert.equal(row.provider_config_json.createTaskEndpoint, "/api/v3/contents/generations/tasks");
+        assert.equal(row.provider_config_json.queryTaskEndpoint, "/api/v3/contents/generations/tasks/{taskId}");
+        assert.equal(row.provider_config_json.apiKeyEnv, "VOLCENGINE_ARK_API_KEY");
+        assert.equal(schemaSourceProvider(row.provider_config_json.inputSchema), "Volcengine Ark video generation");
+        assert.ok((row.provider_config_json.outputSchema as Record<string, unknown> | undefined)?.queryTaskResponse);
+        assert.ok(row.parameter_schema_json.prompt);
+        assert.ok(row.parameter_schema_json.referenceImages);
+        assert.ok(row.parameter_schema_json.sourceVideo);
+        assert.ok(row.parameter_schema_json.referenceAudio);
+        assert.ok(row.parameter_schema_json.aspectRatio);
+        assert.ok(row.parameter_schema_json.durationSec);
+        assert.equal(row.default_params_json.aspectRatio, "adaptive");
+        assert.equal(row.default_params_json.durationSec, 5);
+        assert.deepEqual(row.limits_json.supportedDurations, [4, 5, 10, 15]);
+        assert.equal(row.ui_config_json.modelKind, "video.reference");
+        assert.equal(row.ui_config_json.modelKindLabel, "参考生视频");
+        assert.equal(row.ui_config_json.videoCategory, "reference");
+        assert.equal(row.ui_config_json.videoCategoryLabel, "参考生视频");
+      }
+
+      const seedance = await db.query<{
+        model_code: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        parameter_schema_json: Record<string, unknown>;
+        default_params_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            model_code,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            parameter_schema_json,
+            default_params_json,
+            provider_config_json,
+            limits_json,
+            ui_config_json
+          FROM ai_model_configs
+          WHERE provider_model = 'doubao-seedance-2-0-260128'
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(seedance.rows[0]?.provider_protocol, "volcengine_ark_video");
+      assert.equal(seedance.rows[0]?.invocation_mode, "async_polling");
+      assert.equal(seedance.rows[0]?.media_type, "video");
+      assert.ok(seedance.rows[0]?.parameter_schema_json.aspectRatio);
+      assert.ok(seedance.rows[0]?.parameter_schema_json.durationSec);
+      assert.ok(seedance.rows[0]?.parameter_schema_json.generateAudio);
+      assert.ok(seedance.rows[0]?.parameter_schema_json.returnLastFrame);
+      assert.equal(seedance.rows[0]?.parameter_schema_json.cameraFixed, undefined);
+      assert.deepEqual(
+        (seedance.rows[0]?.parameter_schema_json.durationSec as Record<string, unknown>)?.options,
+        [4, 5, 10, 15],
+      );
+      assert.equal(seedance.rows[0]?.default_params_json.durationSec, 5);
+      assert.equal(schemaSourceProvider(seedance.rows[0]?.provider_config_json.inputSchema), "Volcengine Ark Seedance video generation");
+      assert.deepEqual(seedance.rows[0]?.limits_json.supportedDurations, [4, 5, 10, 15]);
+      assert.equal(seedance.rows[0]?.ui_config_json.modelKind, "video.reference");
+      assert.equal(seedance.rows[0]?.ui_config_json.modelKindLabel, "参考生视频");
+      assert.equal(seedance.rows[0]?.ui_config_json.videoCategory, "reference");
+      assert.equal(seedance.rows[0]?.ui_config_json.videoCategoryLabel, "参考生视频");
     } finally {
       await db.close();
     }

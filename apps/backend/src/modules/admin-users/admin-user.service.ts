@@ -351,7 +351,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       };
     }
 
-    const target = await findUserCreditTarget(deps.db, input.userId);
+    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) {
       return {
         status: 404,
@@ -675,7 +675,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
     const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
     if (rawWorkOrderNo && !workOrderNo) return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
-    const target = await findUserCreditTarget(deps.db, input.userId);
+    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
@@ -783,8 +783,15 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
-  async function listUserCreditLedger(input: { userId: string; workspaceId?: string | null; pageSize?: number }) {
-    const target = await findUserCreditTarget(deps.db, input.userId, {
+  async function listUserCreditLedger(input: {
+    userId: string;
+    pageSize?: number;
+    organizationId?: string | null;
+    workspaceId?: string | null;
+  }) {
+    const target = await findUserCreditTarget(deps.db, {
+      userId: input.userId,
+      organizationId: input.organizationId,
       workspaceId: input.workspaceId,
     });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
@@ -1032,10 +1039,23 @@ async function countOrganizationActiveSubaccounts(db: SqlDatabase, organizationI
 
 async function findUserCreditTarget(
   db: SqlDatabase,
-  userId: string,
-  options: { workspaceId?: string | null } = {},
+  input: {
+    userId: string;
+    organizationId?: string | null;
+    workspaceId?: string | null;
+  },
 ): Promise<UserCreditTarget | undefined> {
-  const preferredWorkspaceId = options.workspaceId?.trim();
+  const params: unknown[] = [input.userId];
+  const filters = ["u.id = $1"];
+  if (input.organizationId) {
+    params.push(input.organizationId);
+    filters.push(`m.organization_id = $${params.length}`);
+  }
+  if (input.workspaceId) {
+    params.push(input.workspaceId);
+    filters.push(`m.workspace_id = $${params.length}`);
+  }
+  const preferredWorkspaceId = input.workspaceId?.trim();
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
@@ -1051,14 +1071,14 @@ async function findUserCreditTarget(
       FROM users u
       JOIN memberships m ON m.user_id = u.id
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-      WHERE u.id = $1
+      WHERE ${filters.join(" AND ")}
       ORDER BY
-        CASE WHEN $2::uuid IS NOT NULL AND m.workspace_id = $2::uuid THEN 0 ELSE 1 END,
+        CASE WHEN $${params.length + 1}::uuid IS NOT NULL AND m.workspace_id = $${params.length + 1}::uuid THEN 0 ELSE 1 END,
         CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
-    [userId, preferredWorkspaceId || null],
+    [...params, preferredWorkspaceId || null],
   );
 
   if (!row) {

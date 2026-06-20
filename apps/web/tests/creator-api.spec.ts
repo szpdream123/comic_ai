@@ -52,6 +52,32 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
+test("read API calls coalesce duplicate in-flight requests", async () => {
+  const calls = [];
+  let resolveFetch;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    await new Promise((resolve) => {
+      resolveFetch = resolve;
+    });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ projects: [] }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const first = creatorApi.getProjects();
+  const second = creatorApi.getProjects();
+  resolveFetch();
+  const [firstPayload, secondPayload] = await Promise.all([first, second]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects");
+  assert.deepEqual(firstPayload, { projects: [] });
+  assert.deepEqual(secondPayload, { projects: [] });
+});
+
 test("importEpisodeAsset targets the episode-scoped import route", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -354,6 +380,44 @@ test("commit ai storyboard preview targets the project preview commit route", as
     episodeTitle: "第 1 集",
     commitPayload: { storyboards: [{ plot: "分镜" }] },
   });
+});
+
+test("streaming ai storyboard preview does not create a fixed abort timeout", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timeoutDelays = [];
+  const encoded = new TextEncoder().encode('event: ping\ndata: {"ts":"2026-06-19T00:00:00.000Z"}\n\n');
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    body: stream,
+  });
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timeoutDelays.push(delay);
+    return previousSetTimeout(callback, 0, ...args);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+
+  try {
+    const { creatorApiTestHooks } = await import("../src/shared/creator-api.js");
+    const events = [];
+    for await (const event of creatorApiTestHooks.postJsonSse("/api/stream", { prompt: "long" })) {
+      events.push(event);
+    }
+
+    assert.deepEqual(events, [{ event: "ping", data: { ts: "2026-06-19T00:00:00.000Z" } }]);
+    assert.deepEqual(timeoutDelays, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
 });
 
 test("generation queue job ops targets the admin ops queue job endpoint with idempotency", async () => {

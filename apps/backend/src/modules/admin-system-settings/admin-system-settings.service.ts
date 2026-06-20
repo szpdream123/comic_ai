@@ -22,6 +22,25 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
+export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
+
+export interface BatchImagePromptPresetOption {
+  id: string;
+  label: string;
+}
+
+export interface BatchImagePromptPresetCategories {
+  scene: BatchImagePromptPresetOption[];
+  character: BatchImagePromptPresetOption[];
+  prop: BatchImagePromptPresetOption[];
+}
+
+export const defaultBatchImagePromptPresetCategories: BatchImagePromptPresetCategories = {
+  scene: [],
+  character: [],
+  prop: [],
+};
+
 const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
   {
     key: "team.default_subaccount_limit",
@@ -57,8 +76,130 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
   },
 ];
 
+const adminSecretValueStoreReady = new WeakSet<SqlDatabase>();
+
+async function ensureAdminSecretValueStore(db: SqlDatabase) {
+  if (adminSecretValueStoreReady.has(db)) return;
+  await db.query(`
+    ALTER TABLE admin_secret_references
+      ADD COLUMN IF NOT EXISTS secret_value text NULL
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS admin_secret_values (
+      id uuid PRIMARY KEY,
+      secret_ref text NOT NULL UNIQUE,
+      secret_key text NOT NULL UNIQUE,
+      secret_value text NOT NULL,
+      purpose text NOT NULL DEFAULT '',
+      provider_name text NULL,
+      status text NOT NULL DEFAULT 'configured',
+      last_checked_at timestamptz NULL,
+      created_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (status IN ('configured', 'missing', 'unknown')),
+      CHECK (btrim(secret_value) <> '')
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS admin_secret_values_status_key_idx
+      ON admin_secret_values (status, secret_key)
+  `);
+  await db.query(`
+    ALTER TABLE admin_secret_values
+      ADD COLUMN IF NOT EXISTS request_domain text NULL
+  `);
+  await db.query(`
+    UPDATE admin_secret_values AS secret
+    SET request_domain = model_domains.request_domain
+    FROM (
+      SELECT
+        provider_config_json->>'apiKeyEnv' AS secret_key,
+        MIN(
+          COALESCE(
+            NULLIF(provider_config_json->>'baseURL', ''),
+            NULLIF(provider_config_json->>'endpoint', ''),
+            NULLIF(provider_config_json->>'requestPath', ''),
+            NULLIF(provider_config_json->>'createTaskEndpoint', '')
+          )
+        ) AS request_domain
+      FROM ai_model_configs
+      WHERE provider_config_json ? 'apiKeyEnv'
+      GROUP BY provider_config_json->>'apiKeyEnv'
+    ) AS model_domains
+    WHERE secret.secret_key = model_domains.secret_key
+      AND COALESCE(NULLIF(secret.request_domain, ''), '') = ''
+      AND COALESCE(NULLIF(model_domains.request_domain, ''), '') <> ''
+  `);
+  await db.query(`
+    INSERT INTO admin_secret_values (
+      id, secret_ref, secret_key, secret_value, purpose, provider_name, status,
+      last_checked_at, created_by_admin_id, created_at, updated_at
+    )
+    SELECT
+      id,
+      secret_ref,
+      env_name,
+      secret_value,
+      purpose,
+      provider_name,
+      CASE
+        WHEN secret_value IS NOT NULL AND btrim(secret_value) <> '' THEN 'configured'
+        ELSE 'missing'
+      END,
+      last_checked_at,
+      created_by_admin_id,
+      created_at,
+      updated_at
+    FROM admin_secret_references
+    WHERE secret_value IS NOT NULL
+      AND btrim(secret_value) <> ''
+    ON CONFLICT (secret_key)
+    DO UPDATE SET
+      secret_ref = EXCLUDED.secret_ref,
+      secret_value = EXCLUDED.secret_value,
+      purpose = EXCLUDED.purpose,
+      provider_name = EXCLUDED.provider_name,
+      status = EXCLUDED.status,
+      last_checked_at = EXCLUDED.last_checked_at,
+      updated_at = EXCLUDED.updated_at
+  `);
+  adminSecretValueStoreReady.add(db);
+}
+
 export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
+  async function getBatchImagePromptPresetCategories() {
+    return {
+      data: await readBatchImagePromptPresetCategoriesFromDb(deps.db),
+    };
+  }
+
+  async function updateBatchImagePromptPresetCategories(input: {
+    value: unknown;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    return updateRuntimeConfig({
+      key: batchImagePromptPresetCategoriesConfigKey,
+      value: input.value,
+      valueType: "json",
+      scope: "creator",
+      description: "批量生图弹框中的场景、角色、道具预设分类",
+      reason: input.reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      auditOrganizationId: input.auditOrganizationId,
+      auditWorkspaceId: input.auditWorkspaceId,
+      now: input.now,
+    });
+  }
+
   async function listSettings() {
+    await ensureAdminSecretValueStore(deps.db);
     const configs = await deps.db.query<RuntimeConfigRow>(
       `
         SELECT key, value_json, value_type, scope, description, updated_at
@@ -68,8 +209,22 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     const secretReferences = await deps.db.query<SecretReferenceRow>(
       `
-        SELECT id, secret_ref, env_name, purpose, provider_name, status, last_checked_at
-        FROM admin_secret_references
+        SELECT id, secret_ref, env_name, purpose, provider_name, request_domain, status, last_checked_at,
+               secret_value, true AS has_secret
+        FROM (
+          SELECT
+            id,
+            secret_ref,
+            secret_key AS env_name,
+            purpose,
+            provider_name,
+            request_domain,
+            status,
+            last_checked_at,
+            secret_value
+          FROM admin_secret_values
+          WHERE btrim(secret_value) <> ''
+        ) secrets
         ORDER BY provider_name ASC NULLS LAST, env_name ASC
       `,
     );
@@ -698,12 +853,14 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
   async function createSecretReference(input: {
     secretRef: string;
     envName: string;
+    secretValue?: string | null;
     purpose: string;
     providerName?: string | null;
     providerChannel?: string | null;
     mediaTypes?: string[];
     modelCodes?: string[];
     baseUrl?: string | null;
+    requestDomain?: string | null;
     authHeaderName?: string | null;
     authScheme?: string | null;
     extraHeaders?: Record<string, string> | null;
@@ -712,9 +869,14 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
   }) {
     const secretRef = input.secretRef.trim();
     const envName = input.envName.trim();
+    const secretValue = String(input.secretValue ?? "").trim();
     const purposeText = input.purpose.trim();
+    const requestDomain = String(input.requestDomain ?? input.baseUrl ?? "").trim();
     if (!secretRef || !envName || !purposeText) {
       return error(400, "secret_reference_required", "请填写密钥引用、环境变量名和用途");
+    }
+    if (!secretValue) {
+      return error(400, "secret_value_required", "请填写密钥值");
     }
     const purpose = formatSecretReferencePurpose({
       purpose: input.purpose,
@@ -727,29 +889,37 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       extraHeaders: input.extraHeaders,
     });
 
+    await ensureAdminSecretValueStore(deps.db);
     const row = await queryOne<SecretReferenceRow>(
       deps.db,
       `
-        INSERT INTO admin_secret_references (
-          id, secret_ref, env_name, purpose, provider_name, status, created_by_admin_id, created_at, updated_at
+        INSERT INTO admin_secret_values (
+          id, secret_ref, secret_key, secret_value, purpose, provider_name, request_domain, status, last_checked_at, created_by_admin_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'unknown', $6, $7, $7)
-        ON CONFLICT (env_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $9, 'configured', $8, $7, $8, $8)
+        ON CONFLICT (secret_key)
         DO UPDATE SET
           secret_ref = EXCLUDED.secret_ref,
+          secret_value = EXCLUDED.secret_value,
           purpose = EXCLUDED.purpose,
           provider_name = EXCLUDED.provider_name,
+          request_domain = EXCLUDED.request_domain,
+          status = EXCLUDED.status,
+          last_checked_at = EXCLUDED.last_checked_at,
           updated_at = EXCLUDED.updated_at
-        RETURNING id, secret_ref, env_name, purpose, provider_name, status, last_checked_at
+        RETURNING id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+                  secret_value, true AS has_secret
       `,
       [
         randomUUID(),
         secretRef,
         envName,
+        secretValue,
         purpose,
         input.providerName?.trim() || null,
         input.actorAdminAccountId,
         input.now,
+        requestDomain || null,
       ],
     );
 
@@ -757,6 +927,91 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       status: 200,
       body: { data: secretReferenceFromRow(row!) },
     };
+  }
+
+  async function updateSecretReference(input: {
+    id: string;
+    secretRef: string;
+    envName: string;
+    secretValue?: string | null;
+    purpose: string;
+    providerName?: string | null;
+    providerChannel?: string | null;
+    mediaTypes?: string[];
+    modelCodes?: string[];
+    baseUrl?: string | null;
+    requestDomain?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    extraHeaders?: Record<string, string> | null;
+    actorAdminAccountId: string;
+    now: Date;
+  }) {
+    const id = input.id.trim();
+    const secretRef = input.secretRef.trim();
+    const envName = input.envName.trim();
+    const secretValue = String(input.secretValue ?? "").trim();
+    const purposeText = input.purpose.trim();
+    const requestDomain = String(input.requestDomain ?? input.baseUrl ?? "").trim();
+    if (!id) return error(400, "secret_reference_id_required", "secret reference id is required");
+    if (!secretRef || !envName || !purposeText) {
+      return error(400, "secret_reference_required", "请填写密钥引用、引用键和用途");
+    }
+
+    const purpose = formatSecretReferencePurpose({
+      purpose: input.purpose,
+      providerChannel: input.providerChannel,
+      mediaTypes: input.mediaTypes,
+      modelCodes: input.modelCodes,
+      baseUrl: input.baseUrl,
+      authHeaderName: input.authHeaderName,
+      authScheme: input.authScheme,
+      extraHeaders: input.extraHeaders,
+    });
+    await ensureAdminSecretValueStore(deps.db);
+    const row = await queryOne<SecretReferenceRow>(
+      deps.db,
+      `
+        UPDATE admin_secret_values
+        SET secret_ref = $2,
+            secret_key = $3,
+            secret_value = CASE WHEN $4 <> '' THEN $4 ELSE secret_value END,
+            purpose = $5,
+            provider_name = $6,
+            request_domain = $8,
+            status = CASE
+              WHEN $4 <> '' THEN 'configured'
+              WHEN secret_value IS NOT NULL AND btrim(secret_value) <> '' THEN 'configured'
+              ELSE 'missing'
+            END,
+            last_checked_at = $7,
+            updated_at = $7
+        WHERE id = $1
+        RETURNING id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+                  secret_value, true AS has_secret
+      `,
+      [id, secretRef, envName, secretValue, purpose, input.providerName?.trim() || null, input.now, requestDomain || null],
+    );
+    if (!row) return error(404, "secret_reference_not_found", "secret reference not found");
+    return { status: 200, body: { data: secretReferenceFromRow(row) } };
+  }
+
+  async function deleteSecretReference(input: { id: string }) {
+    const id = input.id.trim();
+    if (!id) return error(400, "secret_reference_id_required", "secret reference id is required");
+    await ensureAdminSecretValueStore(deps.db);
+    const row = await queryOne<SecretReferenceRow>(
+      deps.db,
+      `
+        DELETE FROM admin_secret_values
+        WHERE id = $1
+        RETURNING id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+                  secret_value, false AS has_secret
+      `,
+      [id],
+    );
+    if (!row) return error(404, "secret_reference_not_found", "secret reference not found");
+    return { status: 200, body: { data: secretReferenceFromRow(row) } };
   }
 
   async function probeSecretReference(input: {
@@ -777,11 +1032,13 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(400, "reason_required", "reason is required");
     }
 
+    await ensureAdminSecretValueStore(deps.db);
     const existing = await queryOne<SecretReferenceRow>(
       deps.db,
       `
-        SELECT id, secret_ref, env_name, purpose, provider_name, status, last_checked_at
-        FROM admin_secret_references
+        SELECT id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+               secret_value, true AS has_secret
+        FROM admin_secret_values
         WHERE id = $1
       `,
       [id],
@@ -790,17 +1047,17 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(404, "secret_reference_not_found", "secret reference not found");
     }
 
-    const envValue = process.env[existing.env_name];
-    const status = typeof envValue === "string" && envValue.trim().length > 0 ? "configured" : "missing";
+    const status = existing.has_secret ? "configured" : "missing";
     const row = await queryOne<SecretReferenceRow>(
       deps.db,
       `
-        UPDATE admin_secret_references
+        UPDATE admin_secret_values
         SET status = $2,
             last_checked_at = $3,
             updated_at = $3
         WHERE id = $1
-        RETURNING id, secret_ref, env_name, purpose, provider_name, status, last_checked_at
+        RETURNING id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+                  secret_value, true AS has_secret
       `,
       [id, status, input.now],
     );
@@ -1157,16 +1414,20 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
   return {
     listSettings,
+    getBatchImagePromptPresetCategories,
     getPublicLegalDocuments,
     listLegalDocuments,
     createLegalDocument,
     updateLegalDocument,
     enableLegalDocument,
     deleteLegalDocument,
+    updateBatchImagePromptPresetCategories,
     updateRuntimeConfig,
     listRuntimeConfigRevisions,
     rollbackRuntimeConfig,
     createSecretReference,
+    updateSecretReference,
+    deleteSecretReference,
     probeSecretReference,
     listAdminAccounts,
     createAdminAccount,
@@ -1198,10 +1459,13 @@ interface SecretReferenceRow {
   id: string;
   secret_ref: string;
   env_name: string;
+  secret_value: string | null;
   purpose: string;
   provider_name: string | null;
+  request_domain: string | null;
   status: string;
   last_checked_at: Date | string | null;
+  has_secret?: boolean | null;
 }
 
 interface AdminAccountRow {
@@ -1250,6 +1514,9 @@ function publicLegalDocumentFromRow(key: string, row: RuntimeConfigRow | null) {
 }
 
 function normalizeRuntimeConfigValue(key: string, value: unknown) {
+  if (key === batchImagePromptPresetCategoriesConfigKey) {
+    return normalizeBatchImagePromptPresetCategories(value);
+  }
   if (key === legalDocumentsConfigKey) {
     return normalizeLegalDocuments(value);
   }
@@ -1276,6 +1543,72 @@ function withDefaultRuntimeConfigs(rows: RuntimeConfigRow[]) {
     const scopeOrder = left.scope.localeCompare(right.scope);
     return scopeOrder || left.key.localeCompare(right.key);
   });
+}
+
+export function normalizeBatchImagePromptPresetCategories(value: unknown): BatchImagePromptPresetCategories {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    scene: normalizeBatchImagePromptPresetOptionList(record.scene, defaultBatchImagePromptPresetCategories.scene),
+    character: normalizeBatchImagePromptPresetOptionList(record.character, defaultBatchImagePromptPresetCategories.character),
+    prop: normalizeBatchImagePromptPresetOptionList(record.prop, defaultBatchImagePromptPresetCategories.prop),
+  };
+}
+
+function normalizeBatchImagePromptPresetOptionList(
+  value: unknown,
+  fallback: BatchImagePromptPresetOption[],
+): BatchImagePromptPresetOption[] {
+  if (!Array.isArray(value)) {
+    return fallback.map((item) => ({ ...item }));
+  }
+  const seen = new Set<string>();
+  const options = value
+    .map((item) => normalizeBatchImagePromptPresetOption(item))
+    .filter((item): item is BatchImagePromptPresetOption => Boolean(item))
+    .filter((item) => {
+      if (seen.has(item.id)) {
+        return false;
+      }
+      seen.add(item.id);
+      return true;
+    });
+  if (!options.length) {
+    return fallback.map((item) => ({ ...item }));
+  }
+  return options;
+}
+
+function normalizeBatchImagePromptPresetOption(value: unknown): BatchImagePromptPresetOption | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const id = String((value as Record<string, unknown>).id ?? "").trim();
+  const label = String((value as Record<string, unknown>).label ?? "").trim();
+  if (!id || !label || id === "none") {
+    return null;
+  }
+  return { id, label };
+}
+
+export async function readBatchImagePromptPresetCategoriesFromDb(
+  db: SqlDatabase,
+): Promise<BatchImagePromptPresetCategories> {
+  const row = await queryOne<RuntimeConfigRow>(
+    db,
+    `
+      SELECT key, value_json, value_type, scope, description, updated_at
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [batchImagePromptPresetCategoriesConfigKey],
+  );
+  if (!row) {
+    return normalizeBatchImagePromptPresetCategories(defaultBatchImagePromptPresetCategories);
+  }
+  return normalizeBatchImagePromptPresetCategories(normalizeJson(row.value_json));
 }
 
 function adminLegalDocumentFromRecord(document: LegalDocumentRecord) {
@@ -1498,6 +1831,7 @@ function secretReferenceFromRow(row: SecretReferenceRow) {
     envName: row.env_name,
     purpose: parsedPurpose.purpose,
     providerName: row.provider_name,
+    requestDomain: row.request_domain || parsedPurpose.baseUrl || "",
     providerChannel: parsedPurpose.providerChannel,
     mediaTypes: parsedPurpose.mediaTypes,
     modelCodes: parsedPurpose.modelCodes,
@@ -1506,6 +1840,8 @@ function secretReferenceFromRow(row: SecretReferenceRow) {
     authScheme: parsedPurpose.authScheme,
     extraHeaders: parsedPurpose.extraHeaders,
     status: row.status,
+    hasSecret: Boolean(row.has_secret),
+    secretValue: row.secret_value || "",
     lastCheckedAt: row.last_checked_at ? new Date(row.last_checked_at).toISOString() : null,
   };
 }

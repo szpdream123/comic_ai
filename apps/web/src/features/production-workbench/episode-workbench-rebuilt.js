@@ -34,34 +34,6 @@ const VIDEO_MODELS = [
   { id: "happy-horse", label: "Happy Horse" },
 ];
 
-const BATCH_IMAGE_MODEL_OPTIONS = [
-  {
-    id: "tnb-pro",
-    label: "nano banana 2（链路G）",
-    group: "Nano banana",
-  },
-  {
-    id: "tnb-fast",
-    label: "nano banana fast（链路G）",
-    group: "Nano banana",
-  },
-  {
-    id: "tnb-ultra",
-    label: "nano banana pro（链路G）",
-    group: "Nano banana",
-  },
-  {
-    id: "jimeng-4-5",
-    label: "gpt image 2（链路G）",
-    group: "Gpt image",
-  },
-  {
-    id: "jimeng-4-5-vip",
-    label: "gpt image 2 VIP（链路G）",
-    group: "Gpt image",
-  },
-];
-
 const BATCH_VIDEO_MODEL_OPTIONS = [
   { id: "vidu-q3-pro", label: "Vidu Q3 Pro" },
   { id: "hailuo-2-0", label: "海螺 2.0" },
@@ -83,35 +55,6 @@ const BATCH_RATIO_OPTIONS = [
 ];
 
 const BATCH_SIZE_OPTIONS = ["1K", "2K"];
-
-const BATCH_PRESET_OPTIONS = [
-  { id: "none", label: "无预设" },
-  { id: "scene-vr", label: "[系统]VR场景图" },
-  { id: "scene-overlook", label: "[系统]场景-俯视图" },
-  { id: "prop-triple", label: "[系统]道具-三视图" },
-  { id: "scene-wide", label: "[系统]场景-广角图" },
-  { id: "character-triple", label: "[系统]角色-三视图" },
-];
-
-const BATCH_PUBLIC_STYLES = [
-  { id: "public-1", label: "邵氏兄弟", preview: buildBatchStylePreview("#7c563f", "#f3cf95", "portrait") },
-  { id: "public-2", label: "[动漫]赛博", preview: buildBatchStylePreview("#303755", "#7ee0ff", "energy") },
-  { id: "public-3", label: "[动漫]中式", preview: buildBatchStylePreview("#463226", "#e4c28b", "city") },
-  { id: "public-4", label: "[真人]中式", preview: buildBatchStylePreview("#2f241f", "#f3d7a2", "portrait") },
-  { id: "public-5", label: "[动漫]废土", preview: buildBatchStylePreview("#44392f", "#c9baa2", "robot") },
-  { id: "public-6", label: "[动漫]国风", preview: buildBatchStylePreview("#27324d", "#a7d7ff", "sword") },
-  { id: "public-7", label: "[动漫]多镜", preview: buildBatchStylePreview("#1f2831", "#8fd0a2", "mask") },
-  { id: "public-8", label: "[动漫]复古", preview: buildBatchStylePreview("#29455c", "#f1b06a", "scene") },
-  { id: "public-9", label: "中国古风", preview: buildBatchStylePreview("#32403f", "#f0d08d", "sword") },
-  { id: "public-10", label: "国漫3D", preview: buildBatchStylePreview("#27415a", "#9bd8ff", "scene") },
-  { id: "public-11", label: "胡金铨武侠", preview: buildBatchStylePreview("#3a2b21", "#f4d9a6", "portrait") },
-];
-
-const BATCH_CUSTOM_STYLES = [
-  { id: "custom-1", label: "日系动漫风", preview: buildBatchStylePreview("#2b3250", "#a9d8ff", "portrait") },
-  { id: "custom-2", label: "都市电影感", preview: buildBatchStylePreview("#2e2b30", "#f3c391", "city") },
-  { id: "custom-3", label: "灰蓝末世", preview: buildBatchStylePreview("#28303b", "#98b3c9", "scene") },
-];
 
 const VOICE_OPTIONS_BY_TAB = {
   custom: [
@@ -298,19 +241,11 @@ export function renderEpisodeWorkbench({
     storyboardMediaKind,
     storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
   );
-  const selectedAssetSummary = String(selectedAsset?.description ?? "").trim();
   const assetStageTitle = selectedAsset
-    ? `${resolveAssetLabel(activeAssetTab)}${selectedAsset?.name ?? ""}${
-        selectedAssetSummary ? `：${selectedAssetSummary}` : ""
-      }`
+    ? `${resolveAssetLabel(activeAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
   const exportButtonLabel = scopeMode === "assets" ? "下一步：分镜制作" : "导出";
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
-  const batchButtonDisabled =
-    scopeMode === "storyboard"
-      ? selectedStoryboardIds.length === 0 && allStoryboardIds.length === 0
-      : selectedEpisodeAssetIds.length === 0 && allAssetIds.length === 0;
-
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
       <header class="episode-replica-topbar">
@@ -322,7 +257,7 @@ export function renderEpisodeWorkbench({
         </div>
         <div class="episode-replica-topbar-center">
           <button class="episode-replica-pill ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" ${disabled(selectAllDisabled)}>全选</button>
-          <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions" ${disabled(batchButtonDisabled)}>批量生图/视频 | 高清处理</button>
+          <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
         </div>
         <div class="episode-replica-topbar-right">
           <div class="episode-replica-main-switch">
@@ -2039,7 +1974,7 @@ export function renderPromptDock({
       <div class="episode-replica-prompt-tools">
         ${isVideoMode && isSingleFrameInputMode ? "" : renderMiniMenu("references", resolveReferenceModeLabel(activeImageGenerationMode), activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
         ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
-        ${isFirstLastFrameVideoMode || isReferenceFreeImageMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
+        ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
       </div>
       <label class="episode-replica-textarea">
         <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
@@ -3014,6 +2949,8 @@ function renderEpisodeBatchModal(modal) {
   if (!modal?.show) return "";
   const mode = modal.mode ?? "image";
   const scope = modal.scope ?? "asset";
+  const isAssetScope = scope === "asset";
+  const showModeTabs = !((isAssetScope && mode === "image") || (!isAssetScope && mode === "video"));
   const selectedCount = modal.items?.length ?? 0;
   const title = mode === "video" ? "批量生视频" : mode === "upscale" ? "批量高清处理" : "批量生图";
   const totalCredits = modal.totalCredits ?? 0;
@@ -3026,17 +2963,22 @@ function renderEpisodeBatchModal(modal) {
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal"></button>
-      <div class="episode-batch-modal">
+      <div class="episode-batch-modal" style="--episode-batch-anchor-top:${escapeAttr(String(modal.anchorTop ?? 80))}px;">
         <div class="single-episode-modal-head storyboard-description-head">
           <h2>${escapeHtml(title)}</h2>
           <button class="modal-close" type="button" data-action="close-episode-batch-modal">×</button>
         </div>
-        <div class="episode-batch-mode-tabs">
-          <button class="${mode === "image" ? "active" : ""}" type="button" disabled>批量生图</button>
-          <button class="${mode === "video" ? "active" : ""}" type="button" disabled>批量生视频</button>
-          <button class="${mode === "upscale" ? "active" : ""}" type="button" disabled>批量高清处理</button>
-          <button type="button" disabled>主体固定</button>
-        </div>
+        ${
+          showModeTabs
+            ? `<div class="episode-batch-mode-tabs">
+                ${
+                  isAssetScope
+                    ? `<button class="${mode === "image" ? "active" : ""}" type="button" disabled>批量生图</button>`
+                    : `<button class="${mode === "video" ? "active" : ""}" type="button" disabled>批量生成视频</button>`
+                }
+              </div>`
+            : ""
+        }
         ${
           mode === "image"
             ? renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel)
@@ -3049,12 +2991,16 @@ function renderEpisodeBatchModal(modal) {
 
 function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const styleTab = modal.styleTab === "custom" ? "custom" : "public";
-  const styleCards = styleTab === "custom" ? BATCH_CUSTOM_STYLES : BATCH_PUBLIC_STYLES;
+  const publicStyles = Array.isArray(modal.publicStyles) ? modal.publicStyles : [];
+  const customStyles = Array.isArray(modal.customStyles) ? modal.customStyles : [];
+  const styleCards = styleTab === "custom" ? customStyles : publicStyles;
   const selectedStyleId = modal.selectedStyleId ?? styleCards[0]?.id ?? "";
-  const imageModel = resolveBatchImageModelLabel(modal.imageModelId);
+  const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
+  const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
+  const presetCategories = normalizeBatchPresetCategories(modal.batchPromptPresetCategories);
   return `
     <div class="episode-batch-image-panel">
-      ${renderEpisodeBatchSelectField("imageModelId", "图片模型", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions())}
+      ${renderEpisodeBatchSelectField("imageModelId", "图片模型", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions))}
       <section class="episode-batch-style-panel">
         <div class="episode-batch-section-title">模型画风</div>
         <div class="episode-batch-style-tabs">
@@ -3062,25 +3008,25 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
           <button class="${styleTab === "custom" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="custom">定制画风</button>
         </div>
         <div class="episode-batch-style-grid">
-          ${styleCards.map((card) => `
+          ${styleCards.length ? styleCards.map((card) => `
             <button
-              class="episode-batch-style-card ${card.id === selectedStyleId ? "selected" : ""}"
+              class="episode-batch-style-card ${card.preview ? "has-preview" : "no-preview"} ${card.id === selectedStyleId ? "selected" : ""}"
               type="button"
               data-action="select-episode-batch-style"
               data-style-id="${escapeAttr(card.id)}"
             >
-              <img src="${escapeAttr(card.preview)}" alt="${escapeAttr(card.label)}" />
+              ${card.preview ? `<img src="${escapeAttr(resolveApiUrl(card.preview))}" alt="${escapeAttr(card.label)}" />` : ""}
               <strong>${escapeHtml(card.label)}</strong>
             </button>
-          `).join("")}
+          `).join("") : '<div class="episode-replica-right-empty">当前没有可用画风，请先在后台配置。</div>'}
         </div>
       </section>
       <section class="episode-batch-config-panel">
         <div class="episode-batch-section-title">其他配置</div>
         <div class="episode-batch-config-grid">
-          ${renderEpisodeBatchSelectField("scenePresetId", "场景", resolveBatchPresetLabel(modal.scenePresetId), modal.openField === "scenePresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
-          ${renderEpisodeBatchSelectField("rolePresetId", "角色预设", resolveBatchPresetLabel(modal.rolePresetId), modal.openField === "rolePresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
-          ${renderEpisodeBatchSelectField("propPresetId", "道具预设", resolveBatchPresetLabel(modal.propPresetId), modal.openField === "propPresetId", BATCH_PRESET_OPTIONS.map((option) => ({ value: option.id, label: option.label })))}
+          ${renderEpisodeBatchSelectField("scenePresetId", "场景", resolveBatchPresetLabel(modal.scenePresetId, "scene", presetCategories), modal.openField === "scenePresetId", buildBatchPresetSelectOptions("scene", presetCategories))}
+          ${renderEpisodeBatchSelectField("rolePresetId", "角色预设", resolveBatchPresetLabel(modal.rolePresetId, "character", presetCategories), modal.openField === "rolePresetId", buildBatchPresetSelectOptions("character", presetCategories))}
+          ${renderEpisodeBatchSelectField("propPresetId", "道具预设", resolveBatchPresetLabel(modal.propPresetId, "prop", presetCategories), modal.openField === "propPresetId", buildBatchPresetSelectOptions("prop", presetCategories))}
           ${renderEpisodeBatchSelectField("aspectRatio", "比例", modal.aspectRatio ?? "16:9", modal.openField === "aspectRatio", BATCH_RATIO_OPTIONS.map((option) => ({ value: option, label: option })))}
           ${renderEpisodeBatchSelectField("size", "大小", modal.size ?? "2K", modal.openField === "size", BATCH_SIZE_OPTIONS.map((option) => ({ value: option, label: option })))}
         </div>
@@ -3133,10 +3079,11 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
 }
 
 function renderEpisodeBatchSelectField(field, label, value, open, options) {
+  const menuDirection = field === "imageModelId" || field === "videoModelId" ? "down" : "up";
   return `
     <div class="episode-batch-select-group">
       ${label ? `<span class="episode-batch-field-label">${escapeHtml(label)}</span>` : ""}
-      <div class="episode-batch-select-wrap ${open ? "open" : ""}">
+      <div class="episode-batch-select-wrap menu-${menuDirection} ${open ? "open" : ""}">
         <button
           class="episode-batch-select"
           type="button"
@@ -3181,30 +3128,77 @@ function renderEpisodeBatchInfoCard(label, value, open = false, field = "", opti
   `;
 }
 
-function groupBatchImageModelOptions() {
-  const groups = new Map();
-  for (const option of BATCH_IMAGE_MODEL_OPTIONS) {
-    if (!groups.has(option.group)) {
-      groups.set(option.group, []);
-    }
-    groups.get(option.group).push(option);
+function normalizeBatchImageModelOptions(options) {
+  if (!Array.isArray(options) || !options.length) {
+    return [{ value: "tnb-pro", label: "nano banana 2（链路G）", group: "Nano banana" }];
   }
-  return [...groups.entries()].flatMap(([group, options]) => [
-    { value: `__label__${group}`, label: `【${group}】`, disabled: true },
-    ...options.map((option) => ({ value: option.id, label: option.label })),
-  ]);
+  return options
+    .map((option) => {
+      const value = String(option?.value ?? option?.id ?? "").trim();
+      const label = String(option?.label ?? option?.modelLabel ?? value).trim();
+      const group = String(option?.group ?? option?.providerGroup ?? "后台配置").trim();
+      if (!value || !label) {
+        return null;
+      }
+      return { value, label, group };
+    })
+    .filter(Boolean);
 }
 
-function resolveBatchImageModelLabel(value) {
-  return BATCH_IMAGE_MODEL_OPTIONS.find((option) => option.id === value)?.label ?? "nano banana 2（链路G）";
+function groupBatchImageModelOptions(imageModelOptions = []) {
+  return normalizeBatchImageModelOptions(imageModelOptions).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+}
+
+function resolveBatchImageModelLabel(value, imageModelOptions = []) {
+  const normalizedValue = String(value ?? "").trim();
+  return normalizeBatchImageModelOptions(imageModelOptions).find((option) => option.value === normalizedValue)?.label ?? "nano banana 2（链路G）";
 }
 
 function resolveBatchVideoModelLabel(value) {
   return BATCH_VIDEO_MODEL_OPTIONS.find((option) => option.id === value)?.label ?? "Vidu Q3 Pro";
 }
 
-function resolveBatchPresetLabel(value) {
-  return BATCH_PRESET_OPTIONS.find((option) => option.id === value)?.label ?? "无预设";
+function normalizeBatchPresetCategories(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    scene: normalizeBatchPresetOptionList(source.scene),
+    character: normalizeBatchPresetOptionList(source.character),
+    prop: normalizeBatchPresetOptionList(source.prop),
+  };
+}
+
+function normalizeBatchPresetOptionList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const options = value
+    .map((item) => {
+      const id = String(item?.id ?? "").trim();
+      const label = String(item?.label ?? "").trim();
+      if (!id || !label || id === "none") {
+        return null;
+      }
+      return { id, label };
+    })
+    .filter(Boolean);
+  return options;
+}
+
+function buildBatchPresetSelectOptions(kind, presetCategories) {
+  return [
+    { value: "none", label: "无预设" },
+    ...presetCategories[kind].map((option) => ({ value: option.id, label: option.label })),
+  ];
+}
+
+function resolveBatchPresetLabel(value, kind = "scene", presetCategories = normalizeBatchPresetCategories(null)) {
+  if (!value || value === "none") {
+    return "无预设";
+  }
+  return presetCategories[kind].find((option) => option.id === value)?.label ?? "无预设";
 }
 
 function resolveReferencePromptPresetLabel(value) {

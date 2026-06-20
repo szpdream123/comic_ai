@@ -42,10 +42,14 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     }
 
     const resultFormat = normalizeResultFormat(this.config.resultFormat);
+    const parameters = readObject(input.redactedPayload.parameters);
     const requestBody = {
       model: this.config.model ?? defaultModel,
       prompt: buildPrompt(input),
-      size: defaultSize,
+      size: resolveImageSize(parameters),
+      ...optionalNumberField("n", readPositiveInteger(parameters.n) ?? readPositiveInteger(parameters.count)),
+      ...optionalStringField("quality", normalizeImageQuality(readString(parameters.quality))),
+      ...optionalStringField("moderation", readString(parameters.moderation)),
       ...(resultFormat ? { response_format: resultFormat } : {}),
     };
 
@@ -104,9 +108,19 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     fetchImpl: typeof fetch,
   ): Promise<ProviderSubmissionResult> {
     const formData = new FormData();
+    const parameters = readObject(input.redactedPayload.parameters);
     formData.set("model", this.config.model ?? defaultModel);
     formData.set("prompt", buildPrompt(input));
-    formData.set("size", defaultSize);
+    formData.set("n", String(readPositiveInteger(parameters.n) ?? readPositiveInteger(parameters.count) ?? 1));
+    formData.set("size", resolveImageSize(parameters));
+    const quality = normalizeImageQuality(readString(parameters.quality));
+    if (quality) {
+      formData.set("quality", quality);
+    }
+    const moderation = readString(parameters.moderation);
+    if (moderation) {
+      formData.set("moderation", moderation);
+    }
     const resultFormat = normalizeResultFormat(this.config.resultFormat);
     if (resultFormat) {
       formData.set("response_format", resultFormat);
@@ -197,6 +211,58 @@ function normalizeResultFormat(value: string | undefined) {
   return normalized === "b64_json" || normalized === "url"
     ? normalized
     : undefined;
+}
+
+function resolveImageSize(parameters: Record<string, unknown>) {
+  const explicitSize =
+    readString(parameters.size) ??
+    readString(parameters.imageSize) ??
+    readString(parameters.imageResolution);
+  if (explicitSize && /^\d+x\d+$/i.test(explicitSize)) {
+    return explicitSize;
+  }
+
+  const aspectRatio = readString(parameters.aspectRatio) ?? readString(parameters.imageAspectRatio);
+  if (aspectRatio && /^\d+x\d+$/i.test(aspectRatio)) {
+    return aspectRatio;
+  }
+  if (aspectRatio === "1:1") return "1024x1024";
+  if (aspectRatio === "16:9") return "1536x1024";
+  if (aspectRatio === "9:16") return "1024x1536";
+  if (aspectRatio === "3:2") return "1536x1024";
+  if (aspectRatio === "2:3") return "1024x1536";
+
+  return defaultSize;
+}
+
+function optionalStringField(key: string, value: string | undefined) {
+  return value ? { [key]: value } : {};
+}
+
+function normalizeImageQuality(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "2k" || normalized === "hd" || normalized === "high") {
+    return "high";
+  }
+  if (normalized === "standard" || normalized === "medium") {
+    return "medium";
+  }
+  if (normalized === "low") {
+    return "low";
+  }
+  return value;
+}
+
+function optionalNumberField(key: string, value: number | undefined) {
+  return value ? { [key]: value } : {};
+}
+
+function readPositiveInteger(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : undefined;
 }
 
 async function fetchTextWithTimeout(

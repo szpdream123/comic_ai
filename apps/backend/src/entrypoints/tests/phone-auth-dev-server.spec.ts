@@ -237,6 +237,143 @@ describe("phone auth dev server", () => {
       assert.equal(session.user.creditBalance, 2036);
       assert.equal(generationConfigResponse.status, 200);
       assert.equal(generationConfig.data.creditBalance, 2036);
+      assert.deepEqual(generationConfig.data.batchPromptPresetCategories, {
+        scene: [],
+        character: [],
+        prop: [],
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("persists creator display name updates and returns them from session", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const updateResponse = await fetch(`${server.origin}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          displayName: "灵曦导演",
+        }),
+      });
+      const updated = await updateResponse.json();
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+
+      const userRecord = await db.query<{ display_name: string }>(
+        "SELECT display_name FROM users WHERE phone_e164 = '+8613800138000'",
+      );
+
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updated.user.displayName, "灵曦导演");
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.displayName, "灵曦导演");
+      assert.equal(userRecord.rows[0]?.display_name, "灵曦导演");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates new user workspaces with the database default zero credit balance", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      await login(server.origin, "13800138123");
+
+      const organizations = await db.query<{
+        name: string;
+        credit_balance_cached: number;
+      }>(
+        `
+          SELECT o.name, o.credit_balance_cached
+          FROM organizations o
+          JOIN memberships m ON m.organization_id = o.id
+          JOIN users u ON u.id = m.user_id
+          WHERE u.phone_e164 = '+8613800138123'
+          ORDER BY o.name
+        `,
+      );
+      const seedCreditLots = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM credit_lots
+          WHERE source_type = 'dev_seed_initial_credits'
+        `,
+      );
+
+      assert.ok(organizations.rows.length > 0);
+      assert.equal(
+        organizations.rows.every((organization) => organization.credit_balance_cached === 0),
+        true,
+      );
+      assert.equal(seedCreditLots.rows[0]?.count, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("repairs legacy dev organization credit lots without changing cached balance", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await db.query("UPDATE organizations SET credit_balance_cached = 1200, credit_reserved_cached = 0 WHERE id = $1", [
+        "10000000-0000-4000-8000-000000000001",
+      ]);
+      await db.query("DELETE FROM credit_lots WHERE organization_id = $1", [
+        "10000000-0000-4000-8000-000000000001",
+      ]);
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "legacy-dev-credit-lot-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Legacy Credit Lot Repair",
+          scriptInput: "Episode 1: Legacy cached credits need spendable lots.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const project = await createProjectResponse.json();
+      const lots = await db.query<{ available_amount: number | string }>(
+        `
+          SELECT available_amount
+          FROM credit_lots
+          WHERE organization_id = $1
+            AND source_type = 'dev_legacy_credit_lot_repair'
+        `,
+        ["10000000-0000-4000-8000-000000000001"],
+      );
+      const organization = await db.query<{ credit_balance_cached: number | string }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+        ["10000000-0000-4000-8000-000000000001"],
+      );
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.ok(project.project.id);
+      assert.equal(lots.rows.length, 1);
+      assert.equal(Number(lots.rows[0]?.available_amount ?? 0), 1200);
+      assert.equal(Number(organization.rows[0]?.credit_balance_cached ?? 0), 1200);
     } finally {
       await server.close();
     }
@@ -642,6 +779,65 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("stores creator projects in the user's personal workspace instead of the team workspace", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "personal-project-workspace-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Personal workspace project",
+          scriptInput: "Episode 1: Project ownership stays personal.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const counts = await db.query<{
+        team_project_count: number;
+        personal_project_count: number;
+        project_workspace_id: string;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE workspace_id = '20000000-0000-4000-8000-000000000001') AS team_project_count,
+            (
+              SELECT count(*)::int
+              FROM projects
+              WHERE workspace_id <> '20000000-0000-4000-8000-000000000001'
+                AND created_by_user_id = (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+            ) AS personal_project_count,
+            (SELECT workspace_id FROM projects WHERE id = $1) AS project_workspace_id
+        `,
+        [created.project.id],
+      );
+
+      const projectsResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const projects = await projectsResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(counts.rows[0]?.team_project_count, 0);
+      assert.equal(counts.rows[0]?.personal_project_count, 1);
+      assert.notEqual(counts.rows[0]?.project_workspace_id, "20000000-0000-4000-8000-000000000001");
+      assert.equal(projects.projects.length, 1);
+      assert.equal(projects.projects[0].id, created.project.id);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("deletes creator projects with export records through the HTTP route", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -881,6 +1077,14 @@ describe("phone auth dev server", () => {
       assert.equal(listResponse.status, 200);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
       assert.equal(
+        listed.data.projects.some(
+          (project) =>
+            project.id === "40000000-0000-4000-8000-000000000277" ||
+            project.title === "普通项目不能进入画布项目列表",
+        ),
+        false,
+      );
+      assert.equal(
         listed.data.projects.some((project) => project.id === "50000000-0000-4000-8000-000000000277"),
         false,
       );
@@ -956,6 +1160,187 @@ describe("phone auth dev server", () => {
       assert.equal(createResponse.status, 201);
       assert.equal(allowedRunsResponse.status, 404);
       assert.equal(allowedRuns.errorCode, "canvas_project_not_found");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not list another user's standalone canvas projects", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138278");
+      const otherCookie = await login(server.origin, "13800138279");
+      await grantExperienceMembershipForPhone(db, "+8613800138278");
+      await grantExperienceMembershipForPhone(db, "+8613800138279");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-project-owner-only",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          title: "只属于原账号的画布",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const ownerListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie: ownerCookie },
+      });
+      const ownerList = await ownerListResponse.json();
+
+      const otherListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie: otherCookie },
+      });
+      const otherList = await otherListResponse.json();
+
+      assert.equal(createResponse.status, 201);
+      assert.equal(created.data.project.title, "只属于原账号的画布");
+      assert.equal(ownerListResponse.status, 200);
+      assert.equal(
+        ownerList.data.projects.some((project) => project.id === created.data.project.id),
+        true,
+      );
+      assert.equal(otherListResponse.status, 200);
+      assert.equal(
+        otherList.data.projects.some(
+          (project) => project.id === created.data.project.id || project.title === "只属于原账号的画布",
+        ),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("runs standalone canvas nodes from the personal canvas workspace", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138280");
+      await grantExperienceMembershipForPhone(db, "+8613800138280");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-run-project-create",
+          cookie,
+        },
+        body: JSON.stringify({ title: "可运行的独立画布" }),
+      });
+      const created = await createResponse.json();
+      const canvasProjectId = created.data.project.id;
+      const saveResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${canvasProjectId}/canvas`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          clientRevision: 1,
+          document: {
+            version: 1,
+            canvasProjectId,
+            projectId: canvasProjectId,
+            viewport: { x: 0, y: 0, zoom: 1 },
+            nodes: [
+              {
+                id: "image-node",
+                type: "image",
+                position: { x: 100, y: 100 },
+                data: {
+                  mediaKind: "image",
+                  modelCode: "gpt-image-2-cn",
+                  prompt: "生成一张画布测试图",
+                  ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
+                },
+              },
+            ],
+            edges: [],
+          },
+          events: [],
+        }),
+      });
+      const saved = await saveResponse.json();
+      const runResponse = await fetch(`${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/run`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-node-run-personal-workspace",
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "canvas",
+          targetId: "image-node",
+          prompt: "生成一张画布测试图",
+          model: "gpt-image-2-cn",
+          kind: "image",
+          mediaKind: "image",
+        }),
+      });
+      const run = await runResponse.json();
+      const projectLink = await db.query<{ project_id: string | null }>(
+        "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
+        [canvasProjectId],
+      );
+      const episodeRows = await db.query<{ id: string }>(
+        "SELECT e.id FROM episodes e JOIN creator_canvas_projects c ON c.project_id = e.project_id WHERE c.id = $1",
+        [canvasProjectId],
+      );
+      const afterRunListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie },
+      });
+      const afterRunList = await afterRunListResponse.json();
+      const afterRunCanvasResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${canvasProjectId}/canvas`, {
+        headers: { cookie },
+      });
+      const afterRunCanvas = await afterRunCanvasResponse.json();
+      const staleStandaloneDocument = {
+        ...afterRunCanvas.data.canvas.document,
+        projectId: canvasProjectId,
+      };
+      const saveAfterRunResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${canvasProjectId}/canvas`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          clientRevision: afterRunCanvas.data.canvas.serverRevision,
+          document: staleStandaloneDocument,
+          events: [],
+        }),
+      });
+      const savedAfterRun = await saveAfterRunResponse.json();
+
+      assert.equal(createResponse.status, 201);
+      assert.equal(saveResponse.status, 200);
+      assert.equal(saved.data.canvas.canvasProjectId, canvasProjectId);
+      assert.equal(runResponse.status, 200);
+      assert.equal(run.data.canvasProjectId, canvasProjectId);
+      assert.equal(run.data.nodeKey, "image-node");
+      assert.equal(run.data.targetType, "canvas");
+      assert.equal(run.data.targetId, "image-node");
+      assert.ok(run.data.runId);
+      assert.ok(run.data.taskId);
+      assert.ok(projectLink.rows[0]?.project_id);
+      assert.equal(episodeRows.rows.length, 1);
+      assert.equal(afterRunListResponse.status, 200);
+      assert.equal(afterRunList.data.projects.some((project) => project.id === canvasProjectId), true);
+      assert.equal(afterRunCanvasResponse.status, 200);
+      assert.equal(afterRunCanvas.data.canvas.canvasProjectId, canvasProjectId);
+      assert.equal(afterRunCanvas.data.canvas.document.nodes.length, 1);
+      assert.equal(saveAfterRunResponse.status, 200);
+      assert.equal(savedAfterRun.data.canvas.canvasProjectId, canvasProjectId);
+      assert.equal(savedAfterRun.data.canvas.document.projectId, projectLink.rows[0]?.project_id);
     } finally {
       await server.close();
     }
@@ -2408,7 +2793,7 @@ describe("phone auth dev server", () => {
         assert.equal(generationConfigResponse.status, 200);
         assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "gpt-image-2-cn");
         assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
-        assert.equal(generationConfigEnvelope.data.creditBalance, 10000);
+        assert.equal(generationConfigEnvelope.data.creditBalance, 0);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxReferencesPerTask, 30);
@@ -2792,6 +3177,7 @@ describe("phone auth dev server", () => {
 
       assert.equal(response.status, 200);
       assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      assert.match(text, /event: ping/);
       assert.ok(text.indexOf("event: script_delta") < text.indexOf("event: complete"));
       assert.ok(text.indexOf("event: asset_delta") < text.indexOf("event: complete"));
       assert.match(text, /event: script_prompt/);
@@ -2803,6 +3189,8 @@ describe("phone auth dev server", () => {
       assert.match(text, /避免魔改原著核心设定/);
       assert.match(text, /任小野托付妹妹/);
       assert.match(text, /递出饭食/);
+      assert.doesNotMatch(text, /data:\s*\{"type":"script_start"/);
+      assert.doesNotMatch(text, /data:\s*\{"type":"script_delta"/);
     } finally {
       await server.close();
     }
@@ -7053,6 +7441,26 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /phone-auth-dev-server\.ts/);
   });
 
+  it("routes phone-auth startup through the full dev stack when generation queues are required", async () => {
+    const launcherScript = await readFile(
+      new URL("../../../../../scripts/run-phone-auth-dev-server.mjs", import.meta.url),
+      "utf8",
+    );
+    const devStackScript = await readFile(
+      new URL("../../../../../scripts/run-creator-dev-stack.mjs", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(launcherScript, /GENERATION_QUEUE_REQUIRED/);
+    assert.match(launcherScript, /BULLMQ_OUTBOX_DISPATCHER_ENABLED/);
+    assert.match(launcherScript, /BULLMQ_WORKERS_ENABLED/);
+    assert.match(launcherScript, /run-creator-dev-stack\.mjs/);
+    assert.match(launcherScript, /CREATOR_DEV_STACK_MANAGED/);
+    assert.match(launcherScript, /generation-outbox and generation-worker/);
+    assert.match(devStackScript, /GENERATION_QUEUE_REQUIRED\s*\?\?=\s*"true"/);
+    assert.match(devStackScript, /CREATOR_DEV_STACK_MANAGED:\s*"true"/);
+  });
+
   it("uses an import-based launcher that starts the dev server explicitly", async () => {
     const launcherScript = await readFile(
       new URL("../../../../../scripts/run-phone-auth-dev-server.mjs", import.meta.url),
@@ -7068,7 +7476,7 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
     assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
-    assert.doesNotMatch(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
+    assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
     assert.match(launcherScript, /server\.listen\(port\)/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);

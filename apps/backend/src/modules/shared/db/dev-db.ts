@@ -20,11 +20,7 @@ export async function createDevDb(): Promise<DevDatabase> {
   const pool = new Pool({
     connectionString,
   });
-  const configuredSchemaName = process.env.DATABASE_SCHEMA?.trim();
-  const autoTestSchemaName = !configuredSchemaName && isTestRuntime()
-    ? `test_${randomUUID().replaceAll("-", "_")}`
-    : undefined;
-  const schemaName = configuredSchemaName || autoTestSchemaName;
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || undefined;
 
   try {
     if (schemaName) {
@@ -32,9 +28,6 @@ export async function createDevDb(): Promise<DevDatabase> {
     }
     const db = createPostgresDatabase(pool, schemaName);
     await ensureFoundationSchema(db);
-    if (autoTestSchemaName) {
-      return withSchemaCleanup(db, autoTestSchemaName);
-    }
     return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
@@ -332,11 +325,11 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await columnExists(db, "credit_packages", "sort_order")) ||
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "transfer_in"))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0028_credit_recharge_center.sql" });
+    await applySqlMigrations(db, process.cwd(), { fromName: "0041_credit_recharge_center.sql" });
   }
 
   if (!(await constraintAllowsNumericValue(db, "membership_plans", "membership_plans_seat_limit_check", "seat_limit", 0))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0029_membership_plan_zero_seats.sql" });
+    await applySqlMigrations(db, process.cwd(), { fromName: "0042_membership_plan_zero_seats.sql" });
   }
 
   if (
@@ -353,7 +346,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
       "full_flow_agent",
     ))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0030_membership_entitlement_keys.sql" });
+    await applySqlMigrations(db, process.cwd(), { fromName: "0043_membership_entitlement_keys.sql" });
   }
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
@@ -376,6 +369,12 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await columnExists(db, "image_prompt_styles", "is_default"))) {
       await db.query("ALTER TABLE image_prompt_styles ADD COLUMN is_default boolean NOT NULL DEFAULT false");
     }
+    await ensureCategoryConstraint(db, {
+      tableName: "image_prompt_styles",
+      constraintName: "image_prompt_styles_category_check",
+      columnName: "category",
+      allowedValues: ["official", "batch", "custom"],
+    });
   }
 
   if (!(await tableExists(db, "character_prompt_templates"))) {
@@ -403,6 +402,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
 async function ensureStandaloneCanvasProjectSchema(db: SqlDatabase) {
   await db.query("ALTER TABLE creator_canvas_projects ALTER COLUMN project_id DROP NOT NULL");
+  await db.query("ALTER TABLE creator_canvas_documents ALTER COLUMN project_id DROP NOT NULL");
   if (await creatorCanvasProjectIndexCurrent(db)) {
     return;
   }
@@ -517,6 +517,41 @@ async function ensureProviderConstraint(
   await db.query(`ALTER TABLE ${input.tableName} DROP CONSTRAINT IF EXISTS ${input.constraintName}`);
   await db.query(
     `ALTER TABLE ${input.tableName} ADD CONSTRAINT ${input.constraintName} CHECK (provider IN (${allowedSql}))`,
+  );
+}
+
+async function ensureCategoryConstraint(
+  db: SqlDatabase,
+  input: {
+    tableName: string;
+    constraintName: string;
+    columnName: string;
+    allowedValues: string[];
+  },
+) {
+  if (!(await tableExists(db, input.tableName))) {
+    return;
+  }
+
+  const current = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = $1
+      LIMIT 1
+    `,
+    [input.constraintName],
+  );
+  const definition = current.rows[0]?.definition ?? "";
+  const hasExpectedValues = input.allowedValues.every((value) => definition.includes(value));
+  if (hasExpectedValues) {
+    return;
+  }
+
+  const allowedSql = input.allowedValues.map((value) => `'${value}'`).join(", ");
+  await db.query(`ALTER TABLE ${input.tableName} DROP CONSTRAINT IF EXISTS ${input.constraintName}`);
+  await db.query(
+    `ALTER TABLE ${input.tableName} ADD CONSTRAINT ${input.constraintName} CHECK (${input.columnName} IN (${allowedSql}))`,
   );
 }
 
@@ -888,17 +923,16 @@ async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
         AND (
           (
             model_code = 'gpt-image-2-cn'
-            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
-            AND provider_config_json->>'endpoint' = '/v1/images/generations'
-            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+            AND provider_protocol = 'openai_images'
+            AND provider_model = 'gpt-image-2'
+            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
           )
           OR (
             model_code = 'gpt-image-2-reference-cn'
             AND provider_protocol = 'openai_images'
             AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'baseURL' = 'https://code.shoestravel.xin'
-            AND provider_config_json->>'endpoint' = '/v1/images/generations'
-            AND provider_config_json->>'editEndpoint' = '/v1/images/edits'
+            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
+            AND provider_config_json->>'baseURL' = 'https://image.shoestravel.xin'
           )
         )
     `,

@@ -22,6 +22,27 @@ loadDotEnvFile(envFilePath);
 if (process.env.LOCAL_DATABASE_DIR?.trim() && !process.env.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE) {
   delete process.env.DATABASE_URL;
 }
+const generationQueueRequired =
+  isEnabled(process.env.GENERATION_QUEUE_REQUIRED) ||
+  isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||
+  isEnabled(process.env.BULLMQ_WORKERS_ENABLED);
+if (generationQueueRequired) {
+  process.env.GENERATION_QUEUE_REQUIRED = "true";
+  process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED = "true";
+  process.env.BULLMQ_WORKERS_ENABLED = "true";
+}
+if (generationQueueRequired && process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
+  const stackEntrypoint = join(process.cwd(), "scripts", "run-creator-dev-stack.mjs");
+  console.error(
+    "[phone-auth] GENERATION_QUEUE_REQUIRED=true; starting the full dev stack so generation-outbox and generation-worker are always running.",
+  );
+  console.error("[phone-auth] Use GENERATION_QUEUE_REQUIRED=false only when you intentionally want HTTP-only mode.");
+  const stackResult = spawnSync(runtime, [stackEntrypoint], {
+    env: process.env,
+    stdio: "inherit",
+  });
+  process.exit(stackResult.status ?? 1);
+}
 if (process.env.NODE_ENV === "production") {
   console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
   process.exit(1);
@@ -165,6 +186,10 @@ function loadDotEnvFile(envFilePath) {
 
     process.env[key] = value;
   }
+}
+
+function isEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 function isSafeDevServerDatabaseUrl(databaseUrl) {

@@ -1030,6 +1030,46 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("returns limited team page data when the creator lacks team read permission", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-limited-team-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const overview = await creator.getTeamOverview({
+        user,
+        now: new Date("2026-06-17T10:00:00.000Z"),
+      });
+      const members = await creator.listTeamMembers({
+        user,
+        now: new Date("2026-06-17T10:01:00.000Z"),
+      });
+
+      assert.equal(overview.status, 200);
+      assert.equal((overview.body as any).entitlements.teamMemberManagement, false);
+      assert.deepEqual((overview.body as any).permissions, {
+        canReadMembers: false,
+        canCreateMember: false,
+        canViewDashboard: false,
+        canManageAll: false,
+        canManageGroup: false,
+      });
+      assert.equal(members.status, 200);
+      assert.deepEqual((members.body as any).members, []);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("stores project covers by storage object id and returns signed cover urls", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();

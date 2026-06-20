@@ -121,6 +121,7 @@ describe("openai images provider adapter", () => {
         providerModel: "gpt-image-2",
         providerConfig: {
           baseURL: "https://relay.example.com",
+          requestPath: "/provider/images",
           endpoint: "/v1/images/generations",
           apiKeyEnv: "GPT_IMAGE2_API_KEY",
           resultFormat: "b64_json",
@@ -161,7 +162,7 @@ describe("openai images provider adapter", () => {
       },
     });
 
-    assert.equal(capturedUrl, "https://relay.example.com/v1/images/generations");
+    assert.equal(capturedUrl, "https://relay.example.com/provider/images");
     assert.deepEqual(capturedHeaders, {
       authorization: "Bearer relay-key",
       "content-type": "application/json",
@@ -283,6 +284,10 @@ describe("openai images provider adapter", () => {
               b64Json: Buffer.from([137, 80, 78, 71]).toString("base64"),
             },
           ],
+          count: 1,
+          size: "1024x1024",
+          quality: "high",
+          moderation: "auto",
         },
       },
     });
@@ -294,12 +299,183 @@ describe("openai images provider adapter", () => {
     assert.ok(capturedBody instanceof FormData);
     assert.equal(capturedBody.get("model"), "gpt-image-2");
     assert.equal(capturedBody.get("prompt"), "Keep the same character and create a new comic panel.");
-    assert.equal(capturedBody.get("size"), "1024x1536");
+    assert.equal(capturedBody.get("n"), "1");
+    assert.equal(capturedBody.get("size"), "1024x1024");
+    assert.equal(capturedBody.get("quality"), "high");
+    assert.equal(capturedBody.get("moderation"), "auto");
     assert.equal(capturedBody.getAll("image[]").length, 1);
     assert.equal(capturedBody.get("image[]") instanceof Blob, true);
     assert.equal(result.externalRequestId, "req_edit_123");
     assert.equal(result.status, "succeeded");
     assert.deepEqual(result.redactedResponse?.outputTypes, ["b64_json"]);
+  });
+
+  it("normalizes legacy image parameters before submitting reference edits", async () => {
+    let capturedBody: FormData | null = null;
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "openai_images",
+        providerModel: "gpt-image-2",
+        providerConfig: {
+          baseURL: "https://image.shoestravel.xin",
+          endpoint: "/v1/images/generations",
+          editEndpoint: "https://image.shoestravel.xin/v1/images/edits",
+          apiKeyEnv: "GPT_IMAGE2_API_KEY",
+        },
+      },
+      {
+        GPT_IMAGE2_API_KEY: "relay-key",
+      },
+      (async (_url, init) => {
+        capturedBody = init?.body as FormData;
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: "ZmFrZQ==" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-legacy-edit",
+      providerName: "gpt-image-2-cn",
+      providerOperation: "episode.image.generate",
+      requestKey: "workflow-edit:legacy",
+      payloadRef: "creator://payload-legacy-edit",
+      payloadHash: "hash-legacy-edit",
+      redactedPayload: {
+        prompt: "Use this reference with legacy UI parameters.",
+        parameters: {
+          referenceImages: [
+            {
+              name: "reference.png",
+              mimeType: "image/png",
+              b64Json: Buffer.from([137, 80, 78, 71]).toString("base64"),
+            },
+          ],
+          count: 1,
+          aspectRatio: "9:16",
+          quality: "2K",
+        },
+      },
+    });
+
+    assert.ok(capturedBody instanceof FormData);
+    assert.equal(capturedBody.get("n"), "1");
+    assert.equal(capturedBody.get("size"), "1024x1536");
+    assert.equal(capturedBody.get("quality"), "high");
+    assert.equal(capturedBody.getAll("image[]").length, 1);
+  });
+
+  it("passes explicit image dimensions from aspectRatio through as OpenAI image size", async () => {
+    let capturedBody: FormData | null = null;
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "openai_images",
+        providerModel: "gpt-image-2",
+        providerConfig: {
+          baseURL: "https://image.shoestravel.xin",
+          endpoint: "/v1/images/generations",
+          editEndpoint: "https://image.shoestravel.xin/v1/images/edits",
+          apiKeyEnv: "GPT_IMAGE2_API_KEY",
+        },
+      },
+      {
+        GPT_IMAGE2_API_KEY: "relay-key",
+      },
+      (async (_url, init) => {
+        capturedBody = init?.body as FormData;
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: "ZmFrZQ==" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-explicit-size",
+      providerName: "gpt-image-2-cn",
+      providerOperation: "episode.image.generate",
+      requestKey: "workflow-edit:explicit-size",
+      payloadRef: "creator://payload-explicit-size",
+      payloadHash: "hash-explicit-size",
+      redactedPayload: {
+        prompt: "Use this reference with an exact output size.",
+        parameters: {
+          referenceImages: [
+            {
+              name: "reference.png",
+              mimeType: "image/png",
+              b64Json: Buffer.from([137, 80, 78, 71]).toString("base64"),
+            },
+          ],
+          count: 1,
+          aspectRatio: "2048x2560",
+          quality: "auto",
+        },
+      },
+    });
+
+    assert.ok(capturedBody instanceof FormData);
+    assert.equal(capturedBody.get("size"), "2048x2560");
+    assert.equal(capturedBody.get("quality"), "auto");
+  });
+
+  it("keeps absolute image edit endpoints instead of joining them with baseURL", async () => {
+    let capturedUrl = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "openai_images",
+        providerModel: "gpt-image-2",
+        providerConfig: {
+          baseURL: "https://code.shoestravel.xin",
+          endpoint: "/v1/images/generations",
+          editEndpoint: "https://image.shoestravel.xin/v1/images/edits",
+          apiKeyEnv: "GPT_IMAGE2_API_KEY",
+        },
+      },
+      {
+        GPT_IMAGE2_API_KEY: "relay-key",
+      },
+      (async (url) => {
+        capturedUrl = String(url);
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: "ZmFrZQ==" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-absolute-edit",
+      providerName: "gpt-image-2-cn",
+      providerOperation: "episode.image.generate",
+      requestKey: "workflow-edit:absolute",
+      payloadRef: "creator://payload-absolute-edit",
+      payloadHash: "hash-absolute-edit",
+      redactedPayload: {
+        prompt: "Use this reference.",
+        parameters: {
+          quickReferences: [
+            {
+              name: "hero.png",
+              mimeType: "image/png",
+              b64Json: Buffer.from([137, 80, 78, 71]).toString("base64"),
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://image.shoestravel.xin/v1/images/edits");
   });
 
   it("times out image generation requests when the provider does not respond", async () => {

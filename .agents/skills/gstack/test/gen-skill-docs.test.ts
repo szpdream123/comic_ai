@@ -1621,7 +1621,13 @@ describe('Codex generation (--host codex)', () => {
     expect(fs.existsSync(rootMetadata)).toBe(true);
     const content = fs.readFileSync(rootMetadata, 'utf-8');
     expect(content).toContain('display_name: "gstack"');
-    expect(content).toContain('Use $gstack to locate the bundled gstack skills.');
+    expect(content).toContain('default_prompt: |');
+    expect(content).toContain('你是 gstack 技能路由助手。');
+    expect(content).toContain('【角色】');
+    expect(content).toContain('【能力】');
+    expect(content).toContain('AI builder framework');
+    expect(content).toContain('【使用方式】');
+    expect(content).toContain('不要把能力再整理成 JSON 结构');
     expect(content).toContain('allow_implicit_invocation: true');
   });
 
@@ -1661,6 +1667,7 @@ describe('Codex generation (--host codex)', () => {
       const content = fs.readFileSync(metadata, 'utf-8');
       expect(content).toContain(`display_name: "${skill.codexName}"`);
       expect(content).toContain('short_description:');
+      expect(content).toContain('default_prompt: |');
       expect(content).toContain('allow_implicit_invocation: true');
     }
   });

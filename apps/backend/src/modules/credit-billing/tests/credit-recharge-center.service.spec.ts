@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
-import { createDevDb } from "../../shared/db/dev-db.ts";
+import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { grantCredits } from "../credit-ledger.service.ts";
 import {
   createCreditRechargeCenterService,
@@ -17,7 +17,7 @@ const teamWorkspaceId = "20000000-0000-4000-8000-000000001002";
 
 describe("credit recharge center service", { concurrency: false }, () => {
   it("summarizes personal wallet and hides team transfer when there is no real team", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     try {
       const session = await seedRechargeFixture(db, { realTeam: false });
       await grantCredits(db, {
@@ -47,7 +47,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
   });
 
   it("lets a team owner transfer personal credits into a real team pool idempotently", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     try {
       const session = await seedRechargeFixture(db, { realTeam: true });
       await grantCredits(db, {
@@ -123,7 +123,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
   });
 
   it("rejects transfer when the actor is not a team owner or admin", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     try {
       const session = await seedRechargeFixture(db, { realTeam: true, teamRole: "creator" });
       const service = createCreditRechargeCenterService({ db, workspaceId: personalWorkspaceId });
@@ -146,7 +146,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
   });
 
   it("hides team transfer when professional membership has expired despite stale payment entitlement rows", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     try {
       const session = await seedRechargeFixture(db, {
         realTeam: true,
@@ -178,7 +178,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
   });
 
   it("rejects transfer larger than the personal available balance", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     try {
       const session = await seedRechargeFixture(db, { realTeam: true });
       await grantCredits(db, {

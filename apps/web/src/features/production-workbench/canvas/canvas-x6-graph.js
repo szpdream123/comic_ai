@@ -255,7 +255,12 @@ function createGraph(X6, mount, workbench) {
 function wireGraphSync(graph, workbench) {
   const sync = (options = {}) => {
     const graphData = readGraphData(graph);
-    workbench.ui.canvasDocument = canvasDocumentFromX6Data(graphData, workbench.ui.canvasDocument);
+    const nextDocument = canvasDocumentFromX6Data(graphData, workbench.ui.canvasDocument);
+    if (typeof workbench.updateCanvasDocument === "function") {
+      workbench.updateCanvasDocument(nextDocument);
+    } else {
+      workbench.ui.canvasDocument = nextDocument;
+    }
     if (options.clearToast) {
       workbench.ui.toast = "";
     }
