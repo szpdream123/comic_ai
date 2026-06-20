@@ -8163,6 +8163,7 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
+        if (path.includes("/membership")) return "membership";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/agreements")) return "agreements";
@@ -8178,6 +8179,7 @@
           models: "/admin/models",
           parameterTemplates: "/admin/parameter-templates",
           users: "/admin/users",
+          membership: "/admin/membership",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           agreements: "/admin/agreements",
@@ -8198,6 +8200,7 @@
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
                 ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
+                ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
@@ -8233,6 +8236,7 @@
         if (state.page === "models") return modelsPage();
         if (state.page === "parameterTemplates") return parameterTemplatesPage();
         if (state.page === "users") return usersPage();
+        if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "agreements") return agreementsPage();
