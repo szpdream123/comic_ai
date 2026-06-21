@@ -1832,32 +1832,28 @@ describe("Worker C asset library surfaces", () => {
     assert.doesNotMatch(html, /import-library-asset-to-project/);
   });
 
-  it("renders the original team API node as an empty configuration table", () => {
+  it("renders the team API category as an unimplemented placeholder without success actions", () => {
     const html = renderLibraryTeam({
       route: "assets",
       assetScope: "team",
       libraryCategory: "api",
       libraryEntitlement: {
-        hasTeamAssetLibrary: false,
+        hasTeamAssetLibrary: true,
         blockReason: "team_asset_library_entitlement_required",
       },
     });
 
-    assertIncludesAll(html, [
+    [
       "团队资产库",
       "API",
-      "配置团队专属 API，全员共享优质模型。",
-      "查看使用位置",
-      "配置企业API服务",
-      "模型名称",
-      "状态",
-      "更新人",
-      "最近更新时间",
-      "操作",
-      "本团队暂未给任何模型配置企业API服务",
-    ]);
-    assert.match(html, /library-team-api-panel/);
-    assert.match(html, /<table/);
+      "企业API暂未接入",
+      "当前分类暂不展示官方素材内容，后续接入团队素材后会在这里管理。",
+    ].forEach((text) => assertIncludesText(html, text));
+    assert.doesNotMatch(html, /配置企业API服务/);
+    assert.doesNotMatch(html, /操作成功/);
+    assert.doesNotMatch(html, /企业 API 配置暂未接入真实服务。/);
+    assert.doesNotMatch(html, /library-team-api-panel/);
+    assert.doesNotMatch(html, /<table/);
   });
 
   it("keeps team assets hidden behind the server entitlement gate", () => {
