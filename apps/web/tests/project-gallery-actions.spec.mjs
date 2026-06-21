@@ -314,6 +314,122 @@ test("core navigation remains available while background work is busy", async ()
   }
 });
 
+test("home hero pointer movement updates the cinematic cursor aura without rendering", async () => {
+  const styleValues = new Map();
+  let pointerMoveHandler = null;
+  const TestElement = class Element {};
+  const TestNode = class Node {};
+  const hero = new TestElement();
+  hero.style = {
+    setProperty(name, value) {
+      styleValues.set(name, value);
+    },
+  };
+  hero.getBoundingClientRect = () => ({ left: 100, top: 50, width: 400, height: 300 });
+  hero.closest = (selector) => (selector === ".home-hero" ? hero : null);
+  const workbench = {
+    ...createWorkbench(),
+    root: {
+      innerHTML: "",
+      querySelector(selector) {
+        return selector === ".home-hero" ? hero : null;
+      },
+      addEventListener(type, handler) {
+        if (type === "pointermove") {
+          pointerMoveHandler = handler;
+        }
+      },
+    },
+  };
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalElement = globalThis.Element;
+  const originalNode = globalThis.Node;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "" },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.document = {
+    addEventListener() {},
+    removeEventListener() {},
+    createElement() {
+      return { innerHTML: "", querySelector() { return null; } };
+    },
+  };
+  globalThis.Element = TestElement;
+  globalThis.Node = TestNode;
+  globalThis.localStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+
+  try {
+    await initProductionWorkbench({
+      root: workbench.root,
+      session: { user: { phone: "+86 13800138000" } },
+      onLogout() {},
+      api: {
+        getSession: async () => ({ user: { phone: "+86 13800138000", creditBalance: 12 } }),
+        getProjects: async () => ({ projects: [] }),
+        getProjectStyles: async () => ({ data: [] }),
+        getStoryboardPromptPackages: async () => ({ data: [] }),
+      },
+    });
+    pointerMoveHandler?.({
+      target: hero,
+      clientX: 300,
+      clientY: 200,
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+    if (originalDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = originalDocument;
+    }
+    if (originalElement === undefined) {
+      delete globalThis.Element;
+    } else {
+      globalThis.Element = originalElement;
+    }
+    if (originalNode === undefined) {
+      delete globalThis.Node;
+    } else {
+      globalThis.Node = originalNode;
+    }
+    if (originalLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = originalLocalStorage;
+    }
+    if (originalSessionStorage === undefined) {
+      delete globalThis.sessionStorage;
+    } else {
+      globalThis.sessionStorage = originalSessionStorage;
+    }
+  }
+
+  assert.equal(styleValues.get("--home-pointer-x"), "50.00%");
+  assert.equal(styleValues.get("--home-pointer-y"), "50.00%");
+});
+
 test("hash route changes re-render the active surface", async () => {
   const workbench = createWorkbench();
   workbench.ui.activeNavTab = "home";

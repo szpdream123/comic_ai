@@ -5718,8 +5718,23 @@ function renderHomeHero({ detailState }) {
   return `
     <section class="home-hero" aria-label="首页">
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
+      <div class="home-cinematic-sky" aria-hidden="true">
+        <span class="home-starfield-layer layer-one"></span>
+        <span class="home-starfield-layer layer-two"></span>
+        <span class="home-scanline-layer"></span>
+      </div>
+      <div class="home-meteor-field" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
+        <p class="hero-kicker">AI 漫剧 / 短剧生成舱</p>
         <div class="hero-brand-lockup">
           <div class="hero-brand-mark" aria-hidden="true">灵</div>
           <div class="hero-brand-text">灵曦剧场</div>

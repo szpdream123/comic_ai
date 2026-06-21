@@ -925,6 +925,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       startCanvasPan(workbench, event);
     }
   });
+  root.addEventListener("pointermove", (event) => {
+    updateHomeHeroPointerAura(workbench, event);
+  });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
   });
@@ -20772,6 +20775,24 @@ function disposeHomeLiquidEther(workbench) {
   }
   workbench.homeLiquidEther.dispose();
   workbench.homeLiquidEther = null;
+}
+
+function updateHomeHeroPointerAura(workbench, event) {
+  const eventTarget = resolveEventElement(event.target);
+  const hero = eventTarget?.closest?.(".home-hero") ?? workbench.root.querySelector(".home-hero");
+  if (!hero || typeof hero.getBoundingClientRect !== "function") {
+    return;
+  }
+
+  const rect = hero.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return;
+  }
+
+  const x = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100));
+  const y = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100));
+  hero.style.setProperty("--home-pointer-x", `${x.toFixed(2)}%`);
+  hero.style.setProperty("--home-pointer-y", `${y.toFixed(2)}%`);
 }
 
 function syncHomeLiquidEther(workbench) {
