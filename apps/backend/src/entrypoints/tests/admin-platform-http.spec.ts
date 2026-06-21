@@ -2283,6 +2283,124 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets admins inspect model request logs for a specific user", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    await seedAdminUserListFixture(db);
+
+    try {
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id,
+            organization_id,
+            workspace_id,
+            provider_name,
+            provider_operation,
+            request_key,
+            request_hash,
+            payload_ref,
+            payload_hash,
+            payload_redacted_json,
+            status,
+            external_submission_started_at,
+            response_redacted_json,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            'a1000000-0000-4000-8000-000000000001',
+            '91000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000000001',
+            'deepseek',
+            'llm.chat.completions',
+            'admin-model-log-1',
+            'req-hash-1',
+            'text-gateway://admin-model-log-1',
+            'payload-hash-1',
+            '{"model":"deepseek-chat"}'::jsonb,
+            'succeeded',
+            '2026-06-05T09:00:00.000Z',
+            '{"usageSource":"provider"}'::jsonb,
+            '93000000-0000-4000-8000-000000000001',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO user_model_request_logs (
+            id,
+            provider_request_id,
+            organization_id,
+            workspace_id,
+            user_id,
+            provider_name,
+            provider_operation,
+            model_id,
+            provider_model,
+            request_key,
+            request_hash,
+            payload_hash,
+            payload_summary,
+            request_body_json,
+            request_text,
+            response_text,
+            response_usage_json,
+            response_finish_reasons_json,
+            status,
+            started_at,
+            completed_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            'a2000000-0000-4000-8000-000000000001',
+            'a1000000-0000-4000-8000-000000000001',
+            '91000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000000001',
+            '93000000-0000-4000-8000-000000000001',
+            'deepseek',
+            'llm.chat.completions',
+            'deepseek-chat',
+            'deepseek-chat',
+            'admin-model-log-1',
+            'req-hash-1',
+            'payload-hash-1',
+            'ai storyboard preview text generation',
+            '{"model":"deepseek-chat","max_tokens":384000}'::jsonb,
+            '[user]\n角色模板 任小野',
+            '{"characters":[{"name":"任小野"}]}',
+            '{"prompt_tokens":101,"completion_tokens":55,"total_tokens":156}'::jsonb,
+            '["stop"]'::jsonb,
+            'succeeded',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z'
+          )
+        `,
+      );
+
+      const response = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?pageSize=20`, {
+        headers: { cookie },
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.length, 1);
+      assert.equal(payload.data[0].modelId, "deepseek-chat");
+      assert.match(payload.data[0].requestText, /角色模板 任小野/);
+      assert.match(payload.data[0].responseText, /任小野/);
+      assert.equal(payload.data[0].status, "succeeded");
+      assert.equal(payload.data[0].responseUsage.total_tokens, 156);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets admins archive users as a soft-delete status with audit records", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);

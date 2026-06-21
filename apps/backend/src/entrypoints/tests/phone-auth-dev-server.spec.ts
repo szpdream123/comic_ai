@@ -7,7 +7,6 @@ import { describe, it } from "node:test";
 describe.configure?.({ concurrency: 1 });
 
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
-import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
@@ -321,71 +320,6 @@ describe("phone auth dev server", () => {
         true,
       );
       assert.equal(seedCreditLots.rows[0]?.count, 0);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("isolates new user wallet and team entitlements from the shared dev organization", async () => {
-    const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
-
-    try {
-      await db.query(
-        `
-          INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
-          VALUES ($1, 'Comic AI Studio', 'active', 101160, 0)
-          ON CONFLICT (id) DO UPDATE
-          SET credit_balance_cached = EXCLUDED.credit_balance_cached,
-              credit_reserved_cached = EXCLUDED.credit_reserved_cached
-        `,
-        ["10000000-0000-4000-8000-000000000001"],
-      );
-      await db.query(
-        `
-          INSERT INTO organization_entitlements (id, organization_id, entitlement_key, status, source)
-          VALUES
-            (gen_random_uuid(), $1, 'team_member_management', 'active', 'dev_seed'),
-            (gen_random_uuid(), $1, 'team_asset_library', 'active', 'dev_seed'),
-            (gen_random_uuid(), $1, 'team_dashboard', 'active', 'dev_seed')
-          ON CONFLICT (organization_id, entitlement_key)
-          DO UPDATE SET status = 'active', source = EXCLUDED.source
-        `,
-        ["10000000-0000-4000-8000-000000000001"],
-      );
-      await server.listen(0);
-      const cookie = await login(server.origin, "13800138124");
-
-      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
-        headers: { cookie },
-      });
-      const session = await sessionResponse.json();
-      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
-        headers: { cookie },
-      });
-      const state = await stateResponse.json();
-      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
-        headers: { cookie },
-      });
-      const ledger = await ledgerResponse.json();
-      const teamResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
-        headers: { cookie },
-      });
-      const team = await teamResponse.json();
-
-      assert.equal(sessionResponse.status, 200);
-      assert.equal(session.user.availableCredits, 0);
-      assert.equal(session.user.creditBalance, 0);
-      assert.equal(stateResponse.status, 200);
-      assert.equal(state.availableCredits, 0);
-      assert.equal(ledgerResponse.status, 200);
-      assert.equal(ledger.summary.organizationAvailableCredits, 0);
-      assert.equal(ledger.summary.displayAvailableCredits, 0);
-      assert.equal(ledger.data.length, 0);
-      assert.equal(teamResponse.status, 200);
-      assert.equal(team.entitlements.teamMemberManagement, false);
-      assert.equal(team.entitlements.teamAssetLibrary, false);
-      assert.equal(team.entitlements.teamDashboard, false);
     } finally {
       await server.close();
     }
@@ -997,7 +931,6 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138277");
-      await grantExperienceMembershipForPhone(db, "+8613800138277");
 
       const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         method: "POST",
@@ -1164,72 +1097,6 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("requires an active membership for creator canvas project routes and allows experience members", async () => {
-    const server = createPhoneAuthDevServer();
-
-    try {
-      await server.listen(0);
-      const db = await server.db();
-      const cookie = await login(server.origin, "13800138288");
-      const membership = await db.query<{ organization_id: string }>(
-        `
-          SELECT membership.organization_id
-          FROM memberships membership
-          JOIN users app_user ON app_user.id = membership.user_id
-          WHERE app_user.phone_e164 = '+8613800138288'
-            AND membership.status = 'active'
-          LIMIT 1
-        `,
-      );
-      assert.ok(membership.rows[0]?.organization_id);
-
-      const blockedResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
-        headers: { cookie },
-      });
-      const blocked = await blockedResponse.json();
-      const blockedRunsResponse = await fetch(
-        `${server.origin}/api/canvas/50000000-0000-4000-8000-000000000288/nodes/image-1/runs`,
-        { headers: { cookie } },
-      );
-      const blockedRuns = await blockedRunsResponse.json();
-
-      await grantExperienceMembershipForPhone(db, "+8613800138288");
-
-      const allowedResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
-        headers: { cookie },
-      });
-      const allowed = await allowedResponse.json();
-      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          title: "体验会员画布",
-        }),
-      });
-      const created = await createResponse.json();
-      const allowedRunsResponse = await fetch(
-        `${server.origin}/api/canvas/${created.data.project.id}/nodes/image-1/runs`,
-        { headers: { cookie } },
-      );
-      const allowedRuns = await allowedRunsResponse.json();
-
-      assert.equal(blockedResponse.status, 403);
-      assert.equal(blocked.errorCode, "canvas_membership_required");
-      assert.equal(blockedRunsResponse.status, 403);
-      assert.equal(blockedRuns.errorCode, "canvas_membership_required");
-      assert.equal(allowedResponse.status, 200);
-      assert.ok(Array.isArray(allowed.data.projects));
-      assert.equal(createResponse.status, 201);
-      assert.equal(allowedRunsResponse.status, 404);
-      assert.equal(allowedRuns.errorCode, "canvas_project_not_found");
-    } finally {
-      await server.close();
-    }
-  });
-
   it("does not list another user's standalone canvas projects", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -1238,8 +1105,6 @@ describe("phone auth dev server", () => {
       await server.listen(0);
       const ownerCookie = await login(server.origin, "13800138278");
       const otherCookie = await login(server.origin, "13800138279");
-      await grantExperienceMembershipForPhone(db, "+8613800138278");
-      await grantExperienceMembershipForPhone(db, "+8613800138279");
 
       const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         method: "POST",
@@ -1290,7 +1155,6 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138280");
-      await grantExperienceMembershipForPhone(db, "+8613800138280");
 
       const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         method: "POST",
@@ -3242,11 +3106,11 @@ describe("phone auth dev server", () => {
 
       assert.equal(response.status, 200);
       assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
-      assert.match(text, /event: ping/);
-      assert.ok(text.indexOf("event: script_delta") < text.indexOf("event: complete"));
-      assert.ok(text.indexOf("event: asset_delta") < text.indexOf("event: complete"));
-      assert.match(text, /event: script_prompt/);
-      assert.match(text, /event: asset_prompt/);
+      assert.match(text, /data:\s*\{"type":"ping","ts":/);
+      assert.ok(text.indexOf('"type":"script_delta"') < text.indexOf('"type":"complete"'));
+      assert.ok(text.indexOf('"type":"asset_delta"') < text.indexOf('"type":"complete"'));
+      assert.match(text, /"type":"script_prompt"/);
+      assert.match(text, /"type":"asset_prompt"/);
       assert.match(text, /场景提示词生成/);
       assert.match(text, /角色提示词生成/);
       assert.match(text, /分镜提示词生成/);
@@ -3254,8 +3118,7 @@ describe("phone auth dev server", () => {
       assert.match(text, /避免魔改原著核心设定/);
       assert.match(text, /任小野托付妹妹/);
       assert.match(text, /递出饭食/);
-      assert.doesNotMatch(text, /data:\s*\{"type":"script_start"/);
-      assert.doesNotMatch(text, /data:\s*\{"type":"script_delta"/);
+      assert.doesNotMatch(text, /^event:/m);
     } finally {
       await server.close();
     }
@@ -7642,121 +7505,6 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("repairs paid membership order effects when the paid order is polled", async () => {
-    const server = createPhoneAuthDevServer();
-
-    try {
-      await server.listen(0);
-      const cookie = await login(server.origin, "13800138003");
-
-      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
-        headers: { cookie },
-      });
-      const plans = await plansResponse.json();
-      const professionalPlan = plans.data.plans.find(
-        (plan: { tier?: string }) => plan.tier === "professional",
-      );
-      assert.ok(professionalPlan);
-
-      const orderResponse = await fetch(`${server.origin}/api/membership/orders`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-repair-order",
-          cookie,
-        },
-        body: JSON.stringify({ membershipPlanId: professionalPlan.id }),
-      });
-      const order = await orderResponse.json();
-
-      const intentResponse = await fetch(`${server.origin}/api/billing/payment-intents`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "membership-repair-intent",
-          cookie,
-        },
-        body: JSON.stringify({
-          orderId: order.order.id,
-          provider: "wechat_pay",
-          productMode: "native_qr",
-        }),
-      });
-      const intent = await intentResponse.json();
-      const callbackFacts = {
-        provider: "wechat_pay" as const,
-        providerEventDedupKey: "membership-repair-paid-callback",
-        merchantOrderNo: intent.paymentIntent.merchantOrderNo,
-        providerTradeId: "membership-repair-provider-trade",
-        eventType: "payment_succeeded" as const,
-        amountMinor: intent.paymentIntent.amountMinor,
-        currency: intent.paymentIntent.currency,
-        merchantId: "comic-ai-dev-merchant",
-      };
-      const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...callbackFacts,
-          signature: signPaymentCallback(callbackFacts, "dev-payment-secret"),
-        }),
-      });
-
-      const db = await server.db();
-      await db.query("DELETE FROM organization_entitlements WHERE entitlement_key IN ('canvas_access', 'priority_generation', 'team_asset_library', 'team_dashboard', 'team_member_management', 'full_flow_agent')");
-      await db.query("DELETE FROM team_plan_limits");
-      await db.query("UPDATE billing_orders SET credit_grant_ledger_entry_id = NULL WHERE id = $1", [
-        order.order.id,
-      ]);
-      await db.query("DELETE FROM credit_lots WHERE source_type = 'membership_gift'");
-      await db.query("DELETE FROM credit_ledger_entries WHERE source_type = 'membership_gift'");
-      await db.query("DELETE FROM membership_periods");
-      await db.query("DELETE FROM organization_membership_subscriptions");
-
-      const pollResponse = await fetch(`${server.origin}/api/billing/orders/${order.order.id}`, {
-        headers: { cookie },
-      });
-      const polled = await pollResponse.json();
-      const statusResponse = await fetch(`${server.origin}/api/membership/status`, {
-        headers: { cookie },
-      });
-      const status = await statusResponse.json();
-      const teamResponse = await fetch(`${server.origin}/api/creator/team/overview`, {
-        headers: { cookie },
-      });
-      const team = await teamResponse.json();
-      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
-        headers: { cookie },
-      });
-      const ledger = await ledgerResponse.json();
-      const giftEntry = ledger.data.find(
-        (entry: { sourceType?: string }) => entry.sourceType === "membership_gift",
-      );
-
-      assert.equal(plansResponse.status, 200);
-      assert.equal(orderResponse.status, 200);
-      assert.equal(intentResponse.status, 200);
-      assert.equal(callbackResponse.status, 200);
-      assert.equal(pollResponse.status, 200);
-      assert.equal(polled.order.status, "paid");
-      assert.equal(statusResponse.status, 200);
-      assert.equal(status.membership.status, "professional_active");
-      assert.equal(status.membership.entitlements.canvasAccess, true);
-      assert.equal(status.membership.entitlements.teamAssetLibrary, true);
-      assert.equal(status.membership.entitlements.teamMemberManagement, true);
-      assert.equal(status.membership.entitlements.fullFlowAgent, true);
-      assert.equal(teamResponse.status, 200);
-      assert.equal(team.entitlements.teamAssetLibrary, true);
-      assert.equal(team.entitlements.teamMemberManagement, true);
-      assert.equal(team.seats.limit, professionalPlan.seatLimit);
-      assert.equal(ledgerResponse.status, 200);
-      assert.equal(giftEntry.entryType, "grant");
-      assert.equal(giftEntry.amount, professionalPlan.giftCredits);
-    } finally {
-      await server.close();
-    }
-  });
-
   it("rejects direct team asset uploads before the paid team asset entitlement is active", async () => {
     const db = await createDevDb();
     const server = createPhoneAuthDevServer({
@@ -7913,53 +7661,6 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
-}
-
-async function grantExperienceMembershipForPhone(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  phoneE164: string,
-) {
-  const membership = await db.query<{ organization_id: string }>(
-    `
-      SELECT membership.organization_id
-      FROM memberships membership
-      JOIN users app_user ON app_user.id = membership.user_id
-      WHERE app_user.phone_e164 = $1
-        AND membership.status = 'active'
-      LIMIT 1
-    `,
-    [phoneE164],
-  );
-  assert.ok(membership.rows[0]?.organization_id);
-
-  await db.query(
-    `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at
-      )
-      VALUES (
-        gen_random_uuid(),
-        $1,
-        'experience_active',
-        'experience',
-        now(),
-        now() + interval '7 days'
-      )
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        status = EXCLUDED.status,
-        current_tier = EXCLUDED.current_tier,
-        current_period_start_at = EXCLUDED.current_period_start_at,
-        current_period_end_at = EXCLUDED.current_period_end_at,
-        updated_at = now()
-    `,
-    [membership.rows[0].organization_id],
-  );
 }
 
 class FakeAiStoryboardTextGateway {

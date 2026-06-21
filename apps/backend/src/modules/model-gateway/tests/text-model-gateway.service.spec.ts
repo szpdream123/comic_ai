@@ -82,6 +82,28 @@ describe("text model gateway service", () => {
         stored.rows[0]?.response_redacted_json["usageSource"],
         "provider",
       );
+
+      const requestLogs = await db.query<{
+        model_id: string;
+        request_text: string | null;
+        response_text: string | null;
+        status: string;
+      }>(
+        `
+          SELECT model_id, request_text, response_text, status
+          FROM user_model_request_logs
+          WHERE provider_request_id = $1
+        `,
+        [result.providerRequestId],
+      );
+      assert.deepEqual(requestLogs.rows, [
+        {
+          model_id: "deepseek-chat",
+          request_text: "[user]\nSay hi",
+          response_text: "Hello",
+          status: "succeeded",
+        },
+      ]);
     } finally {
       await db.close();
     }
@@ -150,6 +172,26 @@ describe("text model gateway service", () => {
 
       assert.equal(stored.rows[0]?.status, "failed");
       assert.equal(stored.rows[0]?.failure_code, "provider_stream_error");
+
+      const requestLogs = await db.query<{
+        status: string;
+        failure_code: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT status, failure_code, response_text
+          FROM user_model_request_logs
+          WHERE provider_request_id = $1
+        `,
+        [result.providerRequestId],
+      );
+      assert.deepEqual(requestLogs.rows, [
+        {
+          status: "failed",
+          failure_code: "provider_stream_error",
+          response_text: "partial",
+        },
+      ]);
     } finally {
       await db.close();
     }

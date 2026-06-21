@@ -29,6 +29,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
           {
             stage: activeStage,
             title: "提示词生成",
+            promptText: `${activeStage} 阶段发送给 DeepSeek 的提示词`,
             responseText,
             status: "loading",
           },
@@ -47,7 +48,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
   });
 }
 
-test("loading AI storyboard preview hides the live output panel while keeping tables visible", () => {
+test("loading AI storyboard preview shows the raw live output panel while keeping tables visible", () => {
   const cases = [
     {
       stage: "character",
@@ -81,18 +82,11 @@ test("loading AI storyboard preview hides the live output panel while keeping ta
   for (const item of cases) {
     const html = renderLoadingPreview(item.stage, item.responseText, item.options);
 
-    assert.doesNotMatch(html, /single-episode-ai-live-output/);
-    assert.doesNotMatch(html, /DeepSeek .*实时返回/);
+    assert.match(html, /single-episode-ai-live-output/);
+    assert.match(html, /DeepSeek /);
     assert.match(html, item.tableTitle);
     assert.match(html, item.marker);
   }
-});
-
-test("project workspace keeps the AI storyboard preview overlay mounted with global overlays", () => {
-  const html = renderLoadingPreview("character", "{\"characters\":[{\"name\":\"A\"}]}");
-
-  assert.match(html, /single-episode-ai-overlay/);
-  assert.match(html, /single-episode-ai-preview loading/);
 });
 
 test("project workspace renders action feedback as global status toast", () => {
@@ -114,7 +108,7 @@ test("project workspace renders action feedback as global status toast", () => {
   assert.doesNotMatch(explicitErrorHtml, /操作成功/);
 });
 
-test("loading AI storyboard preview still bounds table rows without rendering the live output panel", () => {
+test("loading AI storyboard preview keeps long cell content bounded without capping storyboard rows", () => {
   const storyboards = Array.from({ length: 12 }, (_, index) => ({
     shotNo: index + 1,
     plot: `分镜剧情 ${index + 1}`,
@@ -130,10 +124,9 @@ test("loading AI storyboard preview still bounds table rows without rendering th
 
   const html = renderLoadingPreview("shot", "", { storyboards });
 
-  assert.doesNotMatch(html, /single-episode-ai-live-output/);
-  assert.match(html, /实时预览仅展示前 8 条/);
   assert.match(html, /分镜剧情 8/);
-  assert.doesNotMatch(html, /分镜剧情 9/);
+  assert.match(html, /分镜剧情 9/);
+  assert.match(html, /分镜剧情 12/);
   assert.match(html, /已截断，仅展示最近 900 字符/);
 });
 
@@ -173,6 +166,59 @@ test("ready AI storyboard preview shows a creating state while committing", () =
   assert.match(html, /创建中\.\.\./);
   assert.match(html, /创建中，请稍候，完成后会自动进入分镜工作台。/);
   assert.match(html, /data-action="commit-ai-storyboard-preview" disabled/);
+});
+
+test("ready AI storyboard preview renders sent DeepSeek prompts and raw shot response", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "episodes",
+      selectedProjectCardId: "project-1",
+      singleEpisodeAiPreview: {
+        status: "ready",
+        assetPromptSteps: [
+          {
+            stage: "character",
+            title: "角色提示词生成",
+            promptText: "请抽取角色名称、角色描述与角色图片提示词。",
+          },
+          {
+            stage: "shot",
+            title: "分镜提示词生成",
+            promptText: "请按分镜表输出，保留动作节奏与人物原声台词。",
+            rawResponseText: "{\"storyboards\":[]}",
+          },
+        ],
+        data: {
+          displayTables: {
+            script: { title: "剧本", rows: [] },
+            characters: { title: "角色", rows: [] },
+            scenes: { title: "场景", rows: [] },
+            props: { title: "道具", rows: [] },
+            storyboards: { title: "分镜", rows: [] },
+          },
+        },
+      },
+    },
+  });
+
+  assert.match(html, /角色提示词/);
+  assert.match(html, /发送给 DeepSeek 的完整提示词/);
+  assert.match(html, /请抽取角色名称、角色描述与角色图片提示词。/);
+  assert.match(html, /分镜提示词/);
+  assert.match(html, /DeepSeek 完整返回/);
+  assert.match(html, /\{&quot;storyboards&quot;:\[\]\}/);
 });
 
 test("workspace account settings renders as a right drawer with profile and security fields", () => {

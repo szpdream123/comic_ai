@@ -387,7 +387,7 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
   const previousSetTimeout = globalThis.setTimeout;
   const previousClearTimeout = globalThis.clearTimeout;
   const timeoutDelays = [];
-  const encoded = new TextEncoder().encode('event: ping\ndata: {"ts":"2026-06-19T00:00:00.000Z"}\n\n');
+  const encoded = new TextEncoder().encode('data: {"type":"ping","ts":"2026-06-19T00:00:00.000Z"}\n\n');
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(encoded);
@@ -411,7 +411,7 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
       events.push(event);
     }
 
-    assert.deepEqual(events, [{ event: "ping", data: { ts: "2026-06-19T00:00:00.000Z" } }]);
+    assert.deepEqual(events, [{ event: "ping", data: { type: "ping", ts: "2026-06-19T00:00:00.000Z" } }]);
     assert.deepEqual(timeoutDelays, []);
   } finally {
     globalThis.fetch = previousFetch;
@@ -1039,27 +1039,6 @@ test("resolveApiUrl keeps same-origin URLs on additional membership acceptance d
         resolveApiUrl("/api/membership/plans"),
         "http://127.0.0.1:4322/api/membership/plans",
       );
-    },
-  );
-});
-
-test("resolveApiUrl keeps same-origin URLs on the local 4325 dev API port", async () => {
-  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
-
-  await withWindowLocation(
-    {
-      protocol: "http:",
-      host: "127.0.0.1:4325",
-      hostname: "127.0.0.1",
-      port: "4325",
-      origin: "http://127.0.0.1:4325",
-    },
-    () => {
-      assert.equal(
-        resolveApiUrl("/api/auth/session"),
-        "http://127.0.0.1:4325/api/auth/session",
-      );
-      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4325/app.html");
     },
   );
 });

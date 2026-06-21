@@ -156,6 +156,8 @@ export function renderEpisodeWorkbench({
   assetImportPage = 1,
   assetImportPageSize = 10,
   assetImportPageSizeMenuOpen = false,
+  storyboardPage = 1,
+  storyboardPageSize = 10,
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
   importedAssets = null,
@@ -199,6 +201,17 @@ export function renderEpisodeWorkbench({
     normalizedStoryboards.find((item) => item.id === selectedStoryboard?.id) ??
     normalizedStoryboards[0] ??
     null;
+  const normalizedStoryboardPageSize = normalizeStoryboardPageSize(storyboardPageSize);
+  const storyboardSelectedIndex = currentStoryboard
+    ? Math.max(0, normalizedStoryboards.findIndex((item) => item.id === currentStoryboard.id))
+    : -1;
+  const storyboardTotalPages = Math.max(1, Math.ceil(normalizedStoryboards.length / normalizedStoryboardPageSize));
+  const normalizedStoryboardPage = clampStoryboardPage(
+    storyboardSelectedIndex >= 0
+      ? Math.floor(storyboardSelectedIndex / normalizedStoryboardPageSize) + 1
+      : storyboardPage,
+    storyboardTotalPages,
+  );
   const activeAssets = assetGroups[activeAssetTab] ?? [];
   const selectedAsset =
     activeAssets.find((item) => item.id === selectedEpisodeAssetId) ??
@@ -278,7 +291,18 @@ export function renderEpisodeWorkbench({
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                 )
-              : renderStoryboardWorkspace(normalizedStoryboards, currentStoryboard, boardMode, selectedStoryboardIds, assetGroups)
+              : renderStoryboardWorkspace(
+                  normalizedStoryboards,
+                  currentStoryboard,
+                  boardMode,
+                  selectedStoryboardIds,
+                  assetGroups,
+                  {
+                    page: normalizedStoryboardPage,
+                    pageSize: normalizedStoryboardPageSize,
+                    totalPages: storyboardTotalPages,
+                  },
+                )
           }
         </section>
 
@@ -715,8 +739,20 @@ function renderStoryBoardPreview(selectedStoryboard) {
   `;
 }
 
-function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, selectedStoryboardIds = [], assetGroups = {}) {
+function renderStoryboardWorkspace(
+  storyboards,
+  selectedStoryboard,
+  boardMode,
+  selectedStoryboardIds = [],
+  assetGroups = {},
+  pagination = {},
+) {
   const totalCount = storyboards.length;
+  const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? Math.ceil(totalCount / pageSize) ?? 1));
+  const currentPage = clampStoryboardPage(pagination.page, totalPages);
+  const start = (currentPage - 1) * pageSize;
+  const visibleStoryboards = storyboards.slice(start, start + pageSize);
   return `
     <div class="episode-replica-storyboard-toolbar">
       <div class="episode-replica-storyboard-board-tabs">
@@ -732,11 +768,11 @@ function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, s
       ${
         boardMode === "story"
           ? renderStoryBoardPreview(selectedStoryboard)
-            : storyboards.length
-            ? storyboards.map((storyboard, index) =>
+            : visibleStoryboards.length
+            ? visibleStoryboards.map((storyboard, index) =>
                 renderStoryboardCard(
                   storyboard,
-                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && index === 0),
+                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && currentPage === 1 && index === 0),
                   selectedStoryboardIds.includes(storyboard.id),
                   assetGroups,
                 ),
@@ -744,7 +780,7 @@ function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, s
             : renderStoryboardEmptyState()
       }
     </div>
-    ${renderStoryboardPagination(totalCount)}
+    ${renderStoryboardPagination(totalCount, currentPage, totalPages, pageSize)}
   `;
 }
 
@@ -756,18 +792,30 @@ function renderStoryboardEmptyState() {
   `;
 }
 
-function renderStoryboardPagination(totalCount = 0) {
+function renderStoryboardPagination(totalCount = 0, currentPage = 1, totalPages = 1, pageSize = 10) {
   return `
     <div class="episode-replica-storyboard-pagination">
       <strong>共 ${escapeHtml(String(totalCount))} 条</strong>
-      <button class="episode-replica-storyboard-page-size" type="button">10条/页</button>
+      <button class="episode-replica-storyboard-page-size" type="button">${escapeHtml(String(pageSize))}条/页</button>
       <span class="episode-replica-storyboard-pagination-arrows">
-        <button type="button" disabled aria-label="上一页">‹</button>
-        <em class="page-index">1</em>
-        <button type="button" disabled aria-label="下一页">›</button>
+        <button type="button" data-action="change-storyboard-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)} aria-label="上一页">‹</button>
+        <em class="page-index">${escapeHtml(String(currentPage))}</em>
+        <button type="button" data-action="change-storyboard-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)} aria-label="下一页">›</button>
       </span>
     </div>
   `;
+}
+
+function normalizeStoryboardPageSize(value) {
+  return Number(value) === 10 ? 10 : 10;
+}
+
+function clampStoryboardPage(value, totalPages) {
+  const page = Number(value);
+  if (!Number.isFinite(page)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
 function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
@@ -1171,25 +1219,30 @@ function renderQuickAsset(asset, active) {
   const kind = asset.kind || inferKind(name);
   const preview = resolveReferencePreview(asset);
   return `
-    <button
+    <article
       class="episode-replica-quick-asset ${active ? "active" : ""}"
-      type="button"
       draggable="true"
-      data-action="set-episode-asset"
       data-drag-asset="episode-quick-asset"
       data-asset-id="${escapeAttr(asset.id ?? "")}"
       data-asset-kind="${escapeAttr(kind)}"
-      title="${escapeAttr(name)}"
     >
-      <span class="thumb">
+      <button
+        class="thumb episode-replica-quick-asset-trigger"
+        type="button"
+        data-action="set-episode-asset"
+        data-asset-id="${escapeAttr(asset.id ?? "")}"
+        data-asset-kind="${escapeAttr(kind)}"
+        title="${escapeAttr(name)}"
+        aria-label="选择素材 ${escapeAttr(name)}"
+      >
         ${
           preview
             ? `<img class="episode-replica-quick-thumb-image" src="${escapeAttr(preview)}" alt="" />`
             : renderQuickPlaceholder(kind, name)
         }
-        <span class="episode-replica-quick-name">${escapeHtml(name)}</span>
-      </span>
-    </button>
+      </button>
+      <div class="episode-replica-quick-name" title="${escapeAttr(name)}">${escapeHtml(name)}</div>
+    </article>
   `;
 }
 

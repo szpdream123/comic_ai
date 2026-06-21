@@ -6,7 +6,7 @@ import type { TextChatGatewayLike } from "./ai-storyboard-preview.service.ts";
 
 describe("ai script analysis service", () => {
   it("only streams generated script text without asset stages", async () => {
-    const gateway = new FakeTextGateway(["第一集\n任小野进城。"]);
+    const gateway = new FakeTextGateway([JSON.stringify({ scriptText: "第一集\n任小野进城。" })]);
     const service = createAiScriptAnalysisService({ gateway });
     const events = [];
 
@@ -25,7 +25,10 @@ describe("ai script analysis service", () => {
 
     assert.equal(gateway.calls.length, 1);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat"]);
-    assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text"]);
+    assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["json_object"]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [384000]);
+    assert.match(gateway.calls[0]?.prompt ?? "", /JSON 对象/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /scriptText/);
     assert.ok(events.some((event) => event.type === "script_prompt"));
     assert.ok(events.some((event) => event.type === "script_done"));
     assert.ok(events.some((event) => event.type === "complete"));

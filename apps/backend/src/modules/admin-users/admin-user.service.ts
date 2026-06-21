@@ -44,6 +44,32 @@ export interface AdminTeamPlanLimitSummary {
   remainingSeats: number;
 }
 
+export interface AdminUserModelRequestLogItem {
+  id: string;
+  providerRequestId: string;
+  organizationId: string;
+  workspaceId: string | null;
+  providerName: string;
+  providerOperation: string;
+  modelId: string;
+  providerModel: string;
+  requestKey: string;
+  requestHash: string;
+  payloadHash: string;
+  payloadSummary: string | null;
+  requestBody: Record<string, unknown>;
+  requestText: string | null;
+  responseText: string | null;
+  responseUsage: Record<string, unknown> | null;
+  responseFinishReasons: string[];
+  status: string;
+  failureCode: string | null;
+  projectId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+}
+
 interface AdminUserRow {
   user_id: string;
   display_name: string | null;
@@ -64,6 +90,32 @@ interface AdminUserRow {
   member_credit_used: number | string | null;
   workspace_reserved_credits: number | string | null;
   subaccount_count: number | string | null;
+}
+
+interface AdminUserModelRequestLogRow {
+  id: string;
+  provider_request_id: string;
+  organization_id: string;
+  workspace_id: string | null;
+  provider_name: string;
+  provider_operation: string;
+  model_id: string;
+  provider_model: string;
+  request_key: string;
+  request_hash: string;
+  payload_hash: string;
+  payload_summary: string | null;
+  request_body_json: Record<string, unknown> | null;
+  request_text: string | null;
+  response_text: string | null;
+  response_usage_json: Record<string, unknown> | null;
+  response_finish_reasons_json: unknown;
+  status: string;
+  failure_code: string | null;
+  project_id: string | null;
+  started_at: Date | string;
+  completed_at: Date | string | null;
+  created_at: Date | string;
 }
 
 export function createAdminUserService(deps: { db: SqlDatabase }) {
@@ -351,7 +403,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       };
     }
 
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    const target = await findUserCreditTarget(deps.db, input.userId);
     if (!target) {
       return {
         status: 404,
@@ -675,7 +727,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
     const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
     if (rawWorkOrderNo && !workOrderNo) return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    const target = await findUserCreditTarget(deps.db, input.userId);
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
@@ -818,6 +870,61 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
+  async function listUserModelRequestLogs(input: {
+    userId: string;
+    pageSize?: number;
+  }) {
+    const user = await queryOne<{ id: string }>(
+      deps.db,
+      "SELECT id FROM users WHERE id = $1",
+      [input.userId],
+    );
+    if (!user) return error(404, "admin_user_not_found", "用户不存在");
+
+    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 20)));
+    const result = await deps.db.query<AdminUserModelRequestLogRow>(
+      `
+        SELECT
+          id,
+          provider_request_id,
+          organization_id,
+          workspace_id,
+          provider_name,
+          provider_operation,
+          model_id,
+          provider_model,
+          request_key,
+          request_hash,
+          payload_hash,
+          payload_summary,
+          request_body_json,
+          request_text,
+          response_text,
+          response_usage_json,
+          response_finish_reasons_json,
+          status,
+          failure_code,
+          project_id,
+          started_at,
+          completed_at,
+          created_at
+        FROM user_model_request_logs
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `,
+      [input.userId, pageSize],
+    );
+
+    return {
+      data: result.rows.map(modelRequestLogFromRow),
+      meta: {
+        total: result.rows.length,
+        pageSize,
+      },
+    };
+  }
+
   async function getTeamPlanLimit(input: { organizationId: string }) {
     const summary = await buildTeamPlanLimitSummary(deps.db, input.organizationId);
     if (!summary) {
@@ -906,6 +1013,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     updateUserStatus,
     deductUserCredits,
     listUserCreditLedger,
+    listUserModelRequestLogs,
     getTeamPlanLimit,
     updateTeamPlanLimit,
   };
@@ -917,7 +1025,6 @@ interface UserCreditTargetRow {
   organization_id: string;
   workspace_id: string | null;
   membership_id: string;
-  membership_role: string;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -928,7 +1035,6 @@ interface UserCreditTarget {
   organizationId: string;
   workspaceId: string | null;
   membershipId: string;
-  membershipRole: string;
   teamProfileId: string | null;
   createdByUserId: string | null;
 }
@@ -1055,7 +1161,6 @@ async function findUserCreditTarget(
     params.push(input.workspaceId);
     filters.push(`m.workspace_id = $${params.length}`);
   }
-  const preferredWorkspaceId = input.workspaceId?.trim();
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
@@ -1065,7 +1170,6 @@ async function findUserCreditTarget(
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
-        m.role AS membership_role,
         tp.id AS team_profile_id,
         tp.created_by_user_id
       FROM users u
@@ -1073,12 +1177,11 @@ async function findUserCreditTarget(
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE ${filters.join(" AND ")}
       ORDER BY
-        CASE WHEN $${params.length + 1}::uuid IS NOT NULL AND m.workspace_id = $${params.length + 1}::uuid THEN 0 ELSE 1 END,
         CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
-    [...params, preferredWorkspaceId || null],
+    params,
   );
 
   if (!row) {
@@ -1091,7 +1194,6 @@ async function findUserCreditTarget(
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
-    membershipRole: row.membership_role,
     teamProfileId: row.team_profile_id,
     createdByUserId: row.created_by_user_id,
   };
@@ -1126,14 +1228,14 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
         AND ledger_workflow.created_by_user_id = $2::uuid
     )
   )`;
-  if (isMemberWalletTarget(target)) {
+  if (target.teamProfileId) {
     return {
       sql: targetFilter,
       params: [target.userId, target.membershipId],
     };
   }
   return {
-    sql: `(${targetFilter} OR source_type = ANY(ARRAY['payment_order', 'membership_gift']))`,
+    sql: `(${targetFilter} OR source_type = 'payment_order')`,
     params: [target.userId, target.membershipId],
   };
 }
@@ -1155,7 +1257,7 @@ async function buildUserCreditSummary(
     `,
     [target.organizationId],
   );
-  const member = isMemberWalletTarget(target)
+  const member = target.teamProfileId
     ? await queryOne<{
         credit_balance_cached: number | string;
         credit_used_cached: number | string;
@@ -1243,23 +1345,19 @@ async function buildUserCreditSummary(
   const targetReserved = Number(reservations?.active_reserved ?? 0);
   const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
   return {
-    balanceScope: isMemberWalletTarget(target) ? "member" : "organization",
+    balanceScope: target.teamProfileId ? "member" : "organization",
     organizationAvailableCredits: organizationAvailable,
     organizationReservedCredits: organizationReserved,
     memberAvailableCredits: memberAvailable,
     memberUsedCredits: memberUsed,
     displayAvailableCredits: memberAvailable ?? organizationAvailable,
-    displayReservedCredits: isMemberWalletTarget(target) ? targetReserved : organizationReserved,
+    displayReservedCredits: target.teamProfileId ? targetReserved : organizationReserved,
     totalGrantedCredits: Number(totals?.total_granted ?? 0),
     totalConsumedCredits: totalConsumed,
     totalReleasedCredits: Number(totals?.total_released ?? 0),
     activeReservationCount: Number(reservations?.active_count ?? 0),
     manualReviewReservationCount: Number(reservations?.manual_review_count ?? 0),
   };
-}
-
-function isMemberWalletTarget(target: UserCreditTarget) {
-  return Boolean(target.teamProfileId && target.membershipRole !== "owner_admin");
 }
 
 function userFromRow(row: AdminUserRow): AdminUserListItem {
@@ -1337,6 +1435,40 @@ function ledgerFromRow(row: LedgerRow) {
     sourceId: row.source_id,
     reason: row.reason,
     metadata: normalizeJson(row.metadata_json),
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function modelRequestLogFromRow(
+  row: AdminUserModelRequestLogRow,
+): AdminUserModelRequestLogItem {
+  return {
+    id: row.id,
+    providerRequestId: row.provider_request_id,
+    organizationId: row.organization_id,
+    workspaceId: row.workspace_id,
+    providerName: row.provider_name,
+    providerOperation: row.provider_operation,
+    modelId: row.model_id,
+    providerModel: row.provider_model,
+    requestKey: row.request_key,
+    requestHash: row.request_hash,
+    payloadHash: row.payload_hash,
+    payloadSummary: row.payload_summary,
+    requestBody: row.request_body_json ?? {},
+    requestText: row.request_text,
+    responseText: row.response_text,
+    responseUsage: row.response_usage_json ?? null,
+    responseFinishReasons: Array.isArray(row.response_finish_reasons_json)
+      ? row.response_finish_reasons_json
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+      : [],
+    status: row.status,
+    failureCode: row.failure_code,
+    projectId: row.project_id,
+    startedAt: new Date(row.started_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
   };
 }

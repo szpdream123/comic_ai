@@ -425,6 +425,22 @@ test("admin user credit secondary drawers return to the action menu", () => {
   }
 });
 
+test("admin user detail drawer loads model request records for the selected user", () => {
+  assert.match(script, /正在加载模型请求记录/);
+  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?pageSize=20/);
+  assert.match(script, /renderUserModelRequestPanel/);
+  assert.match(script, /模型请求记录/);
+  assert.match(script, /Provider Request ID/);
+  assert.match(script, /组织 ID/);
+  assert.match(script, /工作区 ID/);
+  assert.match(script, /项目 ID/);
+  assert.match(script, /请求哈希/);
+  assert.match(script, /载荷哈希/);
+  assert.match(script, /发送给模型的文本/);
+  assert.match(script, /模型返回文本/);
+  assert.match(script, /请求参数/);
+});
+
 test("admin shell includes membership plan management page", async () => {
   const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
   assert.match(html, /membership-plans/);

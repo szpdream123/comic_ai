@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 
 import { Pool, type PoolClient } from "pg";
 
@@ -14,7 +12,7 @@ export interface DevDatabase extends SqlDatabase {
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    return createLocalDevDb();
+    throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");
   }
 
   const pool = new Pool({
@@ -31,10 +29,9 @@ export async function createDevDb(): Promise<DevDatabase> {
     return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
-    console.warn(
-      `[dev-db] DATABASE_URL is configured but unavailable; falling back to local PGlite storage. ${error instanceof Error ? error.message : String(error)}`,
+    throw new Error(
+      `PostgreSQL database initialization failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return createLocalDevDb();
   }
 }
 
@@ -160,29 +157,6 @@ function withSchemaCleanup(db: DevDatabase, schemaName: string): DevDatabase {
       }
     },
   };
-}
-
-async function createLocalDevDb(): Promise<DevDatabase> {
-  const configuredLocalDir = process.env.LOCAL_DATABASE_DIR?.trim();
-  const ephemeralLocalDir = !configuredLocalDir && isTestRuntime()
-    ? `.local/dev-db/test-${randomUUID()}`
-    : null;
-  const localDbPath = resolve(
-    process.cwd(),
-    configuredLocalDir || ephemeralLocalDir || ".local/dev-db/default",
-  );
-  await mkdir(dirname(localDbPath), { recursive: true });
-
-  const { PGlite } = await import("@electric-sql/pglite");
-  const db = new PGlite(localDbPath) as DevDatabase;
-  await ensureFoundationSchema(db);
-  console.info(`[dev-db] Using local PGlite storage at ${localDbPath}`);
-  return db;
-}
-
-function isTestRuntime() {
-  const callerFile = process.argv[1]?.replaceAll("\\", "/") ?? "";
-  return process.env.NODE_ENV === "test" || /(?:^|\/)[^/]+(?:\.spec|\.test)\.[cm]?[jt]s$/i.test(callerFile);
 }
 
 export async function ensureFoundationSchema(db: SqlDatabase) {

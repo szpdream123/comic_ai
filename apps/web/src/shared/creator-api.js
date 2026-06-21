@@ -216,7 +216,12 @@ function parseSseMessage(raw) {
     return { event: eventName, data: null };
   }
   try {
-    return { event: eventName, data: JSON.parse(dataText) };
+    const data = JSON.parse(dataText);
+    const inferredEventName =
+      data && typeof data === "object" && typeof data.type === "string" && data.type.trim()
+        ? data.type.trim()
+        : eventName;
+    return { event: inferredEventName, data };
   } catch {
     return { event: eventName, data: dataText };
   }

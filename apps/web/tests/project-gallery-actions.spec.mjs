@@ -104,6 +104,7 @@ test("opening a project workspace does not show a success toast", async () => {
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "open-project-workspace", projectId: "project-1" },
     });
+    assert.equal(globalThis.window.location.hash, "#/projects/project-1");
   } finally {
     if (originalWindow === undefined) {
       delete globalThis.window;
@@ -323,6 +324,26 @@ test("hash route changes re-render the active surface", async () => {
   assert.equal(workbench.ui.activeNavTab, "script");
   assert.match(workbench.root.innerHTML, /data-scroll-surface="script"/);
   assert.match(workbench.root.innerHTML, /data-tab="script"[\s\S]*aria-selected="true"|aria-selected="true"[\s\S]*data-tab="script"/);
+});
+
+test("community hash route renders the shared community surface instead of the project gallery", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.projectPanelMode = "library";
+  workbench.api = {
+    getCommunityBoard: async () => ({
+      posts: [{ id: "post-1", title: "分镜生成希望有等待原因", content: "希望告诉我为什么在排队", author: "灵曦体验官" }],
+      features: [{ id: "feature-1", title: "批量生成角色三视图", content: "一次性生成正侧背", votes: 18, author: "创作者共创" }],
+    }),
+  };
+
+  syncWorkbenchHashRouteForTest(workbench, "#community");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(workbench.ui.activeNavTab, "community");
+  assert.match(workbench.root.innerHTML, /灵曦社区/);
+  assert.match(workbench.root.innerHTML, /社区发布/);
+  assert.doesNotMatch(workbench.root.innerHTML, /全部项目/);
 });
 
 test("asset library route reuse avoids duplicate identical requests", async () => {

@@ -19,9 +19,6 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath);
-if (process.env.LOCAL_DATABASE_DIR?.trim() && !process.env.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE) {
-  delete process.env.DATABASE_URL;
-}
 const generationQueueRequired =
   isEnabled(process.env.GENERATION_QUEUE_REQUIRED) ||
   isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||

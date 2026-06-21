@@ -728,53 +728,6 @@
         margin-top: 6px;
       }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-      .field small {
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.5;
-      }
-      .check-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .check-option {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 40px;
-        padding: 9px 10px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: #fbfcfe;
-        color: #30445f;
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .check-option input {
-        width: 16px;
-        height: 16px;
-        accent-color: var(--primary);
-      }
-      .membership-plan-notice {
-        margin: 0 0 14px;
-        padding: 12px 14px;
-        border: 1px solid #bfdbfe;
-        border-radius: 8px;
-        background: #eff6ff;
-        color: #1e3a5f;
-      }
-      .membership-plan-notice strong {
-        display: block;
-        margin-bottom: 6px;
-      }
-      .membership-plan-notice ul {
-        margin: 8px 0 0;
-        padding-left: 18px;
-      }
-      .membership-plan-notice li {
-        margin: 4px 0;
-      }
       .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
       .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
       #parameter-schema-list table {
@@ -1417,14 +1370,6 @@
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw Object.assign(new Error(payload.error?.message || "请求失败"), { payload, status: response.status });
         return payload;
-      }
-
-      function adminIdempotencyKey(scope = "mutation") {
-        const safeScope = String(scope || "mutation")
-          .toLowerCase()
-          .replace(/[^a-z0-9._-]+/g, "-")
-          .replace(/^-+|-+$/g, "") || "mutation";
-        return `admin-ui-${safeScope}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       }
 
       function hasPermission(permission) {
@@ -3289,109 +3234,46 @@
         return `${currency || "CNY"} ${amount.toFixed(2)}`;
       }
 
-      function membershipConfiguredPlanNotice(currentPlanId = "") {
-        const plans = (state.membershipPlans || [])
-          .filter((plan) => String(plan.id || "") !== String(currentPlanId || ""))
-          .slice()
-          .sort((a, b) => membershipTierRank(a.tier) - membershipTierRank(b.tier)
-            || membershipPeriodRank(a.periodUnit, a.periodCount) - membershipPeriodRank(b.periodUnit, b.periodCount));
-        if (!plans.length) {
-          return "";
-        }
-        const items = plans.map((plan) => `
-          <li>
-            ${escapeHtml(plan.displayName || "-")}
-            <span class="metric-note">${escapeHtml(plan.code || "-")} · ${membershipTierLabel(plan.tier)} · ${membershipPeriodLabel(plan)} · ${membershipMoney(plan.amountMinor, plan.currency)}</span>
-          </li>
-        `).join("");
-        return `<div class="membership-plan-notice">
-          <strong>已配置会员套餐</strong>
-          <span>以下套餐已经存在，请配置其他套餐标识；如需调整，请返回列表编辑已有套餐。</span>
-          <ul>${items}</ul>
-        </div>`;
-      }
-
-      function membershipPlanConflictMessage(payload) {
-        const code = payload?.["code"] ? `「${payload["code"]}」` : "";
-        return `套餐标识${code}已经配置过了，请配置其他套餐标识；如需调整，请返回列表编辑已有套餐。`;
-      }
-
-      const membershipEntitlementOptions = [
-        ["canvas_access", "可使用画布功能"],
-        ["priority_generation", "Seedance 2.0 优先排队"],
-        ["team_asset_library", "团队资产库"],
-        ["team_member_management", "团队成员管理"],
-        ["full_flow_agent", "全流程 Agent"],
-      ];
-
-      function membershipKnownEntitlementLabelMap() {
-        return new Map(membershipEntitlementOptions.map(([value, label]) => [label, value]));
-      }
-
-      function membershipEntitlementControls(defaults) {
-        const selected = new Set(Array.isArray(defaults.entitlements) ? defaults.entitlements : []);
-        return membershipEntitlementOptions.map(([value, label]) => `
-          <label class="check-option">
-            <input type="checkbox" name="entitlements" value="${escapeAttribute(value)}" ${selected.has(value) ? "checked" : ""} />
-            <span>${escapeHtml(label)}</span>
-          </label>
-        `).join("");
-      }
-
-      function membershipDisplayFeaturesText(defaults) {
-        const features = Array.isArray(defaults.displayMetadata?.features)
-          ? defaults.displayMetadata.features
-          : membershipEntitlementOptions
-              .filter(([value]) => (defaults.entitlements || []).includes(value))
-              .map(([, label]) => label);
-        return features.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
-      }
-
       function openMembershipPlanDrawer(planId = "") {
         const existing = planId ? membershipPlanById(planId) : null;
         const defaults = existing || {
-          code: "专业版月卡299",
-          displayName: "专业版会员套餐",
+          code: "",
+          displayName: "",
           tier: "professional",
           periodUnit: "month",
           periodCount: 1,
-          amountMinor: 29900,
+          amountMinor: 19900,
           currency: "CNY",
-          giftCredits: 3000,
-          seatLimit: 50,
-          entitlements: ["canvas_access", "priority_generation", "team_asset_library", "team_member_management", "full_flow_agent"],
+          giftCredits: 1000,
+          seatLimit: 5,
+          entitlements: ["team_member_management", "priority_generation"],
           priorityRules: { modelFamilies: ["seedance"], queuePriority: 1 },
-          displayMetadata: {
-            features: ["可使用画布功能", "Seedance 2.0 优先排队", "团队资产库", "团队成员管理", "全流程 Agent"],
-          },
+          displayMetadata: {},
           status: "active",
           validFrom: "",
           validUntil: "",
         };
-        const amountYuan = Number(defaults.amountMinor || 0) / 100;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
           <div class="drawer-head"><h3>${existing ? "编辑会员套餐" : "新增会员套餐"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          ${membershipConfiguredPlanNotice(existing?.id || "")}
           <form id="membership-plan-form">
             <input type="hidden" name="id" value="${escapeAttribute(existing?.id || "")}" />
             <div class="form-grid">
-              <label class="field"><span>套餐标识/内部编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="专业版月卡299，可输入中文、数字或英文" required /></label>
-              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版会员套餐" required /></label>
+              <label class="field"><span>套餐编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="professional_monthly" required /></label>
+              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版月卡" required /></label>
               <label class="field"><span>档位</span><select name="tier">${optionPairs([["experience", "体验版"], ["professional", "专业版"]], defaults.tier)}</select></label>
               <label class="field"><span>周期单位</span><select name="periodUnit">${optionPairs([["day", "天"], ["month", "月"], ["quarter", "季"], ["year", "年"]], defaults.periodUnit)}</select></label>
-              <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /><small>会员有效期：单位 + 数量，月 + 1 = 1个月会员。</small></label>
-              <label class="field"><span>价格（元）</span><input name="amountYuan" type="number" min="0.01" step="0.01" value="${amountYuan > 0 ? amountYuan.toFixed(2) : ""}" required /></label>
+              <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /></label>
+              <label class="field"><span>价格分</span><input name="amountMinor" type="number" min="1" step="1" value="${Number(defaults.amountMinor || 1)}" required /></label>
               <label class="field"><span>赠送积分</span><input name="giftCredits" type="number" min="0" step="1" value="${Number(defaults.giftCredits || 0)}" required /></label>
-              <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="0" step="1" value="${Number(defaults.seatLimit ?? 0)}" required /></label>
+              <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="1" step="1" value="${Number(defaults.seatLimit || 1)}" required /></label>
               <label class="field"><span>币种</span><select name="currency">${optionPairs([["CNY", "CNY"]], defaults.currency || "CNY")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
             </div>
-            <label class="field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></label>
-            <label class="field"><span>前端展示权益</span><textarea name="displayFeatures" rows="4" placeholder="每行一条，会展示在前端会员套餐卡片中">${escapeHtml(membershipDisplayFeaturesText(defaults))}</textarea></label>
+            <label class="field"><span>权益 JSON</span><textarea name="entitlements" rows="3" required>${escapeHtml(JSON.stringify(defaults.entitlements || [], null, 2))}</textarea></label>
             <label class="field"><span>优先级规则 JSON</span><textarea name="priorityRules" rows="4">${escapeHtml(JSON.stringify(defaults.priorityRules || {}, null, 2))}</textarea></label>
-            <label class="field"><span>高级展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
+            <label class="field"><span>展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
             <div class="form-grid">
               <label class="field"><span>有效开始</span><input name="validFrom" value="${escapeAttribute(defaults.validFrom || "")}" placeholder="2026-06-09T00:00:00.000Z" /></label>
               <label class="field"><span>有效结束</span><input name="validUntil" value="${escapeAttribute(defaults.validUntil || "")}" placeholder="留空表示长期有效" /></label>
@@ -3413,50 +3295,33 @@
             return;
           }
           await runAdminMutation(event.currentTarget, error, async () => {
-            try {
-              await api("/api/admin/membership/plans", {
-                method: "POST",
-                headers: { "idempotency-key": adminIdempotencyKey("membership-plan") },
-                body: JSON.stringify(payload),
-              });
-            } catch (err) {
-              if (err.payload?.error?.code === "membership_plan_code_conflict") {
-                await loadMembershipPlans();
-                renderShell();
-                error.textContent = membershipPlanConflictMessage(payload);
-              }
-              throw err;
-            }
+            await api("/api/admin/membership/plans", {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-membership-plan-${payload.id || payload.code}-${Date.now()}` },
+              body: JSON.stringify(payload),
+            });
             await loadMembershipPlans();
             closeDrawer();
             renderShell();
-          }, "会员套餐已保存").catch((err) => {
-            if (err.payload?.error?.code === "membership_plan_code_conflict") {
-              error.textContent = membershipPlanConflictMessage(payload);
-            }
-          });
+          }, "会员套餐已保存").catch(() => undefined);
         });
       }
 
       function membershipPlanPayloadFromForm(form) {
         const id = String(form.get("id") || "").trim();
-        const amountYuan = Number(form.get("amountYuan") || 0);
-        const entitlements = membershipEntitlementsFromForm(form);
-        const displayMetadata = parseJsonTextarea(form, "displayMetadata");
-        displayMetadata.features = membershipDisplayFeaturesFromForm(form, entitlements);
         const payload = {
           code: String(form.get("code") || "").trim(),
           displayName: String(form.get("displayName") || "").trim(),
           tier: String(form.get("tier") || "professional"),
           periodUnit: String(form.get("periodUnit") || "month"),
           periodCount: Number(form.get("periodCount") || 1),
-          amountMinor: Math.round(amountYuan * 100),
+          amountMinor: Number(form.get("amountMinor") || 0),
           currency: String(form.get("currency") || "CNY"),
           giftCredits: Number(form.get("giftCredits") || 0),
-          seatLimit: Number(form.get("seatLimit") || 0),
-          entitlements,
+          seatLimit: Number(form.get("seatLimit") || 1),
+          entitlements: parseJsonArrayTextarea(form, "entitlements"),
           priorityRules: parseJsonTextarea(form, "priorityRules"),
-          displayMetadata,
+          displayMetadata: parseJsonTextarea(form, "displayMetadata"),
           status: String(form.get("status") || "inactive"),
           validFrom: String(form.get("validFrom") || "").trim() || null,
           validUntil: String(form.get("validUntil") || "").trim() || null,
@@ -3475,28 +3340,10 @@
         if (!Number.isInteger(payload.giftCredits) || payload.giftCredits < 0) {
           throw new Error("赠送积分必须是非负整数");
         }
-        if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 0) {
-          throw new Error("席位上限必须是 0 或正整数");
+        if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 1) {
+          throw new Error("席位上限必须是正整数");
         }
         return payload;
-      }
-
-      function membershipEntitlementsFromForm(form) {
-        return Array.from(new Set(form.getAll("entitlements").map((item) => String(item || "").trim()).filter(Boolean)));
-      }
-
-      function membershipDisplayFeaturesFromForm(form, selectedEntitlements) {
-        const raw = String(form.get("displayFeatures") || "").trim();
-        if (!raw) return [];
-        const selectedEntitlementSet = new Set(selectedEntitlements);
-        const knownFeatureLabelToValue = membershipKnownEntitlementLabelMap();
-        return raw.split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter((line) => {
-            if (!line) return false;
-            const value = knownFeatureLabelToValue.get(line);
-            return !value || selectedEntitlementSet.has(value);
-          });
       }
 
       function parseJsonArrayTextarea(form, name) {
@@ -4827,6 +4674,7 @@
             <button class="btn ghost full" type="submit" ${userActionAttrs(user, "reveal", "user.write")}>查看完整联系方式</button>
           </form>
           <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
+          <div id="user-model-request-panel" style="margin-top:16px;"><span class="metric-note">正在加载模型请求记录...</span></div>
         </aside>`;
         document.getElementById("contact-reveal-form").addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -4847,9 +4695,10 @@
           }
         });
         try {
-          const [ledgerResult, subaccountsResult] = await Promise.all([
+          const [ledgerResult, subaccountsResult, modelRequestResult] = await Promise.all([
             api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
             api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
+            api(`/api/admin/users/${userId}/model-requests?pageSize=20`).catch(() => ({ data: [] })),
           ]);
           const creditSummary = renderCreditSummary(ledgerResult.summary || {});
           const ledgerRows = (ledgerResult.data || [])
@@ -4868,9 +4717,89 @@
             <h4 style="margin-top:14px;">关联子账户</h4>
             <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
           `;
+          document.getElementById("user-model-request-panel").innerHTML = renderUserModelRequestPanel(modelRequestResult.data || []);
         } catch (err) {
           document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
+          document.getElementById("user-model-request-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型请求记录加载失败"}</span>`;
         }
+      }
+
+      function renderUserModelRequestPanel(logs) {
+        const rows = (logs || []).map((item) => {
+          const usage = renderModelUsage(item.responseUsage);
+          const requestBody = escapeHtml(JSON.stringify(item.requestBody || {}, null, 2));
+          const requestText = escapeHtml(item.requestText || "");
+          const responseText = escapeHtml(item.responseText || "");
+          const finishReasons = (item.responseFinishReasons || []).length
+            ? (item.responseFinishReasons || []).map((reason) => `<span class="tag blue">${escapeHtml(reason)}</span>`).join("")
+            : `<span class="metric-note">无</span>`;
+          return `
+            <div class="card" style="padding:14px;margin-top:12px;">
+              <div class="toolbar" style="align-items:flex-start;gap:12px;">
+                <div>
+                  <strong>${escapeHtml(item.modelId || "-")}</strong>
+                  <div class="metric-note">${escapeHtml(item.providerName || "-")} / ${escapeHtml(item.providerModel || "-")}</div>
+                </div>
+                <div style="margin-left:auto;text-align:right;">
+                  <span class="tag ${item.status === "succeeded" ? "green" : item.status === "failed" ? "warn" : "blue"}">${escapeHtml(item.status || "-")}</span>
+                  <div class="metric-note">${escapeHtml(formatAdminDateTime(item.createdAt))}</div>
+                </div>
+              </div>
+              <div class="check-list" style="margin-top:12px;">
+                <div><span>请求摘要</span><span>${escapeHtml(item.payloadSummary || "-")}</span></div>
+                <div><span>Provider Request ID</span><span>${escapeHtml(item.providerRequestId || "-")}</span></div>
+                <div><span>组织 ID</span><span>${escapeHtml(item.organizationId || "-")}</span></div>
+                <div><span>工作区 ID</span><span>${escapeHtml(item.workspaceId || "-")}</span></div>
+                <div><span>项目 ID</span><span>${escapeHtml(item.projectId || "-")}</span></div>
+                <div><span>请求标识</span><span>${escapeHtml(item.requestKey || "-")}</span></div>
+                <div><span>请求哈希</span><span>${escapeHtml(item.requestHash || "-")}</span></div>
+                <div><span>载荷哈希</span><span>${escapeHtml(item.payloadHash || "-")}</span></div>
+                <div><span>操作</span><span>${escapeHtml(item.providerOperation || "-")}</span></div>
+                <div><span>失败原因</span><span>${escapeHtml(item.failureCode || "-")}</span></div>
+                <div><span>开始时间</span><span>${escapeHtml(formatAdminDateTime(item.startedAt))}</span></div>
+                <div><span>完成时间</span><span>${escapeHtml(formatAdminDateTime(item.completedAt))}</span></div>
+                <div><span>Finish Reasons</span><span>${finishReasons}</span></div>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">请求参数</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;">${requestBody}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">发送给模型的文本</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;">${requestText || "无"}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">模型返回文本</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:260px;overflow:auto;">${responseText || "无"}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">Token / Usage</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;overflow:auto;">${escapeHtml(usage)}</pre>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        return `
+          <h4>模型请求记录</h4>
+          ${rows || '<div class="metric-note" style="margin-top:10px;">暂无该用户的模型请求记录</div>'}
+        `;
+      }
+
+      function renderModelUsage(value) {
+        if (!value || typeof value !== "object") return "无";
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return "无";
+        }
+      }
+
+      function formatAdminDateTime(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleString("zh-CN");
       }
 
       function openUserProfileDrawer(userId) {
@@ -7428,7 +7357,6 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
-        if (path.includes("/membership")) return "membership";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/agreements")) return "agreements";
@@ -7462,7 +7390,6 @@
           dashboard: "/admin/dashboard",
           models: "/admin/models",
           users: "/admin/users",
-          membership: "/admin/membership",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           agreements: "/admin/agreements",
@@ -7483,7 +7410,6 @@
                 ${navButton("dashboard", "\u603b\u89c8")}
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
-                ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
@@ -7519,7 +7445,6 @@
         if (state.page === "dashboard") return dashboardPage();
         if (state.page === "models") return modelsPage();
         if (state.page === "users") return usersPage();
-        if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "agreements") return agreementsPage();
@@ -8163,7 +8088,6 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
-        if (path.includes("/membership")) return "membership";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/agreements")) return "agreements";
@@ -8179,7 +8103,6 @@
           models: "/admin/models",
           parameterTemplates: "/admin/parameter-templates",
           users: "/admin/users",
-          membership: "/admin/membership",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           agreements: "/admin/agreements",
@@ -8200,7 +8123,6 @@
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
                 ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
-                ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
@@ -8236,7 +8158,6 @@
         if (state.page === "models") return modelsPage();
         if (state.page === "parameterTemplates") return parameterTemplatesPage();
         if (state.page === "users") return usersPage();
-        if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "agreements") return agreementsPage();
