@@ -42,7 +42,7 @@ const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
 const MEMBERSHIP_PAYMENT_FAST_WINDOW_MS = 60 * 1000;
 const MEMBERSHIP_PAYMENT_MAX_POLL_FAILURES = 3;
 const MEMBERSHIP_PAYMENT_COUNTDOWN_TICK_MS = 1000;
-
+const MEMBERSHIP_PAYMENT_SUCCESS_TOAST = "会员权益已开通";
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
@@ -2900,28 +2900,6 @@ function startMembershipPaymentWatcher(workbench) {
   }, delayMs);
 }
 
-function requestPageRefreshAfterMembershipPaymentSuccess(workbench) {
-  if (workbench.membershipPaymentSuccessRefreshRequested) {
-    return;
-  }
-  workbench.membershipPaymentSuccessRefreshRequested = true;
-  if (typeof workbench.requestPageRefreshAfterMembershipPaymentSuccess === "function") {
-    workbench.requestPageRefreshAfterMembershipPaymentSuccess();
-    return;
-  }
-  if (typeof window === "undefined" || typeof window.location?.reload !== "function") {
-    return;
-  }
-  const setTimeoutFn = typeof window.setTimeout === "function"
-    ? window.setTimeout.bind(window)
-    : null;
-  if (setTimeoutFn) {
-    setTimeoutFn(() => window.location.reload(), 0);
-    return;
-  }
-  window.location.reload();
-}
-
 async function refreshMembershipPaymentStatus(workbench, { fromPoll = false } = {}) {
   const paymentIntentId = workbench.ui.lastPaymentIntent?.id ?? "";
   const orderId = workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
@@ -2957,15 +2935,7 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
   }
 
   if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-    await refreshMembershipEntitlementSurfaces(workbench);
-    stopMembershipPaymentWatcher(workbench);
-    stopMembershipPaymentCountdown(workbench);
-    workbench.ui.toast = "";
-    await refreshSessionCreditBalance(workbench, { renderOnChange: false });
-    clearMembershipPaymentState(workbench);
-    workbench.ui.isLibraryPricingModalOpen = false;
-    render(workbench, { preserveLibraryScroll: true });
-    requestPageRefreshAfterMembershipPaymentSuccess(workbench);
+    await finalizeSuccessfulMembershipPayment(workbench);
     return true;
   }
 
@@ -2991,22 +2961,22 @@ async function handleSimulatedMembershipPaymentStatus(workbench) {
   }
 
   if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-    await syncMembershipStatusOnly(workbench);
-    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
-      stopMembershipPaymentWatcher(workbench);
-      stopMembershipPaymentCountdown(workbench);
-      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
-      render(workbench, { preserveLibraryScroll: true });
-      return true;
-    }
-    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
-    startMembershipPaymentWatcher(workbench);
-    render(workbench, { preserveLibraryScroll: true });
-    return false;
+    await finalizeSuccessfulMembershipPayment(workbench);
+    return true;
   }
 
   render(workbench, { preserveLibraryScroll: true });
   return false;
+}
+
+async function finalizeSuccessfulMembershipPayment(workbench) {
+  await refreshMembershipEntitlementSurfaces(workbench);
+  stopMembershipPaymentWatcher(workbench);
+  stopMembershipPaymentCountdown(workbench);
+  await refreshSessionCreditBalance(workbench, { renderOnChange: false });
+  workbench.ui.membershipPaymentPolling = false;
+  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST };
+  render(workbench, { preserveLibraryScroll: true });
 }
 
 async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId }) {
@@ -3877,6 +3847,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-credit-ledger") {
     workbench.ui.creditLedgerOpen = true;
     workbench.ui.creditLedgerError = "";
+    workbench.ui.toast = "";
     render(workbench);
     await loadCreditLedger(workbench);
     return;
@@ -4261,6 +4232,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-credit-ledger") {
     workbench.ui.creditLedgerOpen = false;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -5522,7 +5494,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
     const uploadId = target.dataset.localUploadId ?? "";
     const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
-    workbench.ui.toast = removed ? "已从当前列表移除。" : "未找到要删除的团队素材。";
+    workbench.ui.toast = removed ? "" : "未找到要删除的团队素材。";
     render(workbench, { preserveLibraryScroll: true });
     return;
   }

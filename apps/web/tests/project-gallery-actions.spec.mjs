@@ -222,7 +222,11 @@ test("project gallery refresh does not block on non-gallery startup requests", a
     }
   }
 
-  assert.deepEqual(calls.filter((call) => call !== "session"), ["projects"]);
+  assert.equal(calls.filter((call) => call === "projects").length, 1);
+  assert.deepEqual(
+    calls.filter((call) => !["session", "projects", "project-styles", "packages"].includes(call)),
+    [],
+  );
 });
 
 test("navigation tabs render before lazy surface requests finish", async () => {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -416,4 +417,14 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.doesNotMatch(html, /data-full-id=/);
   assert.doesNotMatch(html, /credit-ledger-description/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);
+});
+
+test("credit ledger drawer uses a narrower desktop width", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const drawerRule = css.match(/\.credit-ledger-drawer\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(drawerRule, /width:\s*min\(64rem,\s*calc\(100vw - 2\.4rem\)\)/);
+  assert.doesNotMatch(drawerRule, /width:\s*min\(72rem/);
 });
