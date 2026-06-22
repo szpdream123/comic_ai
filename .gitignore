@@ -21,3 +21,6 @@ tmp/
 tmp-dev-server/
 tmp-ui-screenshots/
 .worktrees/
+.tmp-edge-canvas-cdp/
+test-results/
+.tmp-project-workbench-test-output.txt
