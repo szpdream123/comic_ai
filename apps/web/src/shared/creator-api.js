@@ -23,12 +23,20 @@ async function fetchJson(url, options = {}) {
     }
   }
   const controller = new AbortController();
+  const externalSignal = options.signal;
+  const abortFromExternalSignal = () => controller.abort();
+  if (externalSignal?.aborted) {
+    controller.abort();
+  } else {
+    externalSignal?.addEventListener?.("abort", abortFromExternalSignal, { once: true });
+  }
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const {
     timeoutMs: _timeoutMs,
     unwrapEnvelope: _unwrapEnvelope,
     dedupeKey: _dedupeKey,
     dedupeTtlMs: _dedupeTtlMs,
+    signal: _signal,
     ...fetchOptions
   } = options;
 
@@ -42,11 +50,15 @@ async function fetchJson(url, options = {}) {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        if (externalSignal?.aborted) {
+          throw error;
+        }
         throw new Error("request_timeout");
       }
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      externalSignal?.removeEventListener?.("abort", abortFromExternalSignal);
     }
 
     const text = await response.text();
@@ -179,19 +191,25 @@ async function* postJsonSse(url, body, options = {}) {
   }
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const event = parseSseMessage(part);
-      if (event) {
-        yield event;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const event = parseSseMessage(part);
+        if (event) {
+          yield event;
+        }
+      }
+    }
+  } finally {
+    if (options.signal?.aborted) {
+      await reader.cancel().catch(() => {});
     }
   }
   buffer += decoder.decode();
@@ -1020,12 +1038,13 @@ export const creatorApi = {
     });
   },
 
-  createAiStoryboardPreview(projectId, input) {
+  createAiStoryboardPreview(projectId, input, options = {}) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input ?? {}),
       timeoutMs: 180000,
+      signal: options.signal,
     });
   },
 

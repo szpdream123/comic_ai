@@ -975,6 +975,46 @@ describe("episode workbench asset list layout", () => {
     assert.match(contextAssetBlock, /context\?\.data\?\.episodeAssets/);
   });
 
+  it("keeps locally hydrated episode assets when workbench context buckets are temporarily empty", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const contextAssetBlock = source.slice(
+      source.indexOf("function applyEpisodeWorkbenchAssetsFromContext"),
+      source.indexOf("async function ensureEpisodeWorkbenchAssetsHydrated"),
+    );
+    const projectDetailSource = readFileSync(
+      new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
+      "utf8",
+    );
+    const assetLibraryBlock = projectDetailSource.slice(
+      projectDetailSource.indexOf("function resolveEpisodeWorkbenchAssetLibrary"),
+      projectDetailSource.indexOf("function applyConversationPreviewFallback"),
+    );
+
+    assert.match(contextAssetBlock, /mappedSceneAssets\.length \? mappedSceneAssets : existingImportedAssets\.scene/);
+    assert.match(contextAssetBlock, /mappedPropAssets\.length \? mappedPropAssets : existingImportedAssets\.prop/);
+    assert.match(assetLibraryBlock, /contextSceneAssets\.length/);
+    assert.match(assetLibraryBlock, /importedAssets\.scene/);
+    assert.match(assetLibraryBlock, /contextPropAssets\.length/);
+    assert.match(assetLibraryBlock, /importedAssets\.prop/);
+  });
+
+  it("keeps locally hydrated storyboards when a fresh workbench storyboard reload comes back empty", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const loadStoryboardsBlock = source.slice(
+      source.indexOf("async function loadEpisodeStoryboardsForWorkbench"),
+      source.indexOf("async function loadEpisodeAssetsForWorkbench"),
+    );
+
+    assert.match(loadStoryboardsBlock, /if \(!mappedStoryboards\.length && existingStoryboards\.length\) \{/);
+    assert.match(loadStoryboardsBlock, /return existingStoryboards;/);
+  });
+
   it("keeps asset conversation height at content minimum after quick references and generation", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
@@ -5032,6 +5072,36 @@ describe("production workbench project tab", () => {
       uploadNotice: "",
       defaultScript: "Episode 1",
       ...overrides,
+    };
+  }
+
+  function createSingleEpisodeAiLiveDisplayTables() {
+    return {
+      script: {
+        title: "剧本",
+        columns: ["剧本文字"],
+        rows: [],
+      },
+      scenes: {
+        title: "场景",
+        columns: ["场景名称", "场景描述"],
+        rows: [],
+      },
+      characters: {
+        title: "角色",
+        columns: ["角色名称", "角色描述"],
+        rows: [],
+      },
+      props: {
+        title: "道具",
+        columns: ["道具名称", "道具描述"],
+        rows: [],
+      },
+      storyboards: {
+        title: "分镜",
+        columns: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+        rows: [],
+      },
     };
   }
 
@@ -22107,7 +22177,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.singleEpisodeAiPreview.sourceScript, "框内最新文案");
     const html = renderProductionWorkbench(workbench);
     assert.match(html, /manual-script-analysis-overlay/);
-    assert.match(html, /DeepSeek 剧本分析结果/);
+    assert.match(html, /AI 剧本分析结果/);
     assert.match(html, /分析后的剧本/);
     assert.match(html, /data-action="save-manual-script-analysis"/);
     assert.match(html, /保存剧本/);
@@ -22143,7 +22213,7 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /manual-script-analysis-overlay/);
-    assert.match(html, /DeepSeek 正在分析剧本/);
+    assert.match(html, /AI 正在分析剧本/);
     assert.match(html, /DeepSeek 正在返回第一段/);
     assert.match(html, /data-action="save-manual-script-analysis"/);
     assert.match(html, /data-action="regenerate-manual-script-analysis"/);
@@ -22481,11 +22551,12 @@ describe("production workbench project tab", () => {
     assert.match(html, /single-episode-ai-overlay/);
     assert.match(html, /single-episode-ai-preview ready/);
     assert.match(html, /single-episode-ai-script-text/);
-    assert.match(html, /分镜提示词/);
     assert.match(html, /发送给 DeepSeek 的完整提示词/);
     assert.match(html, /DeepSeek 完整返回/);
     assert.match(html, /发送分镜提示词/);
-    assert.match(html, /发送角色提示词/);
+    assert.doesNotMatch(html, /data-prompt-stage="scene-response"/);
+    assert.doesNotMatch(html, /data-prompt-stage="character-response"/);
+    assert.doesNotMatch(html, /data-prompt-stage="prop-response"/);
     assert.match(html, /rawOnlyMarker/);
     assert.match(html, /UNPROCESSED_SHOT_JSON_SHOULD_RENDER/);
     assert.match(html, /&quot;storyboards&quot;: \[/);
@@ -22495,6 +22566,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /道具提示词生成/);
     assert.doesNotMatch(html, /分镜提示词生成/);
     assert.match(html, /发送场景提示词/);
+    assert.match(html, /发送角色提示词/);
     assert.match(html, /发送道具提示词/);
     assert.doesNotMatch(html, /sceneName/);
     assert.match(html, /data-action="close-ai-storyboard-preview"/);
@@ -22505,8 +22577,8 @@ describe("production workbench project tab", () => {
     assert.match(html, /single-episode-ai-table-card scenes/);
     assert.match(html, /single-episode-ai-table-card props/);
     assert.match(html, /single-episode-ai-table-card storyboards/);
-    assert.match(html, /角色名称（角色名称\/服装描述）/);
-    assert.match(html, /场景名称（角色名称\/天气和时间描述）/);
+    assert.match(html, /角色名称/);
+    assert.match(html, /场景名称/);
     assert.match(html, /道具名称/);
     assert.match(html, /分镜剧情/);
     assert.match(html, /对话\/旁白/);
@@ -22516,12 +22588,128 @@ describe("production workbench project tab", () => {
     assert.match(html, /旧木屋门前，傍晚微光/);
     assert.match(html, /任小野<\/td>/);
     assert.match(html, /约17岁的东方少年，旧布短衣/);
-    assert.match(html, /17岁东方少年，旧布短衣/);
     assert.match(html, /旧布包裹的朴素饭食/);
     assert.match(html, /递出饭食/);
     assert.match(html, /麻烦您了/);
     assert.match(html, /任小野递出饭食/);
     assert.match(html, /中景固定镜头/);
+  });
+
+  it("aborts the running DeepSeek storyboard preview request when closing the preview", async () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    let capturedSignal = null;
+    let streamStarted;
+    const streamStartedPromise = new Promise((resolve) => {
+      streamStarted = resolve;
+    });
+    const waitForAbort = (signal) => new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener("abort", resolve, { once: true });
+    });
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (_projectId, _input, options = {}) {
+          capturedSignal = options.signal;
+          streamStarted();
+          yield { event: "script_prompt", data: { text: "发送给 DeepSeek 的剧本请求" } };
+          await waitForAbort(options.signal);
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const pendingPreview = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    await streamStartedPromise;
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "close-ai-storyboard-preview" },
+    });
+    await pendingPreview;
+
+    assert.equal(capturedSignal?.aborted, true);
+    assert.equal(workbench.singleEpisodeAiPreviewAbortController, null);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+    assert.equal(workbench.ui.toast, "");
+
+    let backSignal = null;
+    let backStreamStarted;
+    const backStreamStartedPromise = new Promise((resolve) => {
+      backStreamStarted = resolve;
+    });
+    const backWorkbench = {
+      ...workbench,
+      api: {
+        createAiStoryboardPreviewStream: async function* (_projectId, _input, options = {}) {
+          backSignal = options.signal;
+          backStreamStarted();
+          yield { event: "script_prompt", data: { text: "发送给 DeepSeek 的剧本请求" } };
+          await waitForAbort(options.signal);
+        },
+      },
+      ui: {
+        ...workbench.ui,
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        isSingleEpisodeModalOpen: true,
+        singleEpisodeScript: "任小野把小草托付给闵婶子。",
+        storyboardPromptPackages: [
+          { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+          { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+        ],
+        selectedSingleEpisodeLookPackageIds: {
+          genre: ["genre-1"],
+          emotion: ["emotion-1"],
+        },
+        singleEpisodeAiPreview: { status: "idle", data: null, error: "" },
+      },
+    };
+
+    const pendingBackPreview = handleWorkbenchActionForTest(backWorkbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    await backStreamStartedPromise;
+    await handleWorkbenchActionForTest(backWorkbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+    await pendingBackPreview;
+
+    assert.equal(backSignal?.aborted, true);
+    assert.equal(backWorkbench.singleEpisodeAiPreviewAbortController, null);
+    assert.equal(backWorkbench.ui.singleEpisodeAiPreview.status, "idle");
   });
 
   it("builds a usable AI storyboard preview from completed stage rows when the final payload is missing", async () => {
@@ -22634,6 +22822,181 @@ describe("production workbench project tab", () => {
     assert.match(String(rows[0]?.plot ?? ""), /深夜出租屋中|叶焚野接到高价代打单/);
   });
 
+  it("keeps showing the currently streaming storyboard row after completed rows already rendered", async () => {
+    const shotChunks = [
+      '{"storyboards":[',
+      '{"shotNo":1,"plot":"黄昏城门口，小女孩仰头看太阳。","dialogue":"任小野，今天太阳真好看","imagePrompt":"黄昏城门口，小女孩抬头","videoPrompt":"镜头1"},',
+      '{"shotNo":2,"plot":"任小野回头，轻声回应。","dialogue":"切，想让我叫你哥。","imagePrompt":"任小野回头","videoPrompt":"镜头2"},',
+      '{"shotNo":3,"plot":"任小野迎向远处火红的太阳，周头微皱。","dialogue":"走了，你一会儿先去王嫂家看、等我回来。","imagePrompt":"黄昏街道远景"',
+    ];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野带小草穿过城门。", rawText: "任小野带小草穿过城门。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          for (const chunk of shotChunks) {
+            yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: chunk } };
+          }
+          yield { event: "complete", data: { scriptText: "任小野带小草穿过城门。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野带小草穿过城门。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "温情", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.equal(rows.length, 3);
+    assert.match(String(rows[2]?.plot ?? ""), /任小野迎向远处火红的太阳/);
+    assert.match(String(rows[2]?.dialogue ?? ""), /先去王嫂家/);
+    assert.match(String(rows[2]?.imagePrompt ?? ""), /黄昏街道远景/);
+  });
+
+  it("streams storyboard markdown table rows into the live table before the final payload arrives", async () => {
+    const markdownShotChunks = [
+      "| 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词（多镜头序列，每一分镜镜头总时长≤15s） |\n",
+      "| --- | --- | --- | --- |\n",
+      "| 任小野站在阴影边缘，俯身确认迷雾鬼尸体仍有余温。 | 任小野低声：“这尸体不对劲。” | 城墙根阴影下，少年手按切割刀，灰黑血迹铺满地面 | 【镜头1】低机位推进到尸体余温与少年紧绷手指 |\n",
+    ];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野发现尸体异常。", rawText: "任小野发现尸体异常。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          for (const chunk of markdownShotChunks) {
+            yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: chunk } };
+          }
+          yield { event: "complete", data: { scriptText: "任小野发现尸体异常。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野发现尸体异常。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "惊悚", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.ok(rows.length >= 1);
+    assert.match(String(rows[0]?.plot ?? ""), /任小野站在阴影边缘/);
+    assert.match(String(rows[0]?.dialogue ?? ""), /这尸体不对劲/);
+    assert.match(String(rows[0]?.imagePrompt ?? ""), /城墙根阴影下/);
+    assert.match(String(rows[0]?.videoPrompt ?? ""), /任小野站在阴影边缘/);
+  });
+
+  it("keeps parsing live storyboard rows when the streamed shot response exceeds the visible text limit", async () => {
+    const longTail = "动态镜头说明".repeat(3200);
+    const partialShotChunks = [
+      '{"storyboards":[{"shotNo":1,"plot":"深夜出租屋中，叶焚野接到高价代打单并确认预付款到账","dialogue":"【叶焚野】老板，这单打完真的能给八千？","imagePrompt":"主体固定模式不需要生成分镜图","videoPrompt":"【镜头1】0.0-2.8秒',
+      longTail,
+      '"}]}',
+    ];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野托付妹妹。", rawText: "任小野托付妹妹。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          for (const chunk of partialShotChunks) {
+            yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: chunk } };
+          }
+          yield { event: "complete", data: { scriptText: "任小野托付妹妹。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const shotStep = workbench.ui.singleEpisodeAiPreview.assetPromptSteps.find((step) => step.stage === "shot");
+    assert.ok(String(shotStep?.responseText ?? "").length > 16000);
+    assert.ok(String(shotStep?.fullResponseText ?? "").length > 16000);
+    assert.match(String(shotStep?.fullResponseText ?? ""), /动态镜头说明/);
+
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.ok(rows.length >= 1);
+    assert.match(String(rows[0]?.plot ?? ""), /深夜出租屋中|叶焚野接到高价代打单/);
+    assert.match(String(rows[0]?.displayVideoPrompt ?? shotStep?.fullResponseText ?? ""), /动态镜头说明/);
+  });
+
   it("patches only the AI preview overlay during streaming and preserves manual scroll position", async () => {
     const overlay = {
       patchCount: 0,
@@ -22650,6 +23013,11 @@ describe("production workbench project tab", () => {
       scrollTop: 120,
       scrollHeight: 1000,
       clientHeight: 320,
+    };
+    const scriptOutput = {
+      scrollTop: 64,
+      scrollHeight: 1200,
+      clientHeight: 280,
     };
     const liveOutput = {
       scrollTop: 48,
@@ -22672,6 +23040,9 @@ describe("production workbench project tab", () => {
         }
         if (selector === "[data-single-episode-ai-preview-surface]") {
           return previewSurface;
+        }
+        if (selector === ".single-episode-ai-script-text div") {
+          return scriptOutput;
         }
         if (selector === ".manual-script-analysis-output pre, .single-episode-ai-live-output pre") {
           return liveOutput;
@@ -22724,9 +23095,196 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(root.renderCount, 2);
-    assert.equal(overlay.patchCount, 2);
+    assert.ok(overlay.patchCount >= 2);
     assert.equal(previewSurface.scrollTop, 120);
+    assert.equal(scriptOutput.scrollTop, 64);
     assert.equal(liveOutput.scrollTop, 48);
+  });
+
+  it("keeps the streaming script output pinned to the latest content when already at the bottom", async () => {
+    const overlay = {
+      patchCount: 0,
+      _outerHTML: "<section class=\"single-episode-ai-overlay\"></section>",
+      get outerHTML() {
+        return this._outerHTML;
+      },
+      set outerHTML(value) {
+        this._outerHTML = String(value ?? "");
+        this.patchCount += 1;
+      },
+    };
+    const previewSurface = {
+      scrollTop: 680,
+      scrollHeight: 1000,
+      clientHeight: 320,
+    };
+    const scriptOutput = {
+      scrollTop: 920,
+      scrollHeight: 1200,
+      clientHeight: 280,
+    };
+    const root = {
+      renderCount: 0,
+      _innerHTML: "",
+      get innerHTML() {
+        return this._innerHTML;
+      },
+      set innerHTML(value) {
+        this._innerHTML = String(value ?? "");
+        this.renderCount += 1;
+      },
+      querySelector(selector) {
+        if (selector === ".single-episode-ai-overlay") {
+          return overlay;
+        }
+        if (selector === "[data-single-episode-ai-preview-surface]") {
+          return previewSurface;
+        }
+        if (selector === ".single-episode-ai-script-text div") {
+          return scriptOutput;
+        }
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_delta", data: { text: "第一段剧本" } };
+          yield { event: "script_delta", data: { text: "\n第二段剧本" } };
+          yield {
+            event: "complete",
+            data: {
+              scriptText: "第一段剧本\n第二段剧本",
+              displayTables: createSingleEpisodeAiLiveDisplayTables(),
+              commitPayload: { storyboards: [] },
+            },
+          };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root,
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.equal(scriptOutput.scrollTop, scriptOutput.scrollHeight);
+  });
+
+  it("renders the AI preview overlay immediately when shot live tables receive rows", async () => {
+    const overlay = {
+      patchCount: 0,
+      _outerHTML: "<section class=\"single-episode-ai-overlay\"></section>",
+      get outerHTML() {
+        return this._outerHTML;
+      },
+      set outerHTML(value) {
+        this._outerHTML = String(value ?? "");
+        this.patchCount += 1;
+      },
+    };
+    const root = {
+      renderCount: 0,
+      _innerHTML: "",
+      get innerHTML() {
+        return this._innerHTML;
+      },
+      set innerHTML(value) {
+        this._innerHTML = String(value ?? "");
+        this.renderCount += 1;
+      },
+      querySelector(selector) {
+        if (selector === ".single-episode-ai-overlay") {
+          return overlay;
+        }
+        if (selector === "[data-single-episode-ai-preview-surface]") {
+          return { scrollTop: 0, scrollHeight: 1000, clientHeight: 320 };
+        }
+        if (selector === ".manual-script-analysis-output pre, .single-episode-ai-live-output pre") {
+          return null;
+        }
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野在城外战场发现异常尸体。", rawText: "任小野在城外战场发现异常尸体。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          yield {
+            event: "asset_delta",
+            data: {
+              stage: "shot",
+              title: "分镜提示词生成",
+              text: [
+                "场景名：城外战场（原文：城外，大地上满是迷雾鬼尸体）",
+                "人物：任小野",
+                "关键道具：特制迷雾鬼切割刀",
+              ].join("\n"),
+            },
+          };
+          yield {
+            event: "complete",
+            data: {
+              scriptText: "任小野在城外战场发现异常尸体。",
+              displayTables: createSingleEpisodeAiLiveDisplayTables(),
+              commitPayload: { storyboards: [] },
+            },
+          };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野在城外战场发现异常尸体。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "惊悚", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root,
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.ok(overlay.patchCount >= 1);
   });
 
   it("expands live segment storyboard JSON into chapter preview rows", async () => {
@@ -22876,6 +23434,313 @@ describe("production workbench project tab", () => {
     assert.match(String(rows[0]?.plot ?? ""), /地下控制室/);
   });
 
+  it("streams labeled storyboard blocks into the live table before the final payload arrives", async () => {
+    const labeledShotResponse = [
+      "第1场 外 城墙根阴影尸体区 黄昏",
+      "人物：任小野",
+      "关键道具：特制迷雾鬼切割刀（原文第1章：“特制迷雾鬼切割刀”）",
+      "画面/动作：任小野压下心头不安，握紧腰间切割刀，沿城墙根向阴影处挪去。地上满是迷雾鬼尸体，灰黑色血液渗入龟裂大地。",
+      "对白：",
+      "任小野：（自言自语，皱眉）今天的尸体……好像有点不一样。",
+      "情绪节奏：从紧张谨慎到疑惑不安。",
+      "本场高光时刻：任小野发现尸体温热，手一僵。",
+      "本场结尾定格：任小野手僵在半空，皱眉盯着尸体。",
+      "下场承接点：悬念提问一一尸体为何温热？",
+      "预计时长：50秒",
+    ].join("\n");
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野在城墙根发现异常尸体。", rawText: "任小野在城墙根发现异常尸体。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: labeledShotResponse } };
+          yield { event: "complete", data: { scriptText: "任小野在城墙根发现异常尸体。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野在城墙根发现异常尸体。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "惊悚", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.ok(rows.length >= 1);
+    assert.match(String(rows[0]?.plot ?? ""), /城墙根阴影尸体区/);
+    assert.match(String(rows[0]?.plot ?? ""), /关键道具：特制迷雾鬼切割刀/);
+    assert.match(String(rows[0]?.dialogue ?? ""), /任小野：/);
+    assert.match(String(rows[0]?.videoPrompt ?? ""), /本场高光时刻/);
+
+    const html = renderProductionWorkbench(workbench);
+    assert.match(html, /single-episode-ai-table-card storyboards/);
+    assert.match(html, /城墙根阴影尸体区/);
+    assert.match(html, /特制迷雾鬼切割刀/);
+    assert.match(html, /本场高光时刻/);
+  });
+
+  it("streams screenshot-style labeled storyboard rows into the live table before the final payload arrives", async () => {
+    const labeledShotResponse = [
+      "场景名：城外战场（原文：城外，大地上满是迷雾鬼尸体）",
+      "人物：任小野",
+      "关键道具：特制迷雾鬼切割刀（原文：腰间别着的特制迷雾鬼切割刀）",
+      "画面/动作：任小野握紧腰间切割刀，沿城墙根向阴影处挪去。地上满是迷雾鬼尸体，灰色血液渗入龟裂大地。",
+      "对白：",
+      "任小野：（无对白，内心独白）今天的尸体……好像有点不一样。",
+      "情绪节奏：从不安到警惕。",
+      "本场高光时刻：任小野发现尸体温热，手一僵。",
+      "本场结尾定格：任小野手僵在半空，盯着尸体。",
+      "下场承接点：尸体为何温热？",
+      "预计时长：60秒",
+    ].join("\n");
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野在城外战场发现异常尸体。", rawText: "任小野在城外战场发现异常尸体。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: labeledShotResponse } };
+          yield { event: "complete", data: { scriptText: "任小野在城外战场发现异常尸体。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野在城外战场发现异常尸体。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "惊悚", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.ok(rows.length >= 1);
+    assert.match(String(rows[0]?.plot ?? ""), /场景：城外战场/);
+    assert.match(String(rows[0]?.plot ?? ""), /关键道具：特制迷雾鬼切割刀/);
+    assert.match(String(rows[0]?.dialogue ?? ""), /今天的尸体/);
+    assert.match(String(rows[0]?.videoPrompt ?? ""), /本场高光时刻：任小野发现尸体温热/);
+  });
+
+  it("streams screenshot-style labeled storyboard rows incrementally across multiple shot chunks", async () => {
+    const labeledShotChunks = [
+      [
+        "场景名：城外战场（原文：城外，大地上满是迷雾鬼尸体）",
+        "人物：任小野",
+        "关键道具：特制迷雾鬼切割刀（原文：腰间别着的特制迷雾鬼切割刀）",
+      ].join("\n"),
+      [
+        "画面/动作：任小野握紧腰间切割刀，沿城墙根向阴影处挪去。",
+        "对白：",
+        "任小野：（无对白，内心独白）今天的尸体……好像有点不一样。",
+      ].join("\n"),
+      [
+        "情绪节奏：从不安到警惕。",
+        "本场高光时刻：任小野发现尸体温热，手一僵。",
+        "场景名：阴影尸体近景（原文：尸体灰色血液渗入龟裂大地）",
+        "人物：任小野",
+        "画面/动作：镜头切到尸体近景，灰色血液缓慢渗入龟裂大地。",
+      ].join("\n"),
+      [
+        "对白：任小野低声吸气，没有说话。",
+        "本场结尾定格：任小野手僵在半空，盯着尸体。",
+        "预计时长：60秒",
+      ].join("\n"),
+    ];
+    let emittedShotChunkCount = 0;
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野在城外战场发现异常尸体。", rawText: "任小野在城外战场发现异常尸体。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          for (const chunk of labeledShotChunks) {
+            emittedShotChunkCount += 1;
+            yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: chunk } };
+          }
+          yield { event: "complete", data: { scriptText: "任小野在城外战场发现异常尸体。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野在城外战场发现异常尸体。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "末日", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "惊悚", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.equal(emittedShotChunkCount, 4);
+    const rows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows
+      ?? workbench.ui.singleEpisodeAiPreview?.data?.displayTables?.storyboards?.rows
+      ?? [];
+    assert.ok(rows.length >= 2);
+    assert.match(String(rows[0]?.plot ?? ""), /场景：城外战场/);
+    assert.match(String(rows[0]?.dialogue ?? ""), /今天的尸体/);
+    assert.match(String(rows[1]?.plot ?? ""), /场景：阴影尸体近景/);
+    assert.match(String(rows[1]?.videoPrompt ?? ""), /本场结尾定格：任小野手僵在半空/);
+    assert.match(String(rows[1]?.videoPrompt ?? ""), /预计时长：60秒/);
+  });
+
+  it("renders a partial storyboard row during shot streaming before the first segment object closes", async () => {
+    const overlay = {
+      patchCount: 0,
+      htmlHistory: [],
+      _outerHTML: "<section class=\"single-episode-ai-overlay\"></section>",
+      get outerHTML() {
+        return this._outerHTML;
+      },
+      set outerHTML(value) {
+        this._outerHTML = String(value ?? "");
+        this.htmlHistory.push(this._outerHTML);
+        this.patchCount += 1;
+      },
+    };
+    const root = {
+      renderCount: 0,
+      _innerHTML: "",
+      get innerHTML() {
+        return this._innerHTML;
+      },
+      set innerHTML(value) {
+        this._innerHTML = String(value ?? "");
+        this.renderCount += 1;
+      },
+      querySelector(selector) {
+        if (selector === ".single-episode-ai-overlay") {
+          return overlay;
+        }
+        if (selector === "[data-single-episode-ai-preview-surface]") {
+          return { scrollTop: 0, scrollHeight: 1000, clientHeight: 320 };
+        }
+        if (selector === ".manual-script-analysis-output pre, .single-episode-ai-live-output pre") {
+          return null;
+        }
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const partialSegmentChunk = [
+      '{"script_title":"万械协议","total_segments":2,"segments":[',
+      '{"segment_id":1,"scene_analysis":{"scene_name":"地下控制室"},"segment_transition":{"transition":"硬切"},"shots":[{"shot_id":"1.1","time_range":"0.0-3.5秒","transition":"硬切","shot_type":"中景","camera_movement":"固定","description":"主角盯着失控的机械阵列。","dialogue_or_os":"不能再等了。"',
+    ].join("");
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "主角阻止机械阵列失控。", rawText: "主角阻止机械阵列失控。" } };
+          yield { event: "asset_prompt", data: { stage: "shot", title: "分镜提示词生成", text: "发送分镜提示词" } };
+          yield { event: "asset_delta", data: { stage: "shot", title: "分镜提示词生成", text: partialSegmentChunk } };
+          yield { event: "complete", data: { scriptText: "主角阻止机械阵列失控。", displayTables: createSingleEpisodeAiLiveDisplayTables(), commitPayload: { storyboards: [] } } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "主角阻止机械阵列失控。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "科幻", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "紧张", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root,
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.ok(overlay.patchCount >= 1);
+    const liveRows = workbench.ui.singleEpisodeAiPreview?.liveDisplayTables?.storyboards?.rows ?? [];
+    assert.ok(liveRows.length >= 1);
+    assert.match(String(liveRows[0]?.plot ?? ""), /主角盯着失控的机械阵列/);
+    assert.match(String(liveRows[0]?.dialogue ?? ""), /不能再等了/);
+    assert.ok(
+      overlay.htmlHistory.some((html) =>
+        /single-episode-ai-table-card storyboards/.test(html)
+        && /主角盯着失控的机械阵列|不能再等了/.test(html),
+      ),
+    );
+  });
+
   it("sends the displayed dynamic video prompt unchanged when committing AI storyboard preview", async () => {
     const previousWindow = globalThis.window;
     globalThis.window = { location: { hash: "#project" } };
@@ -22980,6 +23845,586 @@ describe("production workbench project tab", () => {
     assert.equal(storyboard.chapterImagePrompt, fullImagePrompt);
   });
 
+  it("prefers the displayed storyboard video prompt over a shorter commit payload prompt", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const fullDisplayedVideoPrompt = [
+      "【场景分析】场景：（城门口/黄昏，火红晚霞，暖色光线）",
+      "【镜头1】0.0-3.0秒 转场：淡入 镜头：中近景/平视/固定镜头",
+      "画面描述：任小野站在小草身旁，抬头看向天边。",
+      "主体动作：任小野护住小草，随后转身走向城门。",
+      "音效：环境音（风声、人群声）",
+    ].join("\n");
+    const commitCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return { episode: { id: "episode-display-video-prompt" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-display-video-prompt", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野护住小草。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野护住小草。",
+            displayTables: {
+              storyboards: {
+                rows: [{
+                  shotNo: 1,
+                  plot: "任小野护住小草。",
+                  dialogue: "无",
+                  displayVideoPrompt: fullDisplayedVideoPrompt,
+                  videoPrompt: "短动态提示词，不应该提交",
+                }],
+              },
+            },
+            commitPayload: {
+              scriptText: "任小野护住小草。",
+              storyboards: [{
+                shotNo: 1,
+                plot: "任小野护住小草。",
+                videoPrompt: "短动态提示词，不应该提交",
+              }],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    const storyboard = commitCalls[0].payload.commitPayload.storyboards[0];
+    assert.equal(storyboard.videoPrompt, fullDisplayedVideoPrompt);
+    assert.equal(storyboard.chapterVideoPrompt, fullDisplayedVideoPrompt);
+    assert.equal(storyboard.description, fullDisplayedVideoPrompt);
+    assert.notEqual(storyboard.videoPrompt, "短动态提示词，不应该提交");
+  });
+
+  it("includes preview scene and prop rows when committing AI storyboard preview", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const commitCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return { episode: { id: "episode-1" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-1", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野递出饭食。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野递出饭食。",
+            displayTables: {
+              scenes: {
+                rows: [
+                  {
+                    sceneName: "闵婶家门前",
+                    sceneDescription: "旧木屋门前，傍晚微光",
+                    sceneImagePrompt: "场景概念图",
+                  },
+                ],
+              },
+              props: {
+                rows: [
+                  {
+                    propName: "饭食",
+                    propDescription: "旧布包裹的朴素饭食",
+                    propImagePrompt: "道具设定图",
+                  },
+                ],
+              },
+              storyboards: {
+                rows: [
+                  {
+                    shotNo: 1,
+                    plot: "递出饭食",
+                    dialogue: "麻烦您了",
+                    imagePrompt: "静态图片提示词",
+                    videoPrompt: "动态视频提示词",
+                  },
+                ],
+              },
+            },
+            commitPayload: {
+              scriptText: "任小野递出饭食。",
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "递出饭食",
+                  dialogue: "麻烦您了",
+                  imagePrompt: "静态图片提示词",
+                  videoPrompt: "动态视频提示词",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(commitCalls.length, 1);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.scenes, [
+      {
+        sceneName: "闵婶家门前",
+        sceneDescription: "旧木屋门前，傍晚微光",
+        sceneImagePrompt: "旧木屋门前，傍晚微光\n场景概念图",
+        imagePrompt: "旧木屋门前，傍晚微光\n场景概念图",
+      },
+    ]);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.props, [
+      {
+        propName: "饭食",
+        propDescription: "旧布包裹的朴素饭食",
+        propImagePrompt: "旧布包裹的朴素饭食\n\n道具设定图",
+        imagePrompt: "旧布包裹的朴素饭食\n\n道具设定图",
+      },
+    ]);
+  });
+
+  it("parses combined scene prompt headers into commit payload scenes", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const commitCalls = [];
+    const combinedSceneTable = [
+      "| 场景名称（角色名称/天气和时间描述） | 场景描述（仅含空间结构、建筑风格、建筑细节、光影规则、氛围基调、关键道具） | 场景组合提示词（左栏+右栏共同组成） |",
+      "| --- | --- | --- |",
+      "| 黄昏城门口/晚霞如血 | 天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。 | 黄昏城门口，天边火红晚霞如血，人群熙攘。 |",
+    ].join("\n");
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return { episode: { id: "episode-1" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-1", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野走到黄昏城门口。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野走到黄昏城门口。",
+            rawMarkdown: {
+              scene: combinedSceneTable,
+            },
+            commitPayload: {
+              scriptText: "任小野走到黄昏城门口。",
+              scenes: [],
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "任小野走近城门。",
+                  dialogue: "",
+                  imagePrompt: "黄昏城门口。",
+                  videoPrompt: "【场景分析】黄昏城门口。",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(commitCalls.length, 1);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.scenes, [
+      {
+        sceneName: "黄昏城门口/晚霞如血",
+        sceneDescription: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。",
+        sceneImagePrompt: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。\n黄昏城门口，天边火红晚霞如血，人群熙攘。",
+        imagePrompt: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。\n黄昏城门口，天边火红晚霞如血，人群熙攘。",
+      },
+    ]);
+  });
+
+  it("commits visible scene and prop prompt-only tables from the ready preview state", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const commitCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return { episode: { id: "episode-1" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-1", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野递出饭食。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          liveDisplayTables: {
+            scenes: {
+              rows: [
+                {
+                  sceneName: "黄昏城门口",
+                  sceneDescription: "",
+                  sceneImagePrompt: "天边火红晚霞如血，人群熙攘。",
+                },
+              ],
+            },
+            props: {
+              rows: [
+                {
+                  propName: "特制切割刀",
+                  propDescription: "",
+                  propImagePrompt: "一把金属质感的特制切割刀，刀身暗灰色。",
+                },
+              ],
+            },
+            storyboards: {
+              rows: [
+                {
+                  shotNo: 1,
+                  plot: "黄昏时分，城门口人来人往。",
+                  dialogue: "无台词，仅动作。",
+                  imagePrompt: "黄昏城门口，天边火红晚霞如血。",
+                  videoPrompt: "【场景分析】黄昏城门口【镜头列表】人群缓慢走动。",
+                },
+              ],
+            },
+          },
+          data: {
+            scriptText: "任小野递出饭食。",
+            commitPayload: {
+              scriptText: "任小野递出饭食。",
+              scenes: [],
+              props: [],
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "旧分镜",
+                  dialogue: "旧台词",
+                  imagePrompt: "旧静态提示词",
+                  videoPrompt: "旧动态提示词",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(commitCalls.length, 1);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.scenes, [
+      {
+        sceneName: "黄昏城门口",
+        sceneDescription: "",
+        sceneImagePrompt: "天边火红晚霞如血，人群熙攘。",
+        imagePrompt: "天边火红晚霞如血，人群熙攘。",
+      },
+    ]);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.props, [
+      {
+        propName: "特制切割刀",
+        propDescription: "一把金属质感的特制切割刀，刀身暗灰色。",
+        propImagePrompt: "一把金属质感的特制切割刀，刀身暗灰色。",
+        imagePrompt: "一把金属质感的特制切割刀，刀身暗灰色。",
+      },
+    ]);
+    assert.equal(
+      commitCalls[0].payload.commitPayload.storyboards[0]?.description,
+      "【场景分析】黄昏城门口【镜头列表】人群缓慢走动。",
+    );
+  });
+
+  it("commits chapter scene rows parsed from storyboard segments when scene tables are otherwise missing", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const commitCalls = [];
+    const shotChapterResponse = JSON.stringify({
+      segments: [
+        {
+          segment_id: "1",
+          scene_analysis: {
+            scene_name: "黄昏城门口",
+            description: "天边火红晚霞如血，人群熙攘。",
+            emotion_intent: "建立世界氛围",
+          },
+          asset_table: {
+            "视频场景对照表": ["黄昏城门口"],
+            "视频角色对照表": ["任小野"],
+            "视频道具对照表": ["特制切割刀"],
+          },
+          shots: [
+            {
+              shot_id: "1",
+              description: "城门口人群缓慢走动，任小野站在光里。",
+              dialogue_or_os: "无台词，仅动作。",
+            },
+          ],
+        },
+      ],
+    });
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return { episode: { id: "episode-1" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-1", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "黄昏时分，城门口人来人往。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "黄昏时分，城门口人来人往。",
+            rawMarkdown: {
+              shot: shotChapterResponse,
+            },
+            commitPayload: {
+              scriptText: "黄昏时分，城门口人来人往。",
+              scenes: [],
+              characters: [],
+              props: [],
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "黄昏时分，城门口人来人往。",
+                  dialogue: "无台词，仅动作。",
+                  imagePrompt: "黄昏城门口，天边火红晚霞如血。",
+                  videoPrompt: "【场景分析】黄昏城门口【镜头列表】人群缓慢走动。",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(commitCalls.length, 1);
+    assert.deepEqual(commitCalls[0].payload.commitPayload.scenes, [
+      {
+        sceneName: "黄昏城门口",
+        sceneDescription: "天边火红晚霞如血，人群熙攘。\n建立世界氛围",
+        sceneImagePrompt: "天边火红晚霞如血，人群熙攘。\n建立世界氛围\n黄昏城门口=【@黄昏城门口】",
+        imagePrompt: "天边火红晚霞如血，人群熙攘。\n建立世界氛围\n黄昏城门口=【@黄昏城门口】",
+      },
+    ]);
+  });
+
+  it("keeps storyboard description aligned with the dynamic video prompt for generation state", () => {
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      id: "shot-1",
+      description: "动态视频提示词",
+      sceneAnalysis: "递出饭食",
+      plotPreview: "麻烦您了",
+      chapterVideoPrompt: "动态视频提示词",
+      videoPrompt: "动态视频提示词",
+      chapterImagePrompt: "静态图片提示词",
+      imagePrompt: "静态图片提示词",
+      generationDrafts: [
+        { mode: "video", prompt: "动态视频提示词", payload: {}, updatedAt: null },
+      ],
+    });
+
+    assert.equal(storyboard.description, "动态视频提示词");
+    assert.equal(storyboard.sceneAnalysis, "递出饭食");
+    assert.equal(storyboard.plotPreview, "麻烦您了");
+    assert.equal(storyboard.generationState.videoPrompt, "动态视频提示词");
+    assert.equal(storyboard.videoPromptDraft.prompt, "动态视频提示词");
+  });
+
+  it("prefers the dynamic video prompt over backend storyboard summary text after reload", () => {
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      id: "shot-1",
+      description: "后端摘要",
+      sceneAnalysis: "递出饭食",
+      plotPreview: "麻烦您了",
+      chapterVideoPrompt: "动态视频提示词",
+      videoPrompt: "动态视频提示词",
+      generationDrafts: [],
+    });
+
+    assert.equal(storyboard.description, "动态视频提示词");
+    assert.equal(storyboard.generationState.videoPrompt, "动态视频提示词");
+  });
+
+  it("hydrates storyboard description from the saved video generation draft when the episode API omits direct video prompt fields", () => {
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      id: "shot-1",
+      description: "",
+      sceneAnalysis: "核心动作: 递出饭食",
+      plotPreview: "麻烦您了",
+      generationDrafts: [
+        {
+          mode: "video",
+          prompt: "【分镜1】\n【镜头列表】\n【镜头1】0-3秒 中景固定镜头，任小野递出饭食。",
+          payload: { source: "episode_workbench_reload" },
+          updatedAt: null,
+        },
+      ],
+    });
+
+    assert.equal(
+      storyboard.description,
+      "【分镜1】\n【镜头列表】\n【镜头1】0-3秒 中景固定镜头，任小野递出饭食。",
+    );
+    assert.equal(
+      storyboard.generationState.videoPrompt,
+      "【分镜1】\n【镜头列表】\n【镜头1】0-3秒 中景固定镜头，任小野递出饭食。",
+    );
+    assert.equal(
+      storyboard.videoPromptDraft.prompt,
+      "【分镜1】\n【镜头列表】\n【镜头1】0-3秒 中景固定镜头，任小野递出饭食。",
+    );
+  });
+
   it("restores the create button after AI storyboard preview commit fails", async () => {
     const previousWindow = globalThis.window;
     globalThis.window = { location: { hash: "#project" } };
@@ -23039,6 +24484,337 @@ describe("production workbench project tab", () => {
     assert.match(String(workbench.ui.toast ?? ""), /操作失败/);
   });
 
+  it("hydrates episode workbench immediately from the AI storyboard commit result", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const commitCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId, payload) {
+          commitCalls.push({ projectId, payload });
+          return {
+            body: {
+              episode: {
+                id: "episode-commit-1",
+                projectId,
+                title: "第 1 集",
+                createdAt: "2026-06-22T09:30:00.000Z",
+              },
+              assets: {
+                characters: [
+                  {
+                    asset: {
+                      id: "episode-character-commit-1",
+                      updatedAt: "2026-06-21T10:00:00.000Z",
+                    },
+                    version: {
+                      id: "episode-character-version-1",
+                      previewUrl: "",
+                      metadata: {
+                        label: "任小野",
+                        description: "黑发短衣，警觉克制。",
+                        prompt: "角色设定图提示词",
+                      },
+                    },
+                  },
+                ],
+                scenes: [
+                  {
+                    asset: {
+                      id: "episode-scene-commit-1",
+                      updatedAt: "2026-06-21T10:00:00.000Z",
+                    },
+                    version: {
+                      id: "episode-scene-version-1",
+                      previewUrl: "",
+                      metadata: {
+                        label: "闵婶家门前",
+                        description: "傍晚微光，旧木门与土墙。",
+                        prompt: "场景概念图提示词",
+                      },
+                    },
+                  },
+                ],
+                props: [
+                  {
+                    asset: {
+                      id: "episode-prop-commit-1",
+                      updatedAt: "2026-06-21T10:00:00.000Z",
+                    },
+                    version: {
+                      id: "episode-prop-version-1",
+                      previewUrl: "",
+                      metadata: {
+                        label: "饭食",
+                        description: "旧布包裹的热饭。",
+                        prompt: "道具展示图提示词",
+                      },
+                    },
+                  },
+                ],
+              },
+              storyboards: [
+                {
+                  id: "shot-commit-1",
+                  shotId: "shot-commit-1",
+                  episodeId: "episode-commit-1",
+                  sortOrder: 0,
+                  title: "分镜 1",
+                  description: "后端摘要",
+                },
+              ],
+            },
+          };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-commit-1", title: "第 1 集", sequence: 1, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野递出饭食。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野递出饭食。",
+            commitPayload: {
+              scriptText: "任小野递出饭食。",
+              characters: [
+                {
+                  characterName: "任小野",
+                  characterDescription: "黑发短衣，警觉克制。",
+                  characterImagePrompt: "角色设定图提示词",
+                },
+              ],
+              scenes: [
+                {
+                  sceneName: "闵婶家门前",
+                  sceneDescription: "傍晚微光，旧木门与土墙。",
+                  sceneImagePrompt: "场景概念图提示词",
+                },
+              ],
+              props: [
+                {
+                  propName: "饭食",
+                  propDescription: "旧布包裹的热饭。",
+                  propImagePrompt: "道具展示图提示词",
+                },
+              ],
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "任小野递出饭食",
+                  dialogue: "麻烦您了",
+                  imagePrompt: "静态图片提示词：任小野递出饭食，旧木门前，傍晚微光。",
+                  videoPrompt: "动态视频提示词：中景固定镜头，任小野递出饭食。",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(commitCalls.length, 1);
+    assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
+    assert.equal(workbench.ui.selectedEpisodeId, "episode-commit-1");
+    assert.equal(workbench.ui.museScopeMode, "storyboard");
+    assert.equal(
+      workbench.ui.customEpisodes.find((episode) => episode.id === "episode-commit-1")?.createdAt,
+      "2026/06/22",
+    );
+    assert.equal(workbench.ui.importedAssets.character[0]?.name, "任小野");
+    assert.equal(workbench.ui.importedAssets.scene[0]?.name, "闵婶家门前");
+    assert.equal(workbench.ui.importedAssets.prop[0]?.name, "饭食");
+    assert.equal(workbench.ui.episodeWorkbenchContextLoadedEpisodeId, "episode-commit-1");
+    assert.equal(workbench.ui.episodeStoryboardMap["episode-commit-1"]?.length, 1);
+    assert.equal(workbench.ui.episodeStoryboardMap["episode-commit-1"]?.[0]?.generationState?.imagePrompt, "静态图片提示词：任小野递出饭食，旧木门前，傍晚微光。");
+    assert.match(String(workbench.ui.episodeStoryboardMap["episode-commit-1"]?.[0]?.generationState?.videoPrompt ?? ""), /【分镜1】/);
+    assert.match(String(workbench.ui.episodeStoryboardMap["episode-commit-1"]?.[0]?.generationState?.videoPrompt ?? ""), /任小野递出饭食/);
+    assert.match(String(workbench.ui.episodeStoryboardMap["episode-commit-1"]?.[0]?.generationState?.videoPrompt ?? ""), /麻烦您了/);
+    assert.equal(workbench.ui.selectedStoryboardId, workbench.ui.episodeStoryboardMap["episode-commit-1"]?.[0]?.id ?? null);
+  });
+
+  it("keeps locally hydrated scene and prop assets when workbench reload returns empty buckets", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId) {
+          return {
+            body: {
+              episode: {
+                id: "episode-commit-2",
+                projectId,
+                title: "第 2 集",
+              },
+              assets: {
+                characters: [],
+                scenes: [
+                  {
+                    asset: { id: "episode-scene-commit-2", updatedAt: "2026-06-21T10:00:00.000Z" },
+                    version: {
+                      id: "episode-scene-version-2",
+                      metadata: {
+                        label: "黑山密林",
+                        description: "傍晚迷雾压住林线。",
+                        prompt: "场景概念图提示词",
+                      },
+                    },
+                  },
+                ],
+                props: [
+                  {
+                    asset: { id: "episode-prop-commit-2", updatedAt: "2026-06-21T10:00:00.000Z" },
+                    version: {
+                      id: "episode-prop-version-2",
+                      metadata: {
+                        label: "机械腿残骸",
+                        description: "沾着泥水和黑血。",
+                        prompt: "道具展示图提示词",
+                      },
+                    },
+                  },
+                ],
+              },
+              storyboards: [
+                {
+                  id: "shot-commit-2",
+                  shotId: "shot-commit-2",
+                  episodeId: "episode-commit-2",
+                  sortOrder: 0,
+                  title: "分镜 1",
+                  description: "动态视频提示词",
+                },
+              ],
+            },
+          };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [{ id: "episode-commit-2", title: "第 2 集", sequence: 2, status: "draft", storyboardCount: 1 }],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+        async getEpisodeWorkbench() {
+          return {
+            data: {
+              episode: { id: "episode-commit-2", episodeId: "episode-commit-2", projectId: "project-1", title: "第 2 集" },
+              project: { id: "project-1", projectId: "project-1" },
+              assetsByType: { character: [], scene: [], prop: [] },
+            },
+          };
+        },
+        async listGenerationConfig() {
+          return { uploadLimits: {} };
+        },
+        async listStoryboards() {
+          return {
+            items: [],
+          };
+        },
+        async getStoryboardConversationHistory() {
+          return { items: [] };
+        },
+        async listGenerationTasks() {
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 2 集",
+        singleEpisodeScript: "任小野把机械腿残骸掷向食人花树。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野把机械腿残骸掷向食人花树。",
+            commitPayload: {
+              scriptText: "任小野把机械腿残骸掷向食人花树。",
+              scenes: [
+                {
+                  sceneName: "黑山密林",
+                  sceneDescription: "傍晚迷雾压住林线。",
+                  sceneImagePrompt: "场景概念图提示词",
+                },
+              ],
+              props: [
+                {
+                  propName: "机械腿残骸",
+                  propDescription: "沾着泥水和黑血。",
+                  propImagePrompt: "道具展示图提示词",
+                },
+              ],
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "任小野把机械腿残骸掷向食人花树。",
+                  dialogue: "别过来。",
+                  imagePrompt: "静态图片提示词",
+                  videoPrompt: "动态视频提示词",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.importedAssets.scene[0]?.name, "黑山密林");
+    assert.equal(workbench.ui.importedAssets.prop[0]?.name, "机械腿残骸");
+    assert.equal(workbench.ui.episodeStoryboardMap["episode-commit-2"]?.[0]?.description, "动态视频提示词");
+    assert.equal(workbench.ui.episodeStoryboardMap["episode-commit-2"]?.[0]?.generationState?.videoPrompt, "动态视频提示词");
+  });
+
   it("renders live script return and incremental AI storyboard tables while loading", () => {
     const html = renderProductionWorkbench({
       state: {
@@ -23079,14 +24855,19 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /single-episode-ai-preview loading/);
-    assert.match(html, /single-episode-ai-live-output/);
+    assert.doesNotMatch(html, /single-episode-ai-live-output/);
     assert.match(html, /饭食/);
-    assert.match(html, /propName/);
-    assert.match(html, /DeepSeek .*实时返回/);
+    assert.match(html, /旧布包裹/);
+    assert.match(html, /道具名称/);
+    assert.doesNotMatch(html, /AI .*实时返回/);
     assert.match(html, /single-episode-ai-table-card characters/);
     assert.match(html, /single-episode-ai-table-card scenes/);
     assert.match(html, /single-episode-ai-table-card props/);
     assert.match(html, /single-episode-ai-table-card storyboards/);
+    assert.ok(
+      html.indexOf("single-episode-ai-table-card scenes") <
+        html.indexOf("single-episode-ai-table-card characters"),
+    );
   });
 
   it("allows the full AI storyboard generation preview to scroll and wraps script text", () => {
@@ -23097,9 +24878,23 @@ describe("production workbench project tab", () => {
 
     assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?overflow:\s*hidden;/);
     assert.match(css, /\.single-episode-ai-preview\s*{[\s\S]*?height:\s*100%;[\s\S]*?overflow-y:\s*auto;/);
-    assert.match(css, /\.single-episode-ai-script-text\s*{[\s\S]*?max-height:\s*none;/);
-    assert.match(css, /\.single-episode-ai-script-text div\s*{[\s\S]*?white-space:\s*pre-wrap;[\s\S]*?word-break:\s*break-word;/);
+    assert.match(css, /\.single-episode-ai-script-text\s*{[\s\S]*?min-height:\s*min\(14rem,\s*28vh\);[\s\S]*?max-height:\s*min\(32rem,\s*56vh\);[\s\S]*?resize:\s*vertical;/);
+    assert.match(css, /\.single-episode-ai-script-text div\s*{[\s\S]*?max-height:\s*none;[\s\S]*?height:\s*100%;/);
+    assert.match(css, /\.single-episode-ai-live-output pre,\s*\.single-episode-ai-script-text div\s*{[\s\S]*?white-space:\s*pre-wrap;[\s\S]*?word-break:\s*break-word;/);
     assert.match(css, /\.single-episode-ai-table-stack\s*{[\s\S]*?overflow-y:\s*visible;/);
+  });
+
+  it("keeps AI storyboard stream rendering throttled to avoid freezing the page", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS\s*=\s*450/);
+    assert.match(source, /SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS\s*=\s*220/);
+    assert.match(source, /scheduleSingleEpisodeAiTableSync\(workbench,\s*stage\)/);
+    assert.doesNotMatch(source, /shouldRenderSingleEpisodeAiPreviewImmediately/);
+    assert.doesNotMatch(source, /syncSingleEpisodeAiAssetTable\(workbench,\s*data\.stage\);\s*}\s*workbench\.ui\.singleEpisodeAiPreview\.activeStage/s);
   });
 
   it("renders chapter storyboard rows from backend-defined columns", () => {
@@ -23202,6 +24997,152 @@ describe("production workbench project tab", () => {
     assert.match(html, /无台词，内心OS/);
     assert.match(html, /出租屋内，屏幕弹窗。/);
     assert.match(html, /键盘敲击，屏幕弹窗。/);
+  });
+
+  it("renders structured scene tables in the ready AI storyboard preview", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+        }),
+        singleEpisodeAiPreview: {
+          status: "ready",
+          assetPromptSteps: [
+            { stage: "scene", title: "场景提示词生成", rawResponseText: '{"scenes":[{"sceneName":"闵婶家门前"}]}' },
+          ],
+          data: {
+            displayTables: {
+              script: { title: "剧本", rows: [{ scriptContent: "任小野托付妹妹。", scriptRawContent: "任小野托付妹妹。" }] },
+              characters: { title: "角色", rows: [] },
+              scenes: { title: "场景", rows: [{ sceneName: "闵婶家门前", sceneDescription: "傍晚微光，旧木门与土墙。" }] },
+              props: { title: "道具", rows: [] },
+              storyboards: {
+                title: "分镜",
+                rows: [{ plot: "递出饭食", dialogue: "麻烦您了", imagePrompt: "旧木门前", videoPrompt: "中景固定镜头" }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    assert.match(html, /single-episode-ai-table-card scenes/);
+    assert.match(html, /场景名称/);
+    assert.match(html, /闵婶家门前/);
+    assert.match(html, /傍晚微光，旧木门与土墙/);
+  });
+
+  it("infers ready preview scene rows from storyboard video prompts when explicit scene rows are missing", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+        }),
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            displayTables: {
+              script: { title: "剧本", rows: [{ scriptContent: "黄昏时分，城门口人来人往。", scriptRawContent: "黄昏时分，城门口人来人往。" }] },
+              characters: { title: "角色", rows: [] },
+              scenes: { title: "场景", rows: [] },
+              props: { title: "道具", rows: [] },
+              storyboards: {
+                title: "分镜",
+                rows: [{
+                  plot: "黄昏时分，城门口人来人往。",
+                  dialogue: "无台词，仅动作。",
+                  imagePrompt: "黄昏城门口，天边火红晚霞如血。",
+                  videoPrompt: "【分镜1】\n【场景分析】\n场景名称：黄昏城门口\n承接：无\n过渡：硬切\n情绪意图：建立世界氛围\n【镜头列表】\n【镜头1】0-3秒 转场: 硬切 镜头类型: 全景/平视 画面描述:\n城门口人群缓慢走动，任小野站在光里。",
+                }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    assert.match(html, /single-episode-ai-table-card scenes/);
+    assert.match(html, /黄昏城门口/);
+    assert.match(html, /建立世界氛围|城门口人群缓慢走动/);
+    assert.doesNotMatch(html, /暂无数据/);
+  });
+
+  it("keeps inferred scene rows after ready-state asset table sync when scene raw output is empty", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "黄昏时分，城门口人来人往。", rawText: "黄昏时分，城门口人来人往。" } };
+          yield { event: "asset_done", data: { stage: "scene", title: "场景提示词生成", text: "" } };
+          yield { event: "asset_done", data: { stage: "character", title: "角色提示词生成", text: '{"characters":[{"characterName":"任小野","characterDescription":"旧布短衣"}]}' } };
+          yield { event: "asset_done", data: { stage: "prop", title: "道具提示词生成", text: '{"props":[{"propName":"切割刀","propDescription":"旧刀"}]}' } };
+          yield {
+            event: "complete",
+            data: {
+              preview: {
+                scriptText: "黄昏时分，城门口人来人往。",
+                rawMarkdown: {
+                  scene: "",
+                  shot: "{\"storyboards\":[{\"plot\":\"黄昏时分，城门口人来人往。\",\"dialogue\":\"无台词，仅动作。\",\"imagePrompt\":\"黄昏城门口，天边火红晚霞如血。\",\"videoPrompt\":\"【分镜1】\\n【场景分析】\\n场景名称：黄昏城门口\\n承接：无\\n过渡：硬切\\n情绪意图：建立世界氛围\\n【镜头列表】\\n【镜头1】0-3秒 转场: 硬切 镜头类型: 全景/平视 画面描述:\\n城门口人群缓慢走动，任小野站在光里。\"}]}",
+                },
+                commitPayload: {
+                  scriptText: "黄昏时分，城门口人来人往。",
+                  scenes: [],
+                  characters: [{ characterName: "任小野", characterDescription: "旧布短衣" }],
+                  props: [{ propName: "切割刀", propDescription: "旧刀" }],
+                  storyboards: [{ plot: "黄昏时分，城门口人来人往。", videoPrompt: "【分镜1】\n【场景分析】\n场景名称：黄昏城门口" }],
+                },
+                displayTables: {},
+              },
+            },
+          };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          singleEpisodeName: "第 1 集",
+          singleEpisodeScript: "黄昏时分，城门口人来人往。",
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "confirm-single-episode" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    const sceneRows = workbench.ui.singleEpisodeAiPreview.data?.displayTables?.scenes?.rows ?? [];
+    assert.ok(sceneRows.length >= 1);
+    assert.equal(sceneRows[0]?.sceneName, "黄昏城门口");
   });
 
 });
@@ -23699,6 +25640,176 @@ describe("storyboard state", () => {
     assert.equal(merged[0].generationState.videoPrompt, fullVideoPrompt);
     assert.match(merged[0].generationState.videoPrompt, /BEGIN_SYNCED_DYNAMIC_VIDEO_PROMPT/);
     assert.match(merged[0].generationState.videoPrompt, /END_SYNCED_DYNAMIC_VIDEO_PROMPT/);
+  });
+
+  it("treats fullwidth scene analysis descriptions as storyboard video prompts", () => {
+    const fullVideoPrompt = [
+      "【场景分析】场景：（城门口/黄昏，火红晚霞，暖色光线）",
+      "【镜头1】0.0-3.0秒 转场：淡入 镜头：中近景/平视/固定镜头",
+      "画面描述：任小野站在小草身旁，抬头看向天边。",
+      "主体动作：任小野护住小草，随后转身走向城门。",
+      "音效：环境音（风声、人群声）",
+    ].join("\n");
+
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      id: "shot-fullwidth-description",
+      description: fullVideoPrompt,
+    });
+
+    assert.equal(storyboard.description, fullVideoPrompt);
+    assert.equal(storyboard.generationState.videoPrompt, fullVideoPrompt);
+    assert.equal(storyboard.generationState.prompt, fullVideoPrompt);
+  });
+
+  it("prefers the fuller persisted dynamic video prompt when refresh data includes the complete storyboard content", () => {
+    const fullVideoPrompt = [
+      "【分镜1】",
+      "【场景分析】",
+      "任小野把机械腿残骸掷向食人花树，小荆后撤半步。",
+      "【镜头列表】",
+      "【镜头1】0-3秒 中景跟拍，机械腿残骸旋转飞出。",
+    ].join("\n");
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        videoPromptDraft: {
+          mode: "video",
+          prompt: "任小野把机械腿残骸掷向食人花树。",
+        },
+        generationState: {
+          prompt: "任小野把机械腿残骸掷向食人花树。",
+          imagePrompt: "",
+          videoPrompt: "任小野把机械腿残骸掷向食人花树。",
+        },
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        videoPromptDraft: {
+          mode: "video",
+          prompt: fullVideoPrompt,
+        },
+        generationState: {
+          prompt: fullVideoPrompt,
+          imagePrompt: "",
+          videoPrompt: fullVideoPrompt,
+        },
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.equal(merged[0].generationState.prompt, fullVideoPrompt);
+    assert.equal(merged[0].generationState.videoPrompt, fullVideoPrompt);
+    assert.equal(merged[0].description, fullVideoPrompt);
+    assert.match(merged[0].generationState.videoPrompt, /【镜头1】0-3秒/);
+  });
+
+  it("updates the storyboard card description when refreshed data has the full dynamic video prompt", () => {
+    const truncatedTail = [
+      "主体动作：任小野护住小草，随后转身走向城门。",
+      "音效：环境音（风声、人群声）",
+    ].join("\n");
+    const fullVideoPrompt = [
+      "【场景分析】场景：（城门口/黄昏，火红晚霞，暖色光线）",
+      "【镜头1】0.0-3.0秒 转场：淡入 镜头：中近景/平视/固定镜头",
+      "画面描述：任小野站在小草身旁，抬头看向天边。",
+      truncatedTail,
+    ].join("\n");
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        description: truncatedTail,
+        sceneAnalysis: truncatedTail,
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        description: fullVideoPrompt,
+        sceneAnalysis: fullVideoPrompt,
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.equal(merged[0].description, fullVideoPrompt);
+    assert.equal(merged[0].sceneAnalysis, fullVideoPrompt);
+    assert.match(merged[0].description, /【场景分析】/);
+    assert.match(merged[0].description, /【镜头1】0\.0-3\.0秒/);
+  });
+
+  it("preserves a locally edited dynamic video prompt during storyboard refresh", () => {
+    const current = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        videoPromptDraft: {
+          mode: "video",
+          prompt: "后端持久化提示词",
+        },
+        generationState: {
+          prompt: "我手动改过的本地提示词",
+          imagePrompt: "",
+          videoPrompt: "我手动改过的本地提示词",
+        },
+      },
+    ];
+    const next = [
+      {
+        id: "storyboard-1",
+        index: 1,
+        title: "1",
+        status: "draft",
+        imageStatus: "empty",
+        videoStatus: "empty",
+        linkedShotId: "shot-1",
+        videoPromptDraft: {
+          mode: "video",
+          prompt: "【分镜1】\n后端刷新回来的完整动态视频提示词",
+        },
+        generationState: {
+          prompt: "【分镜1】\n后端刷新回来的完整动态视频提示词",
+          imagePrompt: "",
+          videoPrompt: "【分镜1】\n后端刷新回来的完整动态视频提示词",
+        },
+      },
+    ];
+
+    const merged = syncStoryboards(current, next);
+
+    assert.equal(merged[0].generationState.prompt, "我手动改过的本地提示词");
+    assert.equal(merged[0].generationState.videoPrompt, "我手动改过的本地提示词");
   });
 
   it("preserves storyboard-local video thumbnails when backend refreshes the same video", () => {

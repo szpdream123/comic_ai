@@ -2919,12 +2919,27 @@ describe("phone auth dev server", () => {
       assert.equal(textChatGateway.calls.length, 4);
       assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[基础改编任务\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[题材包：玄幻修仙\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[情绪包：男频热血\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：角色一致性禁忌\]/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /按玄幻修仙风格改编/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /节奏强、冲突硬/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /请按分镜表输出/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /以下【改写要求】必须作为上方任务说明的一部分执行/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /通用禁忌：/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免角色姓名、身份、年龄、外貌、服装、性格前后不一致/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /请把小说原文改写/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /纯文本剧本/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /JSON 对象/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /scriptText/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /改写要求/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /题材看点：/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /情绪看点：/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /通用禁忌：/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[小说原文\]/);
+      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("按玄幻修仙风格改编") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬"));
+      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定"));
+      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("任小野把小草托付给闵婶子"));
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景默认提示词/);
       assert.match(textChatGateway.calls[2]?.prompt ?? "", /角色默认提示词/);
       assert.match(textChatGateway.calls[3]?.prompt ?? "", /分镜默认提示词/);
@@ -2933,6 +2948,363 @@ describe("phone auth dev server", () => {
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("appends the admin default taboo package to creator preview prompts", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE storyboard_prompt_packages
+        SET is_default = false,
+            is_global_default = false
+        WHERE package_type = 'taboo'
+          AND deleted_at IS NULL
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO storyboard_prompt_packages (
+          id, name, code, package_type, audience, tags, prompt_content, key_points,
+          negative_prompt, applicable_scene, output_type, can_stack, max_select_count,
+          is_default, is_global_default, is_recommended, sort_order, status, remark,
+          created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, 'taboo', NULL, '[]'::jsonb, $4, '[]'::jsonb,
+          NULL, '[]'::jsonb, NULL, true, NULL,
+          true, false, false, 9999, 'enabled', '', NOW(), NOW()
+        )
+        ON CONFLICT (code) DO NOTHING
+      `,
+      [
+        "55555555-5555-4555-8555-555555555555",
+        "通用小说转剧本",
+        "universal_script",
+        "请把小说原文改写为可继续生成分镜的纯文本剧本。请只返回一个 JSON 对象。",
+      ],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scriptText: "任小野把小草托付给闵婶子。",
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138216");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-no-default-taboo-leak",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview no default taboo leak",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(previewResponse.status, 200);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[基础改编任务\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[题材包：玄幻修仙\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[情绪包：男频热血\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用小说转剧本\]/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /请把小说原文改写为可继续生成分镜的纯文本剧本/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /请只返回一个 JSON 对象/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：角色一致性禁忌\]/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("appends global default taboo packages to creator script analysis prompts", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scriptText: "任小野把小草托付给闵婶子。",
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138216");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-script-analysis-with-global-taboo",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI script analysis with global taboo",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const analysisResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-script-analysis`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(analysisResponse.status, 200);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：角色一致性禁忌\]/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免角色姓名、身份、年龄、外貌、服装、性格前后不一致/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses the current default templates from each prompt list for preview generation", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE scene_prompt_templates
+        SET is_default = false
+        WHERE deleted_at IS NULL
+          AND stage = 'split'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO scene_prompt_templates (
+          id, name, code, stage, model_family, tags, variables, json_schema,
+          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
+        )
+        VALUES
+          ($1, $2, $3, 'split', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
+        ON CONFLICT (code) DO NOTHING
+      `,
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "自定义默认场景模板",
+        "custom_scene_default",
+        "后台列表默认场景模板",
+      ],
+    );
+    await db.query(
+      `
+        UPDATE character_prompt_templates
+        SET is_default = false
+        WHERE deleted_at IS NULL
+          AND stage = 'extract'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO character_prompt_templates (
+          id, name, code, stage, model_family, tags, variables, chunk_min_chars,
+          chunk_max_chars, overlap_chars, json_schema, prompt_content, is_default,
+          sort_order, status, remark, created_at, updated_at
+        )
+        VALUES
+          ($1, $2, $3, 'extract', 'general', '[]'::jsonb, '[]'::jsonb, 3000, 8000, 500, '', $4, true, 9999, 'enabled', '', NOW(), NOW())
+        ON CONFLICT (code) DO NOTHING
+      `,
+      [
+        "33333333-3333-4333-8333-333333333333",
+        "自定义默认角色模板",
+        "custom_character_default",
+        "后台列表默认角色模板",
+      ],
+    );
+    await db.query(
+      `
+        UPDATE prop_prompt_templates
+        SET is_default = false
+        WHERE deleted_at IS NULL
+          AND stage = 'extract'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO prop_prompt_templates (
+          id, name, code, stage, model_family, tags, variables, json_schema,
+          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
+        )
+        VALUES
+          ($1, $2, $3, 'extract', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
+        ON CONFLICT (code) DO NOTHING
+      `,
+      [
+        "22222222-2222-4222-8222-222222222222",
+        "自定义默认道具模板",
+        "custom_prop_default",
+        "后台列表默认道具模板",
+      ],
+    );
+    await db.query(
+      `
+        UPDATE shot_prompt_templates
+        SET is_default = false
+        WHERE deleted_at IS NULL
+          AND stage = 'outline'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO shot_prompt_templates (
+          id, name, code, stage, model_family, tags, variables, json_schema,
+          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
+        )
+        VALUES
+          ($1, $2, $3, 'outline', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
+        ON CONFLICT (code) DO NOTHING
+      `,
+      [
+        "44444444-4444-4444-8444-444444444444",
+        "自定义默认分镜模板",
+        "custom_shot_default",
+        "后台列表默认分镜模板",
+      ],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scriptText: "任小野把小草托付给闵婶子。",
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138213");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-template-code-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview template code project",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+
+      assert.equal(previewResponse.status, 200);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /后台列表默认场景模板/);
+      assert.match(textChatGateway.calls[2]?.prompt ?? "", /后台列表默认角色模板/);
+      assert.match(textChatGateway.calls[3]?.prompt ?? "", /后台列表默认道具模板/);
+      assert.match(textChatGateway.calls[4]?.prompt ?? "", /后台列表默认分镜模板/);
     } finally {
       await server.close();
     }
@@ -3111,6 +3483,11 @@ describe("phone auth dev server", () => {
       assert.ok(text.indexOf('"type":"asset_delta"') < text.indexOf('"type":"complete"'));
       assert.match(text, /"type":"script_prompt"/);
       assert.match(text, /"type":"asset_prompt"/);
+      assert.doesNotMatch(text, /\[基础改编任务\]/);
+      assert.doesNotMatch(text, /\[题材包：玄幻修仙\]/);
+      assert.doesNotMatch(text, /\[情绪包：男频热血\]/);
+      assert.doesNotMatch(text, /\[通用禁忌包：通用质量禁忌\]/);
+      assert.doesNotMatch(text, /\[通用禁忌包：角色一致性禁忌\]/);
       assert.match(text, /场景提示词生成/);
       assert.match(text, /角色提示词生成/);
       assert.match(text, /分镜提示词生成/);
@@ -7362,11 +7739,21 @@ describe("phone auth dev server", () => {
       new URL("../../../../../scripts/run-phone-auth-dev-server.mjs", import.meta.url),
       "utf8",
     );
+    const httpOnlyLauncherScript = await readFile(
+      new URL("../../../../../scripts/run-phone-auth-http-only.mjs", import.meta.url),
+      "utf8",
+    );
 
     assert.match(packageJson, /"dev:phone-auth"/);
+    assert.match(packageJson, /"dev:http-only"/);
+    assert.match(packageJson, /"dev:phone-auth:http-only"/);
     assert.match(packageJson, /--import tsx/);
     assert.match(packageJson, /run-phone-auth-dev-server\.mjs/);
     assert.match(launcherScript, /phone-auth-dev-server\.ts/);
+    assert.match(httpOnlyLauncherScript, /GENERATION_QUEUE_REQUIRED = "false"/);
+    assert.match(httpOnlyLauncherScript, /BULLMQ_OUTBOX_DISPATCHER_ENABLED = "false"/);
+    assert.match(httpOnlyLauncherScript, /BULLMQ_WORKERS_ENABLED = "false"/);
+    assert.match(httpOnlyLauncherScript, /run-phone-auth-dev-server\.mjs/);
   });
 
   it("routes phone-auth startup through the full dev stack when generation queues are required", async () => {
@@ -7385,8 +7772,10 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /run-creator-dev-stack\.mjs/);
     assert.match(launcherScript, /CREATOR_DEV_STACK_MANAGED/);
     assert.match(launcherScript, /generation-outbox and generation-worker/);
+    assert.match(launcherScript, /npm run dev:http-only/);
     assert.match(devStackScript, /GENERATION_QUEUE_REQUIRED\s*\?\?=\s*"true"/);
     assert.match(devStackScript, /CREATOR_DEV_STACK_MANAGED:\s*"true"/);
+    assert.match(devStackScript, /npm run dev:http-only/);
   });
 
   it("uses an import-based launcher that starts the dev server explicitly", async () => {

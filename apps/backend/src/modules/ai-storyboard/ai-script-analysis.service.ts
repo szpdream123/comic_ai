@@ -19,6 +19,7 @@ export interface AiScriptAnalysisInput {
     emotionPrompt?: string;
     tabooPrompt?: string;
   };
+  signal?: AbortSignal;
 }
 
 export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLike }) {
@@ -34,16 +35,18 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           prompt,
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
-          responseFormat: "json_object",
+          responseFormat: "text",
           maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+          signal: input.signal,
         })
       : completeAsStream(deps.gateway, {
           model: "deepseek-chat",
           prompt,
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
-          responseFormat: "json_object",
+          responseFormat: "text",
           maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+          signal: input.signal,
         });
 
     for await (const chunk of stream) {
@@ -73,24 +76,11 @@ async function* completeAsStream(
 
 function buildScriptAnalysisPrompt(input: AiScriptAnalysisInput) {
   return [
-    "请把用户提供的文本改写为可直接保存的剧本文字。",
-    "请只返回一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。",
-    "JSON 对象必须包含 `scriptText` 字段，值为最终可直接保存的剧本文字。",
-    "不要生成角色、场景、道具或分镜清单。",
-    "如果原文包含多集，请保留或补全“第1集/第2集”这类集数标题，方便系统按集保存。",
-    "",
-    "【题材包】",
     input.packages.genrePrompt || "",
-    "",
-    "【情绪包】",
     input.packages.emotionPrompt || "",
-    "",
-    "【通用禁忌包】",
     input.packages.tabooPrompt || "",
-    "",
-    "【原始文案】",
     input.scriptText,
-  ].join("\n");
+  ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
 function resolveScriptText(raw: string) {

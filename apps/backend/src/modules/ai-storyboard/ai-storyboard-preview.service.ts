@@ -6,6 +6,7 @@ import {
 } from "../model-gateway/text-model-gateway.service.ts";
 
 export const DEEPSEEK_STORYBOARD_MAX_TOKENS = 384000;
+const LIVE_ECHO_CHUNK_SIZE = 32;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
 
@@ -37,6 +38,7 @@ export interface TextChatGatewayLike {
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<string>;
   streamJson?(input: {
     model: string;
@@ -45,6 +47,7 @@ export interface TextChatGatewayLike {
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    signal?: AbortSignal;
   }): AsyncIterable<string>;
 }
 
@@ -65,6 +68,7 @@ export interface AiStoryboardPreviewInput {
     propPrompt?: string;
     shotPrompt?: string;
   };
+  signal?: AbortSignal;
 }
 
 export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewayLike }) {
@@ -92,8 +96,9 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       prompt: scriptPrompt,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
-      responseFormat: "json_object",
+      responseFormat: "text",
       maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+      signal: input.signal,
     })) {
       scriptRaw += delta;
       yield { type: "script_delta", text: delta };
@@ -142,6 +147,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       createdByUserId: input.createdByUserId,
       responseFormat: "text",
       maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+      signal: input.signal,
     })) {
       raw += delta;
       yield { type: "asset_delta", stage, title, text: delta };
@@ -165,6 +171,7 @@ export function createTextModelChatGateway(deps: {
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    signal?: AbortSignal;
   }) {
     const payloadHash = sha256(input.prompt);
     const requestKey = `ai-storyboard:${input.projectId ?? "none"}:${randomUUID()}`;
@@ -193,6 +200,7 @@ export function createTextModelChatGateway(deps: {
         payloadHash,
         payloadSummary: "ai storyboard preview text generation",
         providerOperation: textModelGatewayOperationNames.chatCompletions,
+        signal: input.signal,
       },
     );
   }
@@ -229,6 +237,7 @@ async function* streamJsonText(input: {
   createdByUserId?: string | null;
   responseFormat?: "json_object" | "text";
   maxTokens?: number;
+  signal?: AbortSignal;
 }) {
   if (input.gateway.streamJson) {
     for await (const delta of input.gateway.streamJson({
@@ -238,6 +247,7 @@ async function* streamJsonText(input: {
       createdByUserId: input.createdByUserId,
       responseFormat: input.responseFormat,
       maxTokens: input.maxTokens,
+      signal: input.signal,
     })) {
       yield* splitTextForLiveEcho(delta);
     }
@@ -250,38 +260,27 @@ async function* streamJsonText(input: {
     createdByUserId: input.createdByUserId,
     responseFormat: input.responseFormat,
     maxTokens: input.maxTokens,
+    signal: input.signal,
   }));
 }
 
 function* splitTextForLiveEcho(text: string) {
-  for (const char of text) {
-    yield char;
+  const normalized = String(text ?? "");
+  if (!normalized) {
+    return;
+  }
+  for (let index = 0; index < normalized.length; index += LIVE_ECHO_CHUNK_SIZE) {
+    yield normalized.slice(index, index + LIVE_ECHO_CHUNK_SIZE);
   }
 }
 
 function buildScriptPrompt(input: AiStoryboardPreviewInput) {
   return [
-    "请把小说原文改写为可继续生成分镜的纯文本剧本。",
-    "请只返回一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。",
-    "JSON 对象必须包含 `scriptText` 字段，值为改写后的完整剧本文字。",
-    "如需补充分段，可额外返回 `scriptBeats` 数组，但 `scriptText` 仍必须完整可读，方便系统后续继续生成角色、场景、道具和分镜提示词。",
-    "剧本要保留完整剧情推进、对白、旁白、动作和情绪变化，方便下一步生成场景、人物、道具和分镜词。",
-    "以下【改写要求】必须作为上方任务说明的一部分执行，再读取【小说原文】进行改写。",
-    "",
-    "[改写要求]",
-    "",
-    "题材看点：",
     input.packages.genrePrompt || "",
-    "",
-    "情绪看点：",
     input.packages.emotionPrompt || "",
-    "",
-    "通用禁忌：",
     input.packages.tabooPrompt || "",
-    "",
-    "[小说原文]",
     input.scriptText,
-  ].join("\n");
+  ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
 function buildScenePrompt(scriptText: string, input: AiStoryboardPreviewInput) {
@@ -302,45 +301,11 @@ function buildShotPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
 
 function buildAssetStagePrompt(stage: AssetPromptStage, template: string, scriptText: string) {
   const rendered = renderPromptTemplate(template, scriptText).trim();
-  const basePrompt = rendered || `【剧本】\n${scriptText}`;
-  return [basePrompt, buildAssetStageMarkdownContract(stage)].filter(Boolean).join("\n\n");
-}
-
-function buildAssetStageMarkdownContract(stage: AssetPromptStage) {
-  const config = {
-    scene: {
-      heading: "【剧本场景列表】",
-      columns: "| 场景名称 | 场景描述 | 场景图片提示词 |",
-    },
-    character: {
-      heading: "【剧本角色列表】",
-      columns: "| 角色名称 | 角色描述 | 角色图片提示词 |",
-    },
-    prop: {
-      heading: "【剧本道具列表】",
-      columns: "| 道具名称 | 道具描述 | 道具图片提示词 |",
-    },
-    shot: {
-      heading: "【剧本分镜列表】",
-      columns: "| 镜号 | 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
-    },
-  } satisfies Record<AssetPromptStage, { heading: string; columns: string }>;
-  const selected = config[stage];
-  return [
-    "【返回协议】",
-    "请严格使用 Markdown 返回，并且只返回一个 ```markdown 代码块，不要 JSON，不要额外解释。",
-    `代码块内先输出标题 ${selected.heading}。`,
-    "随后紧接一个 Markdown 表格，列顺序固定如下：",
-    selected.columns,
-    stage === "shot"
-      ? "| --- | --- | --- | --- | --- |"
-      : "| --- | --- | --- |",
-    "表格每一行都必须可直接交给前端展示和解析，不要输出多余段落。",
-  ].join("\n");
+  return rendered || `【剧本】\n${scriptText}`;
 }
 
 function normalizePreview(scriptText: string, promptResult: Record<string, unknown>) {
-  const scenes = arrayOfRecords(promptResult.scenes).map(normalizeSceneRecord);
+  const scenes = resolvePreviewScenes(promptResult).map(normalizeSceneRecord);
   const characters = arrayOfRecords(promptResult.characters).map(normalizeCharacterRecord);
   const props = arrayOfRecords(promptResult.props).map(normalizePropRecord);
   const segmentStoryboards = normalizeSegmentStoryboardRecords(promptResult);
@@ -491,6 +456,35 @@ function normalizePreview(scriptText: string, promptResult: Record<string, unkno
       storyboards,
     },
   };
+}
+
+function resolvePreviewScenes(promptResult: Record<string, unknown>) {
+  const directScenes = arrayOfRecords(promptResult.scenes);
+  if (directScenes.length > 0) {
+    return directScenes;
+  }
+  return inferSceneRecordsFromSegments(promptResult);
+}
+
+function inferSceneRecordsFromSegments(promptResult: Record<string, unknown>) {
+  const rows: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  arrayOfRecords(promptResult.segments).forEach((segment, segmentIndex) => {
+    const sceneName = resolveSegmentSceneName(segment, segmentIndex);
+    const sceneDescription = buildSceneDisplayDescription(objectRecord(segment.scene_analysis));
+    const sceneImagePrompt = buildStoryboardAssetTableSection(objectRecord(segment.asset_table));
+    const normalizedName = text(sceneName).trim();
+    if (!normalizedName || seen.has(normalizedName)) {
+      return;
+    }
+    seen.add(normalizedName);
+    rows.push({
+      sceneName: normalizedName,
+      sceneDescription,
+      sceneImagePrompt: text(sceneImagePrompt).trim() || sceneDescription,
+    });
+  });
+  return rows;
 }
 
 function buildShotDirection(storyboard: Record<string, unknown>) {

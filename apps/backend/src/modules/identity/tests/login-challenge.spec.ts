@@ -58,13 +58,13 @@ describe("login challenge schema assumptions", () => {
 });
 
 describe("login challenges", () => {
-  it("normalizes mainland phones to +86", async () => {
+  it("normalizes mainland phones to 11-digit storage format", async () => {
     const challenge = await createLoginChallenge({
       phone: "13800138000",
       now: new Date("2026-05-09T10:00:00.000Z"),
     });
 
-    assert.equal(challenge.phoneE164, "+8613800138000");
+    assert.equal(challenge.phoneE164, "13800138000");
     assert.equal(challenge.status, "issued");
   });
 

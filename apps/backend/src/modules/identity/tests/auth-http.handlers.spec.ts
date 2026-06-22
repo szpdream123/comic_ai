@@ -40,7 +40,7 @@ describe("auth HTTP handlers", () => {
     });
 
     assert.equal(verified.status, 200);
-    assert.equal(verified.body.user.phone, "+8613800138000");
+    assert.equal(verified.body.user.phone, "13800138000");
     assert.equal(verified.cookies?.some((cookie) => cookie.includes("HttpOnly")), true);
   });
 

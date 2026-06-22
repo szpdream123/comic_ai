@@ -59,6 +59,9 @@ const ASSET_TABS = [
   { id: "other", icon: "◈", label: "其它", search: "搜索你所需要的视频" },
 ];
 
+const SINGLE_EPISODE_AI_TABLE_ORDER = ["script", "scenes", "characters", "props", "storyboards"];
+const SINGLE_EPISODE_AI_LIVE_CELL_TEXT_LIMIT = 1200;
+
 const ASSET_LIBRARY_CONFIG = {
   character: {
     label: "角色",
@@ -230,7 +233,9 @@ export function renderProjectDetail(context = {}) {
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
-        ${episodeWorkbenchContent}
+        <section class="workbench-main workspace-mode episode-workbench-main">
+          ${episodeWorkbenchContent}
+        </section>
       </section>
       ${renderAssetExtractModal({
         activeTab: ui.scriptTab,
@@ -1176,19 +1181,28 @@ function resolveEpisodeWorkbenchAssetLibrary(ui) {
     ui.episodeWorkbenchContext?.episodeAssets ??
     null;
   if (contextAssets && typeof contextAssets === "object") {
+    const contextCharacterAssets = mapEpisodeWorkbenchContextAssets(
+      resolveEpisodeWorkbenchAssetEntries(contextAssets, "character"),
+      "character",
+    );
+    const contextSceneAssets = mapEpisodeWorkbenchContextAssets(
+      resolveEpisodeWorkbenchAssetEntries(contextAssets, "scene"),
+      "scene",
+    );
+    const contextPropAssets = mapEpisodeWorkbenchContextAssets(
+      resolveEpisodeWorkbenchAssetEntries(contextAssets, "prop"),
+      "prop",
+    );
     return {
-      character: mapEpisodeWorkbenchContextAssets(
-        resolveEpisodeWorkbenchAssetEntries(contextAssets, "character"),
-        "character",
-      ),
-      scene: mapEpisodeWorkbenchContextAssets(
-        resolveEpisodeWorkbenchAssetEntries(contextAssets, "scene"),
-        "scene",
-      ),
-      prop: mapEpisodeWorkbenchContextAssets(
-        resolveEpisodeWorkbenchAssetEntries(contextAssets, "prop"),
-        "prop",
-      ),
+      character: contextCharacterAssets.length
+        ? contextCharacterAssets
+        : applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
+      scene: contextSceneAssets.length
+        ? contextSceneAssets
+        : applyConversationPreviewFallback(importedAssets.scene ?? [], ui.assetConversationHistory ?? {}),
+      prop: contextPropAssets.length
+        ? contextPropAssets
+        : applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
     };
   }
 
@@ -1619,7 +1633,7 @@ function renderEpisodeHubCard(episode, ui) {
       <div class="episode-card-body">
         <div class="episode-card-copy">
           <h3 title="${escapeHtml(episode.title)}">${escapeHtml(truncateEpisodeTitle(episode.title))}</h3>
-          <p>${escapeHtml(formatEpisodeHubDate(episode.createdAt ?? "2026/05/22"))}</p>
+          <p>${escapeHtml(formatEpisodeHubDate(episode.createdAt ?? episode.createdAtMs ?? ""))}</p>
         </div>
         <div class="episode-card-actions">
           <button
@@ -1713,7 +1727,7 @@ export function renderSingleEpisodeAiPreview(ui) {
         </div>
         <div class="single-episode-ai-loading-bar"><span></span></div>
         <div class="single-episode-ai-preview loading" aria-live="polite" data-single-episode-ai-preview-surface="true">
-          ${renderSingleEpisodeAiLiveOutput(preview)}
+          ${renderSingleEpisodeAiSentPrompts(preview)}
           ${renderSingleEpisodeAiLiveTables(preview)}
         </div>
       </section>
@@ -1758,9 +1772,9 @@ export function renderSingleEpisodeAiPreview(ui) {
             </div>
             <p>创建中，请稍候，完成后会自动进入分镜工作台。</p>
           </div>
-          ${renderSingleEpisodeAiSentPrompts(preview)}
+          ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
           <div class="single-episode-ai-table-stack">
-            ${["script", "characters", "scenes", "props", "storyboards"]
+            ${SINGLE_EPISODE_AI_TABLE_ORDER
               .map((key) => renderSingleEpisodeAiTable(resolveSingleEpisodeAiRenderTables(preview)[key], key))
               .join("")}
           </div>
@@ -1785,9 +1799,9 @@ export function renderSingleEpisodeAiPreview(ui) {
           <h3>AI智能分镜</h3>
         </div>
         </div>
-        ${renderSingleEpisodeAiSentPrompts(preview)}
+        ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
         <div class="single-episode-ai-table-stack">
-          ${["script", "characters", "scenes", "props", "storyboards"]
+          ${SINGLE_EPISODE_AI_TABLE_ORDER
             .map((key) => renderSingleEpisodeAiTable(tables[key], key))
             .join("")}
         </div>
@@ -1799,14 +1813,14 @@ export function renderSingleEpisodeAiPreview(ui) {
 function renderManualScriptAnalysisPreview(preview) {
   const isLoading = preview.status === "loading";
   const isError = preview.status === "error";
-  const title = isError ? "分析失败" : isLoading ? "DeepSeek 正在分析剧本" : "DeepSeek 剧本分析结果";
+  const title = isError ? "分析失败" : isLoading ? "AI 正在分析剧本" : "AI 剧本分析结果";
   const saveDisabled = isLoading || isError || !resolveManualScriptAnalysisText(preview).trim();
   return `
-    <section class="single-episode-ai-overlay manual-script-analysis-overlay" role="dialog" aria-modal="true" aria-label="DeepSeek 剧本分析">
+    <section class="single-episode-ai-overlay manual-script-analysis-overlay" role="dialog" aria-modal="true" aria-label="AI 剧本分析">
       <div class="single-episode-ai-overlay-top manual-script-analysis-top">
         <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
         <div class="single-episode-ai-top-status" aria-live="polite">
-          <p>DeepSeek Script</p>
+          <p>AI Script</p>
           <h3>${escapeHtml(title)}</h3>
         </div>
         <div class="single-episode-ai-overlay-actions">
@@ -1843,16 +1857,19 @@ function renderManualScriptAnalysisOutput(preview) {
         <strong>剧本</strong>
         <span>${preview.status === "loading" ? "实时返回中" : "已完成"}</span>
       </header>
-      <pre>${escapeHtml(text || "等待 DeepSeek 返回剧本内容...")}</pre>
+      <pre>${escapeHtml(text || "等待 AI 返回剧本内容...")}</pre>
     </article>
   `;
 }
 
 function resolveManualScriptAnalysisText(preview) {
   return normalizeNovelStyleScriptText(
-    preview?.scriptRawText ||
-    preview?.scriptText ||
-    preview?.data?.scriptText ||
+    resolveSingleEpisodeAiScriptPayloadText(
+      preview?.scriptRawText ||
+      preview?.scriptText ||
+      preview?.data?.scriptText ||
+      "",
+    ) ||
     "",
   );
 }
@@ -1867,21 +1884,6 @@ function resolveSingleEpisodeAiLoadingTitle(stage) {
   return "剧本生成中";
 }
 
-function renderSingleEpisodeAiLiveOutput(preview) {
-  const liveOutput = resolveSingleEpisodeAiLiveOutput(preview);
-  if (!liveOutput.text) {
-    return "";
-  }
-  return `
-    <article class="single-episode-ai-live-output">
-      <header>
-        <strong>${escapeHtml(liveOutput.title)}</strong>
-      </header>
-      <pre>${escapeHtml(truncateSingleEpisodeAiPreviewText(liveOutput.text, 12000))}</pre>
-    </article>
-  `;
-}
-
 function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
   const text = String(value ?? "");
   if (!maxChars || text.length <= maxChars) {
@@ -1890,36 +1892,9 @@ function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
   return `…已截断，仅展示最近 ${maxChars} 字符…\n${text.slice(-maxChars)}`;
 }
 
-function resolveSingleEpisodeAiLiveOutput(preview) {
-  const stage = String(preview?.activeStage ?? "script");
-  const stageConfig = {
-    script: { label: "剧本" },
-    scene: { label: "场景" },
-    character: { label: "角色" },
-    prop: { label: "道具" },
-    shot: { label: "分镜" },
-    prompt: { label: "分镜" },
-  };
-  const config = stageConfig[stage] ?? stageConfig.script;
-  if (stage === "script") {
-    return {
-      title: `DeepSeek ${config.label}`,
-      text: String(preview?.scriptRawText ?? preview?.scriptText ?? ""),
-    };
-  }
-  const assetStage = stage === "prompt" ? "shot" : stage;
-  const step = Array.isArray(preview?.assetPromptSteps)
-    ? preview.assetPromptSteps.find((item) => String(item?.stage ?? "") === assetStage)
-    : null;
-  return {
-    title: `DeepSeek ${config.label}`,
-    text: String(step?.responseText ?? step?.rawResponseText ?? ""),
-  };
-}
-
 function renderSingleEpisodeAiLiveTables(preview) {
   const tables = resolveSingleEpisodeAiRenderTables(preview);
-  const renderedTables = ["script", "characters", "scenes", "props", "storyboards"]
+  const renderedTables = SINGLE_EPISODE_AI_TABLE_ORDER
     .map((key) => renderSingleEpisodeAiTable(tables[key], key, { previewMode: "live" }))
     .filter(Boolean)
     .join("");
@@ -1945,76 +1920,124 @@ function resolveSingleEpisodeAiRenderTables(preview) {
   return candidates.find((tables) => tables && typeof tables === "object") ?? {};
 }
 
-function renderSingleEpisodeAiSentPrompts(preview) {
-  const promptBlocks = renderSingleEpisodeAiAssetPromptBlocks(preview);
-  const shotResponseBlock = renderSingleEpisodeAiShotResponseBlock(preview);
-  if (!promptBlocks && !shotResponseBlock) {
-    return "";
-  }
-  return `
-    <section class="single-episode-ai-sent-prompts">
-      ${promptBlocks}
-      ${shotResponseBlock}
-    </section>
-  `;
+function renderSingleEpisodeAiSentPrompts(preview, options = {}) {
+  return "";
 }
 
-function renderSingleEpisodeAiAssetPromptBlocks(preview) {
-  const stageConfigs = [
-    { stage: "scene", label: "场景提示词" },
-    { stage: "character", label: "角色提示词" },
-    { stage: "prop", label: "道具提示词" },
-    { stage: "shot", label: "分镜提示词" },
-  ];
+function renderSingleEpisodeAiPromptBlocks(preview, options = {}) {
+  const mode = String(options.mode ?? "loading");
+  const promptEntries = resolveSingleEpisodeAiPromptEntries(preview, options);
+  if (!promptEntries.length) {
+    return "";
+  }
+  if (mode !== "ready") {
+    return "";
+  }
+  return promptEntries
+    .map((entry) => `
+      <section class="single-episode-ai-sent-prompt" data-prompt-stage="${escapeAttr(entry.stage)}-prompt">
+        <header>
+          <strong>${escapeHtml(entry.label)}</strong>
+        </header>
+        <div class="single-episode-ai-sent-prompt-body">
+          <div class="single-episode-ai-sent-block single-episode-ai-sent-block-prompt">
+            <p>发送给 DeepSeek 的完整提示词</p>
+            <pre>${escapeHtml(entry.promptText)}</pre>
+          </div>
+        </div>
+      </section>
+    `)
+    .join("");
+}
+
+function renderSingleEpisodeAiResponseBlocks(preview, options = {}) {
+  const mode = String(options.mode ?? "loading");
+  const readyStage = mode === "ready"
+    ? resolveSingleEpisodeAiReadyResponseStage(preview)
+    : "";
   const steps = Array.isArray(preview?.assetPromptSteps) ? preview.assetPromptSteps : [];
-  return stageConfigs
-    .map((config) => {
-      const step = steps.find((item) => String(item?.stage ?? "") === config.stage);
-      const promptText = String(step?.promptText ?? "").trim();
-      if (!promptText) {
+  return steps
+    .map((step) => {
+      const stage = String(step?.stage ?? "").trim();
+      const responseText = String(step?.rawResponseText ?? step?.responseText ?? "").trim();
+      if (!responseText) {
+        return "";
+      }
+      if (stage === "shot" && shouldHideSingleEpisodeAiShotRawResponse(responseText)) {
+        return "";
+      }
+      if (mode === "ready" && stage !== readyStage) {
         return "";
       }
       return `
-        <details class="single-episode-ai-sent-prompt" data-prompt-stage="${escapeAttr(config.stage)}" ${config.stage === "character" ? "open" : ""}>
-          <summary>
-            <strong>${escapeHtml(config.label)}</strong>
-            <span>发送给 DeepSeek 的完整提示词</span>
-          </summary>
+        <section class="single-episode-ai-sent-prompt" data-prompt-stage="${escapeAttr(stage)}-response">
+          ${mode === "ready"
+            ? `
+              <header>
+                <strong>${escapeHtml(resolveSingleEpisodeAiPromptStageLabel(stage, "response"))}</strong>
+              </header>
+            `
+            : ""}
           <div class="single-episode-ai-sent-prompt-body">
-            <div class="single-episode-ai-sent-block">
-              <strong>${escapeHtml(config.label)}</strong>
-              <pre>${escapeHtml(promptText)}</pre>
+            <div class="single-episode-ai-sent-block single-episode-ai-sent-block-response">
+              ${mode === "ready" ? "<p>DeepSeek 完整返回</p>" : ""}
+              ${renderSingleEpisodeAiResponseMarkdown(responseText)}
             </div>
           </div>
-        </details>
+        </section>
       `;
     })
     .filter(Boolean)
     .join("");
 }
 
-function renderSingleEpisodeAiShotResponseBlock(preview) {
-  const shotStep = Array.isArray(preview?.assetPromptSteps)
-    ? preview.assetPromptSteps.find((item) => String(item?.stage ?? "") === "shot")
-    : null;
-  const rawResponseText = String(shotStep?.rawResponseText ?? shotStep?.responseText ?? "").trim();
-  if (!rawResponseText || shouldHideSingleEpisodeAiShotRawResponse(rawResponseText)) {
-    return "";
+function resolveSingleEpisodeAiReadyResponseStage(preview) {
+  const steps = Array.isArray(preview?.assetPromptSteps) ? preview.assetPromptSteps : [];
+  const sceneStep = steps.find((step) => String(step?.stage ?? "").trim() === "scene");
+  const sceneText = String(sceneStep?.rawResponseText ?? sceneStep?.responseText ?? "").trim();
+  return sceneText ? "scene" : "";
+}
+
+function resolveSingleEpisodeAiPromptEntries(preview) {
+  const steps = Array.isArray(preview?.assetPromptSteps) ? preview.assetPromptSteps : [];
+  const entries = steps
+    .map((step) => {
+      const stage = String(step?.stage ?? "").trim();
+      const promptText = String(step?.promptText ?? "").trim();
+      if (!stage || !promptText) {
+        return null;
+      }
+      return {
+        stage,
+        promptText,
+        label: resolveSingleEpisodeAiPromptStageLabel(stage, "prompt"),
+      };
+    })
+    .filter(Boolean);
+  if (entries.length > 0) {
+    return entries;
   }
-  return `
-    <details class="single-episode-ai-sent-prompt" data-prompt-stage="shot-response" open>
-      <summary>
-        <strong>分镜返回原文</strong>
-        <span>DeepSeek 完整返回</span>
-      </summary>
-      <div class="single-episode-ai-sent-prompt-body">
-        <div class="single-episode-ai-sent-block">
-          <strong>分镜返回原文</strong>
-          <pre>${escapeHtml(rawResponseText)}</pre>
-        </div>
-      </div>
-    </details>
-  `;
+  const fallbackPromptText = String(preview?.promptText ?? "").trim();
+  if (!fallbackPromptText) {
+    return [];
+  }
+  return [{
+    stage: "shot",
+    promptText: fallbackPromptText,
+    label: resolveSingleEpisodeAiPromptStageLabel("shot", "prompt"),
+  }];
+}
+
+function resolveSingleEpisodeAiPromptStageLabel(stage, kind = "prompt") {
+  const stageLabelMap = {
+    scene: "场景",
+    character: "角色",
+    prop: "道具",
+    shot: "分镜",
+    prompt: "分镜",
+  };
+  const label = stageLabelMap[String(stage ?? "").trim()] ?? "内容";
+  return kind === "response" ? `${label}返回原文` : `发送${label}提示词`;
 }
 
 function shouldHideSingleEpisodeAiShotRawResponse(rawResponseText) {
@@ -2029,6 +2052,126 @@ function shouldHideSingleEpisodeAiShotRawResponse(rawResponseText) {
   } catch {
     return false;
   }
+}
+
+function renderSingleEpisodeAiResponseMarkdown(rawText) {
+  const blocks = parseSingleEpisodeAiResponseMarkdownBlocks(rawText);
+  if (!blocks.length) {
+    return `<pre>${renderSingleEpisodeAiSafeInlineMarkup(rawText)}</pre>`;
+  }
+  return `
+    <div class="single-episode-ai-response-markdown">
+      ${blocks.map((block) => {
+        if (block.type === "table") {
+          return `
+            <div class="single-episode-ai-response-table-wrap">
+              <table class="single-episode-ai-response-table">
+                <thead>
+                  <tr>${block.header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr>
+                </thead>
+                <tbody>
+                  ${block.rows.map((row) => `<tr>${row.map((cell) => `<td>${renderSingleEpisodeAiSafeInlineMarkup(cell)}</td>`).join("")}</tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          `;
+        }
+        return `<pre>${renderSingleEpisodeAiSafeInlineMarkup(block.text)}</pre>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderSingleEpisodeAiSafeInlineMarkup(value) {
+  return escapeHtml(String(value ?? ""))
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br>");
+}
+
+function parseSingleEpisodeAiResponseMarkdownBlocks(rawText) {
+  const normalized = extractSingleEpisodeAiResponseMarkdownBody(rawText);
+  if (!normalized) {
+    return [];
+  }
+  const lines = normalized.split("\n");
+  const blocks = [];
+  let textBuffer = [];
+  let tableBuffer = [];
+
+  const flushText = () => {
+    const text = textBuffer.join("\n").trim();
+    if (text) {
+      blocks.push({ type: "text", text });
+    }
+    textBuffer = [];
+  };
+
+  const flushTable = () => {
+    if (!tableBuffer.length) {
+      return;
+    }
+    const table = parseSingleEpisodeAiResponseMarkdownTable(tableBuffer.join("\n"));
+    if (table) {
+      blocks.push({ type: "table", ...table });
+    } else {
+      textBuffer.push(...tableBuffer);
+    }
+    tableBuffer = [];
+  };
+
+  for (const line of lines) {
+    if (line.includes("|")) {
+      flushText();
+      tableBuffer.push(line);
+      continue;
+    }
+    flushTable();
+    textBuffer.push(line);
+  }
+
+  flushTable();
+  flushText();
+  return blocks;
+}
+
+function extractSingleEpisodeAiResponseMarkdownBody(rawText) {
+  const trimmed = String(rawText ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const fenced = trimmed.match(/^```(?:markdown|md|text)?\s*([\s\S]*?)\s*```$/i);
+  return String(fenced?.[1] ?? trimmed).replace(/\r\n?/g, "\n");
+}
+
+function parseSingleEpisodeAiResponseMarkdownTable(rawText) {
+  const lines = String(rawText ?? "")
+    .split("\n")
+    .map((line) => String(line ?? "").trim())
+    .filter((line) => line.includes("|"));
+  if (lines.length < 2) {
+    return null;
+  }
+  let header = null;
+  const rows = [];
+  for (const line of lines) {
+    const cells = line
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell, index, array) => !(index === array.length - 1 && cell === ""));
+    if (cells.length < 2) {
+      continue;
+    }
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell) || !cell)) {
+      continue;
+    }
+    if (!header) {
+      header = cells;
+      continue;
+    }
+    rows.push(cells);
+  }
+  return header && rows.length ? { header, rows } : null;
 }
 
 function renderSingleEpisodeAiTable(table, key, options = {}) {
@@ -2083,10 +2226,10 @@ function resolveSingleEpisodeAiTableColumns(table, key) {
     return table.columns;
   }
   const fixedColumns = {
-    characters: ["角色名称（角色名称/服装描述）", "角色描述（仅含年龄、国籍、性别、服装、脸部特征、细节特征）", "角色组合提示词（左栏+右栏共同组成）"],
-    scenes: ["场景名称（角色名称/天气和时间描述）", "场景描述（仅含空间结构、建筑风格、建筑细节、光影规则、氛围基调、关键道具）", "场景组合提示词（左栏+右栏共同组成）"],
-    props: ["道具名称", "道具描述（仅含外观、颜色、细节特征）", "道具组合提示词（左栏+右栏共同组成）"],
-    storyboards: ["镜号", "分镜剧情", "对话/旁白", "时长", "时间段", "转场", "景别/运镜", "静态图片提示词", "动态视频提示词（多镜头序列，每一分镜镜头总时长≤15s）", "分镜详细字段"],
+    characters: ["角色名称", "角色描述"],
+    scenes: ["场景名称", "场景描述"],
+    props: ["道具名称", "道具描述"],
+    storyboards: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
   };
   if (fixedColumns[key]) {
     return fixedColumns[key];
@@ -2096,8 +2239,17 @@ function resolveSingleEpisodeAiTableColumns(table, key) {
 
 function renderSingleEpisodeAiScriptText(table) {
   const rows = Array.isArray(table?.rows) ? table.rows : [];
-  const text = normalizeNovelStyleScriptText(rows
-    .map((row) => [row.scriptRawContent, row.scriptContent, row.dialogue].filter(Boolean).join("\n"))
+  const text = resolveScriptDisplayText(rows
+    .map((row) => {
+      const scriptContent = resolveSingleEpisodeAiScriptPayloadText(row?.scriptContent);
+      const scriptRawContent = resolveSingleEpisodeAiScriptPayloadText(row?.scriptRawContent);
+      const dialogue = String(row?.dialogue ?? "").trim();
+      const parts = [scriptContent || scriptRawContent];
+      if (dialogue && dialogue !== scriptContent && dialogue !== scriptRawContent) {
+        parts.push(dialogue);
+      }
+      return parts.filter(Boolean).join("\n");
+    })
     .filter(Boolean)
     .join("\n\n"));
   if (!text.trim()) {
@@ -2114,30 +2266,182 @@ function renderSingleEpisodeAiScriptText(table) {
   `;
 }
 
+function resolveScriptDisplayText(value) {
+  return normalizeNovelStyleScriptText(value);
+}
+
 function hasSingleEpisodeAiLiveTableContent(table, key) {
   const rows = Array.isArray(table?.rows) ? table.rows : [];
   if (key === "script") {
-    return rows.some((row) => [row?.scriptRawContent, row?.scriptContent, row?.dialogue].some((value) => String(value ?? "").trim()));
+    return rows.some((row) => [
+      resolveSingleEpisodeAiScriptPayloadText(row?.scriptRawContent),
+      resolveSingleEpisodeAiScriptPayloadText(row?.scriptContent),
+      String(row?.dialogue ?? "").trim(),
+    ].some((value) => String(value ?? "").trim()));
   }
   return rows.some((row) =>
     Object.values(row ?? {}).some((value) => String(value ?? "").trim()),
   );
 }
 
+function resolveSingleEpisodeAiScriptPayloadText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  return extractScriptTextFromStructuredPayload(text) || text;
+}
+
+function extractScriptTextFromStructuredPayload(rawText) {
+  const trimmed = String(rawText ?? "").trim();
+  if (!trimmed || !/^(?:```(?:json)?\s*)?[\[{]/i.test(trimmed)) {
+    return "";
+  }
+  const candidates = [trimmed, extractSingleEpisodeAiResponseMarkdownBody(trimmed)]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const extracted = resolveStructuredScriptTextValue(parsed);
+      if (extracted) {
+        return extracted;
+      }
+    } catch {
+      const bestEffortText = extractScriptTextFromJsonLikeString(candidate);
+      if (bestEffortText) {
+        return bestEffortText;
+      }
+    }
+  }
+  return "";
+}
+
+function extractScriptTextFromJsonLikeString(rawText) {
+  const normalized = String(rawText ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const keyMatch = normalized.match(/"(?:scriptText|script_text|script|content|text)"\s*:\s*"/i);
+  if (!keyMatch || keyMatch.index == null) {
+    return "";
+  }
+  const startIndex = keyMatch.index + keyMatch[0].length;
+  return readJsonLikeStringValue(normalized, startIndex);
+}
+
+function readJsonLikeStringValue(sourceText, startIndex) {
+  const source = String(sourceText ?? "");
+  if (!source || startIndex >= source.length) {
+    return "";
+  }
+  let cursor = startIndex;
+  let value = "";
+  let escaped = false;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (escaped) {
+      value += decodeJsonLikeEscape(char, source[cursor + 1], source[cursor + 2], source[cursor + 3], source[cursor + 4]);
+      if (char === "u" && /^[0-9a-f]{4}$/i.test(source.slice(cursor + 1, cursor + 5))) {
+        cursor += 4;
+      }
+      escaped = false;
+      cursor += 1;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      cursor += 1;
+      continue;
+    }
+    if (char === "\"") {
+      return value.trim();
+    }
+    value += char;
+    cursor += 1;
+  }
+  return value.trim();
+}
+
+function decodeJsonLikeEscape(char, a, b, c, d) {
+  if (char === "n") {
+    return "\n";
+  }
+  if (char === "r") {
+    return "\r";
+  }
+  if (char === "t") {
+    return "\t";
+  }
+  if (char === "b") {
+    return "\b";
+  }
+  if (char === "f") {
+    return "\f";
+  }
+  if (char === "\"" || char === "\\" || char === "/") {
+    return char;
+  }
+  if (char === "u") {
+    const hex = `${a ?? ""}${b ?? ""}${c ?? ""}${d ?? ""}`;
+    if (/^[0-9a-f]{4}$/i.test(hex)) {
+      return String.fromCharCode(Number.parseInt(hex, 16));
+    }
+  }
+  return char ?? "";
+}
+
+function resolveStructuredScriptTextValue(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const directCandidates = [
+    payload?.scriptText,
+    payload?.script_text,
+    payload?.script,
+    payload?.content,
+    payload?.text,
+    payload?.data?.scriptText,
+    payload?.data?.script_text,
+    payload?.data?.script,
+    payload?.data?.content,
+    payload?.data?.text,
+    payload?.result?.scriptText,
+    payload?.result?.script_text,
+    payload?.result?.script,
+    payload?.result?.content,
+    payload?.result?.text,
+  ];
+  for (const candidate of directCandidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
 function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}) {
   const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   const valuesByKey = {
     script: [row.beatNo, row.scriptContent, row.characters, row.sceneHint, row.propHints, row.dialogue],
-    scenes: [row.sceneName, row.sceneDescription, row.sceneImagePrompt],
-    characters: [row.characterName, row.characterDescription, row.characterImagePrompt],
-    props: [row.propName, row.propDescription, row.propImagePrompt],
+    scenes: [row.sceneName, row.sceneDescription],
+    characters: [row.characterName, row.characterDescription],
+    props: [row.propName, row.propDescription],
     storyboards: columns.length === chapterStoryboardColumns.length && columns.every((column, index) => column === chapterStoryboardColumns[index])
-      ? [row.plot, row.dialogue, row.imagePrompt, row.videoPrompt]
-      : [row.shotNo, row.plot, row.dialogue, row.durationSec, row.timeRange, row.transition, row.shotDirection, row.imagePrompt, row.videoPrompt, row.shotDetails],
+      ? [row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt]
+      : [row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt],
   };
   const values = valuesByKey[key] ?? Object.values(row ?? {});
-  const maxCellChars = options.previewMode === "live" ? 900 : 0;
-  return `<tr>${values.map((value) => `<td>${escapeHtml(truncateSingleEpisodeAiPreviewText(value ?? "", maxCellChars))}</td>`).join("")}</tr>`;
+  return `<tr>${values.map((value) => `<td>${renderSingleEpisodeAiSafeInlineMarkup(resolveSingleEpisodeAiTableCellText(value, options))}</td>`).join("")}</tr>`;
+}
+
+function resolveSingleEpisodeAiTableCellText(value, options = {}) {
+  const text = String(value ?? "");
+  if (options.previewMode !== "live" || text.length <= SINGLE_EPISODE_AI_LIVE_CELL_TEXT_LIMIT) {
+    return text;
+  }
+  return `${text.slice(0, SINGLE_EPISODE_AI_LIVE_CELL_TEXT_LIMIT)}\n…生成中已省略部分内容，完成后显示完整文本…`;
 }
 
 const AI_PREVIEW_TABLE_TITLES = {
@@ -2286,13 +2590,14 @@ function resolvePackageType(item) {
 
 function getEpisodeHubEntries(state, ui) {
   if (Array.isArray(state?.projectDetail?.episodes)) {
+    const fallbackProjectCreatedAt = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "";
     const detailEpisodes = state.projectDetail.episodes.map((episode) => ({
       id: episode.id,
       title: episode.title,
       sequence: Number(episode.sequence ?? 0),
       status: episode.status === "ready" ? "已定稿" : "未定稿",
-      createdAt: episode.createdAt ?? "2026/05/22",
-      createdAtMs: getEpisodeCreatedAtValue(episode.createdAt),
+      createdAt: episode.createdAt ?? fallbackProjectCreatedAt,
+      createdAtMs: getEpisodeCreatedAtValue(episode.createdAt ?? fallbackProjectCreatedAt),
       storyboardCount: episode.storyboardCount ?? 0,
       previewMedia: getEpisodePreviewMedia(episode.id, ui, episode.previewUrl ?? null),
     }));
@@ -2309,8 +2614,8 @@ function getEpisodeHubEntries(state, ui) {
           title: "剧一",
           sequence: 0,
           status: "未定稿",
-          createdAt: "2026/05/22",
-          createdAtMs: getEpisodeCreatedAtValue("2026/05/22"),
+          createdAt: state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "",
+          createdAtMs: getEpisodeCreatedAtValue(state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? ""),
           storyboardCount: state.shots.length,
           previewMedia: getEpisodePreviewMedia("episode-primary", ui, null),
         },
@@ -2347,7 +2652,7 @@ function getEpisodeHubEntries(state, ui) {
       return null;
     }
 
-  const primaryCreatedAt = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "2026/05/22";
+  const primaryCreatedAt = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "";
 
   return {
     id: "episode-primary",
@@ -2454,7 +2759,7 @@ function isVideoSource(value) {
 function formatEpisodeHubDate(value) {
   const createdAtMs = getEpisodeCreatedAtValue(value);
   if (!createdAtMs) {
-    return "2026/05/22";
+    return "";
   }
   const date = new Date(createdAtMs);
   const year = date.getFullYear();

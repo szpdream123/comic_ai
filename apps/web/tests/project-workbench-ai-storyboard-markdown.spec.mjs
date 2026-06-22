@@ -103,6 +103,12 @@ const chapterTableResponse = `
 | 叶焚野盯着裂纹屏幕，房间被冷白光照亮。 | 叶焚野（烦躁低声）：“这单再不结，房租都扛不住了。” | 狭窄出租屋内，裂纹显示器冷白光映照叶焚野疲惫脸庞，桌面凌乱，写实压抑氛围 | 【场景分析】\\n场景：（出租屋内部/昼夜不明）\\n承接：无\\n过渡：硬切开场 |
 `;
 
+const standaloneSceneCombinedPromptTableResponse = `
+| 场景名称（角色名称/天气和时间描述） | 场景描述（仅含空间结构、建筑风格、建筑细节、光影规则、氛围基调、关键道具） | 场景组合提示词（左栏+右栏共同组成） |
+| --- | --- | --- |
+| 黄昏城门口/晚霞如血 | 天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。 | 黄昏城门口，天边火红晚霞如血，人群熙攘。 |
+`;
+
 describe("single episode ai storyboard markdown parsing", () => {
   it("parses markdown sections into storyboard draft rows", () => {
     const rows = parseSingleEpisodeAiStoryboardMarkdownForTest(markdownShotResponse);
@@ -237,5 +243,63 @@ describe("single episode ai storyboard markdown parsing", () => {
     assert.match(html, /智能手机\/裂痕黑壳/);
     assert.match(html, /叶焚野盯着裂纹屏幕/);
     assert.match(html, /single-episode-ai-table-card storyboards chapter-storyboards/);
+  });
+
+  it("parses standalone scene tables with combined prompt headers", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield {
+            event: "script_done",
+            data: {
+              text: "任小野黄昏时分走到城门口。",
+              rawText: "任小野黄昏时分走到城门口。",
+            },
+          };
+          yield { event: "asset_done", data: { stage: "scene", title: "场景提示词生成", text: standaloneSceneCombinedPromptTableResponse } };
+          yield { event: "asset_done", data: { stage: "character", title: "角色提示词生成", text: '{"characters":[]}' } };
+          yield { event: "asset_done", data: { stage: "prop", title: "道具提示词生成", text: '{"props":[]}' } };
+          yield { event: "asset_done", data: { stage: "shot", title: "分镜提示词生成", text: '{"storyboards":[{"shotNo":1,"plot":"任小野走近城门。","dialogue":"","imagePrompt":"黄昏城门口。","videoPrompt":"【场景分析】黄昏城门口。"}]}' } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野黄昏时分走到城门口。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "古风", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "压抑", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    const preview = workbench.ui.singleEpisodeAiPreview;
+    const sceneRow = preview.data.displayTables.scenes.rows[0];
+
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.data.displayTables.scenes.rows.length, 1);
+    assert.equal(sceneRow.sceneName, "黄昏城门口/晚霞如血");
+    assert.match(sceneRow.sceneDescription, /天边火红晚霞如血/);
+    assert.match(sceneRow.sceneImagePrompt, /黄昏城门口/);
   });
 });

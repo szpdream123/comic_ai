@@ -52,7 +52,7 @@ export class TencentSmsProvider implements SmsProvider {
   }) {
     try {
       const response = await this.options.client.SendSms({
-        PhoneNumberSet: [input.phoneE164],
+        PhoneNumberSet: [input.phoneE164.startsWith("+86") ? input.phoneE164 : `+86${input.phoneE164}`],
         SmsSdkAppId: this.options.sdkAppId,
         SignName: this.options.signName,
         TemplateId: this.options.templateId,

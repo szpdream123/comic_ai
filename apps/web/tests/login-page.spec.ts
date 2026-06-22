@@ -9,6 +9,7 @@ describe("login page shell", () => {
     assert.match(html, /id="login-form"/);
     assert.match(html, /request-code-button/);
     assert.match(html, /verify-button/);
+    assert.match(html, /请输入11位手机号（不带\+86）/);
   });
 
   it("lets people switch between phone code login and password login", async () => {
@@ -171,6 +172,7 @@ describe("login page client flow", () => {
     assert.match(js, /sms_cooldown_active/);
     assert.match(js, /daily_sms_limit_exceeded/);
     assert.match(js, /sms_send_failed/);
+    assert.match(js, /请输入11位手机号，且不要带 \+86/);
   });
 
   it("disables the SMS button for a 60 second resend countdown after delivery", async () => {

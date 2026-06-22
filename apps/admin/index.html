@@ -529,7 +529,10 @@
       .table-wrap.compact table { min-width: 760px; font-size: 12px; }
       .table-wrap.dense table { min-width: 900px; font-size: 12px; }
       .table-wrap.models table { min-width: 1040px; }
-      .table-wrap.users table { min-width: 900px; }
+      .table-wrap.users table {
+        min-width: 980px;
+        table-layout: auto;
+      }
       .table-wrap.settings table { min-width: 820px; }
       th, td {
         padding: 11px 12px;
@@ -561,7 +564,21 @@
       .table-wrap.dense td.actions,
       .table-wrap.dense th.actions { width: 132px; min-width: 132px; max-width: 132px; }
       .table-wrap.users td.actions,
-      .table-wrap.users th.actions { width: 96px; min-width: 96px; max-width: 96px; }
+      .table-wrap.users th.actions { width: 300px; min-width: 300px; max-width: 300px; }
+      .table-wrap.users th:nth-child(1),
+      .table-wrap.users td:nth-child(1) { width: 220px; }
+      .table-wrap.users th:nth-child(2),
+      .table-wrap.users td:nth-child(2) { width: 140px; }
+      .table-wrap.users th:nth-child(3),
+      .table-wrap.users td:nth-child(3) { width: 164px; }
+      .table-wrap.users th:nth-child(4),
+      .table-wrap.users td:nth-child(4) { width: 108px; }
+      .table-wrap.users th:nth-child(5),
+      .table-wrap.users td:nth-child(5),
+      .table-wrap.users th:nth-child(6),
+      .table-wrap.users td:nth-child(6) { width: 112px; }
+      .table-wrap.users th:nth-child(7),
+      .table-wrap.users td:nth-child(7) { width: 84px; }
       .tag {
         display: inline-flex;
         align-items: center;
@@ -593,6 +610,13 @@
       .table-wrap.users .user-edit-btn {
         min-width: 58px;
         padding-inline: 12px;
+      }
+      .table-wrap.users .actions-row {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+      .table-wrap.users .actions-row .btn {
+        min-width: 58px;
       }
       .user-action-grid {
         display: grid;
@@ -1187,7 +1211,12 @@
         selectedModelId: null,
         modelLoadError: "",
         users: [],
+        userTotal: 0,
         userFilters: { keyword: "", status: "all", accountType: "all" },
+        userModelRequestInline: {
+          expandedUserId: null,
+          rowsByUserId: {},
+        },
         userLoadError: "",
         membershipPlans: [],
         membershipLoadError: "",
@@ -1303,6 +1332,8 @@
 
       const app = document.getElementById("admin-app");
       const rememberedLoginStorageKey = "admin-login-remembered-credentials";
+      let userSearchDebounceTimer = null;
+      let userSearchRequestToken = 0;
 
       function readRememberedLogin() {
         try {
@@ -1639,14 +1670,19 @@
       async function loadUsers() {
         setPageLoading("users", true);
         try {
-          const result = await api("/api/admin/users?pageSize=100");
+          const keyword = String(state.userFilters?.keyword || "").trim();
+          const params = new URLSearchParams({ pageSize: "100" });
+          if (keyword) params.set("keyword", keyword);
+          const result = await api(`/api/admin/users?${params.toString()}`);
           state.users = result.data || [];
+          state.userTotal = Number(result.meta?.total || (result.data || []).length || 0);
           state.userLoadError = "";
           clearPageForbidden("users");
         } catch (error) {
           setPageForbidden("users", error);
           state.userLoadError = error.payload?.error?.message || "用户列表加载失败";
           state.users = [];
+          state.userTotal = 0;
         } finally {
           setPageLoading("users", false);
         }
@@ -1805,7 +1841,7 @@
       }
 
       const shotPromptTemplateFallback = [
-        { id: "shot-prompt-outline-default", name: "默认分镜大纲", code: "shot_outline_from_scene", stage: "outline", model_family: "general", tags: ["分镜大纲", "节奏", "JSON"], variables: ["{{script_scene}}"], json_schema: "shots[].shot_no, scene, action, emotion, visual_focus, prompt", prompt_content: "请根据输入剧本场景生成分镜大纲，输出每个镜头的剧情目标、动作、情绪、视觉重点和简要提示词。\n\n剧本内容：\n{{script_scene}}", is_default: true, sort_order: 400, status: "enabled", remark: "默认分镜大纲模板" },
+        { id: "shot-prompt-outline-default", name: "长篇故事精准分镜", code: "long_story_precise_breakdown", stage: "outline", model_family: "general", tags: ["长篇分镜", "节奏", "JSON"], variables: ["{{story_text}}"], json_schema: "shots[].shot_no, duration_seconds, plot_function, visual_content, shot_size, camera_move, action_expression, dialogue_voiceover, subtitle, sound_bgm, transition, hook_note", prompt_content: "请将输入剧情改写为节奏清晰、镜头目标明确的长篇故事分镜脚本，输出每个镜头的时长、剧情功能、视觉内容、景别、运镜、动作情绪、台词/旁白、字幕、音效和转场。\n\n剧情如下：\n{{story_text}}", is_default: true, sort_order: 900, status: "enabled", remark: "默认长篇故事精准分镜模板" },
       ];
       async function loadShotPromptTemplates() {
         try {
@@ -3051,6 +3087,10 @@
 
       const updateUserFilter = (key, value) => {
         state.userFilters = { ...(state.userFilters || {}), [key]: value };
+        if (key === "keyword") {
+          scheduleUserKeywordSearch();
+          return;
+        }
         refreshUserTable();
       };
 
@@ -3060,8 +3100,22 @@
         const count = document.getElementById("user-visible-count");
         if (body) body.innerHTML = userRowsHtml(visibleUsers);
         if (count) {
-          count.textContent = `显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}`;
+          const total = Number(state.userTotal || state.users.length || 0);
+          count.textContent = `显示 ${visibleUsers.length.toLocaleString()} / ${total.toLocaleString()}`;
         }
+      }
+
+      function scheduleUserKeywordSearch() {
+        refreshUserTable();
+        if (userSearchDebounceTimer) {
+          clearTimeout(userSearchDebounceTimer);
+        }
+        userSearchDebounceTimer = setTimeout(async () => {
+          const requestToken = ++userSearchRequestToken;
+          await loadUsers();
+          if (requestToken !== userSearchRequestToken) return;
+          refreshUserTable();
+        }, 180);
       }
 
       function bindUserFilterControls() {
@@ -3146,15 +3200,30 @@
           <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
           <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}</span>
         </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
-          <div class="table-wrap users dense"><table><thead><tr><th>前端用户</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
           ${userRowsHtml(visibleUsers)}
         </tbody></table></div>`;
       }
 
       function userRowsHtml(users) {
         return users.length
-          ? users.map((user) => userRow(user)).join("")
-          : `<tr><td colspan="6">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+          ? users.map((user) => `${userRow(user)}${userModelRequestInlineRow(user)}`).join("")
+          : `<tr><td colspan="8">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+      }
+
+      function userModelRequestInlineRow(user) {
+        const inlineState = state.userModelRequestInline || {};
+        if (inlineState.expandedUserId !== user.userId) return "";
+        const rowState = inlineState.rowsByUserId?.[user.userId];
+        let content = `<span class="metric-note">正在加载模型请求记录...</span>`;
+        if (rowState?.error) {
+          content = `<span class="error-text">${escapeHtml(rowState.error)}</span>`;
+        } else if (rowState?.loaded) {
+          content = renderUserModelRequestPanel(rowState.data || [], {
+            title: `模型请求记录（${escapeHtml(user.displayName || user.userId)}）`,
+          });
+        }
+        return `<tr class="user-model-request-inline-row"><td colspan="6"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
       }
 
       function renderMembershipPage() {
@@ -4086,7 +4155,68 @@
       function userRow(user) {
         const typeLabel = frontendAccountTypeLabel(user);
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
-        return `<tr><td>${user.displayName}<div class="metric-note">${user.phone || user.email || user.userId}</div></td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">编辑</button></td></tr>`;
+        const nextStatus = user.status === "active" ? "disabled" : "active";
+        const statusAction = nextStatus === "disabled" ? "disable" : "enable";
+        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用账户" : "启用账户"}</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>归档账户</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button></div></td></tr>`;
+      }
+
+      async function toggleUserModelRequestInline(userId) {
+        const inlineState = state.userModelRequestInline || { expandedUserId: null, rowsByUserId: {} };
+        if (inlineState.expandedUserId === userId) {
+          state.userModelRequestInline = {
+            ...inlineState,
+            expandedUserId: null,
+          };
+          refreshUserTable();
+          return;
+        }
+        state.userModelRequestInline = {
+          ...inlineState,
+          expandedUserId: userId,
+          rowsByUserId: {
+            ...(inlineState.rowsByUserId || {}),
+            [userId]: inlineState.rowsByUserId?.[userId] || {
+              loaded: false,
+              loading: true,
+              error: "",
+              data: [],
+            },
+          },
+        };
+        refreshUserTable();
+        const currentRowState = state.userModelRequestInline.rowsByUserId?.[userId];
+        if (currentRowState?.loaded || currentRowState?.loading) {
+          return;
+        }
+        try {
+          const result = await api(`/api/admin/users/${userId}/model-requests?pageSize=100`);
+          state.userModelRequestInline = {
+            ...(state.userModelRequestInline || {}),
+            rowsByUserId: {
+              ...(state.userModelRequestInline?.rowsByUserId || {}),
+              [userId]: {
+                loaded: true,
+                loading: false,
+                error: "",
+                data: result.data || [],
+              },
+            },
+          };
+        } catch (error) {
+          state.userModelRequestInline = {
+            ...(state.userModelRequestInline || {}),
+            rowsByUserId: {
+              ...(state.userModelRequestInline?.rowsByUserId || {}),
+              [userId]: {
+                loaded: false,
+                loading: false,
+                error: error.payload?.error?.message || "模型请求记录加载失败",
+                data: [],
+              },
+            },
+          };
+        }
+        refreshUserTable();
       }
 
       function openUserActionDrawer(userId) {
@@ -4107,20 +4237,32 @@
             <div><span>冻结积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <div class="user-action-grid">
-            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户</button>
-            <button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button>
+            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户与模型记录</button>
+            <button class="btn ghost" onclick="openUserModelRequestDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>只看模型记录</button>
             <button class="btn ghost" onclick="openCreditGrantDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动添加积分</button>
             <button class="btn ghost" onclick="openCreditDeductDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动扣减积分</button>
             <button class="btn ghost" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整到目标积分</button>
             ${isTeamUserAccount(user) ? `<button class="btn ghost" onclick="openTeamLimitDrawer('${user.userId}')" ${userActionAttrs(user, "teamLimit", "user.write")}>团队额度</button>` : ""}
-            <button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用账户" : "启用账户"}</button>
-            <button class="btn danger full-row" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>归档账户</button>
           </div>
         </aside>`;
       }
 
       function userDrawerHead(title, userId) {
         return `<div class="drawer-head"><div class="drawer-title-group"><button class="btn ghost drawer-back-btn" type="button" onclick="openUserActionDrawer('${userId}')">返回</button><h3>${title}</h3></div><button class="icon-btn" onclick="closeDrawer()">×</button></div>`;
+      }
+
+      async function loadUserModelRequestPanel(userId, elementId, pageSize = 100) {
+        const target = document.getElementById(elementId);
+        if (!target) return;
+        target.innerHTML = `<span class="metric-note">正在加载模型请求记录...</span>`;
+        try {
+          const modelRequestResult = await api(`/api/admin/users/${userId}/model-requests?pageSize=${pageSize}`);
+          target.innerHTML = renderUserModelRequestPanel(modelRequestResult.data || [], {
+            title: `模型请求记录（最近 ${Number(modelRequestResult.meta?.total || (modelRequestResult.data || []).length || 0)} 条）`,
+          });
+        } catch (err) {
+          target.innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型请求记录加载失败"}</span>`;
+        }
       }
 
       function risksPage() {
@@ -4694,11 +4836,11 @@
             error.textContent = err.payload?.error?.message || "查看完整联系方式失败";
           }
         });
+        loadUserModelRequestPanel(userId, "user-model-request-panel", 100).catch(() => undefined);
         try {
-          const [ledgerResult, subaccountsResult, modelRequestResult] = await Promise.all([
+          const [ledgerResult, subaccountsResult] = await Promise.all([
             api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
             api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
-            api(`/api/admin/users/${userId}/model-requests?pageSize=20`).catch(() => ({ data: [] })),
           ]);
           const creditSummary = renderCreditSummary(ledgerResult.summary || {});
           const ledgerRows = (ledgerResult.data || [])
@@ -4717,14 +4859,31 @@
             <h4 style="margin-top:14px;">关联子账户</h4>
             <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
           `;
-          document.getElementById("user-model-request-panel").innerHTML = renderUserModelRequestPanel(modelRequestResult.data || []);
         } catch (err) {
           document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
-          document.getElementById("user-model-request-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型请求记录加载失败"}</span>`;
         }
       }
 
-      function renderUserModelRequestPanel(logs) {
+      async function openUserModelRequestDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("模型请求记录", userId)}
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
+          <div class="check-list">
+            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>手机 / 邮箱</span><span>${user?.phone || user?.email || "-"}</span></div>
+            <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
+            <div><span>说明</span><span>这里展示用户调用 DeepSeek / 文本模型时的请求与返回正文</span></div>
+          </div>
+          <div id="user-model-request-drawer-panel" style="margin-top:16px;"><span class="metric-note">正在加载模型请求记录...</span></div>
+        </aside>`;
+        await loadUserModelRequestPanel(userId, "user-model-request-drawer-panel", 100);
+      }
+
+      function renderUserModelRequestPanel(logs, options = {}) {
+        const title = options.title || "模型请求记录";
         const rows = (logs || []).map((item) => {
           const usage = renderModelUsage(item.responseUsage);
           const requestBody = escapeHtml(JSON.stringify(item.requestBody || {}, null, 2));
@@ -4781,7 +4940,7 @@
         }).join("");
 
         return `
-          <h4>模型请求记录</h4>
+          <h4>${escapeHtml(title)}</h4>
           ${rows || '<div class="metric-note" style="margin-top:10px;">暂无该用户的模型请求记录</div>'}
         `;
       }
@@ -6492,6 +6651,11 @@
               sort_order: Number(form.get("sort_order") || 0),
               remark: String(form.get("remark") || ""),
             };
+            if (existing) {
+              payload.is_default = Boolean(existing.is_default || existing.isDefault);
+              payload.is_global_default = Boolean(existing.is_global_default || existing.isGlobalDefault);
+              payload.is_recommended = Boolean(existing.is_recommended || existing.isRecommended);
+            }
             if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("剧本提示词正文不得为空，建议不少于 20 字");
             await api(existing ? `/api/admin/storyboard-prompt/packages/${encodeURIComponent(existing.id)}` : "/api/admin/storyboard-prompt/packages", {
               method: existing ? "PUT" : "POST",
@@ -6539,7 +6703,14 @@
       async function setScriptPromptPackageDefault(packageId) {
         const existing = scriptPromptPackageById(packageId);
         if (!existing) return;
-        const payload = { ...existing, is_default: true, isDefault: true };
+        const isTaboo = (existing.package_type || existing.packageType) === "taboo";
+        const payload = {
+          ...existing,
+          is_default: true,
+          isDefault: true,
+          is_global_default: isTaboo,
+          isGlobalDefault: isTaboo,
+        };
         try {
           await api(`/api/admin/storyboard-prompt/packages/${encodeURIComponent(packageId)}`, {
             method: "PUT",
@@ -6557,7 +6728,13 @@
 
       function setDefaultInList(items, id, sameGroup) {
         return (items || []).map((item) => sameGroup(item)
-          ? { ...item, is_default: String(item.id) === String(id), isDefault: String(item.id) === String(id) }
+          ? {
+            ...item,
+            is_default: String(item.id) === String(id),
+            isDefault: String(item.id) === String(id),
+            is_global_default: (item.package_type || item.packageType) === "taboo" ? String(item.id) === String(id) : Boolean(item.is_global_default || item.isGlobalDefault),
+            isGlobalDefault: (item.package_type || item.packageType) === "taboo" ? String(item.id) === String(id) : Boolean(item.is_global_default || item.isGlobalDefault),
+          }
           : item);
       }
 
@@ -7965,6 +8142,8 @@
       window.openCreditSetBalanceDrawer = openCreditSetBalanceDrawer;
       window.openUserActionDrawer = openUserActionDrawer;
       window.openUserDetailDrawer = openUserDetailDrawer;
+      window.toggleUserModelRequestInline = toggleUserModelRequestInline;
+      window.openUserModelRequestDrawer = openUserModelRequestDrawer;
       window.openUserProfileDrawer = openUserProfileDrawer;
       window.openUserStatusDrawer = openUserStatusDrawer;
       window.openTeamLimitDrawer = openTeamLimitDrawer;
@@ -8111,6 +8290,7 @@
         };
         history.pushState(null, "", pathMap[page] || "/admin/dashboard");
         renderShell();
+        ensureAdminPageData(page).catch(() => undefined);
       };
 
       renderShell = function renderShell() {

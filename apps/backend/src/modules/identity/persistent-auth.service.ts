@@ -9,6 +9,7 @@ import {
   hashSecret,
   normalizeCnPhone,
   shanghaiDayWindow,
+  toCnPhoneE164,
 } from "./phone-auth.utils.ts";
 import {
   createAuthSession,
@@ -386,7 +387,7 @@ export async function verifyPersistentLoginChallenge(
       challenge: consumed,
       user: {
         id: user.id,
-        phone: user.phone_e164,
+        phone: normalizeCnPhone(user.phone_e164),
         displayName: user.display_name ?? null,
       },
       session: createdSession.session,
@@ -503,7 +504,7 @@ export async function verifyPersistentPasswordLogin(
     kind: "verified",
     user: {
       id: user.id,
-      phone: user.phone_e164,
+      phone: normalizeCnPhone(user.phone_e164),
       displayName: user.display_name ?? null,
     },
     session: createdSession.session,

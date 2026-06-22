@@ -4,6 +4,141 @@ import { test } from "node:test";
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
 import { createAdminUserService } from "./admin-user.service.ts";
 
+test("admin user service collapses multiple memberships into one preferred user row", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await db.query(
+      `
+        INSERT INTO users (id, email, phone_e164, display_name, status)
+        VALUES ('93000000-0000-4000-8000-000000001010', 'repeat@example.test', '+8613800100010', 'Repeat User', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+        VALUES
+          ('91000000-0000-4000-8000-000000001010', 'Primary Org', 'active', 6000, 20),
+          ('91000000-0000-4000-8000-000000001011', 'Admin Org', 'active', 3200, 15),
+          ('91000000-0000-4000-8000-000000001012', 'Secondary Org', 'active', 1800, 0)
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES
+          ('92000000-0000-4000-8000-000000001010', '91000000-0000-4000-8000-000000001010', 'Primary Workspace', 'active'),
+          ('92000000-0000-4000-8000-000000001011', '91000000-0000-4000-8000-000000001011', 'Admin Workspace', 'active'),
+          ('92000000-0000-4000-8000-000000001012', '91000000-0000-4000-8000-000000001012', 'Secondary Workspace', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, created_at)
+        VALUES
+          (
+            '94000000-0000-4000-8000-000000001010',
+            '91000000-0000-4000-8000-000000001010',
+            '92000000-0000-4000-8000-000000001010',
+            '93000000-0000-4000-8000-000000001010',
+            'owner_admin',
+            'active',
+            '2026-06-01T08:00:00.000Z'
+          ),
+          (
+            '94000000-0000-4000-8000-000000001011',
+            '91000000-0000-4000-8000-000000001011',
+            '92000000-0000-4000-8000-000000001011',
+            '93000000-0000-4000-8000-000000001010',
+            'sub_account',
+            'active',
+            '2026-06-10T08:00:00.000Z'
+          ),
+          (
+            '94000000-0000-4000-8000-000000001012',
+            '91000000-0000-4000-8000-000000001012',
+            '92000000-0000-4000-8000-000000001012',
+            '93000000-0000-4000-8000-000000001010',
+            'sub_account',
+            'disabled',
+            '2026-06-15T08:00:00.000Z'
+          )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO team_member_groups (id, organization_id, workspace_id, name, status, created_by_user_id)
+        VALUES (
+          '95000000-0000-4000-8000-000000001010',
+          '91000000-0000-4000-8000-000000001011',
+          '92000000-0000-4000-8000-000000001011',
+          'Admin Group',
+          'active',
+          '93000000-0000-4000-8000-000000001010'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO team_member_profiles (
+          id,
+          organization_id,
+          workspace_id,
+          membership_id,
+          team_account,
+          display_name,
+          business_role,
+          member_group_id,
+          credit_balance_cached,
+          credit_used_cached,
+          created_by_user_id
+        )
+        VALUES (
+          '96000000-0000-4000-8000-000000001010',
+          '91000000-0000-4000-8000-000000001011',
+          '92000000-0000-4000-8000-000000001011',
+          '94000000-0000-4000-8000-000000001011',
+          'repeat-admin',
+          'Repeat Admin',
+          'group_admin',
+          '95000000-0000-4000-8000-000000001010',
+          900,
+          50,
+          '93000000-0000-4000-8000-000000001010'
+        )
+      `,
+    );
+
+    const result = await service.listUsers({ pageSize: 20 });
+
+    assert.equal(result.meta.total, 1);
+    assert.equal(result.data.length, 1);
+    assert.deepEqual(result.data[0], {
+      userId: "93000000-0000-4000-8000-000000001010",
+      displayName: "Repeat User",
+      phone: "13800100010",
+      email: "re***@example.test",
+      status: "active",
+      organizationId: "91000000-0000-4000-8000-000000001010",
+      organizationName: "Primary Org",
+      workspaceId: "92000000-0000-4000-8000-000000001010",
+      membershipId: "94000000-0000-4000-8000-000000001010",
+      membershipRole: "owner_admin",
+      accountType: "owner_account",
+      teamRole: null,
+      teamGroupId: null,
+      teamGroupName: null,
+      availableCredits: 6000,
+      reservedCredits: 20,
+      usedCredits: 0,
+      subaccountCount: 0,
+    });
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin user service lists only team permission accounts with subaccount totals", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
@@ -681,9 +816,9 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
     `
       INSERT INTO users (id, email, phone_e164, display_name, status)
       VALUES
-        ('93000000-0000-4000-8000-000000002001', 'owner-scope@example.test', '+8613800200001', 'Scope Owner', 'active'),
-        ('93000000-0000-4000-8000-000000002002', 'lead-scope@example.test', '+8613800200002', 'Scope Lead', 'active'),
-        ('93000000-0000-4000-8000-000000002003', 'artist-scope@example.test', '+8613800200003', 'Scope Artist', 'active')
+        ('93000000-0000-4000-8000-000000002001', 'owner-scope@example.test', '13800200001', 'Scope Owner', 'active'),
+        ('93000000-0000-4000-8000-000000002002', 'lead-scope@example.test', '13800200002', 'Scope Lead', 'active'),
+        ('93000000-0000-4000-8000-000000002003', 'artist-scope@example.test', '13800200003', 'Scope Artist', 'active')
     `,
   );
   await db.query(

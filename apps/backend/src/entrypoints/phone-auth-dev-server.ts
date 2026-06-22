@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { createServer } from "node:http";
-import type { Server, ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -505,30 +505,35 @@ function normalizeMembershipPlanStatus(value: unknown) {
   return ["active", "inactive", "archived"].includes(normalized) ? normalized : normalized;
 }
 
+function hasOwn(body: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(body, key);
+}
+
 function storyboardPromptPackageBody(body: Record<string, unknown>) {
-  return {
+  const result: Record<string, unknown> = {
     name: String(body.name ?? ""),
     code: String(body.code ?? ""),
     package_type: String(body.package_type ?? ""),
-    audience: body.audience === undefined || body.audience === null ? null : String(body.audience),
-    tags: stringArray(body.tags),
-    cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
     prompt_content: String(body.prompt_content ?? ""),
-    key_points: stringArray(body.key_points),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    applicable_genres: stringArray(body.applicable_genres),
-    applicable_scene: stringArray(body.applicable_scene),
-    output_type: body.output_type === undefined || body.output_type === null ? null : String(body.output_type),
-    scope: body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {},
-    can_stack: body.can_stack === undefined ? true : Boolean(body.can_stack),
-    max_select_count: body.max_select_count === undefined || body.max_select_count === null ? null : Number(body.max_select_count),
-    is_default: Boolean(body.is_default),
-    is_global_default: Boolean(body.is_global_default),
-    is_recommended: Boolean(body.is_recommended),
-    sort_order: Number(body.sort_order ?? 0),
-    status: String(body.status ?? "enabled"),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
   };
+  if (hasOwn(body, "audience")) result.audience = body.audience === null ? null : String(body.audience ?? "");
+  if (hasOwn(body, "tags")) result.tags = stringArray(body.tags);
+  if (hasOwn(body, "cover_image_url")) result.cover_image_url = body.cover_image_url === null ? null : String(body.cover_image_url ?? "");
+  if (hasOwn(body, "key_points")) result.key_points = stringArray(body.key_points);
+  if (hasOwn(body, "negative_prompt")) result.negative_prompt = body.negative_prompt === null ? null : String(body.negative_prompt ?? "");
+  if (hasOwn(body, "applicable_genres")) result.applicable_genres = stringArray(body.applicable_genres);
+  if (hasOwn(body, "applicable_scene")) result.applicable_scene = stringArray(body.applicable_scene);
+  if (hasOwn(body, "output_type")) result.output_type = body.output_type === null ? null : String(body.output_type ?? "");
+  if (hasOwn(body, "scope")) result.scope = body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {};
+  if (hasOwn(body, "can_stack")) result.can_stack = Boolean(body.can_stack);
+  if (hasOwn(body, "max_select_count")) result.max_select_count = body.max_select_count === null ? null : Number(body.max_select_count);
+  if (hasOwn(body, "is_default") || hasOwn(body, "isDefault")) result.is_default = Boolean(body.is_default ?? body.isDefault);
+  if (hasOwn(body, "is_global_default") || hasOwn(body, "isGlobalDefault")) result.is_global_default = Boolean(body.is_global_default ?? body.isGlobalDefault);
+  if (hasOwn(body, "is_recommended") || hasOwn(body, "isRecommended")) result.is_recommended = Boolean(body.is_recommended ?? body.isRecommended);
+  if (hasOwn(body, "sort_order") || hasOwn(body, "sortOrder")) result.sort_order = Number(body.sort_order ?? body.sortOrder ?? 0);
+  if (hasOwn(body, "status")) result.status = String(body.status ?? "enabled");
+  if (hasOwn(body, "remark")) result.remark = body.remark === null ? null : String(body.remark ?? "");
+  return result;
 }
 
 function imagePromptStyleBody(body: Record<string, unknown>) {
@@ -1968,7 +1973,7 @@ async function findEnabledStoryboardPromptPackageForPreview(
   );
 }
 
-async function findGlobalTabooStoryboardPromptPackagesForPreview(
+async function findDefaultTabooStoryboardPromptPackagesForPreview(
   db: Awaited<ReturnType<typeof createDevDb>>,
 ) {
   const rows = await db.query<StoryboardPromptPackageForPreview>(
@@ -1977,12 +1982,61 @@ async function findGlobalTabooStoryboardPromptPackagesForPreview(
       FROM storyboard_prompt_packages
       WHERE package_type = 'taboo'
         AND status = 'enabled'
-        AND (is_global_default = true OR is_default = true)
         AND deleted_at IS NULL
+        AND (
+          is_default = true
+          OR (
+            is_global_default = true
+            AND NOT EXISTS (
+              SELECT 1
+              FROM storyboard_prompt_packages default_taboo
+              WHERE default_taboo.package_type = 'taboo'
+                AND default_taboo.status = 'enabled'
+                AND default_taboo.is_default = true
+                AND default_taboo.deleted_at IS NULL
+            )
+          )
+        )
       ORDER BY sort_order DESC, updated_at DESC, id ASC
     `,
   );
   return rows.rows;
+}
+
+function formatStoryboardPromptPackageContents(packages: StoryboardPromptPackageForPreview[]) {
+  return packages
+    .map((item) => String(item.prompt_content ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function createRequestAbortController(
+  request: IncomingMessage,
+  response: ServerResponse,
+) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+  request.once("aborted", abort);
+  response.once("close", abort);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      request.off("aborted", abort);
+      response.off("close", abort);
+    },
+  };
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && (
+    error.name === "AbortError" ||
+    error.message === "AbortError" ||
+    error.message.toLowerCase().includes("abort")
+  );
 }
 
 async function findDefaultScenePromptTemplateForPreview(
@@ -1994,6 +2048,7 @@ async function findDefaultScenePromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM scene_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'split'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2011,6 +2066,7 @@ async function findDefaultCharacterPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM character_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'extract'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2028,6 +2084,7 @@ async function findDefaultShotPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM shot_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'outline'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2045,6 +2102,7 @@ async function findDefaultPropPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM prop_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'extract'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2206,8 +2264,10 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
 }
 
 async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
-  const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
-  const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+  const [activeImageModels, activeVideoModels] = await Promise.all([
+    listActiveAiModelConfigs(db, { mediaType: "image" }),
+    listActiveAiModelConfigs(db, { mediaType: "video" }),
+  ]);
   const imageModels = activeImageModels.length
     ? activeImageModels.map(modelConfigToGenerationConfigModel)
     : [
@@ -5331,7 +5391,7 @@ async function resolveGenerationReferenceImages(
   });
 }
 
-function parseMetadataJson(value: Record<string, unknown> | string): Record<string, unknown> {
+function parseMetadataJson(value: Record<string, unknown> | string | null | undefined): Record<string, unknown> {
   if (typeof value !== "string") {
     return value ?? {};
   }
@@ -5722,6 +5782,175 @@ async function listEpisodeAssetsFromDb(
       }),
   );
   return items.filter(Boolean);
+}
+
+async function listEpisodeStoryboardsFromDb(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    sessionToken: string;
+    userId: string;
+    runtime: UploadSessionRuntime | null;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.sessionToken,
+    userId: input.userId,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+
+  const shotRows = await db.query<{
+    id: string;
+    title: string;
+    description: string;
+    scene_analysis: string;
+    plot_preview: string;
+    sort_order: number | string;
+    image_status: string;
+    video_status: string;
+    current_image_asset_version_id: string | null;
+    current_video_asset_version_id: string | null;
+    image_storage_object_id: string | null;
+    image_metadata_json: Record<string, unknown> | string | null;
+    video_storage_object_id: string | null;
+    video_metadata_json: Record<string, unknown> | string | null;
+  }>(
+    `
+      SELECT
+        s.id,
+        s.title,
+        s.description,
+        s.scene_analysis,
+        s.plot_preview,
+        s.sort_order,
+        s.image_status,
+        s.video_status,
+        s.current_image_asset_version_id,
+        s.current_video_asset_version_id,
+        image_version.storage_object_id AS image_storage_object_id,
+        image_version.metadata_json AS image_metadata_json,
+        video_version.storage_object_id AS video_storage_object_id,
+        video_version.metadata_json AS video_metadata_json
+      FROM shots s
+      LEFT JOIN asset_versions image_version
+        ON image_version.organization_id = s.organization_id
+       AND image_version.id = s.current_image_asset_version_id
+      LEFT JOIN asset_versions video_version
+        ON video_version.organization_id = s.organization_id
+       AND video_version.id = s.current_video_asset_version_id
+      WHERE s.organization_id = $1
+        AND s.episode_id = $2
+      ORDER BY s.sort_order ASC, s.created_at ASC, s.id ASC
+    `,
+    [context.actor.organizationId, input.episodeId],
+  );
+  const shotIds = shotRows.rows.map((shot) => shot.id);
+  const draftRows = shotIds.length
+    ? await db.query<{
+        target_id: string;
+        prompt: string;
+        mode: "image" | "video" | "lip_sync";
+        payload_json: Record<string, unknown> | string | null;
+        updated_at: Date | string;
+      }>(
+        `
+          SELECT target_id, prompt, mode, payload_json, updated_at
+            FROM episode_generation_drafts
+           WHERE organization_id = $1
+             AND episode_id = $2
+             AND target_type = 'storyboard'
+             AND target_id = ANY($3::uuid[])
+        `,
+        [context.actor.organizationId, input.episodeId, shotIds],
+      )
+    : { rows: [] };
+  const draftsByShotId = new Map<string, Array<{
+    prompt: string;
+    mode: "image" | "video" | "lip_sync";
+    payload: Record<string, unknown>;
+    updatedAt: Date | string;
+  }>>();
+  for (const draft of draftRows.rows) {
+    const drafts = draftsByShotId.get(draft.target_id) ?? [];
+    drafts.push({
+      prompt: draft.prompt ?? "",
+      mode: draft.mode,
+      payload: parseMetadataJson(draft.payload_json),
+      updatedAt: draft.updated_at,
+    });
+    draftsByShotId.set(draft.target_id, drafts);
+  }
+
+  return Promise.all(shotRows.rows.map(async (shot, index) => {
+    const imageMetadata = parseMetadataJson(shot.image_metadata_json);
+    const videoMetadata = parseMetadataJson(shot.video_metadata_json);
+    const imageUrls = input.runtime && shot.image_storage_object_id
+      ? await signedUrlsForStorageObject(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: shot.image_storage_object_id,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        })
+      : null;
+    const videoUrls = input.runtime && shot.video_storage_object_id
+      ? await signedUrlsForStorageObject(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: shot.video_storage_object_id,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        })
+      : null;
+    const currentImageUrl = resolvePreferredEpisodeImageUrl(
+      imageMetadata.previewUrl,
+      imageMetadata.sourceUrl,
+      imageUrls?.previewUrl,
+      imageUrls?.downloadUrl,
+    ) ?? null;
+    const currentVideoUrl =
+      readString(videoMetadata.sourceUrl) ||
+      readString(videoMetadata.downloadUrl) ||
+      readString(videoMetadata.previewUrl) ||
+      videoUrls?.downloadUrl ||
+      videoUrls?.previewUrl ||
+      null;
+    const currentVideoThumbnailUrl =
+      readString(videoMetadata.thumbnailUrl) ||
+      readString(videoMetadata.coverImageUrl) ||
+      null;
+    return {
+      id: shot.id,
+      shotId: shot.id,
+      storyboardId: shot.id,
+      episodeId: input.episodeId,
+      indexNo: index + 1,
+      title: shot.title,
+      sceneAnalysis: shot.scene_analysis || shot.description || "",
+      plotPreview: shot.plot_preview || shot.title || "",
+      description: shot.description || "",
+      currentImageFileId: shot.current_image_asset_version_id,
+      currentImageUrl,
+      currentVideoFileId: shot.current_video_asset_version_id,
+      currentVideoUrl,
+      currentVideoThumbnailUrl,
+      imageStatus: shot.image_status === "completed" || shot.image_status === "ready"
+        ? "succeeded"
+        : shot.image_status || "draft",
+      videoStatus: shot.video_status === "completed" || shot.video_status === "ready"
+        ? "succeeded"
+        : shot.video_status || "not_ready",
+      assetRefs: [],
+      generationDrafts: draftsByShotId.get(shot.id) ?? [],
+      sortOrder: Number(shot.sort_order ?? index),
+    };
+  }));
 }
 
 async function createEpisodeAssetRecord(
@@ -12919,19 +13148,18 @@ export function createPhoneAuthDevServer(
           if (!episode) {
             return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
           }
-          const result = await creatorApplication.getProjectDetail({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            projectId: episode.project_id,
-            now: new Date(),
-          });
-          if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
+          const project = await queryOne<{
+            id: string;
+            name: string;
+            phase: string;
+          }>(
+            db,
+            "SELECT id, name, phase FROM projects WHERE id = $1 AND organization_id = $2",
+            [episode.project_id, episode.organization_id],
+          );
+          if (!project) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const detail = normalizeProjectDetailForEpisodeContract(result.body as Record<string, unknown>);
-          const project = detail.project as Record<string, unknown>;
           const now = new Date();
           const [roleAssets, sceneAssets, propAssets] = await Promise.all([
             listEpisodeAssetsFromDb(db, {
@@ -12982,9 +13210,9 @@ export function createPhoneAuthDevServer(
                 projectId: episode.project_id,
               },
               project: {
-                projectId: project.projectId ?? episode.project_id,
+                projectId: project.id ?? episode.project_id,
                 name: project.name ?? "",
-                status: project.status ?? null,
+                status: project.phase ?? null,
               },
               navigation: {
                 backTarget: "project_episodes",
@@ -13165,106 +13393,17 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/storyboards")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const episode = await queryOne<{ project_id: string }>(
-            db,
-            "SELECT project_id FROM episodes WHERE id = $1",
-            [episodeId],
-          );
-          if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
-          }
-          const result = await creatorApplication.getProjectDetail({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            projectId: episode.project_id,
+          const items = await listEpisodeStoryboardsFromDb(db, {
+            episodeId,
+            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
             now: new Date(),
           });
-          if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
+          if (!items) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const detail = result.body as Record<string, unknown>;
-          const shots = Array.isArray(detail.shots) ? detail.shots : [];
-          const shotIds = shots
-            .map((shot) => shot && typeof shot === "object" ? (shot as Record<string, unknown>).id : null)
-            .filter((shotId): shotId is string => typeof shotId === "string" && shotId.length > 0);
-          const draftRows = shotIds.length
-            ? await db.query<{
-                target_id: string;
-                prompt: string;
-                mode: "image" | "video" | "lip_sync";
-                payload_json: Record<string, unknown> | null;
-                updated_at: Date | string;
-              }>(
-                `
-                  SELECT target_id, prompt, mode, payload_json, updated_at
-                    FROM episode_generation_drafts
-                   WHERE episode_id = $1
-                     AND target_type = 'storyboard'
-                     AND target_id = ANY($2::uuid[])
-                `,
-                [episodeId, shotIds],
-              )
-            : { rows: [] };
-          const draftsByShotId = new Map<string, Array<{
-            prompt: string;
-            mode: "image" | "video" | "lip_sync";
-            payload: Record<string, unknown>;
-            updatedAt: Date | string;
-          }>>();
-          for (const draft of draftRows.rows) {
-            const drafts = draftsByShotId.get(draft.target_id) ?? [];
-            drafts.push({
-              prompt: draft.prompt ?? "",
-              mode: draft.mode,
-              payload: draft.payload_json ?? {},
-              updatedAt: draft.updated_at,
-            });
-            draftsByShotId.set(draft.target_id, drafts);
-          }
-          const items = shots
-            .map((shot) => shot && typeof shot === "object" ? shot as Record<string, unknown> : {})
-            .filter((shot) => shot.episodeId === episodeId)
-            .sort((left, right) => Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0))
-            .map((shot, index) => {
-              const videoVersions = Array.isArray(shot.videoVersions) ? shot.videoVersions : [];
-              const currentVideoFileId = shot.currentVideoAssetVersionId ?? null;
-              const currentVideoVersion = currentVideoFileId
-                ? videoVersions.find((version) => version?.id === currentVideoFileId) ?? null
-                : null;
-              return {
-                id: shot.id ?? null,
-                shotId: shot.id ?? null,
-                storyboardId: shot.id ?? null,
-                episodeId,
-                indexNo: index + 1,
-                sceneAnalysis: shot.sceneAnalysis ?? shot.description ?? "",
-                plotPreview: shot.plotPreview ?? shot.title ?? "",
-                currentImageFileId: shot.currentImageAssetVersionId ?? null,
-                currentImageUrl: shot.previewImageUrl ?? null,
-                currentVideoFileId,
-                currentVideoUrl:
-                  currentVideoVersion?.metadata?.sourceUrl ??
-                  currentVideoVersion?.metadata?.downloadUrl ??
-                  currentVideoVersion?.metadata?.previewUrl ??
-                  currentVideoVersion?.sourceUrl ??
-                  currentVideoVersion?.downloadUrl ??
-                  currentVideoVersion?.previewUrl ??
-                  shot.previewVideoUrl ??
-                  null,
-                currentVideoThumbnailUrl:
-                  currentVideoVersion?.metadata?.thumbnailUrl ??
-                  currentVideoVersion?.thumbnailUrl ??
-                  shot.previewVideoThumbnailUrl ??
-                  null,
-                imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
-                videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
-                assetRefs: Array.isArray(shot.references) ? shot.references : [],
-                generationDrafts: typeof shot.id === "string" ? draftsByShotId.get(shot.id) ?? [] : [],
-                sortOrder: shot.sortOrder ?? index,
-              };
-            });
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
@@ -13318,9 +13457,11 @@ export function createPhoneAuthDevServer(
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
           }
-          const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
-          const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
-          const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
+          const [activeImageModels, activeVideoModels, batchPromptPresetCategories] = await Promise.all([
+            listActiveAiModelConfigs(db, { mediaType: "image" }),
+            listActiveAiModelConfigs(db, { mediaType: "video" }),
+            readBatchImagePromptPresetCategoriesFromDb(db),
+          ]);
           const imageModels = activeImageModels.length
             ? activeImageModels.map(modelConfigToGenerationConfigModel)
             : [
@@ -14520,11 +14661,14 @@ export function createPhoneAuthDevServer(
           const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
             findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
             findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+            findDefaultTabooStoryboardPromptPackagesForPreview(db),
           ]);
           if (!genrePackage || !emotionPackage) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
+          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
+          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
+          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
 
           const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
           response.statusCode = 200;
@@ -14533,28 +14677,39 @@ export function createPhoneAuthDevServer(
           response.setHeader("connection", "keep-alive");
           response.flushHeaders?.();
           const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+          const abortController = createRequestAbortController(request, response);
           try {
             for await (const event of analysisService.generateScriptStream({
               projectId,
               createdByUserId: authenticated.user.id,
               scriptText,
               packages: {
-                genrePrompt: genrePackage.prompt_content,
-                emotionPrompt: emotionPackage.prompt_content,
-                tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+                genrePrompt,
+                emotionPrompt,
+                tabooPrompt,
               },
+              signal: abortController.signal,
             })) {
+              if (abortController.signal.aborted) {
+                break;
+              }
               writeSseData(response, event);
             }
             stopHeartbeat();
-            response.end();
+            abortController.cleanup();
+            if (!response.destroyed && !response.writableEnded) {
+              response.end();
+            }
           } catch (error) {
             stopHeartbeat();
-            writeSseData(response, {
-              type: "error",
-              error: error instanceof Error ? error.message : "ai_script_analysis_failed",
-            });
-            response.end();
+            abortController.cleanup();
+            if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+              writeSseData(response, {
+                type: "error",
+                error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+              });
+              response.end();
+            }
           }
           return;
         }
@@ -14604,7 +14759,7 @@ export function createPhoneAuthDevServer(
           ] = await Promise.all([
             findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
             findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+            findDefaultTabooStoryboardPromptPackagesForPreview(db),
             findDefaultScenePromptTemplateForPreview(db),
             findDefaultCharacterPromptTemplateForPreview(db),
             findDefaultPropPromptTemplateForPreview(db),
@@ -14616,15 +14771,18 @@ export function createPhoneAuthDevServer(
           if (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
+          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
+          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
+          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
 
           const previewInput = {
             projectId,
             createdByUserId: authenticated.user.id,
             scriptText,
             packages: {
-              genrePrompt: genrePackage.prompt_content,
-              emotionPrompt: emotionPackage.prompt_content,
-              tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+              genrePrompt,
+              emotionPrompt,
+              tabooPrompt,
             },
             templates: {
               scenePrompt: sceneTemplate.prompt_content,
@@ -14642,8 +14800,15 @@ export function createPhoneAuthDevServer(
             response.setHeader("connection", "keep-alive");
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+            const abortController = createRequestAbortController(request, response);
             try {
-              for await (const event of previewService.generatePreviewStream(previewInput)) {
+              for await (const event of previewService.generatePreviewStream({
+                ...previewInput,
+                signal: abortController.signal,
+              })) {
+                if (abortController.signal.aborted) {
+                  break;
+                }
                 if (event.type === "complete") {
                   writeSseData(response, {
                     type: "complete",
@@ -14659,14 +14824,20 @@ export function createPhoneAuthDevServer(
                 }
               }
               stopHeartbeat();
-              response.end();
+              abortController.cleanup();
+              if (!response.destroyed && !response.writableEnded) {
+                response.end();
+              }
             } catch (error) {
               stopHeartbeat();
-              writeSseData(response, {
-                type: "error",
-                error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
-              });
-              response.end();
+              abortController.cleanup();
+              if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+                writeSseData(response, {
+                  type: "error",
+                  error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
+                });
+                response.end();
+              }
             }
             return;
           }

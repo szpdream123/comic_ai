@@ -1420,6 +1420,10 @@
   background: #090a0f;
 }
 
+.workbench-main.workspace-mode.episode-workbench-main {
+  min-height: 0;
+}
+
 .workbench-main.workspace-mode .global-statusbar {
   position: relative;
   top: auto;
@@ -11995,16 +11999,20 @@
 }
 
 .single-episode-ai-close {
-  display: grid;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 2.75rem;
   height: 2.75rem;
-  place-items: center;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0.65rem;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.86);
   font-size: 2rem;
   line-height: 1;
+  padding: 0;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .single-episode-ai-preview {
@@ -12139,19 +12147,18 @@
   background: rgba(9, 12, 18, 0.66);
 }
 
-.single-episode-ai-sent-prompt summary {
+.single-episode-ai-sent-prompt-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.85rem;
   padding: 0.68rem 0.85rem;
   color: rgba(245, 249, 255, 0.9);
-  cursor: pointer;
   font-size: 0.86rem;
   font-weight: 900;
 }
 
-.single-episode-ai-sent-prompt summary span {
+.single-episode-ai-sent-prompt-head span {
   color: rgba(220, 232, 252, 0.52);
   font-size: 0.76rem;
   font-weight: 800;
@@ -12176,10 +12183,7 @@
 }
 
 .single-episode-ai-sent-block pre {
-  max-height: min(18rem, 34vh);
-  min-height: min(8rem, 18vh);
   margin: 0;
-  overflow: auto;
   border: 1px solid rgba(138, 157, 196, 0.12);
   border-radius: 0.48rem;
   padding: 0.85rem;
@@ -12190,6 +12194,54 @@
   word-break: break-word;
 }
 
+.single-episode-ai-response-markdown {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.single-episode-ai-response-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(138, 157, 196, 0.12);
+  border-radius: 0.48rem;
+  background: rgba(4, 7, 12, 0.45);
+}
+
+.single-episode-ai-response-table {
+  width: 100%;
+  min-width: 38rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.single-episode-ai-response-table th,
+.single-episode-ai-response-table td {
+  padding: 0.72rem 0.8rem;
+  border-bottom: 1px solid rgba(138, 157, 196, 0.12);
+  border-right: 1px solid rgba(138, 157, 196, 0.1);
+  color: rgba(226, 235, 248, 0.88);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.single-episode-ai-response-table th:last-child,
+.single-episode-ai-response-table td:last-child {
+  border-right: 0;
+}
+
+.single-episode-ai-response-table thead th {
+  background: rgba(19, 25, 35, 0.98);
+  color: rgba(245, 249, 255, 0.94);
+  font-weight: 900;
+}
+
+.single-episode-ai-response-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .single-episode-ai-sent-block-response strong {
   color: #8ed4ff;
 }
@@ -12198,11 +12250,6 @@
   border-color: rgba(142, 212, 255, 0.26);
   background: rgba(16, 31, 44, 0.54);
   color: rgba(236, 248, 255, 0.92);
-}
-
-.single-episode-ai-preview.ready .single-episode-ai-sent-block pre {
-  max-height: min(15rem, 28vh);
-  min-height: min(7rem, 15vh);
 }
 
 .single-episode-ai-live-output {
@@ -12219,13 +12266,21 @@
 
 .single-episode-ai-script-text {
   display: grid;
-  grid-template-rows: auto auto;
-  max-height: none;
-  overflow: visible;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: min(14rem, 28vh);
+  max-height: min(32rem, 56vh);
+  overflow: hidden;
+  resize: vertical;
   border: 1px solid rgba(138, 157, 196, 0.16);
   border-radius: 0.6rem;
   background: rgba(14, 17, 23, 0.72);
   margin: 0 1.1rem;
+}
+
+.single-episode-ai-live-output.script-state-output {
+  min-height: 7rem;
+  max-height: min(14rem, 28vh);
+  resize: vertical;
 }
 
 .single-episode-ai-live-output header,
@@ -12269,8 +12324,14 @@
   min-height: 0;
 }
 
+.single-episode-ai-live-output.script-state-output pre {
+  max-height: calc(min(14rem, 28vh) - 3rem);
+}
+
 .single-episode-ai-script-text div {
+  min-height: 0;
   max-height: none;
+  height: 100%;
 }
 
 .manual-script-analysis-preview {
@@ -16922,11 +16983,11 @@
 }
 
 .episode-workbench-screen {
-  min-height: 100dvh;
-  height: 100dvh;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   background: #141414;
-  padding-left: var(--workbench-rail-width);
+  padding-left: 0;
 }
 
 .episode-workbench-shell {
@@ -17673,8 +17734,8 @@
 .episode-replica-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 100dvh;
-  height: 100dvh;
+  min-height: 0;
+  height: 100%;
   width: 100%;
   inline-size: 100%;
   padding: 0;
@@ -22963,7 +23024,7 @@
   min-height: auto;
   overflow: visible;
   scroll-margin-top: 4.1rem;
-  padding-bottom: max(1rem, calc(100dvh - 14rem));
+  padding-bottom: 1rem;
 }
 
 .episode-replica-asset-section {
@@ -23698,7 +23759,9 @@
 @media (min-width: 961px) {
   .episode-replica-layout.assets-mode,
   .episode-replica-layout.storyboard-mode {
-    padding-top: 5%;
+    height: 100%;
+    min-height: 0;
+    padding-top: 0;
   }
 }
 /* End shared asset and storyboard layout top padding */

@@ -39,6 +39,7 @@ export interface TextModelGatewayRequestContext {
   payloadHash: string;
   payloadSummary?: string;
   providerOperation: typeof textModelGatewayOperationNames.chatCompletions;
+  signal?: AbortSignal;
 }
 
 export type TextGatewayFinalUsage =
@@ -153,6 +154,16 @@ export class TextModelGatewayService {
       now: now(),
     });
     const abortController = new AbortController();
+    let aborted = false;
+    const abortFromContext = () => {
+      aborted = true;
+      abortController.abort();
+    };
+    if (context.signal?.aborted) {
+      abortFromContext();
+    } else {
+      context.signal?.addEventListener("abort", abortFromContext, { once: true });
+    }
     let upstreamStream: AsyncIterable<TextGatewayChatCompletionChunk>;
     try {
       upstreamStream = await this.config.adapter.createChatCompletionStream({
@@ -163,32 +174,44 @@ export class TextModelGatewayService {
         signal: abortController.signal,
       });
     } catch (error) {
-      await markProviderRequestFailed(this.config.db, {
-        providerRequestId: started.id,
-        failureCode: "provider_stream_error",
-        redactedResponse: {
-          model: model.id,
-          providerModel: model.providerModel,
-          chunkCount: 0,
-          finishReasons: [],
-          usage: null,
-          usageSource: "provider_missing",
-        },
-        now: now(),
-      });
+      const status = aborted ? "canceled" : "failed";
+      const failureCode = aborted ? "client_aborted_stream" : "provider_stream_error";
+      const redactedResponse = {
+        model: model.id,
+        providerModel: model.providerModel,
+        chunkCount: 0,
+        finishReasons: [],
+        usage: null,
+        usageSource: "provider_missing",
+      };
+      if (status === "canceled") {
+        await markProviderRequestCanceled(this.config.db, {
+          providerRequestId: started.id,
+          failureCode,
+          redactedResponse,
+          now: now(),
+        });
+      } else {
+        await markProviderRequestFailed(this.config.db, {
+          providerRequestId: started.id,
+          failureCode,
+          redactedResponse,
+          now: now(),
+        });
+      }
       await completeUserModelRequestLog(this.config.db, {
         providerRequestId: started.id,
-        status: "failed",
+        status,
         responseText: null,
         responseUsage: null,
         finishReasons: [],
-        failureCode: "provider_stream_error",
+        failureCode,
         now: now(),
       });
+      context.signal?.removeEventListener("abort", abortFromContext);
       throw error;
     }
     const tracker = new StreamTracker();
-    let aborted = false;
     let resolveCompleted!: (value: TextGatewayFinalUsage) => void;
     const completed = new Promise<TextGatewayFinalUsage>((resolve) => {
       resolveCompleted = resolve;
@@ -212,7 +235,9 @@ export class TextModelGatewayService {
         aborted = true;
         abortController.abort();
       },
-      completed,
+      completed: completed.finally(() => {
+        context.signal?.removeEventListener("abort", abortFromContext);
+      }),
     };
   }
 

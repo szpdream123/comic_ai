@@ -183,6 +183,13 @@ test("admin shell lazy-loads page data instead of blocking startup on every admi
   assert.doesNotMatch(script, /await Promise\.all\(\[loadDashboard\(\), loadModels\(\), loadUsers\(\), loadPromptManagement\(\), loadSettings\(\), loadLegalDocuments\(\), loadRiskAudit\(\), loadAdminSessions\(\)\]\)/);
 });
 
+test("admin shell reloads page data when sidebar navigation changes routes", () => {
+  assert.match(
+    script,
+    /navigate = function navigate\(page\) \{[\s\S]*?parameterTemplates: "\/admin\/parameter-templates",[\s\S]*?history\.pushState\(null, "", pathMap\[page\] \|\| "\/admin\/dashboard"\);[\s\S]*?renderShell\(\);[\s\S]*?ensureAdminPageData\(page\)\.catch\(\(\) => undefined\);[\s\S]*?\n      \};/,
+  );
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",
@@ -396,17 +403,33 @@ test("admin model management uses parameter templates and a simplified model edi
   assert.doesNotMatch(script, /filter\(\(template\) => template\.mediaTypes\.includes\(mediaType\)\)/);
 });
 
-test("admin user credit table uses a single edit entry for row actions", () => {
+test("admin user credit table keeps edit and status actions in the row action bar", () => {
   assert.match(script, /openUserActionDrawer/);
+  assert.match(script, /openUserModelRequestDrawer/);
+  assert.match(script, /toggleUserModelRequestInline/);
+  assert.match(script, /<th>用户ID<\/th><th>用户名<\/th><th>手机号<\/th>/);
   assert.match(script, /用户操作/);
-  assert.match(script, /查看账户/);
+  assert.match(script, /查看账户与模型记录/);
+  assert.match(script, /只看模型记录/);
+  assert.match(script, /修改资料/);
+  assert.match(script, /禁用账户/);
+  assert.match(script, /启用账户/);
+  assert.match(script, /归档账户/);
   assert.match(script, /手动添加积分/);
   assert.match(script, /手动扣减积分/);
   assert.match(script, /调整到目标积分/);
   assert.match(script, /openCreditGrantDrawer/);
   assert.match(script, /openCreditDeductDrawer/);
   assert.match(script, /openCreditSetBalanceDrawer/);
+  assert.match(script, /onclick="openUserProfileDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','\$\{nextStatus\}'\)"/);
+  assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','archived'\)"/);
   assert.match(script, /onclick="openUserActionDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(script, /<td><div>\$\{user\.userId\}<\/div>/);
+  assert.match(script, /<td>\$\{escapeHtml\(user\.displayName \|\| "未命名用户"\)\}<\/td>/);
+  assert.match(script, /<td>\$\{escapeHtml\(user\.phone \|\| "-"\)\}<\/td>/);
+  assert.match(script, /user-model-request-inline-row/);
+  assert.doesNotMatch(script, /<button class="btn ghost" onclick="toggleUserModelRequestInline\('\$\{user\.userId\}'\)"/);
   assert.doesNotMatch(script, /<button class="icon-btn" title="查看账户" onclick="openUserDetailDrawer\('\$\{user\.userId\}'\)"/);
 });
 
@@ -415,6 +438,7 @@ test("admin user credit secondary drawers return to the action menu", () => {
   assert.match(script, /onclick="openUserActionDrawer\('\$\{userId\}'\)">返回/);
   for (const contract of [
     /openUserDetailDrawer\(userId\)[\s\S]*userDrawerHead\("账户详情", userId\)/,
+    /openUserModelRequestDrawer\(userId\)[\s\S]*userDrawerHead\("模型请求记录", userId\)/,
     /openUserProfileDrawer\(userId\)[\s\S]*userDrawerHead\("修改资料", userId\)/,
     /openCreditGrantDrawer\(userId\)[\s\S]*userDrawerHead\("手动添加积分", userId\)/,
     /openCreditDeductDrawer\(userId\)[\s\S]*userDrawerHead\("手动扣减积分", userId\)/,
@@ -427,7 +451,8 @@ test("admin user credit secondary drawers return to the action menu", () => {
 
 test("admin user detail drawer loads model request records for the selected user", () => {
   assert.match(script, /正在加载模型请求记录/);
-  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?pageSize=20/);
+  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?pageSize=\$\{pageSize\}/);
+  assert.match(script, /最近 \$\{Number\(modelRequestResult\.meta\?\.total \|\| \(modelRequestResult\.data \|\| \[\]\)\.length \|\| 0\)\} 条/);
   assert.match(script, /renderUserModelRequestPanel/);
   assert.match(script, /模型请求记录/);
   assert.match(script, /Provider Request ID/);
@@ -566,8 +591,15 @@ test("admin user credit search filters rows without rerendering the shell input"
   assert.match(script, /id="user-visible-count"/);
   assert.match(script, /function refreshUserTable/);
   assert.match(script, /function bindUserFilterControls/);
+  assert.match(script, /function scheduleUserKeywordSearch/);
+  assert.match(script, /const params = new URLSearchParams\(\{ pageSize: "100" \}\)/);
+  assert.match(script, /if \(keyword\) params\.set\("keyword", keyword\)/);
+  assert.match(script, /await api\(`\/api\/admin\/users\?\$\{params\.toString\(\)\}`\)/);
+  assert.match(script, /state\.userTotal = Number\(result\.meta\?\.total \|\| \(result\.data \|\| \[\]\)\.length \|\| 0\)/);
   assert.match(script, /addEventListener\("input"/);
   assert.match(script, /refreshUserTable\(\)/);
+  assert.match(script, /scheduleUserKeywordSearch\(\)/);
+  assert.match(script, /setTimeout\(async \(\) =>/);
   assert.doesNotMatch(script, /oninput="updateUserFilter/);
   assert.doesNotMatch(script, /function updateUserFilter\(key, value\) \{[\s\S]*?renderShell\(\);[\s\S]*?\}/);
 });
@@ -1097,8 +1129,8 @@ test("admin prompt manager adds the shot prompt workflow tab", () => {
     "admin-ui-shot-prompt-template",
     "admin-ui-shot-prompt-copy",
     "admin-ui-shot-prompt-status",
-    "{{script_scene}}",
-    "shot_outline_from_scene",
+    "{{story_text}}",
+    "long_story_precise_breakdown",
   ]) assert.match(script, new RegExp(escapeRegExp(contract)));
   for (const deprecated of ["shot_panel_breakdown", "shot_camera_language", "shot_image_prompt", "stage: \"camera\"", "stage: \"image\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
 });
@@ -1121,6 +1153,16 @@ test("admin prompt manager supports editing prop prompts and choosing defaults",
     "setScriptPromptPackageDefault",
     "setImagePromptStyleDefault",
     "设为默认",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+});
+
+test("admin script prompt default action marks taboo packages as global defaults", () => {
+  for (const contract of [
+    "const isTaboo = (existing.package_type || existing.packageType) === \"taboo\"",
+    "payload.is_default = Boolean(existing.is_default || existing.isDefault)",
+    "is_global_default: isTaboo",
+    "isGlobalDefault: isTaboo",
+    "payload.is_global_default = Boolean(existing.is_global_default || existing.isGlobalDefault)",
   ]) assert.match(script, new RegExp(escapeRegExp(contract)));
 });
 

@@ -307,7 +307,15 @@ describe("creator application service", { concurrency: false }, () => {
         "金属材质，表面有划痕和污渍。",
       ].join("\n");
 
-      const fullStoryboardVideoPrompt = "动态视频提示词";
+      const fullStoryboardVideoPrompt = [
+        "BEGIN_FULL_DYNAMIC_VIDEO_PROMPT",
+        "【场景分析】场景：（城门口/黄昏，火红晚霞，暖色光线）",
+        "【镜头1】0.0-3.0秒 转场：淡入 镜头：中近景/平视/固定镜头",
+        "画面描述：任小野站在小草身旁，抬头看向天边。",
+        "主体动作：任小野护住小草，随后转身走向城门。",
+        "音效：环境音（风声、人群声）",
+        "END_FULL_DYNAMIC_VIDEO_PROMPT",
+      ].join("\n");
       const committed = await creator.commitAiStoryboardPreview({
         user,
         projectId,
@@ -385,10 +393,10 @@ describe("creator application service", { concurrency: false }, () => {
               WHERE project_id = $1
                 AND target_type = 'storyboard'
                 AND mode = 'video'
-                AND prompt = '动态视频提示词'
+                AND prompt = $2
             ) AS video_draft_count
         `,
-        [projectId],
+        [projectId, fullStoryboardVideoPrompt],
       );
       const assetLabels = await db.query<{
         asset_type: string;
@@ -445,6 +453,8 @@ describe("creator application service", { concurrency: false }, () => {
       assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /灰黑色的血渗入大地/);
       assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /黑山密林场景概念图/);
       assert.equal(shotRows.rows[0]?.description ?? "", fullStoryboardVideoPrompt);
+      assert.match(shotRows.rows[0]?.description ?? "", /BEGIN_FULL_DYNAMIC_VIDEO_PROMPT/);
+      assert.match(shotRows.rows[0]?.description ?? "", /END_FULL_DYNAMIC_VIDEO_PROMPT/);
     } finally {
       await db.close();
     }

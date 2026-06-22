@@ -25,10 +25,22 @@ describe("ai script analysis service", () => {
 
     assert.equal(gateway.calls.length, 1);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat"]);
-    assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["json_object"]);
+    assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text"]);
     assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [384000]);
-    assert.match(gateway.calls[0]?.prompt ?? "", /JSON 对象/);
-    assert.match(gateway.calls[0]?.prompt ?? "", /scriptText/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /通用禁忌/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /任小野进城。/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /请把用户提供的文本改写/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /JSON 对象/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /scriptText/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /【题材包】/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /【情绪包】/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /【通用禁忌包】/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /【原始文案】/);
+    assert.ok((gateway.calls[0]?.prompt ?? "").indexOf("玄幻修仙") < (gateway.calls[0]?.prompt ?? "").indexOf("男频热血"));
+    assert.ok((gateway.calls[0]?.prompt ?? "").indexOf("男频热血") < (gateway.calls[0]?.prompt ?? "").indexOf("通用禁忌"));
+    assert.ok((gateway.calls[0]?.prompt ?? "").indexOf("通用禁忌") < (gateway.calls[0]?.prompt ?? "").indexOf("任小野进城。"));
     assert.ok(events.some((event) => event.type === "script_prompt"));
     assert.ok(events.some((event) => event.type === "script_done"));
     assert.ok(events.some((event) => event.type === "complete"));

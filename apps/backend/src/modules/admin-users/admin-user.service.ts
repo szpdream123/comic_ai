@@ -6,6 +6,7 @@ import {
   reserveCredits,
   settleReservationAllocation,
 } from "../credit-billing/credit-ledger.service.ts";
+import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -137,8 +138,19 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         OR COALESCE(u.display_name, '') ILIKE $${params.length}
         OR COALESCE(u.phone_e164, '') ILIKE $${params.length}
         OR COALESCE(u.email, '') ILIKE $${params.length}
-        OR COALESCE(o.name, '') ILIKE $${params.length}
-        OR COALESCE(tp.display_name, '') ILIKE $${params.length}
+        OR EXISTS (
+          SELECT 1
+          FROM memberships membership_search
+          LEFT JOIN organizations organization_search
+            ON organization_search.id = membership_search.organization_id
+          LEFT JOIN team_member_profiles team_profile_search
+            ON team_profile_search.membership_id = membership_search.id
+          WHERE membership_search.user_id = u.id
+            AND (
+              COALESCE(organization_search.name, '') ILIKE $${params.length}
+              OR COALESCE(team_profile_search.display_name, '') ILIKE $${params.length}
+            )
+        )
       )`);
     }
     const whereSql = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
@@ -147,9 +159,6 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       `
         SELECT COUNT(*) AS count
         FROM users u
-        LEFT JOIN memberships m ON m.user_id = u.id
-        LEFT JOIN organizations o ON o.id = m.organization_id
-        LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
         ${whereSql}
       `,
       params,
@@ -162,40 +171,66 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           u.phone_e164,
           u.email,
           u.status AS user_status,
-          o.id AS organization_id,
-          o.name AS organization_name,
-          w.id AS workspace_id,
-          m.id AS membership_id,
-          m.role AS membership_role,
-          tp.business_role AS team_role,
-          tg.id AS team_group_id,
-          tg.name AS team_group_name,
-          o.credit_balance_cached AS organization_credit_balance,
-          o.credit_reserved_cached AS organization_reserved_balance,
-          tp.credit_balance_cached AS member_credit_balance,
-          tp.credit_used_cached AS member_credit_used,
+          chosen.organization_id,
+          chosen.organization_name,
+          chosen.workspace_id,
+          chosen.membership_id,
+          chosen.membership_role,
+          chosen.team_role,
+          chosen.team_group_id,
+          chosen.team_group_name,
+          chosen.organization_credit_balance,
+          chosen.organization_reserved_balance,
+          chosen.member_credit_balance,
+          chosen.member_credit_used,
           COALESCE((
             SELECT SUM(r.amount_reserved)
             FROM credit_reservations r
-            WHERE r.organization_id = o.id
-              AND (w.id IS NULL OR r.workspace_id = w.id)
+            WHERE r.organization_id = chosen.organization_id
+              AND (chosen.workspace_id IS NULL OR r.workspace_id = chosen.workspace_id)
               AND r.status = 'active'
           ), 0) AS workspace_reserved_credits,
           COALESCE((
             SELECT COUNT(*)
             FROM team_member_profiles child
-            WHERE child.organization_id = tp.organization_id
-              AND child.workspace_id = tp.workspace_id
-              AND child.member_group_id = tp.member_group_id
-              AND child.membership_id <> tp.membership_id
-              AND tp.business_role IN ('admin', 'group_admin')
+            WHERE child.organization_id = chosen.organization_id
+              AND child.workspace_id = chosen.workspace_id
+              AND child.member_group_id = chosen.team_group_id
+              AND child.membership_id <> chosen.membership_id
+              AND chosen.team_role IN ('admin', 'group_admin')
           ), 0) AS subaccount_count
         FROM users u
-        LEFT JOIN memberships m ON m.user_id = u.id
-        LEFT JOIN organizations o ON o.id = m.organization_id
-        LEFT JOIN workspaces w ON w.id = m.workspace_id
-        LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-        LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
+        LEFT JOIN LATERAL (
+          SELECT
+            m.id AS membership_id,
+            m.organization_id,
+            o.name AS organization_name,
+            m.workspace_id,
+            m.role AS membership_role,
+            tp.business_role AS team_role,
+            tg.id AS team_group_id,
+            tg.name AS team_group_name,
+            o.credit_balance_cached AS organization_credit_balance,
+            o.credit_reserved_cached AS organization_reserved_balance,
+            tp.credit_balance_cached AS member_credit_balance,
+            tp.credit_used_cached AS member_credit_used
+          FROM memberships m
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
+          LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
+          WHERE m.user_id = u.id
+          ORDER BY
+            CASE WHEN m.status = 'active' THEN 0 ELSE 1 END,
+            CASE
+              WHEN m.role = 'owner_admin' THEN 0
+              WHEN tp.business_role IN ('admin', 'group_admin') THEN 1
+              WHEN m.role = 'sub_account' THEN 2
+              ELSE 3
+            END,
+            m.created_at DESC,
+            m.id ASC
+          LIMIT 1
+        ) chosen ON TRUE
         ${whereSql}
         ORDER BY u.created_at DESC, u.id ASC
         LIMIT $${params.length + 1}
@@ -638,7 +673,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       metadata: {
         actorAdminAccountId: input.actorAdminAccountId,
         maskedContact: {
-          phone: maskPhone(user.phone_e164),
+          phone: user.phone_e164 ? maskCnPhone(user.phone_e164) : null,
           email: maskEmail(user.email),
         },
       },
@@ -650,7 +685,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         data: {
           userId: user.id,
           contact: {
-            phone: user.phone_e164,
+            phone: user.phone_e164 ? normalizeCnPhone(user.phone_e164) : null,
             email: user.email,
           },
         },
@@ -1366,7 +1401,7 @@ function userFromRow(row: AdminUserRow): AdminUserListItem {
   return {
     userId: row.user_id,
     displayName: row.display_name ?? "未命名用户",
-    phone: maskPhone(row.phone_e164),
+    phone: row.phone_e164 ? normalizeCnPhone(row.phone_e164) : null,
     email: maskEmail(row.email),
     status: row.user_status,
     organizationId: row.organization_id,
@@ -1400,13 +1435,6 @@ function resolveAccountType(row: AdminUserRow): AdminUserListItem["accountType"]
     return "owner_account";
   }
   return "user";
-}
-
-function maskPhone(phone: string | null): string | null {
-  if (!phone) {
-    return null;
-  }
-  return phone.replace(/(\+?\d{2,4})\d{4}(\d{4})$/, "$1****$2");
 }
 
 function maskEmail(email: string | null): string | null {

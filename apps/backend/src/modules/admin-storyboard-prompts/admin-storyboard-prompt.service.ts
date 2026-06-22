@@ -102,17 +102,18 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
   }
 
   async function savePackage(input: SavePackageInput) {
-    const validation = validatePackagePayload(input);
-    if (validation) return validation;
-    const now = input.now;
-    const id = input.id || randomUUID();
     const existing = input.id
       ? await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1 AND deleted_at IS NULL", [input.id])
       : undefined;
+    const normalizedInput = normalizePackageDefaultFlags(mergePackageInputWithExisting(input, existing));
+    const validation = validatePackagePayload(normalizedInput);
+    if (validation) return validation;
+    const now = normalizedInput.now;
+    const id = normalizedInput.id || randomUUID();
     const duplicate = await queryOne<{ id: string }>(
       deps.db,
       "SELECT id FROM storyboard_prompt_packages WHERE code = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) AND deleted_at IS NULL",
-      [input.code.trim(), input.id || null],
+      [normalizedInput.code.trim(), normalizedInput.id || null],
     );
     if (duplicate) return error(409, "storyboard_prompt_code_duplicate", "提示词包编码已存在");
 
@@ -158,26 +159,26 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
           updated_at = EXCLUDED.updated_at
       `,
       packageParams({
-        ...input,
+        ...normalizedInput,
         id,
         now,
       }),
     );
-    if (input.is_default) {
+    if (normalizedInput.is_default) {
       await clearPackageTypeDefaults({
         id,
-        packageType: input.package_type,
-        actorAdminAccountId: input.actorAdminAccountId,
+        packageType: normalizedInput.package_type,
+        actorAdminAccountId: normalizedInput.actorAdminAccountId,
         now,
       });
     }
     await recordPackageVersion({
       packageId: id,
-      actorAdminAccountId: input.actorAdminAccountId,
-      reason: input.reason || (existing ? "update storyboard prompt package" : "create storyboard prompt package"),
+      actorAdminAccountId: normalizedInput.actorAdminAccountId,
+      reason: normalizedInput.reason || (existing ? "update storyboard prompt package" : "create storyboard prompt package"),
       now,
     });
-    await audit(input, existing ? "admin.storyboard_prompt.package.updated" : "admin.storyboard_prompt.package.created", "storyboard_prompt_package", id);
+    await audit(normalizedInput, existing ? "admin.storyboard_prompt.package.updated" : "admin.storyboard_prompt.package.created", "storyboard_prompt_package", id);
     return packageResponse(id);
   }
 
@@ -367,7 +368,10 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     await deps.db.query(
       `
         UPDATE storyboard_prompt_packages
-        SET is_default = false, updated_by_admin_id = $3, updated_at = $4
+        SET is_default = false,
+            is_global_default = CASE WHEN package_type = 'taboo' THEN false ELSE is_global_default END,
+            updated_by_admin_id = $3,
+            updated_at = $4
         WHERE deleted_at IS NULL
           AND package_type = $2
           AND id <> $1
@@ -524,6 +528,26 @@ interface SavePackageInput extends AdminMutationInput {
   remark?: string | null;
 }
 
+interface NormalizedSavePackageInput extends SavePackageInput {
+  audience: string | null;
+  tags: string[];
+  cover_image_url: string | null;
+  key_points: string[];
+  negative_prompt: string | null;
+  applicable_genres: string[];
+  applicable_scene: string[];
+  output_type: string | null;
+  scope: Record<string, unknown>;
+  can_stack: boolean;
+  max_select_count: number | null;
+  is_default: boolean;
+  is_global_default: boolean;
+  is_recommended: boolean;
+  sort_order: number;
+  status: string;
+  remark: string | null;
+}
+
 interface SaveTemplateInput extends AdminMutationInput {
   id?: string;
   name: string;
@@ -568,6 +592,42 @@ function validatePackagePayload(input: SavePackageInput) {
     return error(400, "invalid_storyboard_prompt_status", "状态不支持");
   }
   return null;
+}
+
+function mergePackageInputWithExisting(input: SavePackageInput, existing?: StoryboardPromptPackageRow): NormalizedSavePackageInput {
+  const current = existing ? packageFromRow(existing) : null;
+  return {
+    ...input,
+    audience: input.audience ?? current?.audience ?? null,
+    tags: input.tags ?? current?.tags ?? [],
+    cover_image_url: input.cover_image_url ?? current?.cover_image_url ?? current?.coverImageUrl ?? null,
+    key_points: input.key_points ?? current?.key_points ?? current?.keyPoints ?? [],
+    negative_prompt: input.negative_prompt ?? current?.negative_prompt ?? null,
+    applicable_genres: input.applicable_genres ?? current?.applicable_genres ?? [],
+    applicable_scene: input.applicable_scene ?? current?.applicable_scene ?? current?.applicableScene ?? [],
+    output_type: input.output_type ?? current?.output_type ?? null,
+    scope: input.scope ?? current?.scope ?? {},
+    can_stack: input.can_stack ?? current?.can_stack ?? true,
+    max_select_count: input.max_select_count ?? current?.max_select_count ?? null,
+    is_default: input.is_default ?? current?.is_default ?? false,
+    is_global_default: input.is_global_default ?? current?.is_global_default ?? false,
+    is_recommended: input.is_recommended ?? current?.is_recommended ?? false,
+    sort_order: input.sort_order ?? current?.sort_order ?? 0,
+    status: input.status ?? current?.status ?? "enabled",
+    remark: input.remark ?? current?.remark ?? null,
+  };
+}
+
+function normalizePackageDefaultFlags(input: NormalizedSavePackageInput): NormalizedSavePackageInput {
+  if (input.package_type !== "taboo") {
+    return input;
+  }
+  const isDefault = Boolean(input.is_default);
+  return {
+    ...input,
+    is_default: isDefault,
+    is_global_default: isDefault ? true : Boolean(input.is_global_default),
+  };
 }
 
 function packageParams(input: SavePackageInput & { id: string; now: Date }) {

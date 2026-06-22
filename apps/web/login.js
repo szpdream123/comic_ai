@@ -532,6 +532,10 @@ const errorCopy = {
   verify_locked: "尝试次数过多，请重新获取验证码",
 };
 
+function isMainlandPhoneInput(value) {
+  return /^1\d{10}$/.test(String(value || "").trim());
+}
+
 function authErrorMessage(payload, fallback) {
   return errorCopy[payload?.error] ?? fallback;
 }
@@ -597,6 +601,11 @@ requestCodeButton?.addEventListener("click", async () => {
   }
 
   const phone = phoneInput?.value?.trim() ?? "";
+  if (!isMainlandPhoneInput(phone)) {
+    resetRequestCodeButton();
+    showGlobalToast("error", "验证码发送失败", "请输入11位手机号，且不要带 +86");
+    return;
+  }
   requestCodeButton.disabled = true;
   requestCodeButton.textContent = "发送中...";
 
@@ -637,6 +646,12 @@ form?.addEventListener("submit", async (event) => {
 
   const phone = phoneInput?.value?.trim() ?? "";
   const code = codeInput?.value?.trim() ?? "";
+
+  if (!isMainlandPhoneInput(phone)) {
+    setStatus("请输入11位手机号，且不要带 +86");
+    showGlobalToast("error", "登录失败", "请输入11位手机号，且不要带 +86");
+    return;
+  }
 
   if (!validateAgreementsAccepted()) {
     return;
@@ -750,6 +765,12 @@ passwordLoginForm?.addEventListener("submit", async (event) => {
   const account = accountInput?.value?.trim() ?? "";
   const password = passwordInput?.value ?? "";
   const remember = passwordRememberInput?.checked !== false;
+  if (/^\+86/.test(account)) {
+    passwordLoginButton.disabled = false;
+    setStatus("请输入11位手机号，且不要带 +86");
+    showGlobalToast("error", "密码登录失败", "请输入11位手机号，且不要带 +86");
+    return;
+  }
   passwordLoginButton.disabled = true;
   setStatus("正在登录...");
 

@@ -1049,6 +1049,73 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("keeps storyboard prompt package default flags when editing without resubmitting them", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
+
+    try {
+      const packageCode = `test_storyboard_default_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
+      const createResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Default Storyboard Prompt",
+          code: packageCode,
+          package_type: "genre",
+          tags: ["test", "default"],
+          prompt_content: "This default storyboard package has enough text to validate that edit requests preserve stored default flags.",
+          status: "enabled",
+          sort_order: 11,
+        }),
+      });
+      assert.equal(createResponse.status, 200);
+      const createPayload = await createResponse.json();
+
+      const makeDefaultResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          ...createPayload.data,
+          is_default: true,
+        }),
+      });
+      assert.equal(makeDefaultResponse.status, 200);
+
+      const editResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Edited Default Storyboard Prompt",
+          code: packageCode,
+          package_type: "genre",
+          prompt_content: "Edited default storyboard package content is still long enough, and this request intentionally omits default flags.",
+          status: "enabled",
+          sort_order: 11,
+        }),
+      });
+      assert.equal(editResponse.status, 200);
+
+      const persisted = await db.query<{ is_default: boolean; is_global_default: boolean; name: string }>(
+        "SELECT is_default, is_global_default, name FROM storyboard_prompt_packages WHERE id = $1",
+        [createPayload.data.id],
+      );
+      assert.equal(persisted.rows[0]?.name, "Edited Default Storyboard Prompt");
+      assert.equal(persisted.rows[0]?.is_default, true);
+      assert.equal(persisted.rows[0]?.is_global_default, false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists classified shot prompt templates in the admin database", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
@@ -1059,7 +1126,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
-      assert.ok(listPayload.data.some((item: { code: string; stage: string; remark: string }) => item.code === "douyin_viral_short_drama" && item.stage === "outline" && item.remark.includes("强钩子")));
+      assert.ok(listPayload.data.some((item: { code: string; stage: string; remark: string }) => item.code === "long_story_precise_breakdown" && item.stage === "outline" && item.remark.includes("强钩子")));
 
       const templateCode = `test_shot_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/shot-prompt/templates`, {
@@ -1839,7 +1906,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [{ displayName: "分镜组长", accountType: "team_permission_account", subaccountCount: 1 }],
       );
       assert.equal(teamAdmin.accountType, "team_permission_account");
-      assert.equal(teamAdmin.phone, "+86138****0002");
+      assert.equal(teamAdmin.phone, "13800200002");
       assert.equal(teamAdmin.email, "gr***@example.test");
       assert.equal(teamAdmin.teamRole, "group_admin");
       assert.equal(teamAdmin.availableCredits, 2100);
@@ -1990,11 +2057,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
 
       assert.equal(usersResponse.status, 200);
-      assert.equal(owner.phone, "+86138****0001");
+      assert.equal(owner.phone, "13800200001");
       assert.equal(owner.email, "ow***@example.test");
       assert.equal(revealResponse.status, 200);
       assert.deepEqual(revealPayload.data.contact, {
-        phone: "+8613800200001",
+        phone: "13800200001",
         email: "owner@example.test",
       });
       assert.deepEqual(audit.rows, [

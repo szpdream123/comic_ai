@@ -33,7 +33,7 @@ if (generationQueueRequired && process.env.CREATOR_DEV_STACK_MANAGED !== "true")
   console.error(
     "[phone-auth] GENERATION_QUEUE_REQUIRED=true; starting the full dev stack so generation-outbox and generation-worker are always running.",
   );
-  console.error("[phone-auth] Use GENERATION_QUEUE_REQUIRED=false only when you intentionally want HTTP-only mode.");
+  console.error("[phone-auth] Use npm run dev:http-only when you intentionally want HTTP-only mode.");
   const stackResult = spawnSync(runtime, [stackEntrypoint], {
     env: process.env,
     stdio: "inherit",
@@ -44,15 +44,6 @@ if (process.env.NODE_ENV === "production") {
   console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
   process.exit(1);
 }
-if (!isSafeDevServerDatabaseUrl(process.env.DATABASE_URL)) {
-  console.error("Refusing to start phone-auth dev server with a non-local DATABASE_URL.");
-  process.exit(1);
-}
-if (!process.env.LOCAL_DATABASE_DIR?.trim()) {
-  const port = process.env.PORT?.trim() || "4310";
-  process.env.LOCAL_DATABASE_DIR = `.local/dev-db/phone-auth-${port}`;
-}
-
 const result = spawnSync(
   runtime,
   [
@@ -187,24 +178,4 @@ function loadDotEnvFile(envFilePath) {
 
 function isEnabled(value) {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
-}
-
-function isSafeDevServerDatabaseUrl(databaseUrl) {
-  const value = databaseUrl?.trim();
-  if (!value) {
-    return true;
-  }
-  if (process.env.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE === "true") {
-    return true;
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
