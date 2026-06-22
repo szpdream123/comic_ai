@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -57,6 +58,29 @@ test("global statusbar account card shows phone and keeps upgrade prompt without
 
   assert.match(card, /\+86 13800138000/);
   assert.match(card, /\u5347\u7ea7\u4e13\u4e1a\u7248\uff0c\u521b\u5efa\u534f\u4f5c\u56e2\u961f/);
+});
+
+test("home hero renders cinematic starfield layers for the AI short drama studio", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      membershipStatus: { status: "none" },
+    },
+  });
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /home-cinematic-sky/);
+  assert.match(html, /home-meteor-field/);
+  assert.match(html, /home-cursor-aura/);
+  assert.match(html, /AI 漫剧 \/ 短剧生成舱/);
+  assert.match(css, /\.home-meteor-field span/);
+  assert.match(css, /@keyframes homeMeteorFall/);
+  assert.match(css, /--home-pointer-x/);
 });
 
 test("global statusbar account card prefers nickname and shows experience membership expiry", () => {
@@ -416,4 +440,14 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.doesNotMatch(html, /data-full-id=/);
   assert.doesNotMatch(html, /credit-ledger-description/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);
+});
+
+test("credit ledger drawer uses a narrower desktop width", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const drawerRule = css.match(/\.credit-ledger-drawer\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(drawerRule, /width:\s*min\(64rem,\s*calc\(100vw - 2\.4rem\)\)/);
+  assert.doesNotMatch(drawerRule, /width:\s*min\(72rem/);
 });

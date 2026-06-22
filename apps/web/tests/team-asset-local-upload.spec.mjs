@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { renderLibraryTeam } from "../src/features/library-team/index.js";
 import {
+  handleWorkbenchActionForTest,
   handleTeamAssetLocalUploadFiles,
   removeTeamAssetLocalUpload,
 } from "../src/features/production-workbench/index.js";
@@ -167,6 +168,30 @@ describe("team asset local uploads", () => {
         delete urlApi.createObjectURL;
       }
     }
+  });
+
+  it("removing a team upload does not show a success toast", async () => {
+    const { workbench } = createWorkbench({
+      ui: {
+        teamAssetLocalUploads: {
+          character: [{ id: "local-hero", name: "hero.png" }],
+          scene: [],
+          prop: [],
+          voice: [],
+        },
+      },
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "delete-team-asset-local-upload",
+        libraryCategory: "character",
+        localUploadId: "local-hero",
+      },
+    });
+
+    assert.deepEqual(workbench.ui.teamAssetLocalUploads.character, []);
+    assert.equal(workbench.ui.toast, "");
   });
 
   it("hides upload controls when team asset library membership is locked", () => {

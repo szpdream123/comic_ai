@@ -44,7 +44,7 @@ const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
 const MEMBERSHIP_PAYMENT_FAST_WINDOW_MS = 60 * 1000;
 const MEMBERSHIP_PAYMENT_MAX_POLL_FAILURES = 3;
 const MEMBERSHIP_PAYMENT_COUNTDOWN_TICK_MS = 1000;
-
+const MEMBERSHIP_PAYMENT_SUCCESS_TOAST = "会员权益已开通";
 const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
@@ -940,6 +940,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.canvasPointerHandledAt = Date.now();
       startCanvasPan(workbench, event);
     }
+  });
+  root.addEventListener("pointermove", (event) => {
+    updateHomeHeroPointerAura(workbench, event);
   });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
@@ -2917,18 +2920,8 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
   }
 
   if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-    await refreshMembershipEntitlementSurfaces(workbench);
-    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
-      stopMembershipPaymentWatcher(workbench);
-      stopMembershipPaymentCountdown(workbench);
-      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
-      render(workbench, { preserveLibraryScroll: true });
-      return true;
-    }
-    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
-    startMembershipPaymentWatcher(workbench);
-    render(workbench, { preserveLibraryScroll: true });
-    return false;
+    await finalizeSuccessfulMembershipPayment(workbench);
+    return true;
   }
 
   if (isExpiredMembershipPayment(workbench)) {
@@ -2953,22 +2946,22 @@ async function handleSimulatedMembershipPaymentStatus(workbench) {
   }
 
   if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-    await syncMembershipStatusOnly(workbench);
-    if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
-      stopMembershipPaymentWatcher(workbench);
-      stopMembershipPaymentCountdown(workbench);
-      workbench.ui.toast = "会员已开通，相关权益已在当前页面生效。";
-      render(workbench, { preserveLibraryScroll: true });
-      return true;
-    }
-    workbench.ui.toast = "已收到支付成功，正在同步会员权益...";
-    startMembershipPaymentWatcher(workbench);
-    render(workbench, { preserveLibraryScroll: true });
-    return false;
+    await finalizeSuccessfulMembershipPayment(workbench);
+    return true;
   }
 
   render(workbench, { preserveLibraryScroll: true });
   return false;
+}
+
+async function finalizeSuccessfulMembershipPayment(workbench) {
+  await refreshMembershipEntitlementSurfaces(workbench);
+  stopMembershipPaymentWatcher(workbench);
+  stopMembershipPaymentCountdown(workbench);
+  await refreshSessionCreditBalance(workbench, { renderOnChange: false });
+  workbench.ui.membershipPaymentPolling = false;
+  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST };
+  render(workbench, { preserveLibraryScroll: true });
 }
 
 async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId }) {
@@ -4051,6 +4044,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-credit-ledger") {
     workbench.ui.creditLedgerOpen = true;
     workbench.ui.creditLedgerError = "";
+    workbench.ui.toast = "";
     render(workbench);
     await loadCreditLedger(workbench);
     return;
@@ -4443,6 +4437,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-credit-ledger") {
     workbench.ui.creditLedgerOpen = false;
+    workbench.ui.toast = "";
     render(workbench);
     return;
   }
@@ -5672,7 +5667,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
     const uploadId = target.dataset.localUploadId ?? "";
     const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
-    workbench.ui.toast = removed ? "已从当前列表移除。" : "未找到要删除的团队素材。";
+    workbench.ui.toast = removed ? "" : "未找到要删除的团队素材。";
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
@@ -24096,6 +24091,24 @@ function disposeHomeLiquidEther(workbench) {
   }
   workbench.homeLiquidEther.dispose();
   workbench.homeLiquidEther = null;
+}
+
+function updateHomeHeroPointerAura(workbench, event) {
+  const eventTarget = resolveEventElement(event.target);
+  const hero = eventTarget?.closest?.(".home-hero") ?? workbench.root.querySelector(".home-hero");
+  if (!hero || typeof hero.getBoundingClientRect !== "function") {
+    return;
+  }
+
+  const rect = hero.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return;
+  }
+
+  const x = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100));
+  const y = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100));
+  hero.style.setProperty("--home-pointer-x", `${x.toFixed(2)}%`);
+  hero.style.setProperty("--home-pointer-y", `${y.toFixed(2)}%`);
 }
 
 function syncHomeLiquidEther(workbench) {

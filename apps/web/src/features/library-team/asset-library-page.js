@@ -371,7 +371,6 @@ function renderOfficialTeamLibrary(context) {
   );
   const teamLocked =
     assetScope === "team" && context.libraryEntitlement?.hasTeamAssetLibrary !== true;
-  const isTeamApi = assetScope === "team" && selectedCategory === "api";
   const canUseTeamLocalUploads = assetScope === "team" && !teamLocked;
   const localUploads =
     canUseTeamLocalUploads ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
@@ -396,9 +395,7 @@ function renderOfficialTeamLibrary(context) {
         </nav>
         ${localUploadToolbar}
         ${
-          isTeamApi
-            ? renderTeamApiPanel()
-            : teamLocked
+          teamLocked
               ? renderLockedTeamPanel()
               : assetScope === "team"
                 ? teamAssetContent
@@ -437,7 +434,8 @@ function renderTeamAssetWorkspace(selectedCategory, uploads) {
   const config = teamLocalUploadConfigs[selectedCategory];
   const label = categoryLabel(selectedCategory);
   if (!config) {
-    return renderStatusState(`${label}暂未接入`, "当前分类暂不展示官方素材内容，后续接入团队素材后会在这里管理。");
+    const title = selectedCategory === "api" ? "企业API暂未接入" : `${label}暂未接入`;
+    return renderStatusState(title, "当前分类暂不展示官方素材内容，后续接入团队素材后会在这里管理。");
   }
 
   const action = config.mediaType === "audio" ? "上传音频" : "上传图片";
@@ -666,48 +664,6 @@ function renderLockedTeamPanel() {
       <h2 class="sr-only">${escapeHtml(teamAssetGate.title)}</h2>
       <p>${escapeHtml(teamAssetGate.message)}</p>
       <button class="library-team-button library-team-button-primary" type="button" data-action="open-pricing">立即开通</button>
-    </section>
-  `;
-}
-
-function renderTeamApiPanel() {
-  return `
-    <section class="library-team-api-panel" aria-label="API">
-      <div class="library-team-api-head">
-        <p>
-          配置团队专属 API，全员共享优质模型。
-          <button
-            class="library-team-inline-action"
-            type="button"
-            data-action="show-library-placeholder"
-            data-placeholder-message="企业 API 使用位置将在模型调用链路接入后展示。"
-          >查看使用位置</button>
-        </p>
-        <button
-          class="library-team-button library-team-button-primary"
-          type="button"
-          data-action="show-library-placeholder"
-          data-placeholder-message="企业 API 配置暂未接入真实服务。"
-        >配置企业API服务</button>
-      </div>
-      <div class="library-team-api-table">
-        <table>
-          <thead>
-            <tr>
-              <th>模型名称</th>
-              <th>状态</th>
-              <th>更新人</th>
-              <th>最近更新时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="library-team-api-empty">
-        <div class="library-team-api-empty-icon" aria-hidden="true"></div>
-        <p>本团队暂未给任何模型配置企业API服务</p>
-      </div>
     </section>
   `;
 }

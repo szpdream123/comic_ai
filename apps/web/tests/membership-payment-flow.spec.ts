@@ -142,15 +142,15 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
   ]);
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.teamMembers[0].userId, "member-1");
-  assert.equal(workbench.ui.toast, "");
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.pendingMembershipPlanId, "");
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+  assert.equal(workbench.ui.pendingMembershipPlanId, "plan-pro-month");
+  assert.equal(workbench.ui.lastBillingOrder?.status, "paid");
+  assert.equal(workbench.ui.lastPaymentIntent?.status, "succeeded");
+  assert.match(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
-test("paid membership payment closes the qr flow and refreshes even before entitlement sync returns active", async () => {
+test("paid membership payment keeps the qr success state open without forcing a page refresh", async () => {
   const calls = [];
   const reloads = [];
   const workbench = createWorkbench({
@@ -221,19 +221,21 @@ test("paid membership payment closes the qr flow and refreshes even before entit
   });
 
   assert.equal(workbench.ui.membershipStatus.status, "none");
-  assert.equal(workbench.ui.toast, "");
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.pendingMembershipPlanId, "");
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+  assert.equal(workbench.ui.pendingMembershipPlanId, "plan-pro-month");
+  assert.equal(workbench.ui.lastBillingOrder?.status, "paid");
+  assert.equal(workbench.ui.lastPaymentIntent?.status, "succeeded");
   assert.equal(workbench.ui.membershipPaymentPolling, false);
-  assert.deepEqual(reloads, ["reload"]);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
+  assert.deepEqual(reloads, []);
+  assert.match(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
 test("simulating a membership payment success runs callback then activates membership", async () => {
   const calls = [];
+  const reloads = [];
   const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
     lastBillingOrder: {
       id: "order-membership-1",
       productType: "membership_plan",
@@ -301,6 +303,9 @@ test("simulating a membership payment success runs callback then activates membe
     calls.push("paymentPollClearTimeout");
   };
   workbench.membershipPaymentPollTimer = { active: true };
+  workbench.requestPageRefreshAfterMembershipPaymentSuccess = () => {
+    reloads.push("reload");
+  };
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: {
@@ -315,14 +320,50 @@ test("simulating a membership payment success runs callback then activates membe
     ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
     ["getBillingOrder", "order-membership-1"],
     ["getPaymentIntent", "intent-membership-1"],
+    "getMembershipPlans",
     "getMembershipStatus",
+    "getTeamOverview",
+    "getTeamMembers",
   ]);
-  assert.equal(workbench.ui.lastBillingOrder.status, "paid");
-  assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.membershipPaymentPolling, false);
   assert.equal(workbench.membershipPaymentPollTimer, null);
-  assert.match(workbench.ui.toast, /会员已开通/);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+  assert.equal(workbench.ui.pendingMembershipPlanId, "plan-pro-month");
+  assert.equal(workbench.ui.lastBillingOrder?.status, "paid");
+  assert.equal(workbench.ui.lastPaymentIntent?.status, "succeeded");
+  assert.deepEqual(reloads, []);
+  assert.match(workbench.root.innerHTML, /data-modal="membership-payment"/);
+});
+
+test("opening and closing the wallet clears the membership payment success toast", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    toast: { tone: "success", message: "会员权益已开通" },
+  }, {
+    async getCreditLedger(input) {
+      calls.push(["getCreditLedger", input]);
+      return { data: [], summary: { displayAvailableCredits: 120 } };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-credit-ledger" },
+  });
+
+  assert.deepEqual(calls, [["getCreditLedger", { pageSize: 80 }]]);
+  assert.equal(workbench.ui.creditLedgerOpen, true);
+  assert.equal(workbench.ui.toast, "");
+
+  workbench.ui.toast = { tone: "success", message: "会员权益已开通" };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "close-credit-ledger" },
+  });
+
+  assert.equal(workbench.ui.creditLedgerOpen, false);
+  assert.equal(workbench.ui.toast, "");
 });
 
 test("membership payment countdown refreshes every second independently from payment polling", async () => {

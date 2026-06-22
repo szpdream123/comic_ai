@@ -6857,7 +6857,7 @@ describe("production workbench project tab", () => {
     assert.ok(calls.some((call) => Array.isArray(call) && call[0] === "getPaymentIntent"));
     assert.equal(workbench.ui.membershipStatus.status, "professional_active");
     assert.equal(workbench.ui.libraryEntitlement.hasTeamAssetLibrary, true);
-    assert.match(workbench.ui.toast, /会员已开通/);
+    assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
   });
 
   it("can regenerate an expired membership payment qr code with a new order", async () => {
