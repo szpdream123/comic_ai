@@ -1009,6 +1009,13 @@ export const creatorApi = {
     });
   },
 
+  createMembershipCheckout(input, options = {}) {
+    return postJsonWithIdempotency("/api/membership/checkout", input, {
+      action: "membership.checkout.create",
+      idempotencyKey: options.idempotencyKey,
+    });
+  },
+
   getStoryboardPromptPackages() {
     return fetchJson("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
       unwrapEnvelope: false,

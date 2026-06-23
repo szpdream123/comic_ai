@@ -21,7 +21,9 @@ type CreditLedgerEntryType =
   | "release"
   | "expire"
   | "transfer_out"
-  | "transfer_in";
+  | "transfer_in"
+  | "freeze"
+  | "restore";
 export type CreditAllocationOutcome = Extract<
   CreditReservationAllocationStatus,
   "consumed" | "released" | "manual_review_required"
@@ -298,6 +300,14 @@ export async function grantCreditsInTransaction(
   return inserted.entry;
 }
 
+export class WalletFrozenMembershipRequiredError extends Error {
+  readonly code = "wallet_frozen_membership_required";
+
+  constructor() {
+    super("Membership renewal is required before frozen wallet credits can be used.");
+  }
+}
+
 export async function transferCreditsBetweenOrganizationsInTransaction(
   db: SqlDatabase,
   input: {
@@ -484,19 +494,25 @@ export async function reserveCredits(
       ],
     );
 
-    const updatedOrganization = await queryOne<{ id: string }>(
+    const organizationWallet = await queryOne<{
+      id: string;
+      credit_balance_cached: number;
+      credit_frozen_cached: number;
+    }>(
       db,
       `
-        SELECT id
+        SELECT id, credit_balance_cached, credit_frozen_cached
         FROM organizations
         WHERE id = $1
-          AND credit_balance_cached >= $2
         LIMIT 1
       `,
-      [input.organizationId, input.amount],
+      [input.organizationId],
     );
 
-    if (!updatedOrganization) {
+    if (Number(organizationWallet?.credit_frozen_cached ?? 0) > 0) {
+      throw new WalletFrozenMembershipRequiredError();
+    }
+    if (!organizationWallet || Number(organizationWallet.credit_balance_cached ?? 0) < input.amount) {
       throw new InsufficientCreditsError();
     }
 
@@ -757,24 +773,50 @@ export async function repairCreditBalanceCache(
     available: number;
     reserved: number;
     consumed: number;
+    frozen: number;
+    frozen_at: Date | string | null;
+    frozen_until: Date | string | null;
   }>(
     db,
     `
+      WITH ledger_balance AS (
+        SELECT
+          COALESCE(sum(available_delta), 0)::int AS available,
+          COALESCE(sum(reserved_delta), 0)::int AS reserved,
+          COALESCE(sum(consumed_delta), 0)::int AS consumed
+        FROM credit_ledger_entries
+        WHERE organization_id = $1
+      ),
+      frozen_lots AS (
+        SELECT
+          COALESCE(sum(available_amount), 0)::int AS frozen,
+          min(frozen_at) AS frozen_at,
+          max(frozen_until) AS frozen_until
+        FROM credit_lots
+        WHERE organization_id = $1
+          AND status = 'frozen'
+          AND available_amount > 0
+      )
       SELECT
-        COALESCE(sum(available_delta), 0)::int AS available,
-        COALESCE(sum(reserved_delta), 0)::int AS reserved,
-        COALESCE(sum(consumed_delta), 0)::int AS consumed
-      FROM credit_ledger_entries
-      WHERE organization_id = $1
+        ledger_balance.available,
+        ledger_balance.reserved,
+        ledger_balance.consumed,
+        frozen_lots.frozen,
+        frozen_lots.frozen_at,
+        frozen_lots.frozen_until
+      FROM ledger_balance
+      CROSS JOIN frozen_lots
     `,
     [input.organizationId],
   );
 
+  const frozen = Number(balance?.frozen ?? 0);
   const recomputed = {
     organizationId: input.organizationId,
     available: balance?.available ?? 0,
     reserved: balance?.reserved ?? 0,
     consumed: balance?.consumed ?? 0,
+    frozen,
   };
 
   await db.query(
@@ -782,10 +824,20 @@ export async function repairCreditBalanceCache(
       UPDATE organizations
       SET credit_balance_cached = $2,
           credit_reserved_cached = $3,
+          credit_frozen_cached = $4,
+          credit_frozen_at = $5,
+          credit_frozen_until = $6,
           updated_at = now()
       WHERE id = $1
     `,
-    [input.organizationId, recomputed.available, recomputed.reserved],
+    [
+      input.organizationId,
+      recomputed.available,
+      recomputed.reserved,
+      recomputed.frozen,
+      recomputed.frozen > 0 ? (balance?.frozen_at ?? null) : null,
+      recomputed.frozen > 0 ? (balance?.frozen_until ?? null) : null,
+    ],
   );
 
   return recomputed;

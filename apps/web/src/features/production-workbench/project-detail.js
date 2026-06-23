@@ -348,6 +348,7 @@ function renderGlobalPricingModal(ui = {}) {
     paymentIntent: ui.lastPaymentIntent ?? null,
     paymentAction: ui.lastPaymentAction ?? null,
     membershipPaymentState: resolveMembershipPaymentState(ui),
+    pricingTab: ui.pricingModalTab ?? "membership",
   });
   if (!pricingModal) {
     return "";
@@ -778,10 +779,11 @@ function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
 }
 
 function renderOverlayWorkspaceStatusToast(ui = {}) {
-  if (!ui.accountSettingsOpen) {
+  const toast = normalizeWorkspaceToast(ui.toast);
+  if (!ui.accountSettingsOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
-  return renderWorkspaceStatusToast(ui.toast, "account-settings-toast");
+  return renderWorkspaceStatusToast(toast, ui.accountSettingsOpen ? "account-settings-toast" : "");
 }
 
 function normalizeWorkspaceToast(message) {
@@ -794,6 +796,22 @@ function normalizeWorkspaceToast(message) {
     };
   }
   return { message: String(message ?? "").trim(), tone: "" };
+}
+
+function isPaymentResultToast(message) {
+  const toast = normalizeWorkspaceToast(message);
+  return [
+    "会员权益已开通",
+    "积分已到账",
+  ].includes(toast.message);
+}
+
+function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
+  return (
+    ui.activeNavTab === "tools" &&
+    ui.canvasProjectView === "detail" &&
+    isPaymentResultToast(message)
+  );
 }
 
 function resolveWorkspaceToastTone(message) {
@@ -841,10 +859,13 @@ function resolveDisplayedCreditBalance(ui, session = {}) {
 function resolveMembershipPaymentState(ui) {
   return {
     pendingMembershipPlanId: ui.pendingMembershipPlanId ?? "",
+    pendingBillingPackageId: ui.pendingBillingPackageId ?? "",
     provider: ui.pendingMembershipPaymentProvider ?? ui.lastPaymentIntent?.provider ?? "wechat_pay",
     qrCreatedAt: ui.membershipPaymentQrCreatedAt ?? null,
     qrExpiresAt: ui.membershipPaymentQrExpiresAt ?? ui.lastPaymentIntent?.expiresAt ?? null,
     polling: Boolean(ui.membershipPaymentPolling),
+    creating: Boolean(ui.membershipPaymentCreating),
+    syncing: Boolean(ui.membershipPaymentSyncing),
     pollFailureCount: Number(ui.membershipPaymentPollFailureCount ?? 0),
     agreementAccepted: ui.membershipPaymentAgreementAccepted !== false,
   };
@@ -5666,12 +5687,12 @@ function renderGlobalStatusbar(session, options = {}) {
           <span>商务合作</span>
         </button>
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
-          <span class="statusbar-action-icon">${renderStatusbarActionIcon("sparkle")}</span>
-          <span class="statusbar-action-icon trailing">${renderStatusbarActionIcon("cart")}</span>
+          <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
+          <span>购物车</span>
         </button>
         <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
-          <span class="statusbar-action-icon">${renderStatusbarActionIcon("wallet")}</span>
-          <span>钱包</span>
+          <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
+          <span>积分</span>
           <b>${escapeHtml(String(creditBalance))}</b>
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">

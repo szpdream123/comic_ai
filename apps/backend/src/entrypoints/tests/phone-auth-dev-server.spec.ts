@@ -7642,6 +7642,82 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("creates membership checkout order and payment intent in one HTTP request", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        NODE_ENV: "test",
+        TENCENT_SMS_ENABLED: "false",
+        WECHAT_PAY_ENABLED: "false",
+        ALIPAY_ENABLED: "false",
+        STORAGE_ADAPTER_MODE: "dev",
+        STORAGE_PROVIDER: "dev",
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138003");
+
+      const plansResponse = await fetch(`${server.origin}/api/membership/plans`, {
+        headers: { cookie },
+      });
+      const plans = await plansResponse.json();
+      const plan = plans.data.plans.find((item: { tier?: string }) => item.tier === "experience")
+        ?? plans.data.plans[0];
+      assert.ok(plan);
+
+      const checkoutResponse = await fetch(`${server.origin}/api/membership/checkout`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-checkout-one-shot",
+          cookie,
+        },
+        body: JSON.stringify({
+          membershipPlanId: plan.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        }),
+      });
+      const checkout = await checkoutResponse.json();
+      const replayResponse = await fetch(`${server.origin}/api/membership/checkout`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "membership-checkout-one-shot",
+          cookie,
+        },
+        body: JSON.stringify({
+          membershipPlanId: plan.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        }),
+      });
+      const replay = await replayResponse.json();
+
+      assert.equal(checkoutResponse.status, 200);
+      assert.equal(checkout.order.productType, "membership_plan");
+      assert.equal(checkout.order.membershipPlanId, plan.id);
+      assert.equal(checkout.paymentIntent.orderId, checkout.order.id);
+      assert.equal(checkout.paymentIntent.provider, "wechat_pay");
+      assert.equal(checkout.payAction.provider, "wechat_pay");
+      assert.equal(replayResponse.status, 200);
+      assert.equal(replay.order.id, checkout.order.id);
+      assert.equal(replay.paymentIntent.id, checkout.paymentIntent.id);
+
+      const db = await server.db();
+      const intents = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM payment_intents WHERE order_id = $1",
+        [checkout.order.id],
+      );
+      assert.equal(intents.rows[0]?.count, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("repairs paid membership order effects when the paid order is polled", async () => {
     const server = createPhoneAuthDevServer();
 

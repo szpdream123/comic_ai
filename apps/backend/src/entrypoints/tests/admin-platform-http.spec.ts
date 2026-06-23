@@ -3148,6 +3148,173 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets finance admins manage direct recharge packages through a dedicated admin route", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      await db.query(
+        `
+          INSERT INTO credit_packages (
+            id,
+            code,
+            display_name,
+            credits,
+            amount_minor,
+            currency,
+            metadata_json,
+            status
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000099001',
+            'legacy_bonus_10',
+            'Legacy Bonus',
+            10,
+            100,
+            'CNY',
+            '{}'::jsonb,
+            'active'
+          )
+        `,
+      );
+
+      const packageBody = {
+        code: `direct_recharge_${randomUUID().slice(0, 8)}`,
+        displayName: "500 积分直充",
+        subtitle: "仅增加积分，不延长会员有效期",
+        credits: 500,
+        amountMinor: 19900,
+        currency: "CNY",
+        badge: "推荐",
+        sortOrder: 20,
+        status: "active",
+      };
+      const createResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-direct-recharge-500",
+          cookie,
+        },
+        body: JSON.stringify(packageBody),
+      });
+      const createPayload = await createResponse.json();
+
+      const listResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.package.displayName, "500 积分直充");
+      assert.equal(createPayload.package.credits, 500);
+      assert.equal(createPayload.package.giftCredits, 0);
+      assert.deepEqual(createPayload.package.metadata, { kind: "direct_recharge" });
+      assert.equal(listResponse.status, 200);
+      assert.deepEqual(
+        listPayload.data.packages.map((item: { code: string }) => item.code),
+        [packageBody.code],
+      );
+      assert.equal(
+        listPayload.data.packages.some((item: { code: string }) => item.code === "legacy_bonus_10"),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts direct recharge package saves with an optional validity window from the admin drawer", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      const response = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-direct-recharge-validity-window",
+          cookie,
+        },
+        body: JSON.stringify({
+          code: "direct_recharge_500",
+          displayName: "500 积分直充",
+          subtitle: "仅增加积分，不延长会员有效期",
+          credits: 500,
+          amountMinor: 20000,
+          currency: "CNY",
+          badge: null,
+          sortOrder: 100,
+          status: "active",
+          validFrom: "2026-06-09T00:00:00.000Z",
+          validUntil: null,
+          metadata: { kind: "direct_recharge" },
+        }),
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.package.code, "direct_recharge_500");
+      assert.equal(payload.package.amountMinor, 20000);
+      assert.equal(payload.package.validFrom, "2026-06-09T00:00:00.000Z");
+      assert.equal(payload.package.validUntil, null);
+      assert.deepEqual(payload.package.metadata, { kind: "direct_recharge" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports a readable conflict when a direct recharge package code already exists", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    const body = {
+      code: "direct_recharge_500",
+      displayName: "500 积分直充",
+      credits: 500,
+      amountMinor: 20000,
+      currency: "CNY",
+      sortOrder: 100,
+      status: "active",
+      metadata: { kind: "direct_recharge" },
+    };
+
+    try {
+      const firstResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-direct-recharge-conflict-first",
+          cookie,
+        },
+        body: JSON.stringify(body),
+      });
+      const conflictResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-direct-recharge-conflict-second",
+          cookie,
+        },
+        body: JSON.stringify({ ...body, displayName: "重复编码档位" }),
+      });
+      const conflictPayload = await conflictResponse.json();
+
+      assert.equal(firstResponse.status, 200);
+      assert.equal(conflictResponse.status, 409);
+      assert.equal(conflictPayload.error.code, "credit_package_code_conflict");
+      assert.equal(conflictPayload.error.message, "credit package code already exists");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires idempotency keys for membership plans writes", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, {
@@ -3531,6 +3698,90 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         )
       `,
       [paymentIssueOrderId, paymentIssueUserId, paymentIssuePackageId],
+    );
+    await db.query(
+      `
+        INSERT INTO payment_intents (
+          id,
+          organization_id,
+          order_id,
+          provider,
+          product_mode,
+          status,
+          amount_minor,
+          currency,
+          merchant_order_no,
+          provider_trade_id,
+          provider_payload_hash,
+          provider_safe_metadata_json,
+          submitted_at,
+          succeeded_at,
+          expires_at
+        ) VALUES (
+          '83400000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          $1,
+          'wechat_pay',
+          'native_qr',
+          'succeeded',
+          8800,
+          'CNY',
+          'ORD-RISK-PAID-WITHOUT-CREDIT',
+          'wx-risk-paid-without-credit',
+          'payload-hash',
+          '{}'::jsonb,
+          '2026-06-04T11:59:00.000Z',
+          '2026-06-04T12:00:00.000Z',
+          '2026-06-05T00:00:00.000Z'
+        )
+      `,
+      [paymentIssueOrderId],
+    );
+    await db.query(
+      `
+        INSERT INTO payment_provider_events (
+          id,
+          organization_id,
+          order_id,
+          payment_intent_id,
+          provider,
+          provider_event_dedup_key,
+          merchant_order_no,
+          provider_trade_id,
+          event_type,
+          signature_status,
+          processing_status,
+          raw_payload_hash,
+          normalized_payload_json,
+          ack_status,
+          failure_code,
+          received_at,
+          processed_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          '83400000-0000-4000-8000-000000000002',
+          '10000000-0000-4000-8000-000000000001',
+          $1,
+          '83400000-0000-4000-8000-000000000001',
+          'wechat_pay',
+          'wechat-risk-paid-event-1',
+          'ORD-RISK-PAID-WITHOUT-CREDIT',
+          'wx-risk-paid-without-credit',
+          'payment_succeeded',
+          'verified',
+          'processed',
+          'payload-hash',
+          '{}'::jsonb,
+          'sent_success',
+          NULL,
+          '2026-06-04T12:00:00.000Z',
+          '2026-06-04T12:00:00.000Z',
+          '2026-06-04T12:00:00.000Z',
+          '2026-06-04T12:00:00.000Z'
+        )
+      `,
+      [paymentIssueOrderId],
     );
     await db.query(
       `
@@ -3963,6 +4214,90 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       `,
       [paidOrderId, adminOpsUserId, packageId],
     );
+    await db.query(
+      `
+        INSERT INTO payment_intents (
+          id,
+          organization_id,
+          order_id,
+          provider,
+          product_mode,
+          status,
+          amount_minor,
+          currency,
+          merchant_order_no,
+          provider_trade_id,
+          provider_payload_hash,
+          provider_safe_metadata_json,
+          submitted_at,
+          succeeded_at,
+          expires_at
+        ) VALUES (
+          '89000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          $1,
+          'wechat_pay',
+          'native_qr',
+          'succeeded',
+          9900,
+          'CNY',
+          'ORD-ADMIN-OPS-PAID-1',
+          'wx-admin-ops-paid-1',
+          'payload-hash',
+          '{}'::jsonb,
+          '2026-06-04T10:59:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-05T00:00:00.000Z'
+        )
+      `,
+      [paidOrderId],
+    );
+    await db.query(
+      `
+        INSERT INTO payment_provider_events (
+          id,
+          organization_id,
+          order_id,
+          payment_intent_id,
+          provider,
+          provider_event_dedup_key,
+          merchant_order_no,
+          provider_trade_id,
+          event_type,
+          signature_status,
+          processing_status,
+          raw_payload_hash,
+          normalized_payload_json,
+          ack_status,
+          failure_code,
+          received_at,
+          processed_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          '89000000-0000-4000-8000-000000000002',
+          '10000000-0000-4000-8000-000000000001',
+          $1,
+          '89000000-0000-4000-8000-000000000001',
+          'wechat_pay',
+          'wechat-admin-ops-paid-event-1',
+          'ORD-ADMIN-OPS-PAID-1',
+          'wx-admin-ops-paid-1',
+          'payment_succeeded',
+          'verified',
+          'processed',
+          'payload-hash',
+          '{}'::jsonb,
+          'sent_success',
+          NULL,
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z'
+        )
+      `,
+      [paidOrderId],
+    );
 
     try {
       const missingRetryIdempotency = await fetch(
@@ -4166,6 +4501,188 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
       assert.equal(organization.rows[0]?.credit_balance_cached, 0);
       assert.equal(ledgerCount.rows[0]?.count, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not repair failed payments through documented credit repair route", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const adminOpsUserId = "84000000-0000-4000-8000-000000000201";
+    const packageId = "87000000-0000-4000-8000-000000000201";
+    const failedOrderId = "88000000-0000-4000-8000-000000000201";
+    const failedIntentId = "89000000-0000-4000-8000-000000000201";
+    const failedProviderEventId = "89000000-0000-4000-8000-000000000202";
+
+    await db.query(
+      `
+        INSERT INTO users (id, phone_e164, display_name, status)
+        VALUES ($1, '+8613999999201', '后台失败支付用户', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [adminOpsUserId],
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Ops Failed Payment Org', 'active')
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO credit_packages (
+          id, code, display_name, credits, amount_minor, currency, status
+        ) VALUES ($1, 'admin_ops_failed_120', 'Admin Ops Failed 120', 120, 9900, 'CNY', 'active')
+      `,
+      [packageId],
+    );
+    await db.query(
+      `
+        INSERT INTO billing_orders (
+          id,
+          organization_id,
+          created_by_user_id,
+          order_no,
+          credit_package_id,
+          package_snapshot_json,
+          credits,
+          amount_minor,
+          currency,
+          status,
+          expires_at,
+          paid_at,
+          successful_payment_intent_id
+        ) VALUES (
+          $1,
+          '10000000-0000-4000-8000-000000000001',
+          $2,
+          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
+          $3,
+          '{"code":"admin_ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
+          120,
+          9900,
+          'CNY',
+          'paid',
+          '2026-06-05T00:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          $4
+        )
+      `,
+      [failedOrderId, adminOpsUserId, packageId, failedIntentId],
+    );
+    await db.query(
+      `
+        INSERT INTO payment_intents (
+          id,
+          organization_id,
+          order_id,
+          provider,
+          product_mode,
+          status,
+          amount_minor,
+          currency,
+          merchant_order_no,
+          provider_trade_id,
+          provider_payload_hash,
+          provider_safe_metadata_json,
+          submitted_at,
+          expires_at
+        ) VALUES (
+          $1,
+          '10000000-0000-4000-8000-000000000001',
+          $2,
+          'wechat_pay',
+          'native_qr',
+          'failed',
+          9900,
+          'CNY',
+          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
+          'wx-admin-ops-failed-1',
+          'payload-hash',
+          '{}'::jsonb,
+          '2026-06-04T10:59:00.000Z',
+          '2026-06-05T00:00:00.000Z'
+        )
+      `,
+      [failedIntentId, failedOrderId],
+    );
+    await db.query(
+      `
+        INSERT INTO payment_provider_events (
+          id,
+          organization_id,
+          order_id,
+          payment_intent_id,
+          provider,
+          provider_event_dedup_key,
+          merchant_order_no,
+          provider_trade_id,
+          event_type,
+          signature_status,
+          processing_status,
+          raw_payload_hash,
+          normalized_payload_json,
+          ack_status,
+          failure_code,
+          received_at,
+          processed_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          $1,
+          '10000000-0000-4000-8000-000000000001',
+          $2,
+          $3,
+          'wechat_pay',
+          'wechat-admin-ops-failed-event-1',
+          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
+          'wx-admin-ops-failed-1',
+          'payment_failed',
+          'verified',
+          'processed',
+          'payload-hash',
+          '{}'::jsonb,
+          'sent_success',
+          NULL,
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z',
+          '2026-06-04T11:00:00.000Z'
+        )
+      `,
+      [failedProviderEventId, failedOrderId, failedIntentId],
+    );
+
+    try {
+      const repairResponse = await fetch(
+        `${server.origin}/api/admin/ops/payments/${failedOrderId}/repair-credit`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-platform-failed-payment-repair",
+            cookie,
+          },
+          body: JSON.stringify({ reason: "失败支付不能补发积分" }),
+        },
+      );
+      const repairPayload = await repairResponse.json();
+
+      const ledgerCount = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order' AND source_id = $1",
+        [failedOrderId],
+      );
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [failedOrderId],
+      );
+
+      assert.equal(repairResponse.status, 400);
+      assert.equal(repairPayload.error.code, "payment_issue_not_repairable");
+      assert.equal(ledgerCount.rows[0]?.count, 0);
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
     } finally {
       await server.close();
     }

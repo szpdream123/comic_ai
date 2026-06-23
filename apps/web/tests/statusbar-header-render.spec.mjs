@@ -175,7 +175,12 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
 
   assert.match(purchaseButton, /statusbar-quick-action credit-action/);
   assert.match(walletButton, /statusbar-quick-action wallet-action/);
-  assert.match(html, /statusbar-action-icon trailing/);
+  assert.match(purchaseButton, />购物车<\/span>/);
+  assert.match(purchaseButton, /statusbar-action-icon cart-icon/);
+  assert.doesNotMatch(purchaseButton, /statusbar-action-icon trailing/);
+  assert.match(walletButton, />积分<\/span>/);
+  assert.match(walletButton, /statusbar-action-icon credit-icon/);
+  assert.doesNotMatch(walletButton, />钱包<\/span>/);
   assert.match(html, /aria-label="积分明细"/);
   assert.match(html, /data-action="open-credit-ledger"/);
   assert.match(html, /statusbar-quick-action icon-action/);
@@ -206,9 +211,10 @@ test("global statusbar shows the current account credit balance in wallet only",
   const walletButton = extractStatusbarButton(html, "wallet-action");
 
   assert.match(purchaseButton, /data-action="open-pricing"/);
-  assert.match(purchaseButton, /statusbar-action-icon trailing/);
+  assert.match(purchaseButton, />购物车<\/span>/);
   assert.doesNotMatch(purchaseButton, /1280/);
   assert.match(walletButton, /data-action="open-credit-ledger"/);
+  assert.match(walletButton, />积分<\/span>/);
   assert.match(walletButton, />1280<\/b>/);
 });
 

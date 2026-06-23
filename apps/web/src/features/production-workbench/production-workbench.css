@@ -1560,9 +1560,8 @@
 }
 
 .statusbar-quick-action.credit-action {
-  gap: 0.42rem;
-  min-width: 7.3rem;
-  padding-inline: 0.9rem;
+  min-width: 6.9rem;
+  padding-inline: 1rem;
 }
 
 .statusbar-quick-action.credit-action b {
@@ -1571,8 +1570,8 @@
 }
 
 .statusbar-quick-action.wallet-action {
-  min-width: 5.8rem;
-  padding-inline: 0.9rem;
+  min-width: 8.6rem;
+  padding-inline: 1rem;
 }
 
 .statusbar-quick-action.icon-action {
@@ -1601,16 +1600,12 @@
   overflow: visible;
 }
 
-.statusbar-quick-action.credit-action .statusbar-action-icon:first-child {
-  color: oklch(78% 0.18 300);
-}
-
-.statusbar-quick-action.credit-action .statusbar-action-icon.trailing {
+.statusbar-quick-action.credit-action .statusbar-action-icon.cart-icon {
   color: oklch(100% 0 0 / 0.86);
 }
 
-.statusbar-quick-action.wallet-action .statusbar-action-icon {
-  color: oklch(74% 0.13 165);
+.statusbar-quick-action.wallet-action .statusbar-action-icon.credit-icon {
+  color: oklch(78% 0.18 300);
 }
 
 .statusbar-avatar {

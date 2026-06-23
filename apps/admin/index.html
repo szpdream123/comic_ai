@@ -1221,6 +1221,7 @@
         models: "模型配置",
         users: "用户与积分",
         membership: "会员权益",
+        directRecharge: "直充积分",
         prompts: "提示词管理",
         risks: "风控与审计",
         settings: "系统设置",
@@ -1238,6 +1239,8 @@
         userLoadError: "",
         membershipPlans: [],
         membershipLoadError: "",
+        directRechargePackages: [],
+        directRechargeLoadError: "",
         promptManagementMode: "script",
         batchImagePromptTarget: "character",
         batchImagePromptKeywords: { character: "", scene: "", prop: "" },
@@ -1384,6 +1387,7 @@
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
         if (path.includes("/membership")) return "membership";
+        if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
@@ -1414,9 +1418,31 @@
           headers: { "content-type": "application/json", ...(options.headers || {}) },
           ...options,
         });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw Object.assign(new Error(payload.error?.message || "请求失败"), { payload, status: response.status });
+        const rawBody = await response.text().catch(() => "");
+        let payload = {};
+        try {
+          payload = rawBody ? JSON.parse(rawBody) : {};
+        } catch {
+          payload = { error: { message: rawBody } };
+        }
+        if (!response.ok) throw Object.assign(new Error(adminApiErrorMessage(payload, response)), { payload, status: response.status });
         return payload;
+      }
+
+      function adminApiErrorMessage(payload, response) {
+        if (response.status === 401) return "后台登录已过期，请重新登录";
+        if (response.status === 403) return "当前管理员无权限执行该操作";
+        if (response.status === 404) return "接口不存在，请确认后端服务已更新";
+        if (response.status >= 500) return "服务器处理失败，请查看后端日志";
+        const error = payload?.error;
+        if (error?.message) return error.message;
+        if (typeof error === "string") {
+          return {
+            idempotency_key_required: "请求缺少幂等键，请刷新页面后重试",
+            invalid_json: "请求数据格式不正确",
+          }[error] || error;
+        }
+        return "请求失败";
       }
 
       function adminIdempotencyKey(scope = "mutation") {
@@ -1647,6 +1673,7 @@
                 ${navButton("models", "模型配置")}
                 ${navButton("users", "用户积分")}
                 ${navButton("membership", "会员权益")}
+                ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "提示词管理")}
                 ${navButton("risks", "风控审计")}
                 ${navButton("settings", "系统设置")}
@@ -1728,6 +1755,22 @@
           state.membershipPlans = [];
         } finally {
           setPageLoading("membership", false);
+        }
+      }
+
+      async function loadDirectRechargePackages() {
+        setPageLoading("directRecharge", true);
+        try {
+          const result = await api("/api/admin/direct-recharge/packages?includeArchived=1");
+          state.directRechargePackages = result.data?.packages || [];
+          state.directRechargeLoadError = "";
+          clearPageForbidden("directRecharge");
+        } catch (error) {
+          setPageForbidden("directRecharge", error);
+          state.directRechargeLoadError = error.payload?.error?.message || "直充积分档位加载失败";
+          state.directRechargePackages = [];
+        } finally {
+          setPageLoading("directRecharge", false);
         }
       }
 
@@ -2534,6 +2577,7 @@
           models: "/admin/models",
           users: "/admin/users",
           membership: "/admin/membership",
+          directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           settings: "/admin/settings",
@@ -2557,6 +2601,7 @@
         if (state.page === "models") return modelsPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
+        if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "settings") return settingsPage();
@@ -3255,6 +3300,52 @@
         </tr>`;
       }
 
+      function renderDirectRechargePage() {
+        const packages = [...(state.directRechargePackages || [])].sort((left, right) =>
+          Number(left.sortOrder || 0) - Number(right.sortOrder || 0) ||
+          Number(left.amountMinor || 0) - Number(right.amountMinor || 0) ||
+          String(left.code || "").localeCompare(String(right.code || "")),
+        );
+        const rows = packages.length
+          ? packages.map(renderDirectRechargePackageRow).join("")
+          : `<tr><td colspan="7">${state.directRechargeLoadError || "暂无直充积分档位"}</td></tr>`;
+        return `<section class="section" id="direct-recharge-packages">
+          <div class="toolbar">
+            <div>
+              <h3>直充积分档位</h3>
+              <div class="metric-note">仅配置会员可购买的积分直充档位；不赠送会员权益，不延长会员有效期。</div>
+            </div>
+            <div class="filters">
+              <button class="btn ghost" onclick="loadDirectRechargePackages().then(renderShell)">刷新</button>
+              <button class="btn primary" onclick="openDirectRechargePackageDrawer()" ${permissionAttrs("membership.plan.write")}>新增档位</button>
+            </div>
+          </div>
+          <div class="table-wrap direct-recharge-packages dense">
+            <table>
+              <thead><tr><th>档位</th><th>价格</th><th>积分</th><th>标签</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>`;
+      }
+
+      function renderDirectRechargePackageRow(item) {
+        const statusTone = item.status === "active" ? "green" : item.status === "archived" ? "warn" : "";
+        return `<tr>
+          <td>${escapeHtml(item.displayName || "-")}<div class="metric-note">${escapeHtml(item.code || "-")}</div><div class="metric-note">${escapeHtml(item.subtitle || "")}</div></td>
+          <td>${membershipMoney(item.amountMinor, item.currency)}</td>
+          <td>${Number(item.credits || item.baseCredits || 0).toLocaleString()}</td>
+          <td>${item.badge ? `<span class="tag blue">${escapeHtml(item.badge)}</span>` : "-"}</td>
+          <td>${Number(item.sortOrder || 0).toLocaleString()}</td>
+          <td><span class="tag ${statusTone}">${membershipStatusLabel(item.status)}</span></td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑档位" onclick="openDirectRechargePackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>编</button></div></td>
+        </tr>`;
+      }
+
+      function directRechargePackageById(packageId) {
+        return (state.directRechargePackages || []).find((item) => String(item.id) === String(packageId)) || null;
+      }
+
       function membershipPlanById(planId) {
         return (state.membershipPlans || []).find((plan) => String(plan.id) === String(planId)) || null;
       }
@@ -3314,6 +3405,11 @@
       function membershipPlanConflictMessage(payload) {
         const code = payload?.["code"] ? `「${payload["code"]}」` : "";
         return `套餐标识${code}已经配置过了，请配置其他套餐标识；如需调整，请返回列表编辑已有套餐。`;
+      }
+
+      function directRechargePackageConflictMessage(payload) {
+        const code = payload?.["code"] ? `「${payload["code"]}」` : "";
+        return `直充积分档位编码${code}已经存在，请换一个编码；如需调整，请返回列表编辑已有档位。`;
       }
 
       const membershipEntitlementOptions = [
@@ -3477,6 +3573,118 @@
         }
         if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 0) {
           throw new Error("席位上限必须是 0 或正整数");
+        }
+        return payload;
+      }
+
+      function openDirectRechargePackageDrawer(packageId = "") {
+        const existing = packageId ? directRechargePackageById(packageId) : null;
+        const defaults = existing || {
+          code: "direct_recharge_500",
+          displayName: "500 积分直充",
+          subtitle: "仅增加积分，不延长会员有效期",
+          credits: 500,
+          amountMinor: 19900,
+          currency: "CNY",
+          badge: "",
+          sortOrder: 100,
+          status: "active",
+          validFrom: "",
+          validUntil: "",
+        };
+        const amountYuan = Number(defaults.amountMinor || 0) / 100;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(720px,100%);">
+          <div class="drawer-head"><h3>${existing ? "编辑直充积分档位" : "新增直充积分档位"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="direct-recharge-package-form" data-idempotency-scope="admin-ui-direct-recharge-package">
+            <input type="hidden" name="id" value="${escapeAttribute(existing?.id || "")}" />
+            <div class="form-grid">
+              <label class="field"><span>档位编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="direct_recharge_500" required /></label>
+              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="500 积分直充" required /></label>
+              <label class="field"><span>积分数量</span><input name="credits" type="number" min="1" step="1" value="${Number(defaults.credits || defaults.baseCredits || 0)}" required /></label>
+              <label class="field"><span>价格（元）</span><input name="amountYuan" type="number" min="0.01" step="0.01" value="${amountYuan > 0 ? amountYuan.toFixed(2) : ""}" required /></label>
+              <label class="field"><span>币种</span><select name="currency">${optionPairs([["CNY", "CNY"]], defaults.currency || "CNY")}</select></label>
+              <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
+              <label class="field"><span>标签</span><input name="badge" value="${escapeAttribute(defaults.badge || "")}" placeholder="推荐 / 热门，可留空" /></label>
+              <label class="field"><span>展示顺序（数字越小越靠前）</span><input name="sortOrder" type="number" step="1" value="${Number(defaults.sortOrder || 100)}" required /></label>
+            </div>
+            <label class="field"><span>副标题</span><input name="subtitle" value="${escapeAttribute(defaults.subtitle || "")}" placeholder="仅增加积分，不延长会员有效期" /></label>
+            <div class="form-grid">
+              <label class="field"><span>有效开始</span><input name="validFrom" value="${escapeAttribute(defaults.validFrom || "")}" placeholder="2026-06-09T00:00:00.000Z" /></label>
+              <label class="field"><span>有效结束</span><input name="validUntil" value="${escapeAttribute(defaults.validUntil || "")}" placeholder="留空表示长期有效" /></label>
+            </div>
+            <div class="error-text" id="direct-recharge-package-error"></div>
+            <button class="btn primary full" type="submit">保存直充积分档位</button>
+          </form>
+        </aside>`;
+        document.getElementById("direct-recharge-package-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("direct-recharge-package-error");
+          error.textContent = "";
+          let payload;
+          try {
+            payload = directRechargePackagePayloadFromForm(form);
+          } catch (err) {
+            error.textContent = err.message || "直充积分档位配置不合法";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            try {
+              await api("/api/admin/direct-recharge/packages", {
+                method: "POST",
+                headers: { "idempotency-key": adminIdempotencyKey("direct-recharge-package") },
+                body: JSON.stringify(payload),
+              });
+            } catch (err) {
+              if (err.payload?.error?.code === "credit_package_code_conflict") {
+                await loadDirectRechargePackages();
+                renderShell();
+                error.textContent = directRechargePackageConflictMessage(payload);
+              }
+              throw err;
+            }
+            await loadDirectRechargePackages();
+            closeDrawer();
+            renderShell();
+          }, "直充积分档位已保存").catch((err) => {
+            if (err.payload?.error?.code === "credit_package_code_conflict") {
+              error.textContent = directRechargePackageConflictMessage(payload);
+            }
+          });
+        });
+      }
+
+      function directRechargePackagePayloadFromForm(form) {
+        const id = String(form.get("id") || "").trim();
+        const amountYuan = Number(form.get("amountYuan") || 0);
+        const payload = {
+          code: String(form.get("code") || "").trim(),
+          displayName: String(form.get("displayName") || "").trim(),
+          subtitle: String(form.get("subtitle") || "").trim() || null,
+          credits: Number(form.get("credits") || 0),
+          amountMinor: Math.round(amountYuan * 100),
+          currency: String(form.get("currency") || "CNY"),
+          badge: String(form.get("badge") || "").trim() || null,
+          sortOrder: Number(form.get("sortOrder") || 100),
+          status: String(form.get("status") || "inactive"),
+          validFrom: String(form.get("validFrom") || "").trim() || null,
+          validUntil: String(form.get("validUntil") || "").trim() || null,
+          metadata: { kind: "direct_recharge" },
+        };
+        if (id) payload.id = id;
+        if (!payload.code || !payload.displayName) {
+          throw new Error("档位编码、展示名称必填");
+        }
+        if (!Number.isInteger(payload.credits) || payload.credits < 1) {
+          throw new Error("积分数量必须是正整数");
+        }
+        if (!Number.isInteger(payload.amountMinor) || payload.amountMinor < 1) {
+          throw new Error("价格分必须是正整数");
+        }
+        if (!Number.isInteger(payload.sortOrder)) {
+          throw new Error("排序必须是整数");
         }
         return payload;
       }
@@ -7886,6 +8094,7 @@
         models: () => loadModels(),
         users: () => loadUsers(),
         membership: () => loadMembershipPlans(),
+        directRecharge: () => loadDirectRechargePackages(),
         prompts: () => loadPromptManagement(),
         risks: () => loadRiskAudit(),
         agreements: () => loadLegalDocuments(),
@@ -8046,6 +8255,8 @@
       window.restoreTeamLimitDefault = restoreTeamLimitDefault;
       window.loadMembershipPlans = loadMembershipPlans;
       window.openMembershipPlanDrawer = openMembershipPlanDrawer;
+      window.loadDirectRechargePackages = loadDirectRechargePackages;
+      window.openDirectRechargePackageDrawer = openDirectRechargePackageDrawer;
       window.updatePromptManagementMode = updatePromptManagementMode;
       window.loadScriptPrompts = loadScriptPrompts;
       window.loadImagePromptStyles = loadImagePromptStyles;
@@ -8164,6 +8375,7 @@
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
         if (path.includes("/membership")) return "membership";
+        if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/agreements")) return "agreements";
@@ -8180,6 +8392,7 @@
           parameterTemplates: "/admin/parameter-templates",
           users: "/admin/users",
           membership: "/admin/membership",
+          directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           agreements: "/admin/agreements",
@@ -8201,6 +8414,7 @@
                 ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
                 ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
+                ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
@@ -8237,6 +8451,7 @@
         if (state.page === "parameterTemplates") return parameterTemplatesPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
+        if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "agreements") return agreementsPage();

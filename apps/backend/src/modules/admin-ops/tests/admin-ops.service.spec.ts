@@ -17,8 +17,11 @@ const providerRequestId = "70000000-0000-4000-8000-000000000001";
 const reservationId = "a0000000-0000-4000-8000-000000000001";
 const creditPackageId = "90000000-0000-4000-8000-000000000001";
 const paidOrderId = "91000000-0000-4000-8000-000000000001";
+const failedPaidOrderId = "91000000-0000-4000-8000-000000000002";
 const paymentIntentId = "92000000-0000-4000-8000-000000000001";
+const failedPaymentIntentId = "92000000-0000-4000-8000-000000000002";
 const paymentRiskEventId = "93000000-0000-4000-8000-000000000001";
+const failedPaymentProviderEventId = "93000000-0000-4000-8000-000000000002";
 const retryEpisodeId = "94000000-0000-4000-8000-000000000001";
 const membershipPlanId = "95000000-0000-4000-8000-000000000001";
 const membershipPaidOrderId = "96000000-0000-4000-8000-000000000001";
@@ -729,6 +732,48 @@ describe("admin ops service", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("does not repair a paid credit order unless the payment intent and provider event succeeded", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const { adminSession } = await seedOpsFixture(db);
+      await seedFailedPaymentMarkedPaidOpsFixture(db);
+      const service = createAdminOpsService({ db, workspaceId });
+
+      const listed = await service.listItems({
+        user: { sessionToken: adminSession.token },
+        now: new Date("2026-05-19T11:20:00.000Z"),
+      });
+      const repaired = await service.repairPaidWithoutCredit({
+        user: { sessionToken: adminSession.token },
+        idempotencyKey: "ops-repair-failed-payment-marked-paid-safety",
+        body: {
+          orderId: failedPaidOrderId,
+          reason: "Do not repair failed payment callbacks.",
+        },
+        now: new Date("2026-05-19T11:21:00.000Z"),
+      });
+
+      const ledgerCount = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order' AND source_id = $1",
+        [failedPaidOrderId],
+      );
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [failedPaidOrderId],
+      );
+
+      assert.equal(listed.status, 200);
+      assert.deepEqual(listed.body.paymentIssues, []);
+      assert.equal(repaired.status, 409);
+      assert.deepEqual(repaired.body, { error: "payment_issue_not_repairable" });
+      assert.equal(ledgerCount.rows[0]?.count, 0);
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedOpsFixture(
@@ -1063,6 +1108,53 @@ async function seedPaymentOpsFixture(
   );
   await db.query(
     `
+      INSERT INTO payment_provider_events (
+        id,
+        organization_id,
+        order_id,
+        payment_intent_id,
+        provider,
+        provider_event_dedup_key,
+        merchant_order_no,
+        provider_trade_id,
+        event_type,
+        signature_status,
+        processing_status,
+        raw_payload_hash,
+        normalized_payload_json,
+        ack_status,
+        failure_code,
+        received_at,
+        processed_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '93000000-0000-4000-8000-000000000011',
+        $1,
+        $2,
+        $3,
+        'wechat_pay',
+        'wechat-ops-paid-event-1',
+        'ORD-OPS-PAID-1',
+        'wx-ops-paid-1',
+        'payment_succeeded',
+        'verified',
+        'processed',
+        'payload-hash',
+        '{}'::jsonb,
+        'sent_success',
+        NULL,
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z'
+      )
+    `,
+    [organizationId, paidOrderId, paymentIntentId],
+  );
+  await db.query(
+    `
       INSERT INTO payment_risk_events (
         id,
         organization_id,
@@ -1162,6 +1254,150 @@ async function seedMembershipPaymentOpsFixture(
       adminUserId,
       membershipPlanId,
       membershipPaymentIntentId,
+    ],
+  );
+}
+
+async function seedFailedPaymentMarkedPaidOpsFixture(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO credit_packages (
+        id,
+        code,
+        display_name,
+        credits,
+        amount_minor,
+        currency,
+        status
+      )
+      VALUES ($1, 'ops_failed_120', 'Ops Failed 120', 120, 9900, 'CNY', 'active')
+    `,
+    [creditPackageId],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        credit_package_id,
+        package_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'ORD-OPS-FAILED-MARKED-PAID-1',
+        $4,
+        '{"code":"ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
+        120,
+        9900,
+        'CNY',
+        'paid',
+        '2026-05-20T00:00:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        $5
+      )
+    `,
+    [failedPaidOrderId, organizationId, adminUserId, creditPackageId, failedPaymentIntentId],
+  );
+  await db.query(
+    `
+      INSERT INTO payment_intents (
+        id,
+        organization_id,
+        order_id,
+        provider,
+        product_mode,
+        status,
+        amount_minor,
+        currency,
+        merchant_order_no,
+        provider_trade_id,
+        provider_payload_hash,
+        provider_safe_metadata_json,
+        submitted_at,
+        expires_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'wechat_pay',
+        'native_qr',
+        'failed',
+        9900,
+        'CNY',
+        'ORD-OPS-FAILED-MARKED-PAID-1',
+        'wx-ops-failed-1',
+        'payload-hash',
+        '{}'::jsonb,
+        '2026-05-19T10:49:00.000Z',
+        '2026-05-20T00:00:00.000Z'
+      )
+    `,
+    [failedPaymentIntentId, organizationId, failedPaidOrderId],
+  );
+  await db.query(
+    `
+      INSERT INTO payment_provider_events (
+        id,
+        organization_id,
+        order_id,
+        payment_intent_id,
+        provider,
+        provider_event_dedup_key,
+        merchant_order_no,
+        provider_trade_id,
+        event_type,
+        signature_status,
+        processing_status,
+        raw_payload_hash,
+        normalized_payload_json,
+        ack_status,
+        failure_code,
+        received_at,
+        processed_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'wechat_pay',
+        'wechat-ops-failed-event-1',
+        'ORD-OPS-FAILED-MARKED-PAID-1',
+        'wx-ops-failed-1',
+        'payment_failed',
+        'verified',
+        'processed',
+        'payload-hash',
+        '{}'::jsonb,
+        'sent_success',
+        NULL,
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z',
+        '2026-05-19T10:50:00.000Z'
+      )
+    `,
+    [
+      failedPaymentProviderEventId,
+      organizationId,
+      failedPaidOrderId,
+      failedPaymentIntentId,
     ],
   );
 }
