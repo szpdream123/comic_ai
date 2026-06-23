@@ -83,6 +83,19 @@ export function shanghaiDayWindow(now: Date): { start: Date; end: Date } {
   };
 }
 
+export function shanghaiMonthWindow(now: Date): { start: Date; end: Date } {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+  });
+  const [year, month] = formatter.format(now).split("-");
+  const start = new Date(`${year}-${month}-01T00:00:00.000+08:00`);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  return { start, end };
+}
+
 function hmacSha256(value: string): string {
   return createHmac("sha256", getAuthPepper()).update(value).digest("hex");
 }

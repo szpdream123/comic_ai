@@ -27,6 +27,10 @@ async function ensureAdminSecretValueStore(db: SqlDatabase) {
     )
   `);
   await db.query(`
+    ALTER TABLE admin_secret_values
+      ADD COLUMN IF NOT EXISTS request_domain text NULL
+  `);
+  await db.query(`
     INSERT INTO admin_secret_values (
       id, secret_ref, secret_key, secret_value, purpose, provider_name, status,
       last_checked_at, created_by_admin_id, created_at, updated_at
@@ -193,10 +197,10 @@ async function resolveModelConfigSecretReferences(
     return modelConfig;
   }
   await ensureAdminSecretValueStore(db);
-  const row = await queryOne<{ secret_value: string | null }>(
+  const row = await queryOne<{ secret_value: string | null; request_domain: string | null }>(
     db,
     `
-      SELECT secret_value
+      SELECT secret_value, request_domain
       FROM admin_secret_values
       WHERE secret_key = $1 OR secret_ref = $1
       LIMIT 1
@@ -204,14 +208,16 @@ async function resolveModelConfigSecretReferences(
     [apiKeyEnv],
   );
   const secretValue = readString(row?.secret_value);
-  if (!secretValue) {
+  const requestDomain = readString(row?.request_domain);
+  if (!secretValue && !requestDomain) {
     return modelConfig;
   }
   return {
     ...modelConfig,
     providerConfig: {
       ...modelConfig.providerConfig,
-      apiKey: secretValue,
+      ...(secretValue ? { apiKey: secretValue } : {}),
+      ...(requestDomain ? { baseURL: requestDomain } : {}),
     },
   };
 }

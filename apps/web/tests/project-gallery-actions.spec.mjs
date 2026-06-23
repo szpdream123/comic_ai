@@ -38,12 +38,26 @@ function createWorkbench() {
 
 test("project gallery pagination does not show a success toast", async () => {
   const workbench = createWorkbench();
+  workbench.ui.projectLibrary = createProjectLibrary(18);
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.api.getProjects = async (input) => {
+    assert.deepEqual(input, { page: 2, pageSize: 18, keyword: "" });
+    return {
+      projects: createProjectLibrary(6).map((project, index) => ({
+        ...project,
+        id: `project-${index + 19}`,
+        name: `项目 ${index + 19}`,
+      })),
+      pagination: { page: 2, pageSize: 18, total: 24, totalPages: 2 },
+    };
+  };
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: { action: "change-project-page", page: "2" },
   });
 
   assert.equal(workbench.ui.projectLibraryPage, 2);
+  assert.equal(workbench.ui.projectLibrary.length, 6);
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
 });
@@ -114,9 +128,47 @@ test("opening a project workspace does not show a success toast", async () => {
   }
 
   assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectInteriorSection, "overview");
   assert.equal(workbench.ui.selectedProjectCardId, "project-1");
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast success/);
+});
+
+test("project detail hash keeps the workspace on overview", () => {
+  const workbench = createWorkbench();
+  workbench.ui.activeNavTab = "project";
+  workbench.ui.projectPanelMode = "workspace";
+  workbench.ui.projectInteriorSection = "overview";
+
+  syncWorkbenchHashRouteForTest(workbench, "#/projects/project-1");
+
+  assert.equal(workbench.ui.activeNavTab, "project");
+  assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectInteriorSection, "overview");
+});
+
+test("asset and episode interior tabs do not wait for supplementary project stats", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.activeNavTab = "project";
+  workbench.ui.projectPanelMode = "workspace";
+  workbench.ui.projectInteriorSection = "overview";
+  workbench.ui.selectedProjectCardId = "project-1";
+  workbench.api.getProjectMembers = async () => {
+    throw new Error("members_should_not_load_for_asset_or_episode_tabs");
+  };
+  workbench.api.getProjectStats = async () => {
+    throw new Error("stats_should_not_load_for_asset_or_episode_tabs");
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-project-interior-section", section: "assets" },
+  });
+  assert.equal(workbench.ui.projectInteriorSection, "assets");
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-project-interior-section", section: "episodes" },
+  });
+  assert.equal(workbench.ui.projectInteriorSection, "episodes");
 });
 
 test("project gallery refresh does not block on non-gallery startup requests", async () => {
@@ -464,6 +516,33 @@ test("community hash route renders the shared community surface instead of the p
   assert.match(workbench.root.innerHTML, /灵曦社区/);
   assert.match(workbench.root.innerHTML, /社区发布/);
   assert.doesNotMatch(workbench.root.innerHTML, /全部项目/);
+});
+
+test("account community feedback action opens the community surface in a new page", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const opened = [];
+  globalThis.window = {
+    location: { href: "http://localhost:5173/app.html#project" },
+    open: (...args) => opened.push(args),
+  };
+  workbench.ui.activeNavTab = "project";
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-community-page" },
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+
+  assert.equal(opened.length, 1);
+  assert.deepEqual(opened[0], ["http://localhost:5173/app.html#community", "_blank", "noopener"]);
+  assert.equal(workbench.ui.activeNavTab, "project");
 });
 
 test("asset library route reuse avoids duplicate identical requests", async () => {

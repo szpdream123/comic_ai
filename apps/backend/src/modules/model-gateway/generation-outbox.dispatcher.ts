@@ -3,6 +3,7 @@ import {
   claimOutboxEventsForDispatch,
   markOutboxEventFailed,
   markOutboxEventProcessed,
+  type OutboxEventRecord,
 } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 import {
   publishGenerationTaskCreatedToBullMQ,
@@ -27,6 +28,20 @@ export interface DispatchGenerationOutboxBatchResult {
   failedEventIds: string[];
 }
 
+interface DispatchClaimedGenerationOutboxEventsInput {
+  events: OutboxEventRecord[];
+  now: Date;
+  retryDelayMs?: number;
+  config: GenerationQueueConfig;
+  publisher: GenerationBullMQPublisher;
+}
+
+interface DispatchClaimedGenerationOutboxEventsDeps {
+  publish?: typeof publishGenerationTaskCreatedToBullMQ;
+  markProcessed?: typeof markOutboxEventProcessed;
+  markFailed?: typeof markOutboxEventFailed;
+}
+
 export async function dispatchGenerationOutboxBatch(
   db: SqlDatabase,
   input: DispatchGenerationOutboxBatchInput,
@@ -36,32 +51,53 @@ export async function dispatchGenerationOutboxBatch(
     limit: input.limit,
     eventTypes: [generationTaskCreatedEventType, generationTaskFinalizeRequestedEventType],
   });
-  const processedEventIds: string[] = [];
-  const failedEventIds: string[] = [];
+  return dispatchClaimedGenerationOutboxEvents(db, {
+    events,
+    now: input.now,
+    retryDelayMs: input.retryDelayMs,
+    config: input.config,
+    publisher: input.publisher,
+  });
+}
 
-  for (const event of events) {
+export async function dispatchClaimedGenerationOutboxEvents(
+  db: SqlDatabase,
+  input: DispatchClaimedGenerationOutboxEventsInput,
+  deps: DispatchClaimedGenerationOutboxEventsDeps = {},
+): Promise<DispatchGenerationOutboxBatchResult> {
+  const publish = deps.publish ?? publishGenerationTaskCreatedToBullMQ;
+  const markProcessed = deps.markProcessed ?? markOutboxEventProcessed;
+  const markFailed = deps.markFailed ?? markOutboxEventFailed;
+  const outcomes = await Promise.all(input.events.map(async (event) => {
     try {
-      await publishGenerationTaskCreatedToBullMQ(event, {
+      await publish(event, {
         config: input.config,
         publisher: input.publisher,
       });
-      await markOutboxEventProcessed(db, {
+      await markProcessed(db, {
         outboxEventId: event.id,
         now: input.now,
       });
-      processedEventIds.push(event.id);
+      return { status: "processed" as const, eventId: event.id };
     } catch (error) {
-      await markOutboxEventFailed(db, {
+      await markFailed(db, {
         outboxEventId: event.id,
         errorMessage: errorMessageFromUnknown(error),
         retryAt: new Date(input.now.getTime() + (input.retryDelayMs ?? defaultRetryDelayMs)),
         now: input.now,
       });
-      failedEventIds.push(event.id);
+      return { status: "failed" as const, eventId: event.id };
     }
-  }
+  }));
 
-  return { processedEventIds, failedEventIds };
+  return {
+    processedEventIds: outcomes
+      .filter((outcome) => outcome.status === "processed")
+      .map((outcome) => outcome.eventId),
+    failedEventIds: outcomes
+      .filter((outcome) => outcome.status === "failed")
+      .map((outcome) => outcome.eventId),
+  };
 }
 
 function errorMessageFromUnknown(error: unknown) {

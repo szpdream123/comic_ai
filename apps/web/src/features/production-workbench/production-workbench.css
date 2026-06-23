@@ -1,5 +1,11 @@
 .workbench-body {
   --workbench-rail-width: clamp(5.4rem, 7vw, 6.35rem);
+  --episode-replica-topbar-offset: max(3rem, calc(env(titlebar-area-height, 0px) + 0.75rem));
+  --episode-replica-topbar-offset-compact: max(2.4rem, calc(env(titlebar-area-height, 0px) + 0.4rem));
+  --episode-replica-layout-offset: max(5.6rem, calc(var(--episode-replica-topbar-offset) + 2.8rem));
+  --episode-replica-left-width: minmax(0, 1fr);
+  --episode-replica-center-width: 46.2rem;
+  --episode-replica-right-width: 8.9rem;
   height: 100dvh;
   min-height: 100dvh;
   overflow-x: hidden;
@@ -10,6 +16,7 @@
     var(--color-canvas, #0a0a0a);
   letter-spacing: 0;
 }
+
 
 .workbench-body::after {
   opacity: 0.35;
@@ -13585,6 +13592,91 @@
   font-weight: 800;
 }
 
+.other-imported-card.audio {
+  min-height: 18.5rem;
+  padding: 0.7rem;
+}
+
+.other-imported-preview.audio-preview {
+  display: grid;
+  align-items: end;
+  min-height: 11.6rem;
+  padding: 0.9rem;
+  background:
+    linear-gradient(0deg, rgba(16, 18, 26, 0.26), rgba(16, 18, 26, 0.08)),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06));
+  background-position:
+    0 0,
+    0 0,
+    0.65rem 0.65rem;
+  background-size:
+    100% 100%,
+    1.3rem 1.3rem,
+    1.3rem 1.3rem;
+  background-color: rgba(241, 244, 252, 0.08);
+}
+
+.project-audio-avatar {
+  justify-self: center;
+  align-self: center;
+  width: 7.6rem;
+  height: 8.9rem;
+  border-radius: 999px 999px 1.2rem 1.2rem;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.12) 0.45rem, transparent 0.46rem),
+    linear-gradient(180deg, rgba(33, 37, 52, 0.96), rgba(24, 27, 39, 0.98));
+  box-shadow:
+    inset 0 -0.6rem 0 rgba(255, 255, 255, 0.02),
+    0 1rem 2rem rgba(0, 0, 0, 0.2);
+  clip-path: polygon(30% 0%, 70% 0%, 80% 10%, 80% 34%, 74% 42%, 74% 52%, 82% 58%, 86% 72%, 86% 100%, 14% 100%, 14% 72%, 18% 58%, 26% 52%, 26% 42%, 20% 34%, 20% 10%);
+}
+
+.project-audio-card-actions {
+  position: absolute;
+  left: 0.85rem;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.project-audio-play-button,
+.project-audio-edit-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.2rem;
+  border-radius: 999px;
+  background: rgba(12, 14, 20, 0.82);
+  color: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 0.55rem 1.3rem rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(12px);
+}
+
+.project-audio-play-button {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.project-audio-play-button:hover,
+.project-audio-play-button:focus-visible {
+  background: rgba(27, 30, 39, 0.94);
+}
+
+.project-audio-edit-chip {
+  padding: 0 1rem;
+  font-size: 0.88rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .asset-intake-hero {
   position: relative;
   display: grid;
@@ -13755,6 +13847,173 @@
   max-height: min(48rem, calc(100vh - 4rem));
 }
 
+.asset-import-modal.audio-import-modal {
+  width: min(78rem, calc(100vw - 4rem));
+  max-height: min(48rem, calc(100vh - 4rem));
+  padding: 1.75rem 1.75rem 2rem;
+  background: #1d1d21;
+}
+
+.audio-import-form {
+  display: grid;
+  gap: 1.4rem;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.audio-import-field {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.audio-import-field > span {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.audio-import-field em {
+  color: #ff7d8f;
+  font-style: normal;
+}
+
+.audio-import-input-wrap,
+.audio-import-textarea-wrap {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.audio-import-input-wrap input,
+.audio-import-textarea-wrap textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  background: #141415;
+  color: #fff;
+  font: inherit;
+}
+
+.audio-import-input-wrap input {
+  min-height: 3rem;
+  padding: 0 0.9rem;
+}
+
+.audio-import-textarea-wrap textarea {
+  min-height: 6.6rem;
+  padding: 0.85rem 0.9rem;
+  resize: vertical;
+}
+
+.audio-import-input-wrap em,
+.audio-import-textarea-wrap em {
+  justify-self: end;
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 0.82rem;
+}
+
+.audio-import-upload-button,
+.audio-import-image-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  justify-self: start;
+  gap: 0.35rem;
+  min-width: 6.2rem;
+  min-height: 2.4rem;
+  padding: 0 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.35rem;
+  background: #f2f2f2;
+  color: #222;
+  font: inherit;
+  font-weight: 800;
+}
+
+.audio-import-upload-button.has-audio {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.audio-import-upload-button i,
+.audio-import-image-button i {
+  font-style: normal;
+}
+
+.audio-import-image-button {
+  width: 6.2rem;
+  min-height: 6rem;
+  padding: 0.8rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.audio-import-image-button.has-image {
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.audio-import-image-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.audio-import-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.audio-import-file-name {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.84rem;
+}
+
+.audio-import-player-shell {
+  width: min(28rem, 100%);
+  min-width: 0;
+}
+
+.audio-import-player {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.25rem;
+  accent-color: #8bb3d3;
+  filter: saturate(0.9);
+}
+
+.audio-import-save-button {
+  justify-self: start;
+  min-width: 4.8rem;
+  min-height: 2.8rem;
+  padding: 0 1.25rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: #8d8d94;
+  color: #fff;
+  font: inherit;
+  font-weight: 900;
+}
+
+.audio-import-save-button.is-blocked {
+  opacity: 0.72;
+}
+
+.audio-import-save-button.is-ready {
+  opacity: 1;
+  cursor: pointer;
+}
+
 .asset-import-header {
   display: grid;
   gap: 1.2rem;
@@ -13767,38 +14026,6 @@
   font-size: 1.8rem;
   font-weight: 900;
   letter-spacing: 0;
-}
-
-.asset-import-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2rem;
-}
-
-.asset-import-tab {
-  position: relative;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.62);
-  font: inherit;
-  font-size: 1.02rem;
-  font-weight: 900;
-}
-
-.asset-import-tab.active {
-  color: #fff;
-}
-
-.asset-import-tab.active::after {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -0.8rem;
-  height: 0.18rem;
-  content: "";
-  border-radius: 999px;
-  background: linear-gradient(90deg, #f0dafd, #d9b4ff);
 }
 
 .asset-import-local {
@@ -18042,7 +18269,7 @@
 
 .episode-replica-topbar {
   position: fixed;
-  top: 1rem;
+  top: var(--episode-replica-topbar-offset);
   left: calc(var(--workbench-rail-width) + 1rem);
   right: 1rem;
   z-index: 40;
@@ -18167,12 +18394,15 @@
 
 .episode-replica-layout {
   display: grid;
-  grid-template-columns: minmax(19rem, 0.9fr) minmax(0, 1.5fr) 9.4rem;
+  position: relative;
+  grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   gap: 0;
   height: 100dvh;
   min-height: 0;
   min-width: 0;
-  padding: 6rem 0 0;
+  width: 100%;
+  max-width: 100%;
+  padding: var(--episode-replica-layout-offset) 0 0;
   margin: 0;
 }
 
@@ -18206,6 +18436,8 @@
   min-width: 0;
   border-right: 2px solid #2a2a2c;
   background: #181818;
+  position: relative;
+  cursor: default;
 }
 
 .episode-replica-right {
@@ -18214,6 +18446,37 @@
   padding: 0 0.8rem 1rem;
   overflow: hidden;
   background: #111111;
+  width: var(--episode-replica-right-width);
+  min-width: var(--episode-replica-right-width);
+  max-width: var(--episode-replica-right-width);
+  justify-self: end;
+  box-sizing: border-box;
+}
+
+@media (min-width: 961px) {
+  .episode-replica-layout {
+    grid-template-columns: minmax(0, 1fr) var(--episode-replica-center-width) var(--episode-replica-right-width);
+  }
+
+  .episode-replica-center {
+    width: var(--episode-replica-center-width);
+    min-width: var(--episode-replica-center-width);
+    max-width: var(--episode-replica-center-width);
+    justify-self: end;
+  }
+
+  .episode-replica-right {
+    justify-self: end;
+  }
+}
+
+.episode-replica-center.is-resize-target {
+  cursor: col-resize;
+}
+
+body.is-episode-layout-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .episode-replica-right-head {
@@ -19134,6 +19397,18 @@
   box-shadow: 0 0.8rem 1.8rem rgba(0, 0, 0, 0.18);
 }
 
+.episode-replica-user-message-copy-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  border-radius: 0.7rem;
+  outline: none;
+}
+
+.episode-replica-user-message-copy-wrap:focus-visible {
+  box-shadow: 0 0 0 2px rgba(145, 214, 255, 0.42);
+}
+
 .episode-replica-user-message-copy.clamp-3 {
   display: -webkit-box;
   overflow: hidden;
@@ -19149,6 +19424,98 @@
   background: linear-gradient(180deg, rgba(74, 52, 38, 0.96), rgba(49, 36, 28, 0.96));
   color: rgba(255, 245, 234, 0.96);
   box-shadow: 0 0.8rem 1.8rem rgba(0, 0, 0, 0.18);
+}
+
+.episode-replica-user-message.legacy .episode-replica-user-message-copy-wrap {
+  width: min(100%, 28rem);
+}
+
+.episode-replica-user-message-full-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.48rem);
+  z-index: 45;
+  display: grid;
+  gap: 0.66rem;
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: min(24rem, calc(100vh - 9rem));
+  padding: 0.92rem 1rem 1rem;
+  overflow: auto;
+  border: 1px solid rgba(207, 153, 95, 0.34);
+  border-radius: 0.95rem;
+  background:
+    linear-gradient(180deg, rgba(67, 47, 35, 0.98), rgba(33, 28, 25, 0.98)),
+    #211c19;
+  box-shadow:
+    0 1.2rem 2.6rem rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  color: rgba(255, 245, 234, 0.94);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.25rem) scale(0.98);
+  transform-origin: 88% 0;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.episode-replica-user-message-full-popover::before {
+  position: absolute;
+  top: -0.38rem;
+  right: 2.1rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  border-top: 1px solid rgba(207, 153, 95, 0.34);
+  border-left: 1px solid rgba(207, 153, 95, 0.34);
+  background: rgba(67, 47, 35, 0.98);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.episode-replica-user-message-copy-wrap:hover .episode-replica-user-message-full-popover,
+.episode-replica-user-message-copy-wrap:focus-visible .episode-replica-user-message-full-popover,
+.episode-replica-user-message-copy-wrap:focus-within .episode-replica-user-message-full-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.episode-replica-user-message-full-popover-head,
+.episode-replica-error-reason-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.episode-replica-user-message-full-popover-head strong,
+.episode-replica-error-reason-popover-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 900;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-replica-user-message-full-popover-head span {
+  flex: 0 0 auto;
+  color: rgba(255, 212, 172, 0.9);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.episode-replica-user-message-full-popover p,
+.episode-replica-error-reason-popover p {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .episode-replica-user-message-footer {
@@ -19466,6 +19833,12 @@
 
 .episode-replica-upload-card span {
   font-size: 1.15rem;
+}
+
+.episode-replica-upload-card.is-dragging {
+  border-color: rgba(152, 214, 255, 0.82);
+  background: rgba(152, 214, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(152, 214, 255, 0.35), 0 0 0.9rem rgba(152, 214, 255, 0.16);
 }
 
 .episode-replica-mini,
@@ -20144,7 +20517,7 @@
 
 @media (max-width: 1400px) {
   .episode-replica-layout {
-    grid-template-columns: minmax(0, 1.45fr) minmax(19rem, 1fr) 6.2rem;
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   }
 
   .episode-replica-asset-grid {
@@ -20419,7 +20792,7 @@
 
 /* Episode workbench ratio tune: mirror reference screenshot */
 .episode-replica-layout {
-  grid-template-columns: minmax(44rem, 1.32fr) minmax(28rem, 0.92fr) minmax(14rem, 0.5fr);
+  grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   gap: 0;
   min-width: 0;
 }
@@ -20999,6 +21372,11 @@
   margin-bottom: 0.15rem;
 }
 
+.episode-replica-fixed-results.failure-result {
+  gap: 0.58rem;
+  padding-top: 0.45rem;
+}
+
 .episode-replica-fixed-image-card {
   position: relative;
   width: min(100%, 14.5rem);
@@ -21006,6 +21384,13 @@
   border-radius: 1.05rem;
   background: #f3f0e8;
   box-shadow: 0 1rem 2.6rem rgba(0, 0, 0, 0.22);
+}
+
+.episode-replica-fixed-image-card.failure-card {
+  width: min(100%, 13rem);
+  background: #18191b;
+  border: 1px solid rgba(255, 107, 107, 0.34);
+  box-shadow: 0 1rem 2.6rem rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
 .episode-replica-fixed-video-card {
@@ -21046,6 +21431,50 @@
   font-weight: 900;
 }
 
+.episode-replica-fixed-image-badge.failure {
+  background: rgba(255, 107, 107, 0.2);
+  color: #ffd6d6;
+}
+
+.episode-replica-failure-preview {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1 / 0.92;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 44%, rgba(255, 255, 255, 0.1) 0 17%, transparent 18%),
+    linear-gradient(135deg, rgba(255, 107, 107, 0.12), rgba(120, 146, 188, 0.07)),
+    #161719;
+}
+
+.episode-replica-failure-mark {
+  position: relative;
+  display: grid;
+  width: 4.25rem;
+  height: 4.25rem;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.episode-replica-failure-mark::before,
+.episode-replica-failure-mark::after {
+  position: absolute;
+  width: 2.2rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: rgba(18, 19, 22, 0.72);
+  content: "";
+}
+
+.episode-replica-failure-mark::before {
+  transform: rotate(45deg);
+}
+
+.episode-replica-failure-mark::after {
+  transform: rotate(-45deg);
+}
+
 .episode-replica-fixed-actions {
   display: flex;
   justify-content: flex-start;
@@ -21068,6 +21497,96 @@
 
 .episode-replica-fixed-actions button:hover {
   background: #3a3d44;
+}
+
+.episode-replica-fixed-actions.failure-actions {
+  max-width: min(100%, 28rem);
+}
+
+.episode-replica-error-reason-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: min(100%, 15rem);
+  border-radius: 999px;
+  outline: none;
+}
+
+.episode-replica-fixed-actions .episode-replica-error-reason {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 210, 210, 0.88);
+  cursor: help;
+}
+
+.episode-replica-fixed-actions .episode-replica-error-reason:hover {
+  background: rgba(255, 107, 107, 0.16);
+}
+
+.episode-replica-error-reason-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.48rem);
+  z-index: 45;
+  display: grid;
+  gap: 0.66rem;
+  width: min(25rem, calc(100vw - 2rem));
+  max-height: min(18rem, calc(100vh - 9rem));
+  padding: 0.86rem 0.95rem 0.95rem;
+  overflow: auto;
+  border: 1px solid rgba(255, 107, 107, 0.34);
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(180deg, rgba(58, 35, 38, 0.98), rgba(28, 24, 26, 0.98)),
+    #211719;
+  box-shadow:
+    0 1.15rem 2.4rem rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  color: rgba(255, 235, 235, 0.94);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.22rem) scale(0.98);
+  transform-origin: 1.9rem 0;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.episode-replica-error-reason-popover::before {
+  position: absolute;
+  top: -0.38rem;
+  left: 1.8rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  border-top: 1px solid rgba(255, 107, 107, 0.34);
+  border-left: 1px solid rgba(255, 107, 107, 0.34);
+  background: rgba(58, 35, 38, 0.98);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.episode-replica-error-reason-wrap:hover .episode-replica-error-reason-popover,
+.episode-replica-error-reason-wrap:focus-within .episode-replica-error-reason-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.episode-replica-error-reason-wrap:focus-within .episode-replica-error-reason {
+  background: rgba(255, 107, 107, 0.16);
+}
+
+.episode-replica-error-reason-popover-head span {
+  flex: 0 0 auto;
+  color: rgba(255, 172, 172, 0.9);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.episode-replica-error-reason-popover p {
+  color: rgba(255, 236, 236, 0.9);
 }
 
 .episode-replica-generated-preview {
@@ -21420,6 +21939,96 @@
   font-size: 0.72rem;
 }
 
+.episode-replica-asset-full-popover {
+  position: absolute;
+  left: min(1rem, 4%);
+  right: min(1rem, 4%);
+  top: calc(100% - 0.35rem);
+  z-index: 40;
+  display: grid;
+  gap: 0.65rem;
+  max-height: min(24rem, calc(100vh - 10rem));
+  padding: 0.92rem 1rem 1rem;
+  overflow: auto;
+  border: 1px solid rgba(145, 214, 255, 0.34);
+  border-radius: 0.95rem;
+  background:
+    linear-gradient(180deg, rgba(37, 39, 44, 0.98), rgba(21, 22, 25, 0.98)),
+    #18191c;
+  box-shadow:
+    0 1.2rem 2.6rem rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.25rem) scale(0.98);
+  transform-origin: 50% 0;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.episode-replica-asset-full-popover::before {
+  position: absolute;
+  top: -0.38rem;
+  left: 2.4rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  border-top: 1px solid rgba(145, 214, 255, 0.34);
+  border-left: 1px solid rgba(145, 214, 255, 0.34);
+  background: rgba(37, 39, 44, 0.98);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.episode-replica-asset-card:hover,
+.episode-replica-asset-card:focus-within {
+  z-index: 25;
+}
+
+.episode-replica-asset-card:hover .episode-replica-asset-full-popover,
+.episode-replica-asset-card:focus-within .episode-replica-asset-full-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.episode-replica-asset-full-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.episode-replica-asset-full-popover-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 900;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-replica-asset-full-popover-head span {
+  flex: 0 0 auto;
+  color: rgba(145, 214, 255, 0.9);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.episode-replica-asset-full-popover p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Final parity overrides: keep these last so older duplicated rules cannot win */
 .episode-hub-shell.populated {
   padding: 0.78rem 0.9rem 0.94rem;
@@ -21535,7 +22144,7 @@
 }
 
 .episode-replica-topbar {
-  top: 0.52rem;
+  top: var(--episode-replica-topbar-offset-compact);
   left: calc(var(--workbench-rail-width) + 0.7rem);
   right: 0.7rem;
   gap: 0.38rem;
@@ -23315,6 +23924,7 @@
   position: relative;
   display: block;
   width: 100%;
+  aspect-ratio: 1 / 1;
   min-height: 0;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -23326,8 +23936,12 @@
 }
 
 .episode-replica-quick-asset-trigger {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   display: block;
   width: 100%;
+  height: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -23342,37 +23956,67 @@
 }
 
 .episode-replica-quick-asset .thumb {
-  position: relative;
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 1 / 0.74;
-  border-radius: inherit;
-  background: #343434;
-  overflow: hidden;
-}
-
-.episode-replica-quick-thumb-image {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
+  aspect-ratio: auto;
+  border-radius: inherit;
+  background: #2f3032;
+  overflow: hidden;
+}
+
+.episode-replica-quick-asset.empty-preview .thumb {
+  background: transparent;
+}
+
+.episode-replica-quick-thumb-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 100%;
+  min-height: 100%;
   object-fit: cover;
+  object-position: center;
+  border-radius: inherit;
+}
+
+.episode-replica-quick-empty-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: transparent;
 }
 
 .episode-replica-quick-name {
-  display: block;
-  padding: 0.52rem 0.62rem 0.64rem;
-  background: linear-gradient(180deg, rgba(32, 32, 35, 0.94), rgba(24, 24, 26, 0.98));
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  display: -webkit-box;
+  overflow: hidden;
+  padding: 0.7rem 0.62rem 0.58rem;
+  background: linear-gradient(180deg, rgba(8, 8, 10, 0), rgba(8, 8, 10, 0.78) 48%, rgba(10, 10, 12, 0.94));
   color: rgba(244, 246, 250, 0.92);
   font-size: 0.74rem;
   font-weight: 900;
   line-height: 1.3;
   text-align: left;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.58);
   white-space: normal;
   word-break: break-word;
-  user-select: text;
-  -webkit-user-select: text;
-  cursor: text;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  pointer-events: none;
+}
+
+.episode-replica-quick-asset.empty-preview .episode-replica-quick-name {
+  background: linear-gradient(180deg, rgba(32, 32, 35, 0), rgba(22, 22, 24, 0.72) 46%, rgba(22, 22, 24, 0.94));
 }
 
 /* Final override for left-side asset tabs: character / scene / prop */
@@ -23575,11 +24219,11 @@
   }
 
   .episode-replica-layout {
-    grid-template-columns: minmax(41rem, 1.5fr) minmax(33rem, 0.92fr) minmax(7.2rem, 0.18fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
     gap: 0;
     height: calc(100dvh - 4.85rem);
     min-height: 0;
-    padding-top: 0;
+    padding-top: var(--episode-replica-layout-offset);
     box-sizing: border-box;
   }
 
@@ -23760,7 +24404,7 @@
 
 @media (min-width: 1680px) {
   .episode-replica-layout {
-    grid-template-columns: minmax(54rem, 1.52fr) minmax(39rem, 0.9fr) minmax(7.5rem, 0.16fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   }
 }
 
@@ -23823,9 +24467,9 @@
 /* Reference storyboard desktop composition */
 @media (min-width: 961px) {
   .episode-replica-layout.storyboard-mode {
-    grid-template-columns: minmax(43rem, 63fr) minmax(27rem, 29fr) minmax(6.8rem, 8fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
     height: calc(100dvh - 5.6rem);
-    padding-top: 0;
+    padding-top: var(--episode-replica-layout-offset);
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-left {
@@ -23935,7 +24579,7 @@
 
 @media (min-width: 1680px) {
   .episode-replica-layout.storyboard-mode {
-    grid-template-columns: minmax(55rem, 63fr) minmax(33rem, 29fr) minmax(7rem, 8fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   }
 }
 /* End reference storyboard desktop composition */
@@ -24026,7 +24670,7 @@
   .episode-replica-layout.storyboard-mode {
     height: 100%;
     min-height: 0;
-    padding-top: 0;
+    padding-top: var(--episode-replica-layout-offset);
   }
 }
 /* End shared asset and storyboard layout top padding */
@@ -24046,13 +24690,13 @@
 /* Widen storyboard dialog column */
 @media (min-width: 961px) {
   .episode-replica-layout.storyboard-mode {
-    grid-template-columns: minmax(38.5rem, 58fr) minmax(31.5rem, 34fr) minmax(6.8rem, 8fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   }
 }
 
 @media (min-width: 1680px) {
   .episode-replica-layout.storyboard-mode {
-    grid-template-columns: minmax(50.5rem, 58fr) minmax(38.5rem, 34fr) minmax(7rem, 8fr);
+    grid-template-columns: var(--episode-replica-left-width) var(--episode-replica-center-width) var(--episode-replica-right-width);
   }
 }
 /* End widen storyboard dialog column */
@@ -24207,7 +24851,7 @@
 
 .episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset .thumb {
   aspect-ratio: 1 / 1;
-  height: auto;
+  height: 100%;
 }
 
 @media (min-width: 961px) and (max-height: 820px) {
@@ -24231,7 +24875,7 @@
 .episode-library-modal {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(118rem, calc(100vw - 4rem));
   height: min(58rem, calc(100dvh - 4rem));
   overflow: hidden;
@@ -24320,7 +24964,7 @@
   display: grid;
   grid-template-columns: 17rem minmax(0, 1fr);
   min-height: 0;
-  margin: 0 1.8rem 1.5rem;
+  margin: 0 1.8rem;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0.38rem;
@@ -24411,17 +25055,57 @@
 }
 
 .episode-library-asset-card {
+  position: relative;
   display: grid;
   gap: 0.45rem;
   padding: 0.48rem;
   border: 1px solid transparent;
   border-radius: 0.42rem;
   background: #20212a;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.episode-library-asset-card:hover {
+  transform: translateY(-0.08rem);
+  border-color: rgba(215, 185, 255, 0.42);
 }
 
 .episode-library-asset-card.is-selected {
   border-color: #9a79d8;
   box-shadow: 0 0 0 1px rgba(154, 121, 216, 0.35);
+}
+
+.episode-library-asset-check {
+  position: absolute;
+  top: 0.72rem;
+  left: 0.72rem;
+  z-index: 2;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 0.28rem;
+  background: rgba(16, 17, 22, 0.72);
+  box-shadow: 0 0.35rem 0.9rem rgba(0, 0, 0, 0.32);
+}
+
+.episode-library-asset-card.is-selected .episode-library-asset-check {
+  border-color: #d7b9ff;
+  background: #d7b9ff;
+}
+
+.episode-library-asset-card.is-selected .episode-library-asset-check::after {
+  position: absolute;
+  top: 0.13rem;
+  left: 0.3rem;
+  width: 0.28rem;
+  height: 0.52rem;
+  border-right: 0.13rem solid #221735;
+  border-bottom: 0.13rem solid #221735;
+  content: "";
+  transform: rotate(42deg);
 }
 
 .episode-library-asset-card img,
@@ -24455,6 +25139,40 @@
   font-size: 0.68rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.episode-library-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  min-height: 4.35rem;
+  padding: 0.75rem 1.8rem 1.2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(15, 16, 20, 0.88), rgba(12, 13, 17, 0.98));
+}
+
+.episode-library-modal-footer span {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.episode-library-modal-footer button {
+  min-width: 5.2rem;
+  min-height: 2.55rem;
+  border-radius: 0.54rem;
+  background: #7b45c4;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 900;
+  box-shadow: 0 0.65rem 1.45rem rgba(123, 69, 196, 0.24);
+}
+
+.episode-library-modal-footer button:disabled {
+  background: #343640;
+  color: rgba(255, 255, 255, 0.38);
+  box-shadow: none;
 }
 
 .episode-library-empty,
@@ -24536,4 +25254,342 @@
 .episode-replica-asset-actions.right {
   grid-column: 3;
   justify-self: end;
+}
+
+.episode-replica-asset-toolbar-main {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.58rem 0.78rem;
+  min-height: 0;
+}
+
+.episode-replica-asset-toolbar-main .episode-replica-asset-tabs {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: center;
+  grid-column: auto;
+  justify-self: auto;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  min-height: 2.61rem;
+  max-height: none;
+  border-radius: 1.35rem;
+}
+
+.episode-replica-asset-toolbar .episode-replica-asset-tabs button {
+  flex: 0 0 auto;
+}
+
+.episode-replica-asset-actions.left {
+  position: static;
+  flex: 0 0 auto;
+  transform: none;
+}
+
+.episode-replica-asset-actions.right {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  grid-column: auto;
+}
+
+.episode-replica-asset-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.episode-replica-left {
+  container-type: inline-size;
+}
+
+@container (max-width: 48rem) {
+  .episode-replica-asset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 32rem) {
+  .episode-replica-asset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Final desktop episode layout override: keep the quick asset rail pinned right
+   while preserving a middle message lane and docking the composer to the bottom. */
+@media (min-width: 961px) {
+  .episode-workbench-screen .episode-replica-layout.assets-mode,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode {
+    grid-template-columns: minmax(0, 1fr) var(--episode-replica-center-width) var(--episode-replica-right-width) !important;
+    height: calc(100dvh - var(--episode-replica-layout-offset)) !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-top: var(--episode-replica-layout-offset) !important;
+    padding-top: 0 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode > .episode-replica-center {
+    width: var(--episode-replica-center-width) !important;
+    min-width: var(--episode-replica-center-width) !important;
+    max-width: var(--episode-replica-center-width) !important;
+    justify-self: end !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode > .episode-replica-right {
+    width: 8.9rem !important;
+    min-width: 8.9rem !important;
+    max-width: 8.9rem !important;
+    justify-self: end !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-right,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode > .episode-replica-right {
+    padding: 0 0.54rem 1rem !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode .episode-replica-right-list,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-right-list {
+    gap: 0.55rem !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode .episode-replica-right-list .episode-replica-quick-asset,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset {
+    display: grid !important;
+    grid-template-rows: 1fr !important;
+    aspect-ratio: 1 / 1 !important;
+    min-height: auto !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode .episode-replica-right-list .episode-replica-quick-asset .thumb,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset .thumb {
+    aspect-ratio: 1 / 1 !important;
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode .episode-replica-right-list .episode-replica-quick-asset .episode-replica-quick-thumb-image,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset .episode-replica-quick-thumb-image {
+    position: absolute !important;
+    inset: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    object-fit: cover !important;
+    object-position: center top !important;
+    border-radius: inherit !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode .episode-replica-right-list .episode-replica-quick-asset strong,
+  .episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-right-list .episode-replica-quick-asset strong {
+    display: none !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope {
+    align-content: stretch !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope.empty-composer {
+    align-self: stretch !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    overflow: hidden !important;
+    background: #181818 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope.empty-composer .episode-replica-stage-body {
+    display: block !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    overflow: auto !important;
+    background: #151515 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope.empty-composer .episode-replica-stage-head {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope.has-generated-stage .episode-replica-stage-body {
+    height: 100% !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    padding: 0.6rem 0.85rem 0.35rem !important;
+    overflow: auto !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-generated-stage {
+    min-height: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-prompt {
+    align-self: end !important;
+    display: grid !important;
+    grid-template-rows: auto auto auto auto auto auto auto !important;
+    gap: 0.42rem !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 0.62rem 0.85rem 0.75rem !important;
+    overflow: visible !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-ref-strip {
+    align-items: flex-start !important;
+    min-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-upload-card,
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-ref-card {
+    width: 5.7rem !important;
+    min-width: 5.7rem !important;
+    height: 6rem !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-prompt-tools {
+    justify-content: flex-start !important;
+    gap: 0.38rem !important;
+    min-height: 0 !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-textarea {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-textarea textarea {
+    height: 8.2rem !important;
+    min-height: 8.2rem !important;
+    max-height: 8.2rem !important;
+    overflow-y: auto !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-prompt-footer {
+    align-items: center !important;
+    gap: 0.5rem !important;
+    min-height: 0 !important;
+    margin-top: 0.1rem !important;
+  }
+
+  .episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-prompt-selects {
+    flex-wrap: wrap !important;
+    gap: 0.38rem !important;
+  }
+
+.episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-validation:empty {
+    display: none !important;
+  }
+}
+
+.asset-generator-modal-edit {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(56rem, calc(100vw - 6rem));
+  min-height: min(50rem, calc(100vh - 6rem));
+}
+
+.asset-generator-modal-edit .asset-generator-form {
+  max-height: min(50rem, calc(100vh - 6rem));
+}
+
+.asset-generator-modal-edit .asset-generator-form {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.asset-generator-modal-edit .asset-generator-description-field textarea {
+  width: 100%;
+  min-height: 9rem;
+  padding: 0.95rem 1rem;
+  resize: vertical;
+  border: 0;
+  border-radius: 0.65rem;
+  background: #30323c;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+}
+
+.asset-generator-modal-edit .asset-generator-image-field {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.asset-generator-modal-edit .asset-generator-image-picker {
+  position: relative;
+  display: block;
+  width: 12rem;
+  height: 12rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.85rem;
+  background: #111218;
+  cursor: pointer;
+}
+
+.asset-generator-modal-edit .asset-generator-image-picker.is-empty {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)) #111218;
+}
+
+.asset-generator-modal-edit .asset-generator-image-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-generator-modal-edit .asset-generator-image-overlay {
+  position: absolute;
+  inset: 0;
+  align-content: center;
+  justify-items: center;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.9rem;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(17, 18, 24, 0.08), rgba(17, 18, 24, 0.76));
+  color: #fff;
+}
+
+.asset-generator-modal-edit .asset-generator-image-overlay strong {
+  font-size: 0.98rem;
+  font-weight: 900;
+}
+
+.asset-generator-modal-edit .asset-generator-image-overlay span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.asset-generator-modal-edit .asset-generator-image-input {
+  display: none;
+}
+
+.asset-generator-modal-edit .asset-generator-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.asset-generator-modal-edit .asset-generator-footer button {
+  min-height: 3rem;
+  padding: 0 1.2rem;
+  border: 0;
+  border-radius: 0.7rem;
+  background: #f5dcff;
+  color: #281934;
+  font-weight: 900;
 }

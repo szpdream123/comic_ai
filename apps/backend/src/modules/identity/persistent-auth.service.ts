@@ -83,6 +83,7 @@ export type PersistentLoginCodeRequestResult =
       retryAfterSeconds: number;
       remainingToday: number;
     }
+  | { kind: "ip_sms_limit_exceeded"; retryAfterSeconds: 0 }
   | { kind: "sms_cooldown_active"; retryAfterSeconds: number }
   | { kind: "daily_sms_limit_exceeded"; retryAfterSeconds: 0 }
   | { kind: "sms_send_failed"; errorCode: string };
@@ -110,6 +111,38 @@ export async function requestPersistentLoginCode(
 ): Promise<PersistentLoginCodeRequestResult> {
   const phoneE164 = normalizeCnPhone(input.phone);
   const day = shanghaiDayWindow(input.now);
+  const ipAddressHash = hashRequestMetadata(input.ipAddress);
+
+  if (ipAddressHash) {
+    const sentFromIpToday = await queryOne<{ count: number }>(
+      db,
+      `
+        SELECT count(*)::int AS count
+        FROM sms_send_records
+        WHERE ip_address_hash = $1
+          AND status = 'sent'
+          AND created_at >= $2
+          AND created_at < $3
+      `,
+      [ipAddressHash, day.start, day.end],
+    );
+
+    if ((sentFromIpToday?.count ?? 0) >= 6) {
+      await recordSmsSend(db, {
+        phoneE164,
+        verificationCode: null,
+        smsContent: null,
+        provider: input.smsProvider.providerName,
+        status: "rate_limited",
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        errorCode: "ip_sms_limit_exceeded",
+        now: input.now,
+      });
+      return { kind: "ip_sms_limit_exceeded", retryAfterSeconds: 0 };
+    }
+  }
+
   const sentToday = await queryOne<{ count: number }>(
     db,
     `
@@ -126,6 +159,8 @@ export async function requestPersistentLoginCode(
   if ((sentToday?.count ?? 0) >= 3) {
     await recordSmsSend(db, {
       phoneE164,
+      verificationCode: null,
+      smsContent: null,
       provider: input.smsProvider.providerName,
       status: "rate_limited",
       ipAddress: input.ipAddress,
@@ -157,6 +192,8 @@ export async function requestPersistentLoginCode(
       const retryAfterSeconds = 60 - elapsedSeconds;
       await recordSmsSend(db, {
         phoneE164,
+        verificationCode: null,
+        smsContent: null,
         provider: input.smsProvider.providerName,
         status: "rate_limited",
         ipAddress: input.ipAddress,
@@ -173,6 +210,7 @@ export async function requestPersistentLoginCode(
     now: input.now,
     code: input.code,
   });
+  const smsContent = buildVerificationSmsContent(challenge.plainCode);
   const sent = await input.smsProvider.sendVerificationCode({
     phoneE164: challenge.phoneE164,
     code: challenge.plainCode,
@@ -193,6 +231,8 @@ export async function requestPersistentLoginCode(
     await recordSmsSend(db, {
       phoneE164,
       challengeId: challenge.challengeId,
+      verificationCode: challenge.plainCode,
+      smsContent,
       provider: input.smsProvider.providerName,
       status: "failed",
       ipAddress: input.ipAddress,
@@ -206,6 +246,8 @@ export async function requestPersistentLoginCode(
   await recordSmsSend(db, {
     phoneE164,
     challengeId: challenge.challengeId,
+    verificationCode: challenge.plainCode,
+    smsContent,
     provider: input.smsProvider.providerName,
     status: "sent",
     ipAddress: input.ipAddress,
@@ -379,6 +421,16 @@ export async function verifyPersistentLoginChallenge(
         createdSession.session.revokedAt,
         input.now,
       ],
+    );
+
+    await db.query(
+      `
+        UPDATE users
+        SET last_login_at = $2,
+            updated_at = $2
+        WHERE id = $1
+      `,
+      [user.id, input.now],
     );
 
     await db.query("COMMIT");
@@ -609,6 +661,8 @@ async function recordSmsSend(
   input: {
     phoneE164: string;
     challengeId?: string;
+    verificationCode?: string | null;
+    smsContent?: string | null;
     provider: "tencent" | "dev";
     status: "sent" | "failed" | "rate_limited";
     ipAddress?: string;
@@ -624,8 +678,11 @@ async function recordSmsSend(
         id,
         phone_e164,
         challenge_id,
+        verification_code,
+        sms_content,
         provider,
         status,
+        ip_address,
         ip_address_hash,
         user_agent_hash,
         provider_request_id,
@@ -638,8 +695,11 @@ async function recordSmsSend(
       randomUUID(),
       input.phoneE164,
       input.challengeId ?? null,
+      input.verificationCode ?? null,
+      input.smsContent ?? null,
       input.provider,
       input.status,
+      input.ipAddress ?? null,
       hashRequestMetadata(input.ipAddress),
       hashRequestMetadata(input.userAgent),
       input.providerRequestId ?? null,
@@ -742,6 +802,10 @@ function challengeFromRow(row: LoginChallengeRow): LoginChallenge {
     consumedAt: row.consumed_at,
     revokedAt: row.revoked_at,
   };
+}
+
+function buildVerificationSmsContent(code: string) {
+  return `【登录验证】验证码 ${code}，5 分钟内有效。`;
 }
 
 function sessionFromRow(row: AuthSessionRow): AuthSession {

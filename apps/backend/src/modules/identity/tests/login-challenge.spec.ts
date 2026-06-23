@@ -51,6 +51,7 @@ describe("login challenge schema assumptions", () => {
       ]);
       assert.ok(indexes.includes("sms_send_records_phone_created_idx"));
       assert.ok(indexes.includes("sms_send_records_phone_status_created_idx"));
+      assert.ok(indexes.includes("sms_send_records_ip_created_idx"));
     } finally {
       await db.close();
     }

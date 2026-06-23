@@ -18,6 +18,7 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
     "用户积分",
     "风控审计",
     "系统设置",
+    "短信记录",
     "管理员账户",
     "修改密码",
     "退出登录",
@@ -51,6 +52,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/exports/risks.csv",
     "/api/admin/audit-events",
     "/api/admin/exports/audit-events.csv",
+    "/api/admin/sms-records",
     "/api/admin/storyboard-prompt/packages",
     "/api/admin/image-prompt/styles",
     "/api/admin/secret-references",
@@ -114,6 +116,17 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "riskStatusFilter",
     "riskStatus=",
     "risk.export",
+    "smsRecords",
+    "smsRecordRange",
+    "loadSmsRecords",
+    "updateSmsRecordRange",
+    "登录时间",
+    "短信记录",
+    "验证码",
+    "短信内容",
+    "成功",
+    "失败",
+    "smsRecordRangeOptions",
     "downloadRiskExport",
     "window.location.assign",
     "审计主体",
@@ -411,10 +424,10 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /用户操作/);
   assert.match(script, /查看账户与模型记录/);
   assert.match(script, /只看模型记录/);
-  assert.match(script, /修改资料/);
-  assert.match(script, /禁用账户/);
-  assert.match(script, /启用账户/);
-  assert.match(script, /归档账户/);
+  assert.match(script, /修改/);
+  assert.match(script, /禁用/);
+  assert.match(script, /启用/);
+  assert.match(script, /删除/);
   assert.match(script, /手动添加积分/);
   assert.match(script, /手动扣减积分/);
   assert.match(script, /调整到目标积分/);
@@ -423,8 +436,8 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /openCreditSetBalanceDrawer/);
   assert.match(script, /onclick="openUserProfileDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','\$\{nextStatus\}'\)"/);
-  assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','archived'\)"/);
   assert.match(script, /onclick="openUserActionDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','archived'\)"/);
   assert.match(script, /<td><div>\$\{user\.userId\}<\/div>/);
   assert.match(script, /<td>\$\{escapeHtml\(user\.displayName \|\| "未命名用户"\)\}<\/td>/);
   assert.match(script, /<td>\$\{escapeHtml\(user\.phone \|\| "-"\)\}<\/td>/);
@@ -476,10 +489,6 @@ test("admin shell includes membership plan management page", async () => {
 });
 
 test("admin standalone shell keeps membership plan management visible", () => {
-  const standaloneStart = script.indexOf("standaloneAgreementMenuContract");
-  assert.notEqual(standaloneStart, -1, "standalone shell override exists");
-  const standaloneScript = script.slice(standaloneStart);
-
   for (const contract of [
     'path.includes("/membership")',
     'membership: "/admin/membership"',
@@ -487,7 +496,7 @@ test("admin standalone shell keeps membership plan management visible", () => {
     'state.page === "membership"',
     "renderMembershipPage",
   ]) {
-    assert.match(standaloneScript, new RegExp(escapeRegExp(contract)));
+    assert.match(script, new RegExp(escapeRegExp(contract)));
   }
 });
 
@@ -1108,7 +1117,8 @@ test("admin prompt manager separates script prompts and image prompt styles", ()
   assert.match(script, /function openBatchCharacterPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("character"/);
   assert.match(script, /function openBatchScenePromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("scene"/);
   assert.match(script, /function openBatchPropPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("prop"/);
-  assert.match(script, /function openBatchImagePresetDrawer\([\s\S]*?编辑\$\{title\}预设[\s\S]*?<span>名称<\/span>[\s\S]*?<span>编码<\/span>/);
+  assert.match(script, /function openBatchImagePresetDrawer\([\s\S]*?编辑\$\{title\}预设[\s\S]*?<span>名称<\/span>[\s\S]*?<span>编码<\/span>[\s\S]*?<span>正文内容<\/span><textarea name="prompt_content"/);
+  assert.match(script, /function batchImagePromptTemplatePayloadItem\([\s\S]*?prompt_content: promptContent/);
 });
 
 test("admin prompt manager adds the shot prompt workflow tab", () => {
@@ -1181,6 +1191,11 @@ test("admin image prompt list accepts both flat and nested data payloads", () =>
     "result.data.data",
     "is_default: true",
     "isDefault: true",
+    "result.meta?.total",
+    "page_size: String(Number(state.imagePromptPageSize || 500))",
+    "if (normalizedCategory !== \"all\") params.set(\"category\", normalizedCategory)",
+    "state.imagePromptStyles = []",
+    "state.imagePromptTotal = 0",
     "showToast(error.payload?.error?.message || \"默认提示词更新失败\")",
   ]) assert.match(script, new RegExp(escapeRegExp(contract)));
 });

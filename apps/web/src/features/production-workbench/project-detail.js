@@ -19,7 +19,7 @@ import {
   resolveCanvasNodeTemplates,
 } from "./canvas/canvas-state.js";
 
-const PROJECT_GALLERY_ROWS_PER_PAGE = 3;
+const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_VIDEO_GENERATION_MODES = [
@@ -41,14 +41,13 @@ const GROUPS = [
   { key: "characters", group: "character", label: "角色", accent: "violet" },
   { key: "scenes", group: "scene", label: "场景", accent: "teal" },
   { key: "props", group: "prop", label: "道具", accent: "amber" },
-  { key: "others", group: "other", label: "其它", accent: "slate" },
+  { key: "others", group: "other", label: "音频", accent: "slate" },
 ];
 
 const INTERIOR_NAV_ITEMS = [
   { id: "overview", icon: "◼", label: "总览" },
   { id: "assets", icon: "◻", label: "资产" },
   { id: "episodes", icon: "▣", label: "剧集" },
-  { id: "members", icon: "◎", label: "成员" },
   { id: "stats", icon: "◌", label: "统计" },
 ];
 
@@ -56,7 +55,7 @@ const ASSET_TABS = [
   { id: "character", icon: "◉", label: "角色", search: "搜索你所需要的角色" },
   { id: "scene", icon: "⌂", label: "场景", search: "搜索你所需要的场景" },
   { id: "prop", icon: "✣", label: "道具", search: "搜索你所需要的道具" },
-  { id: "other", icon: "◈", label: "其它", search: "搜索你所需要的视频" },
+  { id: "other", icon: "◈", label: "音频", search: "搜索你所需要的音频" },
 ];
 
 const SINGLE_EPISODE_AI_TABLE_ORDER = ["script", "scenes", "characters", "props", "storyboards"];
@@ -119,7 +118,7 @@ const ASSET_LIBRARY_CONFIG = {
     addDescriptionLabel: "添加道具描述",
   },
   other: {
-    label: "其它",
+    label: "音频",
     importedCardClass: "other",
     reviewFootnote: "确认后主体会进入当前资源库，并保持最新时间优先展示。",
     addDescriptionLabel: "添加主体描述",
@@ -165,6 +164,62 @@ function resolveImportedAssetPreview(asset) {
     asset?.latestVersion?.previewUrl,
     asset?.latestVersion?.metadata?.previewUrl,
     asset?.sourceUrl,
+  );
+}
+
+function normalizeProjectOtherAssetMediaType(value, fallback = "audio") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "image" || normalized === "video" || normalized === "audio") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function resolveProjectOtherAssetMediaLabel(mediaType) {
+  const normalized = normalizeProjectOtherAssetMediaType(mediaType, "audio");
+  if (normalized === "image") {
+    return "图片";
+  }
+  if (normalized === "video") {
+    return "视频";
+  }
+  return "音频";
+}
+
+function resolveImportedAssetAudioUrl(asset) {
+  const candidates = [
+    asset?.audioUrl,
+    asset?.sourceUrl,
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.latestVersion?.metadata?.sourceUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+  ];
+  const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    if (
+      mimeType.startsWith("audio/") ||
+      /^data:audio\//i.test(value) ||
+      /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(value)
+    ) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function isAudioLibraryAssetRecord(asset) {
+  return Boolean(
+    resolveImportedAssetAudioUrl(asset) ||
+    String(asset?.mimeType ?? asset?.latestVersion?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "")
+      .trim()
+      .toLowerCase()
+      .startsWith("audio/"),
   );
 }
 export function renderProjectDetail(context = {}) {
@@ -1088,7 +1143,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
   const episodeTitle = activeEpisode?.title ?? "Episode 1";
   const episodeStatus = activeEpisode?.status ?? "Draft";
   const storyboardCount = activeEpisode?.storyboardCount ?? activeStoryboards.length ?? 0;
-  const episodeWorkbenchAssetLibrary = resolveEpisodeWorkbenchAssetLibrary(ui);
+  const episodeWorkbenchAssetLibrary = resolveEpisodeWorkbenchAssetLibrary(ui, state);
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
@@ -1199,7 +1254,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
         assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
         projectLibraryAssetsByType: ui.projectLibraryAssetsByType ?? null,
-        projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
+        projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
         projectDetail: ui.projectDetail ?? null,
       })}
       ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
@@ -1207,7 +1262,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
   `;
 }
 
-function resolveEpisodeWorkbenchAssetLibrary(ui) {
+function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
   const importedAssets = ui.importedAssets ?? {};
   const resolvedContext = resolveEpisodeWorkbenchContextPayload(ui.episodeWorkbenchContext);
   const contextAssets =
@@ -1234,7 +1289,9 @@ function resolveEpisodeWorkbenchAssetLibrary(ui) {
       resolveEpisodeWorkbenchAssetEntries(contextAssets, "prop"),
       "prop",
     );
-    return {
+    return hydrateEpisodeAssetLibraryFromProjectLibraryByName({
+      ui,
+      state,
       character: contextCharacterAssets.length
         ? contextCharacterAssets
         : applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
@@ -1244,14 +1301,16 @@ function resolveEpisodeWorkbenchAssetLibrary(ui) {
       prop: contextPropAssets.length
         ? contextPropAssets
         : applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
-    };
+    });
   }
 
-  return {
+  return hydrateEpisodeAssetLibraryFromProjectLibraryByName({
+    ui,
+    state,
     character: applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
     scene: applyConversationPreviewFallback(importedAssets.scene ?? [], ui.assetConversationHistory ?? {}),
     prop: applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
-  };
+  });
 }
 
 function applyConversationPreviewFallback(assets = [], historyMap = {}) {
@@ -1316,8 +1375,8 @@ function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
     id: asset?.assetId ?? asset?.id ?? "",
     assetId: asset?.assetId ?? asset?.id ?? null,
     name: asset?.name ?? asset?.label ?? "未命名资产",
-    preview: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
-    previewUrl: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
+    preview: resolveEpisodeAssetPreviewUrl(asset),
+    previewUrl: resolveEpisodeAssetPreviewUrl(asset),
     description: asset?.description ?? "",
     kind,
     source: "episode",
@@ -1328,9 +1387,112 @@ function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
     dubbingConfig: asset?.dubbingConfig ?? null,
     updatedAt: asset?.updatedAt ?? null,
     fixedImageFileId: asset?.fixedImageFileId ?? null,
-    fixedImageUrl: resolvePreferredPreviewUrl(asset?.fixedImageUrl, asset?.previewUrl),
+    fixedImageUrl: resolveEpisodeAssetPreviewUrl(asset),
     fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
   }));
+}
+
+function hydrateEpisodeAssetLibraryFromProjectLibraryByName({ ui = {}, state = {}, character = [], scene = [], prop = [] } = {}) {
+  return {
+    character: hydrateEpisodeAssetsFromProjectLibraryByName(ui, state, character, "character"),
+    scene: hydrateEpisodeAssetsFromProjectLibraryByName(ui, state, scene, "scene"),
+    prop: hydrateEpisodeAssetsFromProjectLibraryByName(ui, state, prop, "prop"),
+  };
+}
+
+function hydrateEpisodeAssetsFromProjectLibraryByName(ui = {}, state = {}, assets = [], kind = "character") {
+  const previewByName = buildProjectAssetPreviewMapByName(ui, state, kind);
+  if (!previewByName.size) {
+    return Array.isArray(assets) ? assets : [];
+  }
+  return (Array.isArray(assets) ? assets : []).map((asset) => {
+    const currentPreview = resolveEpisodeAssetPreviewUrl(asset);
+    if (currentPreview && !isMockPreviewUrl(currentPreview)) {
+      return asset;
+    }
+    const matchedPreview = findProjectAssetPreviewForEpisodeAsset(previewByName, asset);
+    if (!matchedPreview) {
+      return asset;
+    }
+    return {
+      ...asset,
+      preview: matchedPreview,
+      previewUrl: matchedPreview,
+      fixedImageUrl: matchedPreview,
+      sourceUrl: asset?.sourceUrl ?? matchedPreview,
+    };
+  });
+}
+
+function buildProjectAssetPreviewMapByName(ui = {}, state = {}, kind = "character") {
+  const previewByName = new Map();
+  const projectAssets = [
+    ...(Array.isArray(ui.projectLibraryAssetsByType?.[kind]) ? ui.projectLibraryAssetsByType[kind] : []),
+    ...(Array.isArray(ui.projectDetail?.assetsByType?.[kind]) ? ui.projectDetail.assetsByType[kind] : []),
+    ...(Array.isArray(state.projectDetail?.assetsByType?.[kind]) ? state.projectDetail.assetsByType[kind] : []),
+  ];
+  for (const asset of projectAssets) {
+    const preview = resolveEpisodeAssetPreviewUrl(asset);
+    if (!preview || isMockPreviewUrl(preview)) {
+      continue;
+    }
+    for (const name of listProjectAssetMatchNames(asset)) {
+      const normalizedName = normalizeEpisodeAssetNameForMatch(name);
+      if (normalizedName && !previewByName.has(normalizedName)) {
+        previewByName.set(normalizedName, preview);
+      }
+    }
+  }
+  return previewByName;
+}
+
+function findProjectAssetPreviewForEpisodeAsset(previewByName, asset) {
+  for (const name of listProjectAssetMatchNames(asset)) {
+    const normalizedName = normalizeEpisodeAssetNameForMatch(name);
+    if (normalizedName && previewByName.has(normalizedName)) {
+      return previewByName.get(normalizedName);
+    }
+  }
+  return "";
+}
+
+function listProjectAssetMatchNames(asset) {
+  return [
+    asset?.name,
+    asset?.label,
+    asset?.assetKey,
+    extractAssetDisplayNameFromKey(asset?.assetKey),
+  ].filter(Boolean);
+}
+
+function extractAssetDisplayNameFromKey(value) {
+  const raw = String(value ?? "").trim();
+  const match = /^(?:character|role|scene|prop|asset)[-_](.+?)(?:[-_][a-f0-9]{6,}|[-_]\d{6,})?$/i.exec(raw);
+  return match?.[1]?.trim() ?? "";
+}
+
+function normalizeEpisodeAssetNameForMatch(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(/^[@#]+/, "")
+    .toLowerCase();
+}
+
+function resolveEpisodeAssetPreviewUrl(asset) {
+  return resolvePreferredPreviewUrl(
+    asset?.fixedImageUrl,
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.publicUrl,
+    asset?.coverImageUrl,
+    asset?.src,
+    asset?.imageUrl,
+    asset?.url,
+    asset?.sourceUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.latestVersion?.metadata?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+  );
 }
 
 function renderProjectInteriorShell({ state, ui, detailState }) {
@@ -1343,7 +1505,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
   const aspectRatio = detailState.project.aspectRatio || "16:9";
   const hasAssets = Boolean(state.assetCandidates);
   const episodeCount = detailState.episodes?.length ?? 0;
-  const activeInteriorSection = ui.projectInteriorSection ?? "overview";
+  const activeInteriorSection = normalizeProjectInteriorSection(ui.projectInteriorSection);
   const activeAssetTab = ui.projectAssetTab ?? "character";
 
   return `
@@ -1379,10 +1541,8 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
             ? renderProjectAssetLibrary({ state, ui, activeAssetTab })
             : activeInteriorSection === "episodes"
               ? renderProjectEpisodesInterior({ state, ui })
-              : activeInteriorSection === "members"
-                ? renderProjectMembersInterior(ui)
-                : activeInteriorSection === "stats"
-                  ? renderProjectStatsInterior(ui)
+              : activeInteriorSection === "stats"
+                ? renderProjectStatsInterior(ui)
             : renderProjectOverviewInterior({
                 state,
                 ui,
@@ -1409,35 +1569,6 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
 function renderProjectEpisodesInterior({ state, ui }) {
   const episodes = getEpisodeHubEntries(state, ui);
   return renderEpisodeHub({ episodes, ui });
-}
-
-function renderProjectMembersInterior(ui) {
-  const members = Array.isArray(ui.projectMembers) ? ui.projectMembers : [];
-  return `
-    <section class="project-info-panel" aria-label="成员">
-      <header class="project-info-header">
-        <h1>成员</h1>
-        <p>当前项目所在协作空间的真实成员列表。</p>
-      </header>
-      <div class="project-info-grid">
-        ${
-          members.length
-            ? members
-                .map(
-                  (member) => `
-                    <article class="project-info-card member-card">
-                      <strong>${escapeHtml(member.phone ?? member.userId ?? "未命名成员")}</strong>
-                      <span>角色：${escapeHtml(member.role ?? "unknown")}</span>
-                      <span>状态：${escapeHtml(member.status ?? "unknown")}</span>
-                    </article>
-                  `,
-                )
-                .join("")
-            : '<article class="project-info-card empty"><strong>暂无成员数据</strong><span>当前项目尚未返回可展示的成员信息。</span></article>'
-        }
-      </div>
-    </section>
-  `;
 }
 
 function renderProjectStatsInterior(ui) {
@@ -1494,6 +1625,11 @@ function renderProjectStatMetric(label, value) {
   `;
 }
 
+function normalizeProjectInteriorSection(section) {
+  const normalized = String(section ?? "overview");
+  return INTERIOR_NAV_ITEMS.some((item) => item.id === normalized) ? normalized : "overview";
+}
+
 function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, hasAssets, episodeCount }) {
   const episodes = getEpisodeHubEntries(state, ui);
   const hasEpisodes = episodes.length > 0;
@@ -1523,7 +1659,7 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
           ${renderInteriorAssetCard("角色", "character", "violet", detailState.assets.characters, detailState.assets.previews?.character)}
           ${renderInteriorAssetCard("场景", "scene", "teal", detailState.assets.scenes, detailState.assets.previews?.scene)}
           ${renderInteriorAssetCard("道具", "prop", "ochre", detailState.assets.props, detailState.assets.previews?.prop)}
-          ${renderInteriorAssetCard("其它", "other", "cyan", detailState.assets.others, detailState.assets.previews?.other)}
+          ${renderInteriorAssetCard("音频", "other", "cyan", detailState.assets.others, detailState.assets.previews?.other)}
         </div>
       </section>
 
@@ -1706,6 +1842,7 @@ function renderSingleEpisodeModal(ui) {
   const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
   const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
   const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
+  const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -1736,12 +1873,91 @@ function renderSingleEpisodeModal(ui) {
             </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode">创建空白章节</button>
-            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">AI 智能分镜</button>
+            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">${escapeHtml(aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
     </section>
   `;
+}
+
+function resolveSingleEpisodeAiActionLabel(ui = {}) {
+  const credits = resolveSingleEpisodeScriptModelCredits(ui);
+  return credits ? `AI 智能分镜 ${credits}积分` : "AI 智能分镜";
+}
+
+function resolveSingleEpisodeScriptModelCredits(ui = {}) {
+  const models = Array.isArray(ui.episodeGenerationConfig?.models)
+    ? ui.episodeGenerationConfig.models
+    : [];
+  const scriptModel = models.find(isScriptGenerationModel);
+  return scriptModel ? resolveConfiguredModelCredits(scriptModel) : "";
+}
+
+function resolveConfiguredModelCredits(model = {}) {
+  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
+    ? model.pricing
+    : {};
+  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
+    ? model.pricingJson
+    : {};
+  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
+    ? model.pricing_json
+    : {};
+  const candidates = [
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    pricingJson.baseCredits,
+    pricingJson.credits,
+    pricingJson.cost,
+    pricingJson.price,
+    pricingSnakeJson.baseCredits,
+    pricingSnakeJson.credits,
+    pricingSnakeJson.cost,
+    pricingSnakeJson.price,
+    model?.displayBaseCost,
+    model?.baseCredits,
+    model?.credits,
+    model?.creditCost,
+    model?.cost,
+    model?.price,
+    model?.priceCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return String(Math.round(value));
+    }
+  }
+  return "";
+}
+
+function isScriptGenerationModel(model = {}) {
+  const source = model && typeof model === "object" ? model : {};
+  const mediaType = String(source.mediaType ?? source.media_type ?? source.mediaKind ?? source.media_kind ?? "").trim().toLowerCase();
+  const uiConfig = source.uiConfig && typeof source.uiConfig === "object" && !Array.isArray(source.uiConfig)
+    ? source.uiConfig
+    : {};
+  const tokens = [
+    source.modelCode,
+    source.model_code,
+    source.id,
+    source.modelKind,
+    source.model_kind,
+    uiConfig.modelKind,
+    ...(Array.isArray(source.supportedModes) ? source.supportedModes : []),
+    ...(Array.isArray(source.taskModes) ? source.taskModes : []),
+    ...(Array.isArray(source.task_modes) ? source.task_modes : []),
+    ...(Array.isArray(source.taskModesJson) ? source.taskModesJson : []),
+    ...(Array.isArray(source.task_modes_json) ? source.task_modes_json : []),
+    ...(Array.isArray(uiConfig.supportedModes) ? uiConfig.supportedModes : []),
+  ].map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean);
+  return (
+    mediaType === "text" ||
+    tokens.some((token) => token === "text.script" || token === "script" || token.includes("script"))
+  );
 }
 
 export function renderSingleEpisodeAiPreview(ui) {
@@ -2855,12 +3071,12 @@ function renderProjectInteriorStatusMenu(currentStatus) {
 function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
   const tab = ASSET_TABS.find((item) => item.id === activeAssetTab) ?? ASSET_TABS[0];
   const isOther = tab.id === "other";
-  const mediaType = ui.projectOtherAssetMediaType ?? "video";
+  const mediaType = normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio");
   const importedAssets = filterAndSortImportedAssets(
     getImportedAssetEntries(state, ui, tab.id, mediaType),
     ui,
   );
-  const mediaLabel = mediaType === "image" ? "图片" : "视频";
+  const mediaLabel = resolveProjectOtherAssetMediaLabel(mediaType);
   const filterLabel =
     ui.assetFilterMode === "with-preview"
       ? "有预览"
@@ -2875,7 +3091,6 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
         <div class="asset-library-tabs" role="tablist" aria-label="资产类型">
           ${ASSET_TABS.map((item) => renderProjectAssetTab(item, item.id === tab.id)).join("")}
         </div>
-        ${isOther ? renderOtherAssetSubtabs(mediaType) : ""}
         <div class="asset-library-tools">
           <button class="asset-sort-button" type="button" data-action="toggle-asset-sort-order">${ui.assetSortOrder === "desc" ? "时间倒序" : "时间正序"} <span aria-hidden="true">⌄</span></button>
           ${
@@ -2925,7 +3140,7 @@ function renderProjectAssetTab(tab, active) {
 
 function renderOtherAssetSubtabs(mediaType) {
   return `
-    <div class="other-media-tabs" role="tablist" aria-label="其它资产媒体类型">
+    <div class="other-media-tabs" role="tablist" aria-label="音频资产媒体类型">
       ${["video", "image"]
         .map((type) => {
           const label = type === "video" ? "视频" : "图片";
@@ -3016,20 +3231,20 @@ function renderAssetEmptyLibrary(tab) {
 }
 
 function renderOtherAssetLibrary(mediaType, importedAssets, ui) {
-  const label = mediaType === "image" ? "图片" : "视频";
+  const label = resolveProjectOtherAssetMediaLabel(mediaType);
   return `
     <section class="other-asset-library">
       <button class="seedance-import-card" type="button" data-action="open-asset-import-modal" data-asset-kind="other">
         <span aria-hidden="true">✦</span>
-        导入 Seedance 2.0${label}主体
+        导入${label}素材
       </button>
       ${
         importedAssets.length
           ? importedAssets.map((asset) => renderOtherImportedAssetCard(asset, mediaType, ui)).join("")
           : `
             <div class="seedance-library-empty">
-              <strong>该资源库为 Seedance 2.0 专享资源库</strong>
-              <p>暂无${label}，立即上传一个${label === "图片" ? "图片" : "视频"}主体吧。</p>
+              <strong>${label}资源库</strong>
+              <p>暂无${label}，立即上传一个${label}文件吧。</p>
             </div>
           `
       }
@@ -3073,9 +3288,51 @@ function renderImportedAssetCard(asset, ui) {
 
 function renderOtherImportedAssetCard(asset, mediaType, ui) {
   const preview = resolveImportedAssetPreview(asset);
+  const audioUrl = resolveImportedAssetAudioUrl(asset);
+  const visualPreview = audioUrl && preview === audioUrl ? "" : preview;
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, "other", mediaType, asset.id);
+  if (mediaType === "audio") {
+    return `
+      <article
+        class="other-imported-card audio ${isHighlighted ? "just-imported" : ""}"
+        data-imported-asset-id="${escapeHtml(asset.id)}"
+        tabindex="-1"
+      >
+        <div class="other-imported-preview audio-preview">
+          ${visualPreview ? `<img src="${escapeHtml(resolveApiUrl(visualPreview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="project-audio-avatar" aria-hidden="true"></span>'}
+          <div class="project-audio-card-actions">
+            <button
+              class="project-audio-play-button"
+              type="button"
+              data-action="preview-project-audio-asset"
+              data-asset-id="${escapeAttr(asset.id)}"
+              data-audio-url="${escapeAttr(resolveApiUrl(audioUrl))}"
+              aria-label="播放音频"
+            >▷</button>
+            <span class="project-audio-edit-chip">编辑配音</span>
+          </div>
+        </div>
+        <div class="asset-card-meta-row">
+          <div class="asset-card-copy">
+            <strong>${escapeHtml(asset.name)}</strong>
+            <span>${escapeHtml(asset.description || (audioUrl ? "点击播放音频" : "已导入音频"))}</span>
+          </div>
+          <button
+            class="asset-card-menu-button"
+            type="button"
+            data-action="toggle-asset-card-menu"
+            data-asset-menu-id="${escapeHtml(menuId)}"
+            aria-haspopup="menu"
+            aria-expanded="${isMenuOpen ? "true" : "false"}"
+            aria-label="更多操作"
+          >⋮</button>
+        </div>
+        ${isMenuOpen ? renderImportedAssetMenu(asset, "other", mediaType) : ""}
+      </article>
+    `;
+  }
   return `
     <article
       class="other-imported-card ${mediaType} ${isHighlighted ? "just-imported" : ""}"
@@ -3119,9 +3376,13 @@ function renderImportedAssetMenu(asset, assetKind, mediaType) {
 }
 
 export function renderAssetImportModal(ui) {
-  const activeTab = ui.assetImportModalTab ?? "local";
+  const activeTab = "local";
   const assetKind = ui.assetImportModal ?? "character";
-  const assetLabel = getAssetModalLabel(assetKind, ui.projectOtherAssetMediaType ?? "video");
+  const otherMediaType = normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio");
+  const assetLabel = getAssetModalLabel(
+    assetKind,
+    otherMediaType,
+  );
   const isEpisodeWorkbenchLibraryModal =
     ui.projectPanelMode === "episode-workbench" &&
     assetKind !== "other" &&
@@ -3132,19 +3393,101 @@ export function renderAssetImportModal(ui) {
     return renderEpisodeWorkbenchAssetImportModal(ui, assetKind);
   }
 
+  if (assetKind === "other" && otherMediaType === "audio") {
+    return renderAudioAssetImportModal(ui);
+  }
+
   return `
     <section class="asset-import-backdrop modal-backdrop" role="dialog" aria-modal="true" aria-label="import-asset-dialog">
       <div class="asset-import-modal ${assetKind === "character" ? "character-import-flow" : ""} ${assetKind === "other" ? "other-import-flow" : ""}">
         <button class="asset-modal-close" type="button" data-action="close-asset-import-modal" aria-label="关闭">×</button>
         <header class="asset-import-header">
           <h2>导入${escapeHtml(assetLabel)}</h2>
-          <nav class="asset-import-tabs" aria-label="导入来源">
-            ${renderAssetImportTab(activeTab, "local", "本地导入")}
-            ${renderAssetImportTab(activeTab, "team", "团队资产库")}
-            ${renderAssetImportTab(activeTab, "official", "官方资产库")}
-          </nav>
         </header>
         ${renderAssetImportBody(ui, activeTab, assetKind)}
+      </div>
+    </section>
+  `;
+}
+
+function renderAudioAssetImportModal(ui) {
+  const draft = ui.audioAssetImportDraft ?? {};
+  const name = String(draft.name ?? "").slice(0, 20);
+  const audioFileName = String(draft.audioFileName ?? "").trim();
+  const audioUploading = draft.audioUploading === true;
+  const exampleImageUploading = draft.exampleImageUploading === true;
+  const audioPreviewUrl = resolvePreferredPreviewUrl(
+    draft.audioPreviewUrl,
+    draft.audioUpload?.publicUrl,
+    draft.audioUpload?.previewUrl,
+  );
+  const exampleImageUrl = resolvePreferredPreviewUrl(
+    draft.exampleImagePreview,
+    draft.exampleImageUrl,
+    draft.exampleImageSourceUrl,
+  );
+  const canSave = Boolean(name.trim() && draft.audioUpload && !audioUploading && !exampleImageUploading);
+
+  return `
+    <section class="asset-import-backdrop modal-backdrop" role="dialog" aria-modal="true" aria-label="audio-import-dialog">
+      <div class="asset-import-modal audio-import-modal">
+        <button class="asset-modal-close" type="button" data-action="close-asset-import-modal" aria-label="关闭">×</button>
+        <div class="audio-import-form">
+          <label class="audio-import-field">
+            <span>配音员名称 <em>*</em></span>
+            <div class="audio-import-input-wrap">
+              <input
+                id="audio-import-name-input"
+                type="text"
+                maxlength="20"
+                value="${escapeAttr(name)}"
+                placeholder="请填写配音员名称"
+              />
+              <em>${[...name].length} / 20</em>
+            </div>
+          </label>
+
+          <div class="audio-import-field">
+            <span>主播音频 <em>*</em></span>
+            <button class="audio-import-upload-button ${audioPreviewUrl ? "has-audio" : ""}" type="button" data-action="trigger-audio-import-audio-file" ${disabled(audioUploading)}>
+              <i aria-hidden="true">⇪</i>
+              <strong>${audioUploading ? "上传中..." : "上传音乐"}</strong>
+            </button>
+            <input class="audio-import-hidden-input" type="file" accept="audio/*" data-action="select-audio-import-audio-file" />
+            ${
+              audioPreviewUrl
+                ? `
+                  <div class="audio-import-player-shell">
+                    <audio
+                      class="audio-import-player"
+                      controls
+                      preload="metadata"
+                      src="${escapeAttr(resolveApiUrl(audioPreviewUrl))}"
+                    ></audio>
+                  </div>
+                `
+                : ""
+            }
+            ${audioFileName ? `<p class="audio-import-file-name">${escapeHtml(audioFileName)}</p>` : ""}
+          </div>
+
+          <div class="audio-import-field">
+            <span>配音员示例图（非必填，仅用于分辨配音）</span>
+            <button class="audio-import-image-button ${exampleImageUrl ? "has-image" : ""}" type="button" data-action="trigger-audio-import-example-image" ${disabled(exampleImageUploading)}>
+              ${
+                exampleImageUploading
+                  ? `<i aria-hidden="true">↑</i><strong>上传中...</strong>`
+                  : 
+                exampleImageUrl
+                  ? `<img src="${escapeAttr(resolveApiUrl(exampleImageUrl))}" alt="配音员示例图" loading="lazy" />`
+                  : `<i aria-hidden="true">↑</i><strong>上传图片</strong>`
+              }
+            </button>
+            <input class="audio-import-hidden-input" type="file" accept="image/*" data-action="select-audio-import-example-image" />
+          </div>
+
+          <button class="audio-import-save-button ${canSave ? "is-ready" : "is-blocked"}" type="button" data-action="confirm-audio-asset-import">保存</button>
+        </div>
       </div>
     </section>
   `;
@@ -3378,14 +3721,6 @@ function clampAssetImportPage(value, totalPages) {
   return Math.min(Math.max(Math.trunc(page), 1), totalPages);
 }
 
-function renderAssetImportTab(activeTab, tab, label) {
-  return `
-    <button class="asset-import-tab ${activeTab === tab ? "active" : ""}" type="button" data-action="switch-asset-import-tab" data-tab="${tab}">
-      ${label}
-    </button>
-  `;
-}
-
 function renderAssetImportBody(ui, activeTab, assetKind) {
   if (activeTab === "team") {
     return `
@@ -3462,33 +3797,10 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
   }
 
   const config = ASSET_LIBRARY_CONFIG[assetKind] ?? ASSET_LIBRARY_CONFIG.character;
-  const mediaType = ui.projectOtherAssetMediaType ?? "video";
-  const presetKind = assetKind === "other" ? `other-${mediaType}` : config.presetKind;
-  const noteLink =
-    assetKind === "other"
-      ? ""
-      : ` <a href="#" onclick="return false;">${escapeHtml(config.importLinkLabel)}</a>`;
+  const mediaType = normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio");
 
   return `
     <section class="asset-import-local">
-      <div class="asset-import-banner ${assetKind === "other" ? "other-tone" : ""}">
-        <span class="asset-import-banner-icon" aria-hidden="true">✦</span>
-        <strong>${escapeHtml(getAssetImportHint(assetKind, mediaType))}</strong>
-        <button type="button" class="asset-import-banner-action">我知道了</button>
-      </div>
-      <div class="asset-import-presets">
-        ${getAssetImportPresets(presetKind)
-          .map(
-            ([label, kind]) => `
-              <article class="asset-import-preset">
-                <div class="asset-import-preset-visual ${kind}" aria-hidden="true"></div>
-                <footer>${label}</footer>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <p class="asset-import-note">${escapeHtml(getAssetImportNote(assetKind, mediaType))}${noteLink}</p>
       <button
         class="asset-import-dropzone ${escapeHtml(config.dropzoneMode ?? "")}"
         type="button"
@@ -3498,7 +3810,7 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
         <input
           class="asset-import-file-input"
           type="file"
-          accept="${escapeHtml(getAssetImportAccept(assetKind, ui.projectOtherAssetMediaType ?? "video"))}"
+          accept="${escapeHtml(getAssetImportAccept(assetKind, mediaType))}"
           multiple
         />
         <span class="asset-import-upload-icon" aria-hidden="true">⇪</span>
@@ -3510,23 +3822,26 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
 }
 
 function renderOtherAssetEmpty(mediaType) {
-  const label = mediaType === "image" ? "图片" : "视频";
+  const label = resolveProjectOtherAssetMediaLabel(mediaType);
   return `
     <section class="other-asset-empty">
       <button class="seedance-import-card" type="button">
         <span aria-hidden="true">✦</span>
-        导入 Seedance 2.0${label}主体
+        导入${label}素材
       </button>
       <div class="seedance-library-empty">
-        <strong>该资源库为 <span aria-hidden="true">🪽</span> Seedance 2.0 专享资源库</strong>
-        <p>暂无${label}，立即上传一个${label === "图片" ? "图片" : "视频"}主体吧！</p>
+        <strong>${label}资源库</strong>
+        <p>暂无${label}，立即上传一个${label}文件吧！</p>
       </div>
     </section>
   `;
 }
 
 function renderAssetImportReview(ui, assetKind) {
-  const label = getAssetModalLabel(assetKind, ui.projectOtherAssetMediaType ?? "video");
+  const label = getAssetModalLabel(
+    assetKind,
+    normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
+  );
   const selection = ui.assetImportSelection ?? [];
   const config = ASSET_LIBRARY_CONFIG[assetKind] ?? ASSET_LIBRARY_CONFIG.character;
 
@@ -3579,7 +3894,7 @@ function renderAssetImportReview(ui, assetKind) {
   `;
 }
 
-function getImportedAssetEntries(state, ui, assetKind, mediaType = "video") {
+function getImportedAssetEntries(state, ui, assetKind, mediaType = "audio") {
   const preferWorkbenchAssets = ui.projectPanelMode === "episode-workbench";
   if (preferWorkbenchAssets) {
     if (assetKind === "other") {
@@ -3591,7 +3906,20 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "video") {
   const detailAssets = state?.projectDetail?.assetsByType;
   if (detailAssets) {
     if (assetKind === "other") {
-      return mapDetailAssets(detailAssets.other?.[mediaType] ?? [], "other");
+      if (mediaType === "audio") {
+        const audioAssets = [
+          ...(detailAssets.other?.audio ?? []),
+          ...((detailAssets.other?.video ?? []).filter((asset) => isAudioLibraryAssetRecord(asset))),
+        ];
+        return mapDetailAssets(audioAssets, "other");
+      }
+      if (mediaType === "video") {
+        return mapDetailAssets(
+          (detailAssets.other?.video ?? []).filter((asset) => !isAudioLibraryAssetRecord(asset)),
+          "other",
+        );
+      }
+      return mapDetailAssets(detailAssets.other?.image ?? [], "other");
     }
     return mapDetailAssets(detailAssets[assetKind] ?? [], assetKind);
   }
@@ -3616,6 +3944,9 @@ function mapDetailAssets(assets, kind) {
     isMain: Boolean(asset.latestVersion?.metadata?.isMain),
     source: asset.latestVersion?.metadata?.source ?? "import",
     updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? asset.createdAt ?? null,
+    mimeType: asset.latestVersion?.metadata?.mimeType ?? asset.latestVersion?.mimeType ?? "",
+    sourceUrl: asset.latestVersion?.metadata?.sourceUrl ?? asset.previewUrl ?? "",
+    audioUrl: resolveImportedAssetAudioUrl(asset),
     latestVersion: asset.latestVersion ?? null,
   }));
 }
@@ -3659,7 +3990,7 @@ function renderAssetLibraryReturnNotice(ui, assetKind, mediaType) {
   }
   const matchesKind = (ui.assetLibraryHighlightKind ?? null) === assetKind;
   const matchesMedia =
-    assetKind !== "other" || (ui.assetLibraryHighlightMediaType ?? "video") === mediaType;
+    assetKind !== "other" || normalizeProjectOtherAssetMediaType(ui.assetLibraryHighlightMediaType, "audio") === mediaType;
   if (!matchesKind || !matchesMedia) {
     return "";
   }
@@ -3674,15 +4005,21 @@ function isImportedAssetHighlighted(ui, assetKind, mediaType, assetId) {
   if ((ui.assetLibraryHighlightKind ?? null) !== assetKind) {
     return false;
   }
-  if (assetKind === "other" && (ui.assetLibraryHighlightMediaType ?? "video") !== mediaType) {
+  if (assetKind === "other" && normalizeProjectOtherAssetMediaType(ui.assetLibraryHighlightMediaType, "audio") !== mediaType) {
     return false;
   }
   return true;
 }
 
-function getAssetModalLabel(assetKind, mediaType = "video") {
+function getAssetModalLabel(assetKind, mediaType = "audio") {
   if (assetKind === "other") {
-    return mediaType === "image" ? "图片主体" : "视频主体";
+    if (mediaType === "image") {
+      return "图片主体";
+    }
+    if (mediaType === "video") {
+      return "视频主体";
+    }
+    return "音频素材";
   }
   return getAssetLabel(assetKind);
 }
@@ -3693,48 +4030,72 @@ function getAssetLabel(assetKind) {
       character: "角色",
       scene: "场景",
       prop: "道具",
-      other: "其它",
+      other: "音频",
     }[assetKind] ?? "资产"
   );
 }
 
-function getAssetImportAccept(assetKind, otherMediaType = "video") {
+function getAssetImportAccept(assetKind, otherMediaType = "audio") {
   if (assetKind === "other") {
-    return otherMediaType === "image" ? "image/*" : "video/*";
+    if (otherMediaType === "image") {
+      return "image/*";
+    }
+    if (otherMediaType === "video") {
+      return "video/*";
+    }
+    return "audio/*";
   }
   return "image/*";
 }
 
-function getAssetImportHint(assetKind, mediaType = "video") {
+function getAssetImportHint(assetKind, mediaType = "audio") {
   if (assetKind === "other") {
-    return mediaType === "image"
-      ? "上传图片主体后，可在图片分镜中作为统一参考主体使用"
-      : "上传视频主体后，可在视频分镜中作为统一参考主体使用";
+    if (mediaType === "image") {
+      return "上传图片主体后，可在图片分镜中作为统一参考主体使用";
+    }
+    if (mediaType === "video") {
+      return "上传视频主体后，可在视频分镜中作为统一参考主体使用";
+    }
+    return "上传音频后，可在配音与音频参考流程中直接复用。";
   }
   return ASSET_LIBRARY_CONFIG[assetKind]?.importHint ?? ASSET_LIBRARY_CONFIG.character.importHint;
 }
 
-function getAssetImportNote(assetKind, mediaType = "video") {
+function getAssetImportNote(assetKind, mediaType = "audio") {
   if (assetKind === "other") {
-    return mediaType === "image"
-      ? "支持上传单张图片主体，上传完成后可在确认页修改名称并导入。"
-      : "支持上传视频主体素材，上传完成后可在确认页修改名称并导入。";
+    if (mediaType === "image") {
+      return "支持上传单张图片主体，上传完成后可在确认页修改名称并导入。";
+    }
+    if (mediaType === "video") {
+      return "支持上传视频主体素材，上传完成后可在确认页修改名称并导入。";
+    }
+    return "支持上传 MP3、WAV、M4A、AAC，上传完成后可在确认页修改名称并导入。";
   }
   return ASSET_LIBRARY_CONFIG[assetKind]?.importNote ?? ASSET_LIBRARY_CONFIG.character.importNote;
 }
 
-function getAssetDropzoneTitle(assetKind, mediaType = "video") {
+function getAssetDropzoneTitle(assetKind, mediaType = "audio") {
   if (assetKind === "other") {
-    return mediaType === "image" ? "点击或直接拖拽图片主体上传" : "点击或直接拖拽视频主体上传";
+    if (mediaType === "image") {
+      return "点击或直接拖拽图片主体上传";
+    }
+    if (mediaType === "video") {
+      return "点击或直接拖拽视频主体上传";
+    }
+    return "点击或直接拖拽音频上传";
   }
   return ASSET_LIBRARY_CONFIG[assetKind]?.dropzoneTitle ?? ASSET_LIBRARY_CONFIG.character.dropzoneTitle;
 }
 
-function getAssetDropzoneCopy(assetKind, mediaType = "video") {
+function getAssetDropzoneCopy(assetKind, mediaType = "audio") {
   if (assetKind === "other") {
-    return mediaType === "image"
-      ? "支持 PNG、JPG 等图片格式，确认后会展示在当前图片主体资源库"
-      : "支持 MP4、MOV 等视频格式，确认后会展示在当前视频主体资源库";
+    if (mediaType === "image") {
+      return "支持 PNG、JPG 等图片格式，确认后会展示在当前图片主体资源库";
+    }
+    if (mediaType === "video") {
+      return "支持 MP4、MOV 等视频格式，确认后会展示在当前视频主体资源库";
+    }
+    return "支持 MP3、WAV、M4A、AAC，确认后会展示在当前音频资源库";
   }
   return ASSET_LIBRARY_CONFIG[assetKind]?.dropzoneCopy ?? ASSET_LIBRARY_CONFIG.character.dropzoneCopy;
 }
@@ -3786,62 +4147,134 @@ function renderAssetGeneratorModal(ui) {
   const tab = ASSET_TABS.find((item) => item.id === assetKind) ?? ASSET_TABS[0];
   const label = tab.label;
   const isEditing = ui.assetGeneratorMode === "edit";
-  const isCharacter = assetKind === "character";
-  const isScene = assetKind === "scene";
   const name = ui.assetGeneratorName ?? "";
-  const prompt = ui.assetGeneratorPrompt ?? "";
-  const importedAssets = getImportedAssetEntries({}, ui, assetKind, ui.projectOtherAssetMediaType ?? "image");
   const editingAsset = ui.assetGeneratorEditingAsset ?? null;
-  const previewAssets = editingAsset
-    ? [editingAsset]
-    : importedAssets.length
-    ? importedAssets
-    : [{
-        id: `${assetKind}-preview-default`,
-        name,
-        preview:
-          "data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='228' viewBox='0 0 300 228'%3E%3Crect width='300' height='228' rx='18' fill='%2332353f'/%3E%3Crect x='16' y='16' width='268' height='140' rx='14' fill='url(%23g)'/%3E%3Crect x='16' y='172' width='144' height='16' rx='8' fill='%23434655'/%3E%3Crect x='16' y='196' width='98' height='12' rx='6' fill='%23393c48'/%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23525461'/%3E%3Cstop offset='1' stop-color='%23272831'/%3E%3C/linearGradient%3E%3C/defs%3E%3C/svg%3E",
-      }];
+  const description = ui.assetGeneratorPrompt ?? "";
+  const previewUrl = resolvePreferredPreviewUrl(
+    ui.assetGeneratorPreviewUrl,
+    editingAsset?.fixedImageUrl,
+    editingAsset?.preview,
+    editingAsset?.previewUrl,
+    editingAsset?.latestVersion?.metadata?.fixedImageUrl,
+    editingAsset?.latestVersion?.previewUrl,
+    editingAsset?.latestVersion?.metadata?.previewUrl,
+  );
+  if (!isEditing) {
+    const previewAssets = editingAsset
+      ? [editingAsset]
+      : [{
+          id: `${assetKind}-preview-default`,
+          name,
+          preview:
+            "data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='228' viewBox='0 0 300 228'%3E%3Crect width='300' height='228' rx='18' fill='%2332353f'/%3E%3Crect x='16' y='16' width='268' height='140' rx='14' fill='url(%23g)'/%3E%3Crect x='16' y='172' width='144' height='16' rx='8' fill='%23434655'/%3E%3Crect x='16' y='196' width='98' height='12' rx='6' fill='%23393c48'/%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23525461'/%3E%3Cstop offset='1' stop-color='%23272831'/%3E%3C/linearGradient%3E%3C/defs%3E%3C/svg%3E",
+        }];
+    return `
+      <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
+        <div class="asset-generator-modal">
+          <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
+          <aside class="asset-generator-form">
+            <h2>生成${escapeHtml(label)}</h2>
+            <label class="asset-generator-field">
+              <span>${escapeHtml(label)}名称 <b>*</b></span>
+              <div class="asset-generator-name-row">
+                <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入${escapeHtml(label)}名称" />
+                <button class="asset-generator-ghost-button" type="button">添加${escapeHtml(ASSET_LIBRARY_CONFIG[assetKind]?.addDescriptionLabel ?? "描述")}</button>
+              </div>
+              <em class="asset-generator-name-count">${[...name].length}/50</em>
+            </label>
+            ${assetKind === "character" ? renderCharacterGeneratorFields(ui) : ""}
+            ${assetKind === "scene" ? renderSceneGeneratorFields() : ""}
+            ${assetKind === "prop" ? renderPropGeneratorFields() : ""}
+            <label class="asset-generator-prompt">
+              <span>输入提示词</span>
+              <div class="asset-generator-prompt-shell">
+                <button type="button" aria-label="上传参考图">✦</button>
+                <textarea id="asset-generator-prompt-input" placeholder="请输入描述提示词，点击或上传添加参考图。">${escapeHtml(description)}</textarea>
+                <small class="asset-generator-prompt-count">${[...description].length}/460</small>
+                <footer>
+                  <span>${escapeHtml(ui.assetGeneratorModel ?? "即梦4.0")}</span>
+                  <span>${escapeHtml(ui.assetGeneratorResolution ?? "2K")}</span>
+                  <span>生成${escapeHtml(String(ui.assetGeneratorCount ?? 1))}张</span>
+                  <span>✦ 2 积分</span>
+                  <button type="button" data-action="submit-asset-generator">生成</button>
+                </footer>
+              </div>
+            </label>
+          </aside>
+          <section class="asset-generator-preview">
+            ${renderAssetGeneratorPreviewColumn("定稿图片", previewAssets.slice(0, 1))}
+            ${renderAssetGeneratorPreviewColumn("全部素材", previewAssets)}
+          </section>
+        </div>
+      </section>
+    `;
+  }
+  const placeholderArt = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720">
+      <rect width="960" height="720" rx="36" fill="#20222b"/>
+      <rect x="74" y="74" width="812" height="572" rx="28" fill="#2d303b" stroke="rgba(255,255,255,0.08)" stroke-width="2" stroke-dasharray="16 16"/>
+      <path d="M332 364h296" stroke="rgba(255,255,255,0.42)" stroke-width="18" stroke-linecap="round"/>
+      <path d="M480 216v296" stroke="rgba(255,255,255,0.42)" stroke-width="18" stroke-linecap="round"/>
+      <text x="480" y="558" text-anchor="middle" fill="rgba(255,255,255,0.52)" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="34" font-weight="700">点击上传图片</text>
+    </svg>
+  `)}`;
 
   return `
-    <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
-      <div class="asset-generator-modal">
+    <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="编辑${escapeHtml(label)}">
+      <div class="asset-generator-modal asset-generator-modal-edit">
         <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
         <aside class="asset-generator-form">
-          <h2>${isEditing ? "编辑" : "生成"}${escapeHtml(label)}</h2>
+          <h2>编辑${escapeHtml(label)}</h2>
           <label class="asset-generator-field">
-            <span>${escapeHtml(label)}名称 <b>*</b></span>
+            <span>名称 <b>*</b></span>
             <div class="asset-generator-name-row">
-              <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入${escapeHtml(label)}名称" />
-              <button class="asset-generator-ghost-button" type="button">添加${escapeHtml(ASSET_LIBRARY_CONFIG[assetKind]?.addDescriptionLabel ?? "描述")}</button>
+              <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入名称" />
             </div>
             <em class="asset-generator-name-count">${[...name].length}/50</em>
           </label>
-          ${isCharacter ? renderCharacterGeneratorFields(ui) : ""}
-          ${isScene ? renderSceneGeneratorFields() : ""}
-          ${assetKind === "prop" ? renderPropGeneratorFields() : ""}
-          <label class="asset-generator-prompt">
-            <span>输入提示词</span>
-            <div class="asset-generator-prompt-shell">
-              <button type="button" aria-label="上传参考图">✦</button>
-              <textarea id="asset-generator-prompt-input" placeholder="请输入描述提示词，点击或上传添加参考图。">${escapeHtml(prompt)}</textarea>
-              <small class="asset-generator-prompt-count">${[...prompt].length}/460</small>
-              <footer>
-                <span>${escapeHtml(ui.assetGeneratorModel ?? "即梦4.0")}</span>
-                <span>${escapeHtml(ui.assetGeneratorResolution ?? "2K")}</span>
-                <span>生成${escapeHtml(String(ui.assetGeneratorCount ?? 1))}张</span>
-                <span>✦ 2 积分</span>
-                <button type="button" data-action="submit-asset-generator">${isEditing ? "保存" : "生成"}</button>
-              </footer>
-            </div>
+          <label class="asset-generator-field asset-generator-description-field">
+            <span>描述</span>
+            <textarea id="asset-generator-prompt-input" placeholder="请输入描述">${escapeHtml(description)}</textarea>
+            <em class="asset-generator-prompt-count">${[...description].length}/460</em>
           </label>
+          <div class="asset-generator-image-field">
+            <span>缩略图</span>
+            <label class="asset-generator-image-picker ${previewUrl ? "has-preview" : "is-empty"}" for="asset-generator-image-input">
+              <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl || placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" />
+              <div class="asset-generator-image-overlay">
+                <strong>${previewUrl ? "点击更换" : "点击上传"}</strong>
+                <span>${previewUrl ? "替换当前图片" : "占位图片，点击上传"}</span>
+              </div>
+            </label>
+            <input id="asset-generator-image-input" class="asset-generator-image-input" type="file" accept="image/*" data-action="upload-asset-generator-image" />
+          </div>
+          <div class="asset-generator-footer">
+            <button type="button" data-action="submit-asset-generator">${isEditing ? "保存" : "生成"}</button>
+          </div>
         </aside>
-        <section class="asset-generator-preview">
-          ${renderAssetGeneratorPreviewColumn("定稿图片", previewAssets.slice(0, 1))}
-          ${renderAssetGeneratorPreviewColumn("全部素材", previewAssets)}
-        </section>
       </div>
     </section>
+  `;
+}
+
+function renderAssetGeneratorPreviewColumn(title, assets) {
+  return `
+    <section class="asset-generator-preview-group">
+      <header><span aria-hidden="true">▾</span>${title} (${assets.length})</header>
+      <div class="asset-generator-preview-grid">
+        ${assets.map((asset) => renderAssetGeneratorPreviewCard(asset)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetGeneratorPreviewCard(asset) {
+  return `
+    <article class="asset-generator-preview-card">
+      <div class="asset-generator-preview-media">
+        <img src="${escapeHtml(resolveApiUrl(asset.preview || asset.previewUrl || ""))}" alt="${escapeHtml(asset.name || "素材预览")}" />
+      </div>
+    </article>
   `;
 }
 
@@ -3953,27 +4386,6 @@ function renderPropGeneratorFields() {
     <div class="asset-generator-card">
       <label>创作风格 ⌄ <select><option>无风格 · 无题材</option></select></label>
     </div>
-  `;
-}
-
-function renderAssetGeneratorPreviewColumn(title, assets) {
-  return `
-    <section class="asset-generator-preview-group">
-      <header><span aria-hidden="true">▾</span>${title} (${assets.length})</header>
-      <div class="asset-generator-preview-grid">
-        ${assets.map((asset) => renderAssetGeneratorPreviewCard(asset)).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function renderAssetGeneratorPreviewCard(asset) {
-  return `
-    <article class="asset-generator-preview-card">
-      <div class="asset-generator-preview-media">
-        <img src="${escapeHtml(resolveApiUrl(asset.preview || asset.previewUrl || ""))}" alt="${escapeHtml(asset.name || "素材预览")}" />
-      </div>
-    </article>
   `;
 }
 
@@ -4704,7 +5116,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       assetImportPageSize: ui.assetImportPageSize ?? 10,
       assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
       assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
-      projectOtherAssetMediaType: ui.projectOtherAssetMediaType ?? "video",
+      projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
       projectDetail: ui.projectDetail ?? null,
       mediaMode: ui.episodeMediaMode ?? "image",
       videoMode: ui.videoGenerationMode ?? "reference-video",
@@ -6277,6 +6689,7 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem">合伙人中心</button>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
             <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
+            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
             <button class="popover-menu-item" type="button" role="menuitem">政策广场</button>
             <button class="popover-menu-item" type="button" role="menuitem">专属服务支持</button>
@@ -6387,7 +6800,7 @@ function renderProjectGallery({ ui }) {
         }
       </section>
       ${renderInlineWorkspaceStatusToast(ui)}
-      ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.pageProjects.length) : ""}
+      ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.projectsPerPage) : ""}
       <div class="project-gallery-footer">
         <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
       </div>
@@ -6398,30 +6811,39 @@ function renderProjectGallery({ ui }) {
 export function getProjectGallerySnapshot(ui = {}) {
   const projects = Array.isArray(ui.projectLibrary) ? ui.projectLibrary : [];
   const searchQuery = String(ui.projectSearchQuery ?? "").trim();
-  const filteredProjects = filterProjects(sortProjectsByCreatedAt(projects), searchQuery, ui);
-  const projectsPerPage = resolveProjectGalleryPageSize(ui);
-  const totalProjects = filteredProjects.length;
-  const totalPages = Math.max(1, Math.ceil(totalProjects / projectsPerPage));
-  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? 1)), totalPages);
-  const pageStart = (currentPage - 1) * projectsPerPage;
-  const pageProjects = filteredProjects.slice(pageStart, pageStart + projectsPerPage);
+  const pagination = normalizeProjectGalleryPagination(ui.projectLibraryPagination, projects.length);
+  const totalProjects = pagination.total;
+  const totalPages = pagination.totalPages;
+  const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? pagination.page)), totalPages);
   return {
     searchQuery,
-    filteredProjects,
-    projectsPerPage,
+    filteredProjects: projects,
+    projectsPerPage: pagination.pageSize,
     totalProjects,
     totalPages,
     currentPage,
-    pageProjects,
+    pageProjects: projects,
   };
 }
 
 export function resolveProjectGalleryPageSize(ui = {}) {
-  const columns = Math.min(
-    PROJECT_GALLERY_MAX_COLUMNS,
-    Math.max(1, Math.floor(Number(ui.projectLibraryColumns ?? PROJECT_GALLERY_DEFAULT_COLUMNS))),
-  );
-  return columns * PROJECT_GALLERY_ROWS_PER_PAGE;
+  return normalizeProjectGalleryPagination(ui.projectLibraryPagination, 0).pageSize;
+}
+
+function normalizeProjectGalleryPagination(value, fallbackTotal) {
+  const candidatePageSize = Math.floor(Number(value?.pageSize ?? PROJECT_GALLERY_DEFAULT_PAGE_SIZE));
+  const pageSize = Number.isFinite(candidatePageSize) && candidatePageSize > 0
+    ? candidatePageSize
+    : PROJECT_GALLERY_DEFAULT_PAGE_SIZE;
+  const total = Math.max(0, Number(value?.total ?? fallbackTotal ?? 0));
+  const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? 1)));
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
 }
 
 function normalizeSelectedProjectIds(value) {

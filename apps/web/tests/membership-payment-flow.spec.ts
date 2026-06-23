@@ -366,6 +366,31 @@ test("opening and closing the wallet clears the membership payment success toast
   assert.equal(workbench.ui.toast, "");
 });
 
+test("opening pricing from the team page clears a stale membership payment toast", async () => {
+  const workbench = createWorkbench({
+    activeNavTab: "team",
+    toast: { tone: "success", message: "会员权益已开通" },
+  }, {
+    async getBillingPackages() {
+      return { packages: [] };
+    },
+    async getMembershipPlans() {
+      return { data: { plans: [] } };
+    },
+    async getMembershipStatus() {
+      return { data: null };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-pricing" },
+  });
+
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+  assert.equal(workbench.ui.toast, "");
+  assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
+});
+
 test("membership payment countdown refreshes every second independently from payment polling", async () => {
   const scheduledPolls = [];
   const scheduledCountdowns = [];

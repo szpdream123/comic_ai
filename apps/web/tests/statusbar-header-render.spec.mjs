@@ -183,6 +183,20 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
   assert.match(html, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
 });
 
+test("global statusbar account menu exposes the community feedback entry", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+    },
+  });
+
+  assert.match(html, /data-action="open-community-page">社区反馈<\/button>/);
+});
+
 test("global statusbar shows the current account credit balance in wallet only", () => {
   const html = renderProjectDetail({
     state: {

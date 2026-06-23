@@ -18,6 +18,7 @@ export interface AdminUserListItem {
   displayName: string;
   phone: string | null;
   email: string | null;
+  lastLoginAt: string | null;
   status: string;
   organizationId: string | null;
   organizationName: string | null;
@@ -76,6 +77,7 @@ interface AdminUserRow {
   display_name: string | null;
   phone_e164: string | null;
   email: string | null;
+  last_login_at: Date | string | null;
   user_status: string;
   organization_id: string | null;
   organization_name: string | null;
@@ -170,6 +172,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           u.display_name,
           u.phone_e164,
           u.email,
+          u.last_login_at,
           u.status AS user_status,
           chosen.organization_id,
           chosen.organization_name,
@@ -266,6 +269,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           u.display_name,
           u.phone_e164,
           u.email,
+          u.last_login_at,
           u.status AS user_status,
           o.id AS organization_id,
           o.name AS organization_name,
@@ -1403,6 +1407,7 @@ function userFromRow(row: AdminUserRow): AdminUserListItem {
     displayName: row.display_name ?? "未命名用户",
     phone: row.phone_e164 ? normalizeCnPhone(row.phone_e164) : null,
     email: maskEmail(row.email),
+    lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
     status: row.user_status,
     organizationId: row.organization_id,
     organizationName: row.organization_name,

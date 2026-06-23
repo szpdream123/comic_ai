@@ -200,6 +200,31 @@ describe("persistent phone auth", { concurrency: false }, () => {
     }
   });
 
+  it("records last login time for SMS login", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const challenge = await createPersistentLoginChallenge(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+        code: "123456",
+      });
+      const verified = await verifyPersistentLoginChallenge(db, {
+        challengeId: challenge.challengeId,
+        phone: "13800138000",
+        code: "123456",
+        now: new Date("2026-06-11T10:05:00.000Z"),
+      });
+      const user = await db.query<{ last_login_at: Date | string | null }>(
+        "SELECT last_login_at FROM users WHERE phone_e164 = '13800138000'",
+      );
+
+      assert.equal(verified.kind, "verified");
+      assert.equal(new Date(user.rows[0]?.last_login_at ?? "").toISOString(), "2026-06-11T10:05:00.000Z");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("uses a one-day session when password login is not remembered", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -385,6 +410,42 @@ describe("persistent phone auth", { concurrency: false }, () => {
 
       assert.deepEqual(limited, {
         kind: "daily_sms_limit_exceeded",
+        retryAfterSeconds: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("limits each IP to six successful SMS sends per Shanghai day", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const smsProvider = {
+        providerName: "dev" as const,
+        async sendVerificationCode() {
+          return { kind: "sent" as const, providerRequestId: "dev" };
+        },
+      };
+
+      for (let index = 0; index < 6; index += 1) {
+        const result = await requestPersistentLoginCode(db, {
+          phone: `13800138${String(100 + index)}`,
+          now: new Date(`2026-06-04T10:0${index}:00.000+08:00`),
+          ipAddress: "203.0.113.10",
+          smsProvider,
+        });
+        assert.equal(result.kind, "sent");
+      }
+
+      const limited = await requestPersistentLoginCode(db, {
+        phone: "13800138106",
+        now: new Date("2026-06-04T10:06:00.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      assert.deepEqual(limited, {
+        kind: "ip_sms_limit_exceeded",
         retryAfterSeconds: 0,
       });
     } finally {
