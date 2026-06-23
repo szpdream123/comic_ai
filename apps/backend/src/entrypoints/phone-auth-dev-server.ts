@@ -10,7 +10,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import mammoth from "mammoth";
 
-import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
+import { maskCnPhone, shanghaiDayWindow, shanghaiMonthWindow } from "../modules/identity/phone-auth.utils.ts";
 import { appendAuditEvent } from "../modules/audit/audit.service.ts";
 import {
   createAdminAuthService,
@@ -337,6 +337,14 @@ class GenerationRequestValidationError extends Error {
     readonly message: string,
   ) {
     super(code);
+  }
+}
+
+class GenerationMembershipRequiredError extends Error {
+  readonly code = "generation_membership_required";
+
+  constructor() {
+    super("有效会员已过期或未开通，请先开通会员。");
   }
 }
 
@@ -2233,6 +2241,26 @@ function generationCostFromModelConfig(
     : fallbackCost;
 }
 
+async function hasActiveGenerationMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; now: Date },
+) {
+  const activePeriod = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM membership_periods
+      WHERE organization_id = $1
+        AND status = 'active'
+        AND period_start_at <= $2
+        AND period_end_at > $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
+  return Boolean(activePeriod);
+}
+
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
   const videoCategory = readString(modelConfig.uiConfig.videoCategory) || inferVideoModelCategory(modelConfig.taskModes);
@@ -2263,10 +2291,65 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   };
 }
 
+function modelConfigSupportsBatchImage(modelConfig: AiModelConfigRecord) {
+  const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
+  const taskModes = [...supportedModes, ...modelConfig.taskModes]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+  if (!taskModes.length) {
+    return false;
+  }
+  const aliases = new Set([
+    "multi-image",
+    "multi_image",
+    "multi_reference",
+    "image.reference_generate",
+    "image_reference_generate",
+    "image.generate",
+    "image_generate",
+  ]);
+  return taskModes.some((taskMode) => aliases.has(taskMode));
+}
+
+function modelConfigToBatchImageModelOption(modelConfig: AiModelConfigRecord) {
+  const schemaRatios = readEnumValues(modelConfig.parameterSchema.aspectRatio);
+  const defaultRatios = readStringArray(modelConfig.defaultParams.aspectRatio);
+  const ratios = schemaRatios.length ? schemaRatios : defaultRatios;
+  const schemaQuality = readEnumValues(modelConfig.parameterSchema.quality);
+  const schemaResolutions = readEnumValues(modelConfig.parameterSchema.resolution);
+  const qualities = schemaQuality.length ? schemaQuality : schemaResolutions;
+  return {
+    modelId: modelConfig.modelCode,
+    modelName: modelConfig.displayName,
+    ratios: ratios.length ? ratios : ["16:9", "9:16"],
+    qualities: qualities.length ? qualities : ["2K"],
+  };
+}
+
+async function buildBatchImageModelOptions(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+  const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
+  const models = activeImageModels
+    .filter(modelConfigSupportsBatchImage)
+    .map(modelConfigToBatchImageModelOption);
+  const fallbackModels = [
+    {
+      modelId: "nano_banana_2",
+      modelName: "nano banana 2",
+      ratios: ["16:9", "9:16", "1:1"],
+      qualities: ["2K"],
+    },
+  ];
+  const resolvedModels = models.length ? models : fallbackModels;
+  return {
+    models: resolvedModels,
+  };
+}
+
 async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
-  const [activeImageModels, activeVideoModels] = await Promise.all([
+  const [activeImageModels, activeVideoModels, activeTextModels] = await Promise.all([
     listActiveAiModelConfigs(db, { mediaType: "image" }),
     listActiveAiModelConfigs(db, { mediaType: "video" }),
+    listActiveAiModelConfigs(db, { mediaType: "text" }),
   ]);
   const imageModels = activeImageModels.length
     ? activeImageModels.map(modelConfigToGenerationConfigModel)
@@ -2302,10 +2385,12 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     videoModels.find((model) => model.videoCategory === "reference") ??
     videoModels[0] ??
     null;
+  const textModels = activeTextModels.map(modelConfigToGenerationConfigModel);
   return {
     models: [
       ...imageModels,
       ...videoModels,
+      ...textModels,
     ],
     presets: [],
     uploadLimits: episodeUploadLimits,
@@ -3579,7 +3664,7 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_reference_unavailable: "\u53c2\u8003\u7d20\u6750\u8fd8\u672a\u51c6\u5907\u597d\u3002",
     model_reference_mime_not_allowed: "\u53c2\u8003\u7d20\u6750\u683c\u5f0f\u4e0d\u53d7\u6a21\u578b\u652f\u6301\u3002",
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
-    insufficient_credits: "\u79ef\u5206\u4e0d\u8db3\uff0c\u4efb\u52a1\u672a\u63d0\u4ea4\u7ed9\u4f9b\u5e94\u5546\u3002",
+    insufficient_credits: "积分余额不足，请充值。",
   };
   return messages[failureCode] ?? `鐢熸垚浠诲姟澶辫触锛?{failureCode || "unknown_failure"}`;
 }
@@ -4401,6 +4486,15 @@ async function createEpisodeGenerationTask(
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
   });
+  if (modelConfig) {
+    const hasMembership = await hasActiveGenerationMembership(db, {
+      organizationId: context.actor.organizationId,
+      now: input.now,
+    });
+    if (!hasMembership) {
+      throw new GenerationMembershipRequiredError();
+    }
+  }
   if (modelConfig) {
     validateGenerationModelRequest({
       kind: input.kind,
@@ -5614,6 +5708,194 @@ function matchesEpisodeScopedAsset(
   return typeof metadata?.episodeId === "string" && metadata.episodeId === episodeId;
 }
 
+function normalizeAssetNameForSameEpisodeMatch(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/^[@#]+/, "")
+    .toLowerCase();
+}
+
+function hasRealEpisodeAssetPreview(metadata: Record<string, unknown> | null | undefined) {
+  const preview = resolvePreferredEpisodeImageUrl(
+    metadata?.fixedImageUrl,
+    metadata?.previewUrl,
+    metadata?.sourceUrl,
+    metadata?.downloadUrl,
+  );
+  return Boolean(preview && !isMockEpisodeImageUrl(preview));
+}
+
+async function findSameNameProjectAssetImage(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    assetType: "character_sheet" | "scene_reference" | "prop_reference";
+    episodeId: string;
+    name: string;
+  },
+) {
+  const normalizedName = normalizeAssetNameForSameEpisodeMatch(input.name);
+  if (!normalizedName) {
+    return null;
+  }
+  const rows = await db.query<{
+    asset_id: string;
+    asset_key: string;
+    version_id: string;
+    storage_object_id: string | null;
+    storage_object_key: string | null;
+    metadata_json: Record<string, unknown> | string | null;
+    content_type: string | null;
+  }>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_key,
+        v.id AS version_id,
+        v.storage_object_id,
+        v.storage_object_key,
+        v.metadata_json,
+        s.content_type
+      FROM assets a
+      JOIN LATERAL (
+        SELECT *
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC, created_at DESC
+        LIMIT 1
+      ) v ON true
+      LEFT JOIN storage_objects s
+        ON s.organization_id = v.organization_id
+       AND s.id = v.storage_object_id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.asset_type = $3
+      ORDER BY a.updated_at DESC, a.id DESC
+    `,
+    [input.organizationId, input.projectId, input.assetType],
+  );
+  for (const row of rows.rows) {
+    const metadata = parseMetadataJson(row.metadata_json);
+    if (matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+      continue;
+    }
+    const candidateNames = [
+      metadata.label,
+      metadata.name,
+      row.asset_key,
+      row.asset_key.replace(/^(?:character|role|scene|prop|asset)[-_]/i, "").replace(/[-_][a-f0-9]{6,}$/i, ""),
+    ];
+    if (!candidateNames.some((name) => normalizeAssetNameForSameEpisodeMatch(name) === normalizedName)) {
+      continue;
+    }
+    const previewUrl = resolvePreferredEpisodeImageUrl(
+      metadata.fixedImageUrl,
+      metadata.previewUrl,
+      metadata.sourceUrl,
+      metadata.downloadUrl,
+    );
+    if (!row.storage_object_id && (!previewUrl || isMockEpisodeImageUrl(previewUrl))) {
+      continue;
+    }
+    return {
+      assetId: row.asset_id,
+      versionId: row.version_id,
+      storageObjectId: row.storage_object_id,
+      storageObjectKey: row.storage_object_key,
+      previewUrl,
+      sourceUrl: readString(metadata.sourceUrl) || previewUrl,
+      downloadUrl: readString(metadata.downloadUrl) || previewUrl,
+      contentType: row.content_type ?? readString(metadata.mimeType) ?? "image/png",
+    };
+  }
+  return null;
+}
+
+async function persistSameNameProjectAssetImageForEpisodeAsset(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+    assetId: string;
+    assetType: "character_sheet" | "scene_reference" | "prop_reference";
+    versionId: string;
+    metadata: Record<string, unknown>;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  if (hasRealEpisodeAssetPreview(input.metadata)) {
+    return input.metadata;
+  }
+  const name = readString(input.metadata.label) || readString(input.metadata.name);
+  const matchedImage = await findSameNameProjectAssetImage(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    assetType: input.assetType,
+    episodeId: input.episodeId,
+    name,
+  });
+  if (!matchedImage) {
+    return input.metadata;
+  }
+  const signedUrls = matchedImage.storageObjectId
+    ? await signedUrlsForStorageObject(db, {
+        sessionToken: input.sessionToken,
+        storageObjectId: matchedImage.storageObjectId,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      })
+    : null;
+  const previewUrl = resolvePreferredEpisodeImageUrl(
+    matchedImage.previewUrl,
+    signedUrls?.previewUrl,
+    signedUrls?.sourceUrl,
+    matchedImage.sourceUrl,
+    matchedImage.downloadUrl,
+  );
+  if (!previewUrl) {
+    return input.metadata;
+  }
+  const metadata = {
+    ...input.metadata,
+    fixedImageFileId: matchedImage.versionId,
+    fixedImageStorageObjectId: matchedImage.storageObjectId,
+    fixedImageUrl: previewUrl,
+    previewUrl,
+    sourceUrl: matchedImage.sourceUrl,
+    downloadUrl: matchedImage.downloadUrl,
+    mimeType: matchedImage.contentType,
+    importedFromProjectAssetId: matchedImage.assetId,
+    importedFromProjectAssetVersionId: matchedImage.versionId,
+  };
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3::jsonb
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.versionId, JSON.stringify(metadata)],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId, input.now],
+  );
+  return metadata;
+}
+
 async function listEpisodeAssetsFromDb(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -5625,16 +5907,17 @@ async function listEpisodeAssetsFromDb(
     signedUrlExpiresInSeconds: number;
     now: Date;
     capability?: (typeof capabilities)[keyof typeof capabilities] | null;
+    context?: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>;
   },
 ) {
   const normalized = normalizeEpisodeAssetType(input.assetType);
-  const context = await getEpisodeContext(db, {
-    episodeId: input.episodeId,
-    sessionToken: input.sessionToken,
-    userId: input.userId,
-    capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
-    now: input.now,
-  });
+  const context = input.context ?? (await getEpisodeContext(db, {
+      episodeId: input.episodeId,
+      sessionToken: input.sessionToken,
+      userId: input.userId,
+      capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
+      now: input.now,
+    }));
   if (!context) {
     return null;
   }
@@ -5727,9 +6010,25 @@ async function listEpisodeAssetsFromDb(
         if (!metadata || !matchesEpisodeScopedAsset(metadata, input.episodeId)) {
           return null;
         }
-        const fixedImageFileId = typeof metadata.fixedImageFileId === "string" ? metadata.fixedImageFileId : null;
+        const hydratedMetadata = row.version_id
+          ? await persistSameNameProjectAssetImageForEpisodeAsset(db, {
+              organizationId: context.actor.organizationId,
+              projectId: context.project.id,
+              episodeId: input.episodeId,
+            assetId: row.asset_id,
+            assetType: normalized.assetType,
+            versionId: row.version_id,
+            metadata,
+            sessionToken: input.sessionToken,
+            runtime: input.runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+            now: input.now,
+          })
+          : metadata;
+        const fixedImageFileId =
+          typeof hydratedMetadata.fixedImageFileId === "string" ? hydratedMetadata.fixedImageFileId : null;
         const fixedImageStorageObjectId =
-          typeof metadata.fixedImageStorageObjectId === "string" ? metadata.fixedImageStorageObjectId : null;
+          typeof hydratedMetadata.fixedImageStorageObjectId === "string" ? hydratedMetadata.fixedImageStorageObjectId : null;
         const fixedImageVersion =
           fixedImageFileId || fixedImageStorageObjectId
             ? await resolveEpisodeAssetVersion(db, {
@@ -5755,27 +6054,27 @@ async function listEpisodeAssetsFromDb(
           : null;
         const persistedFixedPreviewUrl =
           resolvePreferredEpisodeImageUrl(
-            metadata.fixedImageUrl,
-            metadata.previewUrl,
+            hydratedMetadata.fixedImageUrl,
+            hydratedMetadata.previewUrl,
             fixedImageVersion?.assetVersion.previewUrl,
             fixedImageVersion?.assetVersion.metadata?.previewUrl,
           ) ?? "";
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
-          name: String(metadata.label ?? row.asset_key ?? "Untitled asset"),
-          description: String(metadata.description ?? ""),
+          name: String(hydratedMetadata.label ?? row.asset_key ?? "Untitled asset"),
+          description: String(hydratedMetadata.description ?? ""),
           fixedImageFileId: fixedImageVersion?.assetVersion.versionId ?? fixedImageFileId ?? row.version_id,
           fixedImageStorageObjectId:
             fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id,
-          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(metadata.fixedImageUrl ?? metadata.previewUrl ?? ""),
-          voiceId: typeof metadata.voiceId === "string" ? metadata.voiceId : null,
-          voiceName: typeof metadata.voiceName === "string" ? metadata.voiceName : null,
+          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
+          voiceId: typeof hydratedMetadata.voiceId === "string" ? hydratedMetadata.voiceId : null,
+          voiceName: typeof hydratedMetadata.voiceName === "string" ? hydratedMetadata.voiceName : null,
           dubbingConfig:
-            metadata.dubbingConfig && typeof metadata.dubbingConfig === "object"
-              ? metadata.dubbingConfig
+            hydratedMetadata.dubbingConfig && typeof hydratedMetadata.dubbingConfig === "object"
+              ? hydratedMetadata.dubbingConfig
               : null,
-          sortOrder: Number(metadata.sortOrder ?? 0),
+          sortOrder: Number(hydratedMetadata.sortOrder ?? 0),
           updatedAt: new Date(row.asset_updated_at).toISOString(),
           createdAt: new Date(row.asset_created_at).toISOString(),
         };
@@ -7793,7 +8092,19 @@ async function serveAdminStatic(pathname: string, response: ServerResponse) {
   const filePath = relativePath && extname(relativePath)
     ? join(adminRoot, relativePath)
     : join(adminRoot, "index.html");
-  const file = await readFile(filePath);
+  let file: Buffer;
+  try {
+    file = await readFile(filePath);
+  } catch (error) {
+    if (relativePath && extname(relativePath)) {
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.setHeader("cache-control", "no-store");
+      response.end("Not Found");
+      return;
+    }
+    throw error;
+  }
 
   response.statusCode = 200;
   response.setHeader(
@@ -11725,6 +12036,88 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/sms-records") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+
+        const range = String(url.searchParams.get("range") ?? "all");
+        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 100), 1), 500);
+        const now = new Date();
+        let rangeClause = "";
+        const params: Array<unknown> = [];
+        if (range === "day") {
+          rangeClause = `AND created_at >= $1 AND created_at < $2`;
+          const day = shanghaiDayWindow(now);
+          params.push(day.start, day.end);
+        } else if (range === "month") {
+          const month = shanghaiMonthWindow(now);
+          rangeClause = `AND created_at >= $1 AND created_at < $2`;
+          params.push(month.start, month.end);
+        }
+        params.push(pageSize);
+        const rows = await db.query<{
+          id: string;
+          phone_e164: string;
+          challenge_id: string | null;
+          verification_code: string | null;
+          sms_content: string | null;
+          provider: string;
+          status: string;
+          ip_address: string | null;
+          user_agent_hash: string | null;
+          provider_request_id: string | null;
+          error_code: string | null;
+          created_at: Date;
+        }>(
+          `
+            SELECT
+              id,
+              phone_e164,
+              challenge_id,
+              verification_code,
+              sms_content,
+              provider,
+              status,
+              ip_address,
+              user_agent_hash,
+              provider_request_id,
+              error_code,
+              created_at
+            FROM sms_send_records
+            WHERE 1=1
+            ${rangeClause}
+            ORDER BY created_at DESC, id DESC
+            LIMIT $${params.length}
+          `,
+          params,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: rows.rows.map((row) => ({
+              id: row.id,
+              phone: row.phone_e164,
+              verificationCode: row.verification_code,
+              smsContent: row.sms_content,
+              provider: row.provider,
+              status: row.status,
+              ipAddress: row.ip_address,
+              userAgentHash: row.user_agent_hash,
+              providerRequestId: row.provider_request_id,
+              errorCode: row.error_code,
+              createdAt: row.created_at.toISOString(),
+            })),
+          },
+        });
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
         const result = await requestPersistentLoginCode(db, {
@@ -12128,6 +12521,8 @@ export function createPhoneAuthDevServer(
               code: style.code,
               coverImageUrl: style.coverImageUrl,
               cover_image_url: style.cover_image_url,
+              prompt_content: style.prompt_content,
+              promptContent: style.promptContent,
               status: style.status,
               sortOrder: style.sort_order,
               sort_order: style.sort_order,
@@ -13133,35 +13528,19 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/workbench")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const episode = await queryOne<{
-            id: string;
-            organization_id: string;
-            project_id: string;
-            title: string;
-            sequence: number;
-            status: string;
-          }>(
-            db,
-            "SELECT id, organization_id, project_id, title, sequence, status FROM episodes WHERE id = $1",
-            [episodeId],
-          );
-          if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
-          }
-          const project = await queryOne<{
-            id: string;
-            name: string;
-            phase: string;
-          }>(
-            db,
-            "SELECT id, name, phase FROM projects WHERE id = $1 AND organization_id = $2",
-            [episode.project_id, episode.organization_id],
-          );
-          if (!project) {
+          const context = await getEpisodeContext(db, {
+            episodeId,
+            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
+          if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
+          const { episode, project } = context;
           const now = new Date();
-          const [roleAssets, sceneAssets, propAssets] = await Promise.all([
+          const [roleAssets, sceneAssets, propAssets, creditBalance] = await Promise.all([
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
               assetType: "role",
@@ -13171,6 +13550,7 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
@@ -13181,6 +13561,7 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
@@ -13191,7 +13572,9 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
+            getOrganizationCreditBalance(db, episode.organization_id),
           ]);
           const assetsByType = {
             role: roleAssets ?? [],
@@ -13226,7 +13609,7 @@ export function createPhoneAuthDevServer(
                 canDeleteEpisode: true,
               },
               defaultScopeMode: "storyboard",
-              creditBalance: await getOrganizationCreditBalance(db, episode.organization_id),
+              creditBalance,
               assetsByType,
             }),
           );
@@ -13443,25 +13826,55 @@ export function createPhoneAuthDevServer(
 
         if (
           request.method === "GET" &&
+          pathname === "/api/batch-image-model-options"
+        ) {
+          return writeJson(response, enveloped(200, await buildBatchImageModelOptions(db)));
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/batch-image-model-options")
+        ) {
+          const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const [context, modelOptions] = await Promise.all([
+            getEpisodeContext(db, {
+              episodeId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              capability: capabilities.generationStart,
+              now: new Date(),
+            }),
+            buildBatchImageModelOptions(db),
+          ]);
+          if (!context) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
+          }
+          return writeJson(response, enveloped(200, modelOptions));
+        }
+
+        if (
+          request.method === "GET" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.endsWith("/generation-config")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const context = await getEpisodeContext(db, {
-            episodeId,
-            sessionToken: authenticated.sessionToken,
-            userId: authenticated.user.id,
-            capability: capabilities.generationStart,
-            now: new Date(),
-          });
+          const [context, activeImageModels, activeVideoModels, activeTextModels, batchPromptPresetCategories] = await Promise.all([
+            getEpisodeContext(db, {
+              episodeId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              capability: capabilities.generationStart,
+              now: new Date(),
+            }),
+            listActiveAiModelConfigs(db, { mediaType: "image" }),
+            listActiveAiModelConfigs(db, { mediaType: "video" }),
+            listActiveAiModelConfigs(db, { mediaType: "text" }),
+            readBatchImagePromptPresetCategoriesFromDb(db),
+          ]);
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
           }
-          const [activeImageModels, activeVideoModels, batchPromptPresetCategories] = await Promise.all([
-            listActiveAiModelConfigs(db, { mediaType: "image" }),
-            listActiveAiModelConfigs(db, { mediaType: "video" }),
-            readBatchImagePromptPresetCategoriesFromDb(db),
-          ]);
           const imageModels = activeImageModels.length
             ? activeImageModels.map(modelConfigToGenerationConfigModel)
             : [
@@ -13496,12 +13909,14 @@ export function createPhoneAuthDevServer(
             videoModels.find((model) => model.videoCategory === "reference") ??
             videoModels[0] ??
             null;
+          const textModels = activeTextModels.map(modelConfigToGenerationConfigModel);
           return writeJson(
             response,
             enveloped(200, {
               models: [
                 ...imageModels,
                 ...videoModels,
+                ...textModels,
               ],
               presets: [],
               batchPromptPresetCategories,
@@ -13550,7 +13965,10 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(202, error.code, "request is still processing"));
             }
             if (error instanceof InsufficientCreditsError) {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "缁夘垰鍨庢稉宥堝喕"));
+              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值。"));
+            }
+            if (error instanceof GenerationMembershipRequiredError) {
+              return writeJson(response, envelopedError(403, error.code, error.message));
             }
             throw error;
           }
@@ -14182,6 +14600,9 @@ export function createPhoneAuthDevServer(
                 sessionToken: authenticated.sessionToken,
               },
               now: new Date(),
+              page: Number(url.searchParams.get("page") ?? 1),
+              pageSize: url.searchParams.get("pageSize"),
+              keyword: url.searchParams.get("keyword"),
             }),
           );
         }
@@ -15084,6 +15505,12 @@ export function createPhoneAuthDevServer(
             name?: string | null;
             description?: string | null;
             isMain?: boolean | null;
+            previewUrl?: string | null;
+            sourceUrl?: string | null;
+            downloadUrl?: string | null;
+            storageObjectId?: string | null;
+            storageObjectKey?: string | null;
+            mimeType?: string | null;
           };
           return writeJson(
             response,
@@ -15120,6 +15547,7 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "POST" && pathname === "/api/creator/assets/import") {
           const body = (await readJsonBody(request)) as {
+            projectId?: string | null;
             kind: "character" | "scene" | "prop" | "image" | "video";
             name?: string | null;
             description?: string | null;

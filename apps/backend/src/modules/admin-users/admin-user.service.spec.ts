@@ -119,6 +119,7 @@ test("admin user service collapses multiple memberships into one preferred user 
       displayName: "Repeat User",
       phone: "13800100010",
       email: "re***@example.test",
+      lastLoginAt: null,
       status: "active",
       organizationId: "91000000-0000-4000-8000-000000001010",
       organizationName: "Primary Org",

@@ -11,6 +11,16 @@ const batchPresetTargets = ["scene", "character", "prop"] as const;
 const batchImagePromptStyleNames = ["国风仙侠", "国漫仙侠", "废土科幻", "国风3D", "国风动漫", "邵氏兄弟风", "中国武侠", "中国古代国风动漫", "中国古代画风动漫", "赛博朋克"];
 const batchImagePromptStyleCodes = ["national_xianxia", "national", "chinese_anime", "brother_style", "chinese_wuxia", "china_ancient", "cyberpunk"];
 const batchImagePromptStyleCodePatterns = ["national_man%", "wasteland%"];
+const batchPromptCoverCodeMap: Record<string, string> = {
+  national_xianxia: "chinese_style",
+  national: "anime_2d",
+  wasteland_fantasy: "cyberpunk",
+  national_man_3d: "three_d_render",
+  chinese_anime: "animation",
+  brother_style: "hong_kong_anime",
+  chinese_wuxia: "chinese_style",
+  china_ancient: "ink_wash",
+};
 
 type JsonValue = unknown;
 
@@ -80,6 +90,25 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
     await ensureDefaultImagePromptStyles(deps.db);
     const pageSize = clamp(Number(input.pageSize || 100), 1, 500);
     const keyword = input.keyword?.trim() ? `%${input.keyword.trim().toLowerCase()}%` : null;
+    const filters = [input.category || null, input.modelFamily || null, input.status || null, keyword] as const;
+    const total = await queryOne<{ count: string | number }>(
+      deps.db,
+      `
+        SELECT COUNT(*) AS count
+        FROM image_prompt_styles
+        WHERE deleted_at IS NULL
+          AND ($1::text IS NULL OR category = $1)
+          AND ($2::text IS NULL OR model_family = $2)
+          AND ($3::text IS NULL OR status = $3)
+          AND (
+            $4::text IS NULL
+            OR lower(name) LIKE $4
+            OR lower(code) LIKE $4
+            OR lower(tags::text) LIKE $4
+          )
+      `,
+      filters,
+    );
     const rows = await deps.db.query<ImagePromptStyleRow>(
       `
         SELECT *
@@ -97,9 +126,15 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
         ORDER BY sort_order DESC, updated_at DESC, id ASC
         LIMIT $5
       `,
-      [input.category || null, input.modelFamily || null, input.status || null, keyword, pageSize],
+      [...filters, pageSize],
     );
-    return { data: rows.rows.map(styleFromRow) };
+    return {
+      data: rows.rows.map(styleFromRow),
+      meta: {
+        total: Number(total?.count || 0),
+        pageSize,
+      },
+    };
   }
 
   async function listBatchPromptPresetCategories(): Promise<BatchImagePromptPresetCategories> {
@@ -374,6 +409,47 @@ export async function ensureDefaultImagePromptStyles(db: SqlDatabase) {
   await ensureDefaultBatchPromptPresets(db);
 }
 
+async function ensureDefaultBatchPromptPresets(db: SqlDatabase) {
+  for (const item of defaultBatchImagePromptStyles) {
+    await db.query(
+      `
+        INSERT INTO image_prompt_styles (
+          id, name, code, category, model_family, tags, cover_image_url, prompt_content,
+          negative_prompt, is_default, sort_order, status, remark, batch_preset_target, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, 'batch', 'doubao', $4::jsonb, $5, $6, $7, false, $8, 'enabled', $9, $10, $11, $11)
+        ON CONFLICT (code)
+        DO UPDATE SET
+          name = EXCLUDED.name,
+          category = EXCLUDED.category,
+          model_family = EXCLUDED.model_family,
+          tags = EXCLUDED.tags,
+          cover_image_url = EXCLUDED.cover_image_url,
+          prompt_content = EXCLUDED.prompt_content,
+          negative_prompt = EXCLUDED.negative_prompt,
+          sort_order = EXCLUDED.sort_order,
+          status = EXCLUDED.status,
+          remark = EXCLUDED.remark,
+          batch_preset_target = EXCLUDED.batch_preset_target,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        item.id,
+        item.name,
+        item.code,
+        JSON.stringify(item.tags),
+        item.cover_image_url || null,
+        item.prompt_content,
+        defaultNegativePrompt,
+        item.sort_order,
+        item.remark || null,
+        item.batch_preset_target,
+        seedUpdatedAt,
+      ],
+    );
+  }
+}
+
 function validateStylePayload(input: SaveImagePromptStyleInput) {
   if (!input.name?.trim() || !input.code?.trim()) {
     return error(400, "image_prompt_style_required", "名称和编码必填");
@@ -414,6 +490,7 @@ function styleFromRow(row: ImagePromptStyleRow) {
     cover_image_url: row.cover_image_url || "",
     coverImageUrl: row.cover_image_url || "",
     prompt_content: row.prompt_content,
+    promptContent: row.prompt_content,
     negative_prompt: row.negative_prompt || "",
     is_default: Boolean(row.is_default),
     isDefault: Boolean(row.is_default),
@@ -502,7 +579,7 @@ function batchPresetStyle(
     id: stableUuid(`image-prompt-style:${code}`),
     name,
     code,
-    cover_image_url: styleCoverDataUrl(code, name),
+    cover_image_url: batchStyleCoverDataUrl(code, name),
     prompt_content: promptContent,
     sort_order: sortOrder,
     tags,
@@ -514,6 +591,11 @@ function batchPresetStyle(
 function styleCoverDataUrl(code: string, name: string) {
   void name;
   return `/admin/assets/prompt-covers/${code}.webp`;
+}
+
+function batchStyleCoverDataUrl(code: string, name: string) {
+  const coverCode = batchPromptCoverCodeMap[code] || code;
+  return styleCoverDataUrl(coverCode, name);
 }
 
 const defaultImagePromptStyles = [
@@ -549,4 +631,16 @@ const defaultImagePromptStyles = [
   style("巴洛克", "baroque", "巴洛克艺术风格，华丽装饰，戏剧光影，动态构图，金色细节，宏大气势", 30, ["巴洛克"]),
   style("复古动漫", "retro_anime", "复古赛璐璐动漫风格，怀旧配色，胶片颗粒，手绘线条，旧动画质感", 20, ["复古", "动漫"]),
   style("绘本", "picture_book", "绘本插画风格，温暖色调，柔和手绘线条，童话叙事感，纸张纹理清晰", 10, ["绘本", "插画"]),
+];
+
+const defaultBatchImagePromptStyles = [
+  batchPresetStyle("国风仙侠", "national_xianxia", "scene", "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。", 900, ["国风", "仙侠"]),
+  batchPresetStyle("国漫仙侠", "national", "character", "国漫仙侠批量生图风格，保留国漫人物造型、仙侠气质、干净轮廓和统一角色辨识度。", 890, ["国漫", "仙侠"]),
+  batchPresetStyle("废土科幻", "wasteland_fantasy", "scene", "废土科幻批量生图风格，保留末日环境、机械残骸、冷暖对比和统一氛围。", 880, ["废土", "科幻"]),
+  batchPresetStyle("国风3D", "national_man_3d", "prop", "国风3D批量生图风格，保留三维材质、国风装饰细节、统一光影和清晰道具轮廓。", 870, ["国风", "3D"]),
+  batchPresetStyle("国风动漫", "chinese_anime", "character", "国风动漫批量生图风格，保留动漫线条、东方审美、角色轮廓和整体画面稳定性。", 860, ["国风", "动漫"]),
+  batchPresetStyle("邵氏兄弟风", "brother_style", "scene", "邵氏兄弟风批量生图风格，保留复古港片氛围、戏剧性打光、武打场面和电影质感。", 850, ["港风", "武侠"]),
+  batchPresetStyle("中国武侠", "chinese_wuxia", "character", "中国武侠批量生图风格，保留武器细节、飘逸衣袍、江湖气息和统一人物结构。", 840, ["武侠"]),
+  batchPresetStyle("中国古代国风动漫", "china_ancient", "scene", "中国古代国风动漫批量生图风格，保留古代建筑、国风色彩、动漫表达和统一场景关系。", 830, ["古风", "动漫"]),
+  batchPresetStyle("赛博朋克", "cyberpunk", "scene", "赛博朋克批量生图风格，保留霓虹灯光、未来城市、机械科技元素和高对比氛围。", 820, ["科幻", "霓虹"]),
 ];

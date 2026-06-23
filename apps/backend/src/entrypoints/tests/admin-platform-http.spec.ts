@@ -1191,8 +1191,18 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
+      assert.equal(Number(listPayload.meta?.total || 0) >= listPayload.data.length, true);
       assert.ok(listPayload.data.some((item: { name: string; code: string }) => item.name === "人像摄影" && item.code === "portrait_photography"));
       assert.ok(listPayload.data.some((item: { name: string }) => item.name === "二次元"));
+
+      const batchListResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles?category=batch&page_size=5`, {
+        headers: { cookie },
+      });
+      assert.equal(batchListResponse.status, 200);
+      const batchListPayload = await batchListResponse.json();
+      assert.equal(batchListPayload.meta?.total, 9);
+      assert.equal(batchListPayload.data.length, 5);
+      assert.ok(batchListPayload.data.every((item: { category: string }) => item.category === "batch"));
 
       const styleCode = `test_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
@@ -1286,15 +1296,23 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       assert.equal(initialResponse.status, 200);
       assert.deepEqual(initialPayload.data, {
-        scene: [],
-        character: [],
-        prop: [],
+        scene: [
+          { id: "scene-vr", label: "[系统]VR场景图" },
+          { id: "scene-overlook", label: "[系统]场景-俯视图" },
+          { id: "scene-wide", label: "[系统]场景-广角图" },
+        ],
+        character: [
+          { id: "character-triple", label: "[系统]角色-三视图" },
+        ],
+        prop: [
+          { id: "prop-triple", label: "[系统]道具-三视图" },
+        ],
       });
 
       const nextValue = {
-        scene: [{ id: "scene-future-city", label: "未来城市场景" }],
-        character: [{ id: "character-hero", label: "主角角色预设" }],
-        prop: [{ id: "prop-sword", label: "飞剑道具预设" }],
+        scene: [{ id: "scene-future-city", label: "未来城市场景", prompt_content: "未来城市环境提示词正文" }],
+        character: [{ id: "character-hero", label: "主角角色预设", prompt_content: "主角角色三视图提示词正文" }],
+        prop: [{ id: "prop-sword", label: "飞剑道具预设", prompt_content: "飞剑道具三视图提示词正文" }],
       };
       const updateResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
         method: "PATCH",
@@ -4397,6 +4415,55 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.ok(loginEvent);
       assert.equal(typeof loginEvent.metadata, "object");
       assert.ok("ipAddress" in loginEvent.metadata);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves sms records to admins with audit permission", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      await db.query(
+        `
+          INSERT INTO sms_send_records (
+            id,
+            phone_e164,
+            verification_code,
+          sms_content,
+          provider,
+          status,
+          ip_address,
+          user_agent_hash,
+          created_at
+        ) VALUES (
+            $1,
+            '+8613800138000',
+            '123456',
+            '【登录验证】验证码 123456，5 分钟内有效。',
+            'dev',
+            'sent',
+            '203.0.113.10',
+            'hash-ua',
+            now()
+          )
+        `,
+        [randomUUID()],
+      );
+
+      const forbidden = await fetch(`${server.origin}/api/admin/sms-records`);
+      const allowed = await fetch(`${server.origin}/api/admin/sms-records?range=all`, {
+        headers: { cookie },
+      });
+      const payload = await allowed.json();
+
+      assert.equal(forbidden.status, 401);
+      assert.equal(allowed.status, 200);
+      assert.equal(Array.isArray(payload.data), true);
+      assert.equal(payload.data[0]?.verificationCode, "123456");
+      assert.equal(payload.data[0]?.smsContent, "【登录验证】验证码 123456，5 分钟内有效。");
+      assert.equal(payload.data[0]?.ipAddress, "203.0.113.10");
     } finally {
       await server.close();
     }

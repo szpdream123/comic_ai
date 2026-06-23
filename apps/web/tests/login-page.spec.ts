@@ -112,7 +112,7 @@ describe("login page shell", () => {
   it("includes a creator workspace shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
-    assert.match(html, /Comic AI Studio/);
+    assert.match(html, /灵曦剧场/);
     assert.match(html, /id="creator-app"/);
     assert.match(html, /production-workbench\.css/);
   });
@@ -171,6 +171,7 @@ describe("login page client flow", () => {
 
     assert.match(js, /sms_cooldown_active/);
     assert.match(js, /daily_sms_limit_exceeded/);
+    assert.match(js, /ip_sms_limit_exceeded/);
     assert.match(js, /sms_send_failed/);
     assert.match(js, /请输入11位手机号，且不要带 \+86/);
   });

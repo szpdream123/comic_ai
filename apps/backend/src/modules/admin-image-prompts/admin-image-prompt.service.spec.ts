@@ -188,4 +188,41 @@ describe("admin image prompt service", { concurrency: false }, () => {
       await (db as unknown as { close?: () => Promise<void> }).close?.();
     }
   });
+
+  it("reports filtered image prompt totals for admin list views", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const service = createAdminImagePromptService({ db });
+      const result = await service.listStyles({
+        category: "batch",
+        pageSize: 5,
+      });
+
+      assert.equal(result.meta.total, 9);
+      assert.equal(result.meta.pageSize, 5);
+      assert.equal(result.data.length, 5);
+      assert.ok(result.data.every((item) => item.category === "batch"));
+    } finally {
+      await (db as unknown as { close?: () => Promise<void> }).close?.();
+    }
+  });
+
+  it("seeds batch image prompt styles for admin batch lists", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const service = createAdminImagePromptService({ db });
+      const result = await service.listStyles({
+        category: "batch",
+        pageSize: 500,
+      });
+
+      assert.equal(result.meta.total, 9);
+      assert.equal(result.data.length, 9);
+      assert.ok(result.data.every((item) => item.category === "batch"));
+      assert.ok(result.data.some((item) => item.code === "national_xianxia"));
+      assert.ok(result.data.some((item) => item.code === "cyberpunk"));
+    } finally {
+      await (db as unknown as { close?: () => Promise<void> }).close?.();
+    }
+  });
 });

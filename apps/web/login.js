@@ -526,6 +526,7 @@ const errorCopy = {
   invalid_phone: "请输入正确的中国大陆手机号",
   sms_cooldown_active: "验证码已发送，请稍后再试",
   daily_sms_limit_exceeded: "今日验证码发送次数已达上限，请明天再试",
+  ip_sms_limit_exceeded: "该网络请求过于频繁，请稍后再试",
   sms_send_failed: "短信发送失败，请稍后再试",
   code_invalid: "验证码不正确",
   challenge_expired: "验证码已过期，请重新获取",
