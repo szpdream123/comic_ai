@@ -16,6 +16,11 @@ export function normalizeCnPhone(phone: string): string {
     throw new Error("invalid_phone");
   }
 
+  return mainland;
+}
+
+export function toCnPhoneE164(phone: string): string {
+  const mainland = normalizeCnPhone(phone);
   return `+86${mainland}`;
 }
 
@@ -58,8 +63,8 @@ export function generateIdentityId(): string {
   return randomUUID();
 }
 
-export function maskCnPhone(phoneE164: string): string {
-  const mainland = phoneE164.slice(3);
+export function maskCnPhone(phone: string): string {
+  const mainland = normalizeCnPhone(phone);
   return `${mainland.slice(0, 3)}****${mainland.slice(-4)}`;
 }
 
@@ -76,6 +81,19 @@ export function shanghaiDayWindow(now: Date): { start: Date; end: Date } {
     start,
     end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
   };
+}
+
+export function shanghaiMonthWindow(now: Date): { start: Date; end: Date } {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+  });
+  const [year, month] = formatter.format(now).split("-");
+  const start = new Date(`${year}-${month}-01T00:00:00.000+08:00`);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  return { start, end };
 }
 
 function hmacSha256(value: string): string {

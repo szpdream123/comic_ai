@@ -1,5 +1,10 @@
-﻿import { getProjectGallerySnapshot, renderProjectDetail, resolveProjectGalleryPageSize } from "./project-detail.js";
+﻿import {
+  getProjectGallerySnapshot,
+  renderProjectDetail,
+  renderSingleEpisodeAiPreview,
+} from "./project-detail.js?single-episode-credits=1";
 import { buildProjectCreateRequest } from "./project-create-request.js";
+import { normalizeNovelStyleScriptText } from "./script-text-normalizer.js";
 import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
 import {
   addStoryboard,
@@ -14,7 +19,7 @@ import {
   EPISODE_WORKBENCH_FALLBACK_ASSET_IDS,
   renderPromptDock,
   renderStoryboardStageForPartialUpdate,
-} from "./episode-workbench-rebuilt.js?video-category=1";
+} from "./episode-workbench-rebuilt.js?video-category=2";
 import { resolveEpisodeWorkbenchPrompt, resolveStoryboardPromptForMode } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
@@ -50,11 +55,15 @@ The lead mechanist opens the tower window, sees the industrial skyline, and prep
 const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
 const CREDIT_SESSION_REFRESH_INTERVAL_MS = 60_000;
 const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
+const SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS = 220;
+const SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS = 450;
+const SINGLE_EPISODE_AI_SCROLL_STICKY_THRESHOLD_PX = 72;
 const WORKBENCH_TOAST_DISMISS_MS = 2000;
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
+const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
@@ -164,6 +173,21 @@ function revokeTeamAssetLocalUploadUrl(asset) {
   }
 }
 
+function revokeAudioAssetImportBlobUrl(value) {
+  const previewUrl = String(value ?? "").trim();
+  if (!previewUrl.startsWith("blob:")) {
+    return;
+  }
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(previewUrl);
+  }
+}
+
+function revokeAudioAssetImportPreviewUrl(draft) {
+  revokeAudioAssetImportBlobUrl(draft?.audioPreviewUrl);
+  revokeAudioAssetImportBlobUrl(draft?.exampleImagePreview);
+}
+
 export function syncStoryboards(current, next) {
   if (!current.length) {
     return normalizeStoryboardIndices(next);
@@ -211,9 +235,18 @@ export function syncStoryboards(current, next) {
     const mergedStoryboard = {
       ...storyboard,
       ...synced,
+      description: resolveMergedStoryboardDescription(storyboard, synced),
+      sceneAnalysis: resolveMergedStoryboardSceneAnalysis(storyboard, synced),
       uploadedImages,
       uploadedVideos,
-      generationState: mergeGenerationState(storyboard.generationState, synced.generationState),
+      generationState: mergeGenerationState(storyboard.generationState, synced.generationState, {
+        currentPromptDraft: storyboard.videoPromptDraft?.prompt ?? storyboard.imagePromptDraft?.prompt ?? "",
+        nextPromptDraft: synced.videoPromptDraft?.prompt ?? synced.imagePromptDraft?.prompt ?? "",
+        currentImagePromptDraft: storyboard.imagePromptDraft?.prompt ?? "",
+        nextImagePromptDraft: synced.imagePromptDraft?.prompt ?? "",
+        currentVideoPromptDraft: storyboard.videoPromptDraft?.prompt ?? "",
+        nextVideoPromptDraft: synced.videoPromptDraft?.prompt ?? "",
+      }),
       selectedUploadedVideoId,
       currentVideoAssetVersionId: shouldKeepPendingVideo
         ? pendingVideo.id
@@ -553,6 +586,15 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 }
 
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
+const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH = 0.70;
+const EPISODE_LAYOUT_LEGACY_DEFAULT_CENTER_WIDTH = 0.58;
+const EPISODE_LAYOUT_EARLY_DEFAULT_CENTER_WIDTH = 0.50;
+const EPISODE_LAYOUT_WIDTH_VERSION = 9;
+const EPISODE_LAYOUT_MIN_CENTER_WIDTH = 0.28;
+const EPISODE_LAYOUT_MAX_CENTER_WIDTH = 0.70;
+const EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM = 46.2;
+const EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM * 16;
+const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM * 16;
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
 export async function initProductionWorkbench({ root, session, api, onLogout }) {
@@ -596,6 +638,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       batchImageStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
+      projectLibraryPagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
       projectSearchQuery: "",
       projectSearchDraft: "",
@@ -620,10 +663,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       episodeWorkbenchSelectedAttachmentIds: [],
       episodeWorkbenchScrollTarget: null,
       episodeWorkbenchConversationScrollMode: null,
+      episodeWorkbenchCenterWidthRatio: EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH,
+      episodeWorkbenchCenterWidthPx: null,
       episodeVoiceModal: null,
       episodeBatchModal: null,
       exportOptionModal: null,
-      projectOtherAssetMediaType: "video",
+      projectOtherAssetMediaType: "audio",
       projectMembers: [],
       projectStats: null,
       teamMemberSearchQuery: "",
@@ -662,6 +707,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetImportModal: null,
       assetImportModalTab: "local",
       assetImportModalSource: null,
+      audioAssetImportDraft: null,
       episodeAssetLibraryModal: null,
       episodeAssetLibraryCategory: "character",
       episodeAssetLibraryFolder: "",
@@ -672,6 +718,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetImportPage: 1,
       assetImportPageSize: 10,
       assetImportPageSizeMenuOpen: false,
+      storyboardPage: 1,
+      storyboardPageSize: 10,
       assetLibraryHighlightAssetIds: [],
       assetLibraryHighlightKind: null,
       assetLibraryHighlightMediaType: null,
@@ -683,6 +731,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         scene: [],
         prop: [],
         other: {
+          audio: [],
           image: [],
           video: [],
         },
@@ -692,6 +741,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetGeneratorEditingAsset: null,
       assetGeneratorName: "废土角色(1)",
       assetGeneratorPrompt: "",
+      assetGeneratorPreviewUrl: "",
+      assetGeneratorPreviewFile: null,
       assetGeneratorCharacterType: "human",
       assetGeneratorStyleValue: "搴熷湡鍐欏疄椋庢牸",
       assetGeneratorStyleCategory: "official",
@@ -896,6 +947,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.target);
+    const episodeResizeTarget = eventTarget?.closest?.(".episode-replica-center");
+    if (episodeResizeTarget && isEpisodeWorkbenchCenterResizeHotzone(event, episodeResizeTarget)) {
+      startEpisodeWorkbenchLayoutResize(workbench, event, episodeResizeTarget);
+      return;
+    }
     const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
     if (canvasEdgeTarget) {
       workbench.canvasPointerHandledAt = Date.now();
@@ -936,6 +992,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
   });
   root.addEventListener("pointermove", (event) => {
+    updateEpisodeWorkbenchResizeHover(workbench, event);
     updateHomeHeroPointerAura(workbench, event);
   });
   window.addEventListener("resize", () => {
@@ -1011,6 +1068,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   });
   root.addEventListener("click", (event) => {
     const eventTarget = resolveEventElement(event.target);
+    const audioImportTrigger = eventTarget?.closest?.(
+      '[data-action="trigger-audio-import-audio-file"], [data-action="trigger-audio-import-example-image"]',
+    );
+    if (audioImportTrigger) {
+      event.preventDefault();
+      triggerAudioAssetImportFilePicker(audioImportTrigger);
+      return;
+    }
     const actionTarget = eventTarget?.closest?.("[data-action]");
     if (!actionTarget) {
       if (eventTarget?.closest?.(".canvas-stage")) {
@@ -1040,7 +1105,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       const blockedInteractiveTarget = eventTarget?.closest?.(
         "textarea, input, button, select, option, label, a, [contenteditable='true']",
       );
+      const activeTextSelection = hasActiveWorkbenchTextSelection(eventTarget);
       if (storyboardCardTarget && !blockedInteractiveTarget) {
+        if (activeTextSelection) {
+          return;
+        }
         requestEpisodeWorkbenchConversationScroll(workbench);
         void handleAction(workbench, {
           dataset: {
@@ -1054,6 +1123,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         return;
       }
       if (cardTarget && !blockedInteractiveTarget) {
+        if (activeTextSelection) {
+          return;
+        }
         requestEpisodeWorkbenchConversationScroll(workbench);
         void handleAction(workbench, {
           dataset: {
@@ -1190,7 +1262,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     const searchTarget = resolveEventElement(event.target);
     if (searchTarget?.matches?.('[data-action="search-projects"]') && event.key === "Enter") {
       event.preventDefault();
-      applyProjectSearch(workbench, searchTarget.value);
+      void applyProjectSearch(workbench, searchTarget.value).catch((error) => {
+        workbench.ui.toast = `项目搜索失败：${friendlyError(error)}`;
+        render(workbench);
+      });
       return;
     }
     const target = resolveEventElement(event.target);
@@ -1257,6 +1332,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     workbench.ui.storyboardDeleteId = null;
     render(workbench, { preserveLibraryScroll: true });
   });
+
+  root.addEventListener("change", (event) => {
+    const target = resolveEventElement(event.target);
+    if (!isAudioAssetImportFileInput(target)) {
+      return;
+    }
+    event.stopPropagation();
+    void handleAudioAssetImportFileInputChange(workbench, target).catch((error) => {
+      console.error("[audio-import] file input change failed", error);
+      workbench.ui.toast = "上传失败，请重试。";
+      render(workbench);
+    });
+  }, true);
 
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.target);
@@ -1428,6 +1516,30 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       await runAction(workbench, "正在上传项目封面...", async () => {
         await uploadProjectCoverFile(workbench, file, projectId);
       });
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="upload-asset-generator-image"]')) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (!file) {
+        return;
+      }
+      const upload = await uploadLocalFile(workbench, file, "asset-generator", {
+        projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
+      });
+      workbench.ui.assetGeneratorPreviewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? "");
+      workbench.ui.assetGeneratorPreviewFile = {
+        storageObjectId: upload.storageObjectId ?? null,
+        storageObjectKey: upload.storageObjectKey ?? null,
+        mimeType: upload.mimeType ?? null,
+      };
+      render(workbench);
+      return;
+    }
+
+    if (isAudioAssetImportFileInput(target)) {
+      await handleAudioAssetImportFileInputChange(workbench, target);
       return;
     }
 
@@ -1965,6 +2077,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.("#audio-import-name-input")) {
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        name: target.value,
+      };
+      return;
+    }
+
     if (target?.matches?.("#asset-search-input")) {
       workbench.ui.assetSearchQuery = target.value;
       render(workbench);
@@ -2168,6 +2288,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('[data-action="search-episode-asset-library"]')) {
       workbench.ui.episodeAssetLibraryQuery = target.value;
+      workbench.ui.assetImportSelection = [];
       render(workbench);
       return;
     }
@@ -2353,9 +2474,12 @@ async function refresh(workbench) {
     }
     if (workbench.state?.project?.id) {
       try {
+        const supplementaryTask = shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)
+          ? syncProjectInteriorSupplementary(workbench)
+          : Promise.resolve();
         const [projectDetail] = await Promise.all([
           loadProjectDetailForWorkbench(workbench, workbench.state.project.id),
-          syncProjectInteriorSupplementary(workbench),
+          supplementaryTask,
         ]);
         applyProjectDetail(workbench, projectDetail);
       } catch (error) {
@@ -2377,9 +2501,6 @@ async function refresh(workbench) {
         : [];
     }
   }
-  await syncProjectStyles(workbench);
-  await syncStoryboardPromptPackages(workbench);
-  await syncMembershipSurface(workbench);
 
   if (isTeamSurface) {
     runLazyWorkbenchTask(workbench, "team surface", async () => {
@@ -2462,6 +2583,17 @@ function syncWorkbenchHashRoute(workbench, hash) {
   scheduleLazySurfaceLoad(workbench);
 }
 
+function buildProjectWorkspaceHash(projectId) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  return normalizedProjectId ? `#/projects/${encodeURIComponent(normalizedProjectId)}` : "#project-workspace";
+}
+
+function syncProjectWorkspaceHash(workbench, projectId = resolveActiveProjectId(workbench)) {
+  if (globalThis.window?.location) {
+    globalThis.window.location.hash = buildProjectWorkspaceHash(projectId);
+  }
+}
+
 function scheduleLazySurfaceLoad(workbench) {
   const visibleTab = workbench.ui.activeNavTab;
   if (visibleTab === "project" && workbench.ui.projectPanelMode === "library") {
@@ -2472,7 +2604,6 @@ function scheduleLazySurfaceLoad(workbench) {
   }
   if (visibleTab === "tools") {
     runLazyWorkbenchTask(workbench, "canvas projects", async () => {
-      await syncMembershipSurface(workbench);
       await syncCanvasProjectsFromApi(workbench);
       await ensureCanvasGenerationConfig(workbench);
       render(workbench);
@@ -2545,16 +2676,22 @@ async function syncProjectInteriorSupplementary(workbench) {
   }
 
   try {
-    const [membersPayload, statsPayload] = await Promise.all([
-      workbench.api.getProjectMembers(projectId),
-      workbench.api.getProjectStats(projectId),
-    ]);
-    workbench.ui.projectMembers = Array.isArray(membersPayload.members) ? membersPayload.members : [];
+    const statsPayload = await workbench.api.getProjectStats(projectId);
+    workbench.ui.projectMembers = [];
     workbench.ui.projectStats = statsPayload.stats ?? null;
   } catch (error) {
     workbench.ui.projectMembers = [];
     workbench.ui.projectStats = null;
   }
+}
+
+function shouldLoadProjectInteriorSupplementary(section) {
+  return section === "stats";
+}
+
+function normalizeProjectInteriorSection(section) {
+  const normalized = String(section ?? "overview");
+  return PROJECT_INTERIOR_SECTIONS.has(normalized) ? normalized : "overview";
 }
 
 async function syncProjectLibraryAssets(workbench) {
@@ -2567,12 +2704,26 @@ async function syncProjectLibraryAssets(workbench) {
   try {
     const payload = await workbench.api.getAssetLibrary();
     workbench.ui.projectLibraryAssetsByType = groupLibraryAssetsByType(payload?.assets ?? []);
+    if (workbench.ui.episodeWorkbenchContext) {
+      applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
+    }
   } catch (error) {
     if (String(error?.errorCode ?? "") === "creator_project_missing") {
       workbench.ui.projectLibraryAssetsByType = null;
       return;
     }
     throw error;
+  }
+}
+
+async function ensureProjectAssetLibraryReadyForEpisode(workbench) {
+  if (workbench.ui.projectLibraryAssetsByType || typeof workbench.api?.getAssetLibrary !== "function") {
+    return;
+  }
+  try {
+    await syncProjectLibraryAssets(workbench);
+  } catch (error) {
+    console.warn("[episode-workbench] project asset preload failed", error);
   }
 }
 
@@ -2640,52 +2791,47 @@ function isActiveMembershipStatus(membershipStatus) {
   return status === "experience_active" || status === "professional_active";
 }
 
-function hasActiveProfessionalTeamManagement(membershipStatus) {
-  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
-  const tier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
-  const entitlements = membershipStatus?.entitlements ?? membershipStatus?.membership?.entitlements ?? {};
-  const isProfessionalActive = status === "professional_active" || (!status && tier === "professional");
-  return isProfessionalActive && entitlements?.teamMemberManagement === true;
-}
+async function ensureEpisodeBatchImageGenerationAllowed(workbench, modal) {
+  let membershipStateKnown = workbench?.ui?.membershipStatus != null;
+  const refreshTasks = [];
 
-function effectiveTeamOverviewForMembership(workbench) {
-  const overview = workbench.ui.teamOverview ?? {};
-  if (!hasActiveProfessionalTeamManagement(workbench.ui.membershipStatus)) {
-    return overview;
+  if (typeof workbench?.api?.getSession === "function") {
+    refreshTasks.push(refreshSessionCreditBalance(workbench, { renderOnChange: false }));
   }
-  const seats = overview?.seats ?? {};
-  const membershipStatus = workbench.ui.membershipStatus ?? {};
-  const membershipSeatLimit = Number(
-    membershipStatus?.team?.seatLimit ?? membershipStatus?.membership?.team?.seatLimit ?? 0,
-  );
-  const limit = Math.max(
-    Number(seats.limit ?? seats.total ?? 0),
-    Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
-  );
-  const used = Number(seats.used ?? 0);
-  return {
-    ...overview,
-    entitlements: {
-      ...(overview?.entitlements ?? {}),
-      teamMemberManagement: true,
-    },
-    seats: {
-      ...seats,
-      used,
-      limit,
-      remaining: limit > 0 ? Math.max(0, limit - used) : Number(seats.remaining ?? 0),
-    },
-    permissions: {
-      ...(overview?.permissions ?? {}),
-      canReadMembers: true,
-      canCreateMember: true,
-      canViewDashboard: true,
-    },
-  };
-}
 
-function isCanvasMembershipRequiredError(error) {
-  return String(error?.errorCode ?? "") === "canvas_membership_required";
+  if (typeof workbench?.api?.getMembershipStatus === "function") {
+    refreshTasks.push((async () => {
+      await syncMembershipStatusOnly(workbench);
+      membershipStateKnown = true;
+    })());
+  }
+
+  if (refreshTasks.length) {
+    await Promise.allSettled(refreshTasks);
+  }
+
+  if (membershipStateKnown && !isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+    const message = "有效会员已过期或未开通，请先开通会员。";
+    workbench.ui.validationMessage = message;
+    workbench.ui.toast = message;
+    render(workbench);
+    return false;
+  }
+
+  const requiredCredits = Math.max(
+    0,
+    Number(modal?.totalCredits ?? resolveEpisodeBatchTotalCredits(modal)) || 0,
+  );
+  const availableCredits = resolveKnownWorkbenchCreditBalance(workbench);
+  if (requiredCredits > 0 && availableCredits !== null && availableCredits < requiredCredits) {
+    const message = "积分余额不足，请充值。";
+    workbench.ui.validationMessage = message;
+    workbench.ui.toast = message;
+    render(workbench);
+    return false;
+  }
+
+  return true;
 }
 
 function isSucceededPaymentIntent(paymentIntent, billingOrder) {
@@ -3102,7 +3248,8 @@ async function finalizeSuccessfulMembershipPayment(workbench) {
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
   await refreshMembershipPaymentCriticalSurfaces(workbench);
-  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
+  workbench.ui.renderedPaymentResultToastMessage = "";
+  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST };
   render(workbench, { preserveLibraryScroll: true });
   queueMembershipPaymentSecondaryRefresh(workbench);
 }
@@ -3114,7 +3261,8 @@ async function finalizeSuccessfulCreditRechargePayment(workbench) {
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
   await refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
+  workbench.ui.renderedPaymentResultToastMessage = "";
+  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST };
   render(workbench, { preserveLibraryScroll: true });
 }
 
@@ -3132,13 +3280,13 @@ function clearPaymentResultToast(workbench) {
   const toastMessage = String(toast.message ?? "").trim();
   if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
     workbench.ui.toast = "";
+    workbench.ui.renderedPaymentResultToastMessage = "";
   }
 }
 
 function isPaymentResultToastState(message) {
   const toast = normalizeWorkbenchToast(message);
-  return [MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(String(toast.message ?? "").trim()) &&
-    Boolean(message && typeof message === "object" && message.__paymentResultToast);
+  return [MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(String(toast.message ?? "").trim());
 }
 
 function consumePaymentResultToastState(workbench) {
@@ -3146,6 +3294,7 @@ function consumePaymentResultToastState(workbench) {
   const toastMessage = String(toast.message ?? "").trim();
   if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
     workbench.ui.toast = "";
+    workbench.ui.renderedPaymentResultToastMessage = "";
   }
 }
 
@@ -3479,6 +3628,16 @@ function resolveEpisodeBatchPublicStyles(workbench) {
     .filter((style) => style.id && style.label);
 }
 
+function resolveEpisodeBatchSelectedStylePrompt(workbench, styleId) {
+  const normalizedStyleId = String(styleId ?? "").trim();
+  if (!normalizedStyleId) {
+    return "";
+  }
+  const styles = Array.isArray(workbench.ui.batchImageStyles) ? workbench.ui.batchImageStyles : [];
+  const style = styles.find((item) => String(item?.id ?? item?.code ?? "").trim() === normalizedStyleId) ?? null;
+  return String(style?.prompt_content ?? style?.promptContent ?? "").trim();
+}
+
 function resolveEpisodeBatchStyleSelection(modal, styleTab) {
   const list =
     styleTab === "custom"
@@ -3520,6 +3679,8 @@ function resolveProjectStyleList(payload) {
       name: String(item.name ?? ""),
       code: String(item.code ?? ""),
       coverImageUrl: String(item.coverImageUrl ?? item.cover_image_url ?? ""),
+      prompt_content: String(item.prompt_content ?? item.promptContent ?? ""),
+      promptContent: String(item.promptContent ?? item.prompt_content ?? ""),
       status: String(item.status ?? "enabled"),
     }))
     .filter((item) => item.code && item.name);
@@ -3568,10 +3729,8 @@ function render(workbench, options = {}) {
   globalThis.document?.body?.classList?.toggle?.("community-window-body", workbench.ui?.activeNavTab === "community");
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
+  const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
   const modalScrollState = captureLibraryTeamModalScrollState(workbench.root);
-  const shouldMarkPaymentResultToastShown =
-    isPaymentResultToastState(workbench.ui?.toast) &&
-    !Boolean(workbench.ui?.toast?.__paymentResultToastShown);
   let renderFailed = false;
   try {
     const activeStoryboards = getActiveStoryboards(workbench);
@@ -3595,16 +3754,12 @@ function render(workbench, options = {}) {
     console.error("[creator-app] render failed", error);
     workbench.root.innerHTML = renderRecoverableWorkbenchShell(workbench, error);
   }
+  syncEpisodeWorkbenchLayoutVars(workbench);
   restoreEpisodeWorkbenchScrollState(workbench.root, episodeScrollState);
   restoreWorkbenchSurfaceScrollState(workbench.root, surfaceScrollState);
+  restoreSingleEpisodeAiPreviewScrollState(workbench.root, singleEpisodeAiScrollState);
   restoreLibraryTeamModalScrollState(workbench.root, modalScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
-  if (!renderFailed && shouldMarkPaymentResultToastShown && workbench.ui?.toast && typeof workbench.ui.toast === "object") {
-    workbench.ui.toast = {
-      ...workbench.ui.toast,
-      __paymentResultToastShown: true,
-    };
-  }
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }
@@ -3616,7 +3771,7 @@ function render(workbench, options = {}) {
   }
   applyPostRenderEffects(workbench);
   scheduleProjectGalleryMeasurement(workbench);
-  keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench);
+  keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
   mountCanvasWorkflowIfPresent(workbench);
   updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
   resumeCanvasGenerationPollingIfNeeded(workbench);
@@ -3714,9 +3869,6 @@ function measureProjectGalleryColumns(workbench) {
     return;
   }
   workbench.ui.projectLibraryColumns = nextColumns;
-  const totalProjects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary.length : 0;
-  const totalPages = Math.max(1, Math.ceil(totalProjects / resolveProjectGalleryPageSize(workbench.ui)));
-  workbench.ui.projectLibraryPage = Math.min(totalPages, Math.max(1, Number(workbench.ui.projectLibraryPage ?? 1)));
   render(workbench);
 }
 
@@ -3771,6 +3923,90 @@ function restoreWorkbenchSurfaceScrollState(root, scrollState) {
     if (Number.isFinite(state.left)) {
       surface.scrollLeft = state.left;
     }
+  }
+}
+
+function captureSingleEpisodeAiPreviewScrollState(root) {
+  if (!root?.querySelector) {
+    return null;
+  }
+  const promptOpenState = root.querySelectorAll
+    ? Array.from(root.querySelectorAll(".single-episode-ai-sent-prompt[data-prompt-stage]")).map((item) => ({
+      stage: String(item.dataset?.promptStage ?? ""),
+      open: Boolean(item.open),
+    }))
+    : [];
+  return {
+    previewSurface: captureSingleEpisodeAiScrollTargetState(
+      root.querySelector("[data-single-episode-ai-preview-surface]"),
+    ),
+    scriptOutput: captureSingleEpisodeAiScrollTargetState(
+      root.querySelector(".single-episode-ai-script-text div"),
+    ),
+    liveOutput: captureSingleEpisodeAiScrollTargetState(
+      root.querySelector(".manual-script-analysis-output pre, .single-episode-ai-live-output pre"),
+    ),
+    promptOpenState,
+  };
+}
+
+function captureSingleEpisodeAiScrollTargetState(element) {
+  if (!element) {
+    return null;
+  }
+  const scrollTop = Number(element.scrollTop ?? 0);
+  const scrollHeight = Number(element.scrollHeight ?? 0);
+  const clientHeight = Number(element.clientHeight ?? 0);
+  return {
+    scrollTop,
+    stickToBottom:
+      scrollHeight <= 0
+      || clientHeight <= 0
+      || scrollHeight - (scrollTop + clientHeight) <= SINGLE_EPISODE_AI_SCROLL_STICKY_THRESHOLD_PX,
+  };
+}
+
+function restoreSingleEpisodeAiPreviewScrollState(root, scrollState) {
+  if (!root?.querySelector || !scrollState) {
+    return;
+  }
+  restoreSingleEpisodeAiScrollTargetState(
+    root.querySelector("[data-single-episode-ai-preview-surface]"),
+    scrollState.previewSurface,
+  );
+  restoreSingleEpisodeAiScrollTargetState(
+    root.querySelector(".single-episode-ai-script-text div"),
+    scrollState.scriptOutput,
+  );
+  restoreSingleEpisodeAiScrollTargetState(
+    root.querySelector(".manual-script-analysis-output pre, .single-episode-ai-live-output pre"),
+    scrollState.liveOutput,
+  );
+  if (!Array.isArray(scrollState.promptOpenState) || !root.querySelectorAll) {
+    return;
+  }
+  const details = Array.from(root.querySelectorAll(".single-episode-ai-sent-prompt[data-prompt-stage]"));
+  for (const state of scrollState.promptOpenState) {
+    if (!state?.stage) {
+      continue;
+    }
+    const detail = details.find((item) => String(item.dataset?.promptStage ?? "") === state.stage);
+    if (detail) {
+      detail.open = Boolean(state.open);
+    }
+  }
+}
+
+function restoreSingleEpisodeAiScrollTargetState(element, scrollState) {
+  if (!element || !scrollState) {
+    return;
+  }
+  if (scrollState.stickToBottom) {
+    element.scrollTop = Number(element.scrollHeight ?? 0);
+    return;
+  }
+  if (Number.isFinite(scrollState.scrollTop)) {
+    element.scrollTop = scrollState.scrollTop;
   }
 }
 
@@ -3834,10 +4070,128 @@ function restoreEpisodeWorkbenchScrollState(root, scrollState) {
   }
 }
 
+function clampEpisodeWorkbenchCenterWidthRatio(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH;
+  }
+  return Math.min(EPISODE_LAYOUT_MAX_CENTER_WIDTH, Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH, numeric));
+}
+
+function buildEpisodeWorkbenchCenterWidthTrack(value) {
+  clampEpisodeWorkbenchCenterWidthRatio(value);
+  return `${EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM}rem`;
+}
+
+function clampEpisodeWorkbenchCenterWidthPx(value, viewportWidth = null) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const resolvedViewportWidth =
+    Number.isFinite(Number(viewportWidth)) && Number(viewportWidth) > 0
+      ? Number(viewportWidth)
+      : (typeof window !== "undefined" ? window.innerWidth : 0);
+  const maxWidth = resolvedViewportWidth > 0
+    ? Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, resolvedViewportWidth * EPISODE_LAYOUT_MAX_CENTER_WIDTH)
+    : null;
+  if (!Number.isFinite(maxWidth) || maxWidth === null) {
+    return Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, numeric);
+  }
+  return Math.min(maxWidth, Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, numeric));
+}
+
+function buildEpisodeWorkbenchDefaultCenterWidthPx(viewportWidth = null) {
+  const resolvedViewportWidth =
+    Number.isFinite(Number(viewportWidth)) && Number(viewportWidth) > 0
+      ? Number(viewportWidth)
+      : (typeof window !== "undefined" ? window.innerWidth : 0);
+  if (!resolvedViewportWidth) {
+    return null;
+  }
+  return clampEpisodeWorkbenchCenterWidthPx(
+    Math.min(
+      resolvedViewportWidth * EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH,
+      EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX,
+    ),
+    resolvedViewportWidth,
+  );
+}
+
+function buildEpisodeWorkbenchLeftWidthTrack(value) {
+  clampEpisodeWorkbenchCenterWidthRatio(value);
+  return "minmax(0, 1fr)";
+}
+
+function buildEpisodeWorkbenchRightWidthTrack(value) {
+  clampEpisodeWorkbenchCenterWidthRatio(value);
+  return "8.9rem";
+}
+
+function syncEpisodeWorkbenchLayoutVars(workbench) {
+  if (!workbench?.root?.querySelector) {
+    return;
+  }
+  const scope =
+    workbench.root.querySelector(".episode-workbench-screen")
+    ?? workbench.root.querySelector(".episode-replica-shell")
+    ?? workbench.root;
+  if (!scope?.style) {
+    return;
+  }
+  if (workbench.ui.projectPanelMode !== "episode-workbench") {
+    scope.style.removeProperty("--episode-replica-left-width");
+    scope.style.removeProperty("--episode-replica-center-width");
+    scope.style.removeProperty("--episode-replica-right-width");
+    return;
+  }
+  const ratio = clampEpisodeWorkbenchCenterWidthRatio(workbench.ui.episodeWorkbenchCenterWidthRatio);
+  const pixelWidth = clampEpisodeWorkbenchCenterWidthPx(workbench.ui.episodeWorkbenchCenterWidthPx);
+  const effectivePixelWidth = pixelWidth ?? buildEpisodeWorkbenchDefaultCenterWidthPx();
+  if (pixelWidth !== workbench.ui.episodeWorkbenchCenterWidthPx) {
+    workbench.ui.episodeWorkbenchCenterWidthPx = pixelWidth;
+  }
+  scope.style.setProperty(
+    "--episode-replica-left-width",
+    buildEpisodeWorkbenchLeftWidthTrack(ratio),
+  );
+  scope.style.setProperty(
+    "--episode-replica-center-width",
+    effectivePixelWidth ? `${effectivePixelWidth.toFixed(0)}px` : buildEpisodeWorkbenchCenterWidthTrack(ratio),
+  );
+  scope.style.setProperty(
+    "--episode-replica-right-width",
+    buildEpisodeWorkbenchRightWidthTrack(ratio),
+  );
+}
+
+function isEpisodeWorkbenchCenterResizeHotzone(event, centerPanel) {
+  const rect = centerPanel?.getBoundingClientRect?.();
+  if (!rect) {
+    return false;
+  }
+  return Math.abs(event.clientX - rect.left) <= 10;
+}
+
+function updateEpisodeWorkbenchResizeHover(workbench, event) {
+  const centerPanel = resolveEventElement(event.target)?.closest?.(".episode-replica-center");
+  const activePanels = workbench.root?.querySelectorAll?.(".episode-replica-center.is-resize-target") ?? [];
+  activePanels.forEach((panel) => panel.classList.remove("is-resize-target"));
+  if (!centerPanel || workbench.ui.projectPanelMode !== "episode-workbench") {
+    return;
+  }
+  if (isEpisodeWorkbenchCenterResizeHotzone(event, centerPanel)) {
+    centerPanel.classList.add("is-resize-target");
+  }
+}
+
 function renderSingleEpisodeAiPreviewProgress(workbench) {
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+    return;
+  }
   const now = Date.now();
   const lastRenderAt = Number(workbench.singleEpisodeAiPreviewLastRenderAt ?? 0);
-  if (now - lastRenderAt < 350) {
+  if (now - lastRenderAt < SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS) {
     workbench.singleEpisodeAiPreviewRenderPending = true;
     if (!workbench.singleEpisodeAiPreviewRenderTimer) {
       workbench.singleEpisodeAiPreviewRenderTimer = setTimeout(() => {
@@ -3847,14 +4201,14 @@ function renderSingleEpisodeAiPreviewProgress(workbench) {
         }
         workbench.singleEpisodeAiPreviewLastRenderAt = Date.now();
         workbench.singleEpisodeAiPreviewRenderPending = false;
-        render(workbench);
-      }, 350 - (now - lastRenderAt));
+        renderSingleEpisodeAiPreviewIncremental(workbench);
+      }, SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS - (now - lastRenderAt));
     }
     return;
   }
   workbench.singleEpisodeAiPreviewLastRenderAt = now;
   workbench.singleEpisodeAiPreviewRenderPending = false;
-  render(workbench);
+  renderSingleEpisodeAiPreviewIncremental(workbench);
 }
 
 function clearSingleEpisodeAiPreviewRenderTimer(workbench) {
@@ -3865,9 +4219,59 @@ function clearSingleEpisodeAiPreviewRenderTimer(workbench) {
   workbench.singleEpisodeAiPreviewRenderPending = false;
 }
 
-function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench) {
+function cancelSingleEpisodeAiPreviewRequest(workbench) {
+  const controller = workbench.singleEpisodeAiPreviewAbortController;
+  workbench.singleEpisodeAiPreviewAbortController = null;
+  if (controller && !controller.signal?.aborted) {
+    controller.abort();
+  }
+  if (workbench.singleEpisodeAiTableSyncTimer) {
+    clearTimeout(workbench.singleEpisodeAiTableSyncTimer);
+    workbench.singleEpisodeAiTableSyncTimer = null;
+  }
+  workbench.singleEpisodeAiTableSyncPendingStages = new Set();
+  clearSingleEpisodeAiPreviewRenderTimer(workbench);
+}
+
+function isAbortError(error) {
+  return error instanceof DOMException && error.name === "AbortError"
+    || error?.name === "AbortError"
+    || error?.message === "AbortError";
+}
+
+function renderSingleEpisodeAiPreviewIncremental(workbench) {
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+    render(workbench);
+    return;
+  }
+  const overlay = workbench.root?.querySelector?.(".single-episode-ai-overlay");
+  const overlayHtml = renderSingleEpisodeAiPreview(workbench.ui);
+  if (!overlay || typeof overlay.outerHTML !== "string" || !overlayHtml) {
+    render(workbench);
+    return;
+  }
+  const scrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
+  overlay.outerHTML = overlayHtml;
+  restoreSingleEpisodeAiPreviewScrollState(workbench.root, scrollState);
+  keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, scrollState);
+}
+
+function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, previousScrollState = null) {
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
     return;
+  }
+  if (previousScrollState) {
+    return;
+  }
+  const previewSurface = workbench.root.querySelector?.(
+    "[data-single-episode-ai-preview-surface]",
+  );
+  if (previewSurface) {
+    previewSurface.scrollTop = previewSurface.scrollHeight;
+  }
+  const scriptOutput = workbench.root.querySelector?.(".single-episode-ai-script-text div");
+  if (scriptOutput) {
+    scriptOutput.scrollTop = scriptOutput.scrollHeight;
   }
   const liveOutput = workbench.root.querySelector?.(
     ".manual-script-analysis-output pre, .single-episode-ai-live-output pre",
@@ -3910,11 +4314,14 @@ function scheduleProjectSearch(workbench, value) {
   }
   workbench.projectSearchTimer = setTimeout(() => {
     workbench.projectSearchTimer = null;
-    applyProjectSearch(workbench, value);
+    void applyProjectSearch(workbench, value).catch((error) => {
+      workbench.ui.toast = `项目搜索失败：${friendlyError(error)}`;
+      render(workbench);
+    });
   }, 500);
 }
 
-function applyProjectSearch(workbench, value) {
+async function applyProjectSearch(workbench, value) {
   if (workbench.projectSearchTimer) {
     clearTimeout(workbench.projectSearchTimer);
     workbench.projectSearchTimer = null;
@@ -3929,6 +4336,13 @@ function applyProjectSearch(workbench, value) {
   workbench.ui.projectLibraryPage = 1;
   workbench.ui.selectedProjectIds = [];
   workbench.ui.toast = "";
+  if (typeof workbench.api?.getProjects === "function") {
+    await syncProjectLibraryFromApi(workbench, {
+      page: 1,
+      keyword: nextQuery,
+      includeAssets: false,
+    });
+  }
   render(workbench);
   restoreProjectSearchFocus(workbench.root);
 }
@@ -4097,7 +4511,7 @@ function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
   };
 }
 
-function mergeGenerationState(currentState, nextState) {
+function mergeGenerationState(currentState, nextState, options = {}) {
   const current = currentState ?? createEmptyGenerationState();
   const next = nextState ?? createEmptyGenerationState();
   const merged = {
@@ -4107,9 +4521,18 @@ function mergeGenerationState(currentState, nextState) {
   };
   return {
     ...merged,
-    prompt: resolveMergedGenerationPrompt(current.prompt, next.prompt),
-    imagePrompt: resolveMergedGenerationPrompt(current.imagePrompt, next.imagePrompt),
-    videoPrompt: resolveMergedGenerationPrompt(current.videoPrompt, next.videoPrompt),
+    prompt: resolveMergedGenerationPrompt(current.prompt, next.prompt, {
+      currentDraftPrompt: options.currentPromptDraft,
+      nextDraftPrompt: options.nextPromptDraft,
+    }),
+    imagePrompt: resolveMergedGenerationPrompt(current.imagePrompt, next.imagePrompt, {
+      currentDraftPrompt: options.currentImagePromptDraft,
+      nextDraftPrompt: options.nextImagePromptDraft,
+    }),
+    videoPrompt: resolveMergedGenerationPrompt(current.videoPrompt, next.videoPrompt, {
+      currentDraftPrompt: options.currentVideoPromptDraft,
+      nextDraftPrompt: options.nextVideoPromptDraft,
+    }),
     referenceUploads:
       (current.referenceUploads?.length ? current.referenceUploads : next.referenceUploads) ?? [],
     localReferenceRoles:
@@ -4119,10 +4542,72 @@ function mergeGenerationState(currentState, nextState) {
   };
 }
 
-function resolveMergedGenerationPrompt(currentPrompt, nextPrompt) {
+function resolveMergedGenerationPrompt(currentPrompt, nextPrompt, options = {}) {
   const currentText = typeof currentPrompt === "string" ? currentPrompt : "";
   const nextText = typeof nextPrompt === "string" ? nextPrompt : "";
-  return currentText.trim() ? currentText : nextText;
+  const currentValue = currentText.trim();
+  const nextValue = nextText.trim();
+  if (!currentValue) {
+    return nextText;
+  }
+  if (!nextValue) {
+    return currentText;
+  }
+  const currentDraftValue = String(options.currentDraftPrompt ?? "").trim();
+  if (currentDraftValue && currentValue !== currentDraftValue) {
+    return currentText;
+  }
+  return shouldPreferIncomingGenerationPrompt(currentValue, nextValue)
+    ? nextText
+    : currentText;
+}
+
+function resolveMergedStoryboardDescription(currentStoryboard, nextStoryboard) {
+  const currentVideoPrompt = resolveEpisodeStoryboardVideoPrompt(currentStoryboard);
+  const nextVideoPrompt = resolveEpisodeStoryboardVideoPrompt(nextStoryboard);
+  return chooseEpisodeStoryboardPreferredPrompt(
+    currentStoryboard?.description ?? currentVideoPrompt,
+    nextStoryboard?.description ?? nextVideoPrompt,
+  ) || nextVideoPrompt || currentVideoPrompt || String(nextStoryboard?.description ?? currentStoryboard?.description ?? "");
+}
+
+function resolveMergedStoryboardSceneAnalysis(currentStoryboard, nextStoryboard) {
+  const currentVideoPrompt = resolveEpisodeStoryboardVideoPrompt(currentStoryboard);
+  const nextVideoPrompt = resolveEpisodeStoryboardVideoPrompt(nextStoryboard);
+  return chooseEpisodeStoryboardPreferredPrompt(
+    currentStoryboard?.sceneAnalysis ?? currentVideoPrompt,
+    nextStoryboard?.sceneAnalysis ?? nextVideoPrompt,
+  ) || nextVideoPrompt || currentVideoPrompt || String(nextStoryboard?.sceneAnalysis ?? currentStoryboard?.sceneAnalysis ?? "");
+}
+
+function shouldPreferIncomingGenerationPrompt(currentValue, nextValue) {
+  if (!currentValue || !nextValue || currentValue === nextValue) {
+    return false;
+  }
+  if (nextValue.length > currentValue.length && nextValue.includes(currentValue)) {
+    return true;
+  }
+  if (nextValue.length <= currentValue.length) {
+    return false;
+  }
+  return calculateGenerationPromptCompletenessScore(nextValue) >
+    calculateGenerationPromptCompletenessScore(currentValue);
+}
+
+function calculateGenerationPromptCompletenessScore(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return 0;
+  }
+  const markers = [
+    "\n",
+    "【分镜",
+    "【镜头",
+    "【镜头列表】",
+    "【场景分析】",
+    "动态视频提示词",
+  ];
+  return markers.reduce((score, marker) => score + (text.includes(marker) ? 1 : 0), 0);
 }
 
 export async function handleProductionWorkbenchAction(workbench, target) {
@@ -4142,6 +4627,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-asset-inspector",
     "open-episode-batch-actions",
     "close-episode-batch-modal",
+    "close-single-episode-modal",
+    "close-ai-storyboard-preview",
     "set-episode-media-mode",
     "preview-export",
     "episode-fixed-result-action",
@@ -4186,6 +4673,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-credit-ledger",
     "close-membership-payment",
     "refresh-credit-ledger",
+    "open-community-page",
     "open-community",
     "open-community-composer",
     "close-community-composer",
@@ -4208,6 +4696,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
     return;
   }
+  clearWorkbenchToast(workbench);
 
   if (action === "open-credit-ledger") {
     workbench.ui.creditLedgerOpen = true;
@@ -4218,8 +4707,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-community-page") {
+    const currentUrl = globalThis.window?.location?.href;
+    const communityUrl = typeof currentUrl === "string" && currentUrl
+      ? new URL("#community", currentUrl).toString()
+      : "#community";
+    globalThis.window?.open?.(communityUrl, "_blank", "noopener");
+    return;
+  }
+
   if (action === "open-community") {
-    openLingxiCommunityWindow();
+    workbench.ui.activeNavTab = "community";
+    workbench.ui.projectPanelMode = "workspace";
+    if (globalThis.window?.location?.hash !== "#community") {
+      globalThis.window.location.hash = "community";
+    }
+    render(workbench);
+    runLazyWorkbenchTask(workbench, "community board", async () => {
+      await loadLingxiCommunityBoard(workbench);
+    });
     return;
   }
 
@@ -4889,34 +5395,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       try {
         task = await submitCanvasRunIfAvailable(workbench, { ...preview, creditCost });
       } catch (error) {
-        if (isCanvasMembershipRequiredError(error)) {
-          if (previousBalance !== null) {
-            setWorkbenchCreditBalance(workbench, previousBalance);
-          }
-          updateActiveCanvasDocument(workbench, updateCanvasNodeData(workbench.ui.canvasDocument, nodeId, {
-            status: "ready",
-            generationProgress: 0,
-            generationStage: "",
-            lastTaskId: null,
-            taskId: null,
-            generationTaskId: null,
-            platform: null,
-          }));
-          if (String(workbench.ui.canvasGeneratingNodeId ?? "") === nodeId) {
-            workbench.ui.canvasGeneratingNodeId = null;
-          }
-          workbench.ui.membershipStatus = { status: "none" };
-          workbench.ui.canvasEditorOpen = false;
-          workbench.ui.canvasRunPreview = null;
-          workbench.ui.isLibraryPricingModalOpen = true;
-          workbench.ui.toast = "";
-          await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
-          if (workbench.ui.membershipStatus == null) {
-            workbench.ui.membershipStatus = { status: "none" };
-          }
-          render(workbench);
-          return;
-        }
         if (previousBalance !== null) {
           setWorkbenchCreditBalance(workbench, previousBalance);
         }
@@ -4983,9 +5461,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
               task,
             };
           }
-          workbench.ui.toast = succeeded
-            ? "画布节点生成完成。"
-            : { tone: "error", message: generationTaskNoticePrefix(task) + generationTaskFailureMessage(task) };
+          if (!succeeded) {
+            workbench.ui.toast = { tone: "error", message: generationTaskNoticePrefix(task) + generationTaskFailureMessage(task) };
+          }
           render(workbench);
           return;
         }
@@ -5724,13 +6202,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "set-team-panel-tab") {
-    workbench.ui.teamPanelTab = target.dataset.teamPanelTab === "credits" ? "credits" : "members";
-    workbench.ui.toast = "";
-    render(workbench, { preserveLibraryScroll: true });
-    return;
-  }
-
   if (action === "search-team-members") {
     workbench.ui.toast = "";
     render(workbench, { preserveLibraryScroll: true });
@@ -5749,7 +6220,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, "character");
     workbench.ui.toast = "";
-    window.location.hash = "project-workspace";
+    syncProjectWorkspaceHash(workbench);
     render(workbench);
     return;
   }
@@ -5763,7 +6234,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.toast = "";
-    window.location.hash = "project-workspace";
+    syncProjectWorkspaceHash(workbench);
     render(workbench);
     return;
   }
@@ -5875,7 +6346,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       searchQuery: workbench.ui.libraryQuery ?? "",
     });
     workbench.ui.toast = `已带入 ${selectedIds.length} 项资产，可继续确认导入。`;
-    window.location.hash = "project-workspace";
+    syncProjectWorkspaceHash(workbench);
     render(workbench);
     return;
   }
@@ -5954,15 +6425,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-team-member-create") {
-    const overview = effectiveTeamOverviewForMembership(workbench);
+    const overview = workbench.ui.teamOverview;
     if (overview?.entitlements?.teamMemberManagement !== true) {
       workbench.ui.isLibraryPricingModalOpen = true;
       render(workbench);
       return;
     }
-    const seatLimit = Number(overview?.seats?.limit ?? overview?.seats?.total ?? 0);
-    const remainingSeats = Number(overview?.seats?.remaining ?? 0);
-    if (seatLimit > 0 && remainingSeats <= 0) {
+    if (Number(overview?.seats?.remaining ?? 0) <= 0) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "团队席位已满，扩容后才能继续创建成员账号。";
       render(workbench);
@@ -6289,8 +6758,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
+    if (workbench.ui.singleEpisodeAiPreview?.status === "loading") {
+      cancelSingleEpisodeAiPreviewRequest(workbench);
+      workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+    }
     if (nextTab === "community") {
-      openLingxiCommunityWindow();
+      workbench.ui.activeNavTab = "community";
+      if (globalThis.window?.location?.hash !== "#community") {
+        globalThis.window.location.hash = "community";
+      }
+      render(workbench);
+      runLazyWorkbenchTask(workbench, "community board", async () => {
+        await loadLingxiCommunityBoard(workbench);
+      });
       return;
     }
     workbench.ui.activeNavTab = nextTab;
@@ -6316,8 +6796,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.toast = "";
     const nextHash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
-    const currentHash = String(window.location.hash ?? "").replace(/^#/, "");
-    window.location.hash = nextHash;
+    const currentHash = String(globalThis.window?.location?.hash ?? "").replace(/^#/, "");
+    if (globalThis.window?.location) {
+      globalThis.window.location.hash = nextHash;
+    }
     render(workbench);
     if (currentHash === nextHash) {
       scheduleLazySurfaceLoad(workbench);
@@ -6632,6 +7114,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "select-storyboard") {
     stopLipSyncAudioPreview(workbench);
     workbench.ui.selectedStoryboardId = target.dataset.storyboardId ?? null;
+    syncStoryboardPaginationForSelection(workbench);
     workbench.ui.isStoryboardDescriptionModalOpen = false;
     normalizeStoryboardComposerState(workbench, workbench.ui.selectedStoryboardId);
     await loadSelectedStoryboardConversationHistory(workbench, {
@@ -6725,6 +7208,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       storyboardIds.length > 0 &&
       storyboardIds.every((id) => (workbench.ui.selectedStoryboardIds ?? []).includes(id));
     workbench.ui.selectedStoryboardIds = isAllSelected ? [] : [...storyboardIds];
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-storyboard-page") {
+    const storyboards = getActiveStoryboards(workbench);
+    const pageSize = normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize);
+    const totalPages = Math.max(1, Math.ceil(storyboards.length / pageSize));
+    const nextPage = clampStoryboardWorkbenchPage(target.dataset.page, totalPages);
+    workbench.ui.storyboardPage = nextPage;
+    const pageStart = (nextPage - 1) * pageSize;
+    const pageStoryboards = storyboards.slice(pageStart, pageStart + pageSize);
+    if (pageStoryboards.length > 0 && !pageStoryboards.some((item) => item.id === workbench.ui.selectedStoryboardId)) {
+      workbench.ui.selectedStoryboardId = pageStoryboards[0].id;
+    }
+    persistWorkbenchState(workbench);
     render(workbench);
     return;
   }
@@ -6972,7 +7471,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     ) {
       await runAction(workbench, "正在删除剧集素材...", async () => {
         await workbench.api.deleteEpisodeAsset(workbench.ui.selectedEpisodeId, draft.assetId);
-        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench, { force: true });
+        removeEpisodeAssetFromImportedAssets(workbench, draft.assetId);
       });
       const nextSelection = resolveNextSelection();
       workbench.ui.selectedEpisodeAssetId = nextSelection;
@@ -7265,8 +7765,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-muse-scope-mode") {
     stopLipSyncAudioPreview(workbench);
+    closeAssetImportOverlays(workbench);
     const nextScopeMode = target.dataset.mode === "assets" ? "assets" : "storyboard";
     if (workbench.ui.museScopeMode === nextScopeMode) {
+      render(workbench);
       return;
     }
     workbench.ui.museScopeMode = nextScopeMode;
@@ -7800,12 +8302,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    if (
-      mode === "image" &&
-      (!Array.isArray(workbench.ui.batchImageStyles) || workbench.ui.batchImageStyles.length === 0) &&
-      typeof workbench.api?.getBatchImageStyles === "function"
-    ) {
-      await syncBatchImageStyles(workbench);
+    if (mode === "image") {
+      const loadTasks = [refreshEpisodeBatchGenerationConfig(workbench)];
+      if (
+        (!Array.isArray(workbench.ui.batchImageStyles) || workbench.ui.batchImageStyles.length === 0) &&
+        typeof workbench.api?.getBatchImageStyles === "function"
+      ) {
+        loadTasks.push(syncBatchImageStyles(workbench));
+      }
+      await Promise.all(loadTasks);
     }
     workbench.ui.episodeBatchModal = buildEpisodeBatchModal(workbench, {
       scope,
@@ -7849,9 +8354,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       [field]:
         field === "videoResolution"
           ? value.toUpperCase()
-          : field === "size"
-            ? value.toUpperCase()
-            : value,
+          : value,
       openField: null,
     });
     render(workbench);
@@ -7903,6 +8406,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     const mode = modal?.mode ?? "image";
     const scope = modal?.scope ?? "asset";
+    if (scope === "asset" && mode === "image" && typeof workbench.api?.createImageTask !== "function") {
+      workbench.ui.validationMessage = "真实图片生成接口不可用，请刷新后重试。";
+      workbench.ui.toast = "真实图片生成接口不可用，请刷新后重试。";
+      render(workbench);
+      throw new Error("episode_image_generation_api_missing");
+    }
+    if (scope === "asset" && mode === "image") {
+      const allowed = await ensureEpisodeBatchImageGenerationAllowed(workbench, modal);
+      if (!allowed) {
+        return;
+      }
+    }
     if (scope === "storyboard") {
       const activeStoryboards = getActiveStoryboards(workbench);
       for (const [index, item] of items.entries()) {
@@ -7955,10 +8470,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     };
     const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
     const batchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
+    const selectedStylePrompt = resolveEpisodeBatchSelectedStylePrompt(workbench, modal?.selectedStyleId);
 
     for (const [index, item] of items.entries()) {
       const assetKind = item.kind || inferEpisodeAssetKind(item.name);
       const imageUrl = resolveApiUrl(item.previewUrl ?? item.preview ?? item.sourceUrl ?? imageUrlSeeds[assetKind] ?? imageUrlSeeds.character);
+      const itemPrompt = String(item.description ?? "").trim() || `${resolveEpisodeAssetKindLabel(assetKind)} ${item.name ?? ""} 固定图生成`;
+      const composedPrompt = [selectedStylePrompt, itemPrompt].filter(Boolean).join("\n");
       const selectionContext = {
         episodeId: workbench.ui.selectedEpisodeId ?? "episode-primary",
         episodeTitle: null,
@@ -7968,45 +8486,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         selectedAssetDescription: item.description ?? "",
         selectedAssetPreview: imageUrl,
       };
-      const result = {
-        mediaKind: "image",
-        promptPreview:
-          item.description?.trim() ||
-          `${resolveEpisodeAssetKindLabel(assetKind)} ${item.name ?? ""} 固定图生成`,
-        quickReferenceItems: [],
-        attachmentItems: [],
-        selectionContext,
-        selectedModelId: mode === "video" ? (modal?.videoModelId ?? "vidu-q3-pro") : (modal?.imageModelId ?? "tnb-pro"),
-        resolution: mode === "video" ? (modal?.videoResolution ?? "720P") : (modal?.size ?? "2K"),
-        aspectRatio: modal?.aspectRatio ?? "16:9",
-        durationSec: mode === "video" ? 10 : null,
-        creditCost: resolveEpisodeBatchUnitCredit(modal),
-        createdAt: now,
-        completedAt: now,
-        status: "completed",
-        taskId: `batch-${mode}-${index + 1}-${Date.now().toString(36)}`,
-        fixedImages: [
-          {
-            id: `${item.id}-batch-image`,
-            label: assetKind === "scene" ? "场景图片" : assetKind === "prop" ? "道具图片" : "角色图片",
-            url: imageUrl,
-            storageObjectId: null,
-            assetVersionId: null,
-          },
-        ],
+      const submission = buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind, composedPrompt, selectionContext, now);
+      const runningResult = {
+        ...submission,
+        status: "running",
+        fixedImages: [],
       };
-      batchResults[item.id] = result;
-      appendAssetConversationHistoryEntry(workbench, result);
-      nextAssets[assetKind] = (nextAssets[assetKind] ?? []).map((asset) =>
-        asset.id === item.id
-          ? {
-              ...asset,
-              preview: imageUrl,
-              previewUrl: imageUrl,
-              sourceUrl: imageUrl,
-            }
-          : asset,
-      );
+      batchResults[item.id] = runningResult;
+      appendAssetConversationHistoryEntry(workbench, runningResult);
+      if (index === 0) {
+        workbench.ui.projectAssetTab = assetKind;
+        workbench.ui.selectedEpisodeAssetId = item.id;
+        workbench.ui.selectedEpisodeCardId = item.id;
+        if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+          workbench.ui.imageGenerationResult = runningResult;
+        }
+      }
     }
 
     workbench.ui.importedAssets = nextAssets;
@@ -8022,13 +8517,95 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.selectedEpisodeAssetIds = [];
     workbench.ui.episodeBatchModal = null;
-    workbench.ui.toast = `已为 ${items.length} 项素材创建各自任务，可逐个切换查看结果。`;
+    workbench.ui.toast = "";
     collectEpisodeWorkbenchEvent(workbench, "batch.submit", {
       mode,
       itemCount: items.length,
       items,
+      selectedStyleId: modal?.selectedStyleId ?? null,
+      selectedStylePrompt,
+      promptPreview: batchResults[firstItem?.id ?? ""]?.promptPreview ?? "",
       batchConfig: modal,
     });
+    render(workbench);
+    let batchErrorToast = "";
+    const submissionJobs = items.map(async (item) => {
+      const assetKind = item.kind || inferEpisodeAssetKind(item.name);
+      const submission = batchResults[item.id];
+      const payload = buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission);
+      try {
+        const task = await workbench.api.createImageTask(workbench.ui.selectedEpisodeId, payload);
+        const normalized = normalizeEpisodeTaskForLegacyResult(task, submission, "image");
+        const result = {
+          ...normalized,
+          ...submission,
+          status: resolveWorkflowStatus(normalized?.platform?.workflowStatus ?? normalized?.status),
+          taskId: normalized?.platform?.tasks?.[0]?.taskId ?? normalized?.taskId ?? null,
+          fixedImages: normalized?.fixedImages ?? [],
+          selectionContext: normalized?.selectionContext ?? submission.selectionContext,
+        };
+        const creditBalance = Number(result?.creditBalance ?? normalized?.creditBalance ?? task?.creditBalance);
+        if (Number.isFinite(creditBalance) && creditBalance >= 0) {
+          setWorkbenchCreditBalance(workbench, creditBalance);
+        }
+        batchResults[item.id] = result;
+        appendAssetConversationHistoryEntry(workbench, result);
+        if (workbench.ui.selectedEpisodeAssetId === item.id || workbench.ui.selectedEpisodeCardId === item.id) {
+          workbench.ui.imageGenerationResult = result;
+        }
+        workbench.ui.episodeBatchResults = batchResults;
+        workbench.ui.generationPollingActive = Object.values(batchResults).some((entry) =>
+          isGenerationTaskPendingStatus(resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus)),
+        );
+        render(workbench);
+        if (workbench.ui.generationPollingActive) {
+          scheduleAssetBatchGenerationPolling(workbench, "image", { immediate: true });
+        }
+        try {
+          await persistAssetConversationEntry(workbench, result, { includeUserRequest: true });
+          render(workbench);
+        } catch {
+          // Keep the submitted task visible if conversation persistence is temporarily unavailable.
+        }
+        return { itemId: item.id, result };
+      } catch (error) {
+        const failedResult = {
+          ...submission,
+          status: "failed",
+          failureCode: "batch_image_task_failed",
+          failure: {
+            displayMessage: friendlyError(error),
+          },
+          fixedImages: [],
+        };
+        batchResults[item.id] = failedResult;
+        appendAssetConversationHistoryEntry(workbench, failedResult);
+        if (workbench.ui.selectedEpisodeAssetId === item.id || workbench.ui.selectedEpisodeCardId === item.id) {
+          workbench.ui.imageGenerationResult = failedResult;
+        }
+        workbench.ui.episodeBatchResults = batchResults;
+        workbench.ui.generationPollingActive = Object.values(batchResults).some((entry) =>
+          isGenerationTaskPendingStatus(resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus)),
+        );
+        render(workbench);
+        const errorCode = String(error?.errorCode ?? "");
+        if (!batchErrorToast && (errorCode === "insufficient_credits" || errorCode === "generation_membership_required")) {
+          batchErrorToast = friendlyError(error);
+        }
+        return { itemId: item.id, result: failedResult, error };
+      }
+    });
+    await Promise.all(submissionJobs);
+    workbench.ui.episodeBatchResults = batchResults;
+    workbench.ui.generationPollingActive = Object.values(batchResults).some((entry) =>
+      isGenerationTaskPendingStatus(resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus)),
+    );
+    if (batchErrorToast) {
+      workbench.ui.toast = batchErrorToast;
+    }
+    if (workbench.ui.generationPollingActive) {
+      scheduleAssetBatchGenerationPolling(workbench, "image", { immediate: true });
+    }
     render(workbench);
     return;
   }
@@ -8115,6 +8692,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-episode-media-mode") {
     stopLipSyncAudioPreview(workbench);
+    closeAssetImportOverlays(workbench);
     workbench.ui.episodeMediaMode = target.dataset.mode ?? "image";
     if (workbench.ui.episodeMediaMode === "image") {
       workbench.ui.selectedModelId = resolveConfiguredImageModelCode(
@@ -8212,7 +8790,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorSection = "overview";
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.toast = "";
-    window.location.hash = "project-workspace";
+    syncProjectWorkspaceHash(workbench, projectId);
     render(workbench);
     try {
       const detail = await workbench.api.selectProject({ projectId });
@@ -8229,7 +8807,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       );
       workbench.ui.selectedEpisodeId = getDefaultEpisodeWorkbenchId(workbench);
       syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
-      await syncProjectInteriorSupplementary(workbench);
+      if (shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)) {
+        await syncProjectInteriorSupplementary(workbench);
+      }
       await syncProjectLibraryFromApi(workbench);
       workbench.ui.toast = "";
     } catch (error) {
@@ -8255,7 +8835,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorSection = "episodes";
     workbench.ui.episodeCardMenuId = null;
     workbench.ui.toast = "";
-    window.location.hash = "project-workspace";
+    syncProjectWorkspaceHash(workbench);
     render(workbench);
     return;
   }
@@ -8349,14 +8929,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-project-interior-section") {
-    workbench.ui.projectInteriorSection = target.dataset.section ?? "overview";
+    const nextSection = normalizeProjectInteriorSection(target.dataset.section);
+    workbench.ui.projectInteriorSection = nextSection;
     workbench.ui.projectInteriorStatusMenuOpen = false;
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.toast = "";
-    if (workbench.ui.selectedProjectCardId) {
-      await syncProjectInteriorSupplementary(workbench);
-    }
     render(workbench);
+    if (shouldLoadProjectInteriorSupplementary(nextSection) && workbench.ui.selectedProjectCardId) {
+      await syncProjectInteriorSupplementary(workbench);
+      render(workbench);
+    }
     return;
   }
 
@@ -8379,12 +8961,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "close-single-episode-modal") {
+    cancelSingleEpisodeAiPreviewRequest(workbench);
     resetSingleEpisodeModalState(workbench);
     render(workbench);
     return;
   }
 
   if (action === "close-ai-storyboard-preview") {
+    cancelSingleEpisodeAiPreviewRequest(workbench);
     workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
     render(workbench);
     return;
@@ -8496,7 +9080,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       sourceScript: nextScript,
       packages,
       projectId,
-      data: { displayTables: createSingleEpisodeAiLiveDisplayTables() },
+      data: (() => {
+        const previewTables = createSingleEpisodeAiLiveDisplayTables();
+        return {
+          previewTables,
+          displayTables: previewTables,
+        };
+      })(),
       error: "",
       scriptText: "",
       scriptRawText: "",
@@ -8504,10 +9094,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       scriptPromptText: "",
       promptPromptText: "",
       assetPromptSteps: [],
+      liveStoryboardStreamState: null,
+      livePreviewTables: null,
+      liveDisplayTables: null,
       activeStage: "script",
     };
     render(workbench);
     try {
+      cancelSingleEpisodeAiPreviewRequest(workbench);
+      const abortController = new AbortController();
+      workbench.singleEpisodeAiPreviewAbortController = abortController;
       const previewInput = {
         scriptText: nextScript,
         packages,
@@ -8518,99 +9114,128 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           ? workbench.api.createAiScriptAnalysisStream
           : workbench.api.createAiStoryboardPreviewStream;
       if (typeof previewStream === "function") {
-        for await (const event of previewStream(projectId, previewInput)) {
-          const eventName = event?.event ?? "";
-          const data = event?.data ?? {};
-          if (eventName === "script_prompt") {
-            workbench.ui.singleEpisodeAiPreview.scriptPromptText = String(data.text ?? "");
-          } else if (eventName === "script_start") {
-            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
-          } else if (eventName === "script_delta") {
-            workbench.ui.singleEpisodeAiPreview.scriptText = appendBoundedText(
-              workbench.ui.singleEpisodeAiPreview.scriptText,
-              data.text,
-              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-            );
-            workbench.ui.singleEpisodeAiPreview.scriptRawText = appendBoundedText(
-              workbench.ui.singleEpisodeAiPreview.scriptRawText,
-              data.text,
-              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-            );
-            syncSingleEpisodeAiScriptTable(workbench);
-            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
-          } else if (eventName === "script_done") {
-            workbench.ui.singleEpisodeAiPreview.scriptText = String(data.text ?? workbench.ui.singleEpisodeAiPreview.scriptText ?? "");
-            workbench.ui.singleEpisodeAiPreview.scriptRawText = String(data.rawText ?? workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "");
-            syncSingleEpisodeAiScriptTable(workbench);
-            workbench.ui.singleEpisodeAiPreview.activeStage = "script";
-          } else if (isManualScriptAnalysis && eventName.startsWith("asset_")) {
-            // Manual script analysis intentionally ends after the script response.
-          } else if (eventName === "prompt_prompt") {
-            workbench.ui.singleEpisodeAiPreview.promptPromptText = String(data.text ?? "");
-          } else if (eventName === "prompt_start") {
-            workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
-          } else if (eventName === "prompt_delta") {
-            workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
-              workbench.ui.singleEpisodeAiPreview.promptText,
-              data.text,
-              SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-            );
-            workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
-          } else if (eventName === "asset_prompt") {
-            upsertSingleEpisodeAiAssetStep(workbench, data, { promptText: String(data.text ?? "") });
-            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
-          } else if (eventName === "asset_start") {
-            upsertSingleEpisodeAiAssetStep(workbench, data, { status: "loading" });
-            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
-          } else if (eventName === "asset_delta") {
-            appendSingleEpisodeAiAssetStepText(workbench, data);
-            if (String(data.stage ?? "") === "shot") {
-              workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
-                workbench.ui.singleEpisodeAiPreview.promptText,
-                data.text,
-                SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-              );
+        for await (const event of previewStream(projectId, previewInput, {
+          signal: abortController.signal,
+        })) {
+          if (abortController.signal.aborted) {
+            if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
+              workbench.singleEpisodeAiPreviewAbortController = null;
             }
-            workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
-          } else if (eventName === "asset_done") {
-            const rawResponseText = String(data.text ?? "");
-            upsertSingleEpisodeAiAssetStep(workbench, data, {
-              status: "done",
-              responseText: appendBoundedText("", rawResponseText, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
-              rawResponseText,
-            });
-            syncSingleEpisodeAiAssetTable(workbench, data.stage);
-          } else if (eventName === "complete") {
-            preview = data;
-          } else if (eventName === "error") {
-            throw new Error(data.error ?? "ai_storyboard_stream_failed");
+            return;
           }
-          renderSingleEpisodeAiPreviewProgress(workbench);
+          try {
+            const completedPreview = applySingleEpisodeAiPreviewStreamEvent(workbench, event, {
+              isManualScriptAnalysis,
+            });
+            if (completedPreview && typeof completedPreview === "object") {
+              preview = completedPreview;
+            }
+            renderSingleEpisodeAiPreviewProgress(workbench);
+          } catch (error) {
+            const eventName = resolveSingleEpisodeAiPreviewStreamEventName(event);
+            if (eventName === "error") {
+              throw error;
+            }
+            console.error("[creator-app] ai preview stream event processing failed", {
+              eventName,
+              error,
+              event,
+            });
+          }
         }
       } else if (!isManualScriptAnalysis) {
-        preview = await workbench.api.createAiStoryboardPreview(projectId, previewInput);
+        preview = await workbench.api.createAiStoryboardPreview(projectId, previewInput, {
+          signal: abortController.signal,
+        });
       } else {
         throw new Error("ai_script_analysis_stream_api_missing");
       }
+      if (abortController.signal.aborted) {
+        if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
+          workbench.singleEpisodeAiPreviewAbortController = null;
+        }
+        return;
+      }
+      if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
+        workbench.singleEpisodeAiPreviewAbortController = null;
+      }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      const finalizedPreview = finalizeSingleEpisodeAiPreviewData(
+        preview,
+        workbench.ui.singleEpisodeAiPreview,
+      );
       workbench.ui.singleEpisodeAiPreview = {
         status: "ready",
         source: workbench.ui.singleEpisodeAiPreview.source,
         sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
         packages: workbench.ui.singleEpisodeAiPreview.packages,
         projectId: workbench.ui.singleEpisodeAiPreview.projectId,
-        data: preview,
+        data: finalizedPreview,
         error: "",
-        scriptText: workbench.ui.singleEpisodeAiPreview.scriptText || preview?.scriptText || "",
-        scriptRawText: workbench.ui.singleEpisodeAiPreview.scriptRawText || workbench.ui.singleEpisodeAiPreview.scriptText || preview?.scriptText || "",
+        scriptText: finalizedPreview?.scriptText || workbench.ui.singleEpisodeAiPreview.scriptText || "",
+        scriptRawText: finalizedPreview?.scriptText || workbench.ui.singleEpisodeAiPreview.scriptRawText || workbench.ui.singleEpisodeAiPreview.scriptText || "",
         promptText: workbench.ui.singleEpisodeAiPreview.promptText ?? "",
         scriptPromptText: workbench.ui.singleEpisodeAiPreview.scriptPromptText ?? "",
         promptPromptText: workbench.ui.singleEpisodeAiPreview.promptPromptText ?? "",
         assetPromptSteps: workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [],
-        liveDisplayTables: workbench.ui.singleEpisodeAiPreview.data?.displayTables ?? null,
+        liveStoryboardStreamState: null,
+        livePreviewTables: finalizedPreview?.previewTables ?? finalizedPreview?.displayTables ?? null,
+        liveDisplayTables: finalizedPreview?.previewTables ?? finalizedPreview?.displayTables ?? null,
         activeStage: "complete",
       };
+      syncSingleEpisodeAiAssetTable(workbench, "scene");
+      syncSingleEpisodeAiAssetTable(workbench, "character");
+      syncSingleEpisodeAiAssetTable(workbench, "prop");
+      syncSingleEpisodeAiAssetTable(workbench, "shot");
+      let finalizedStoryboardRows = chooseSingleEpisodeAiPreviewRows(
+        workbench.ui.singleEpisodeAiPreview.data?.displayTables?.storyboards?.rows,
+        resolveSingleEpisodeAiPreviewStageRows(workbench.ui.singleEpisodeAiPreview, "shot", "storyboards"),
+      );
+      if (!finalizedStoryboardRows.length) {
+        const shotStep = (workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [])
+          .find((item) => item?.stage === "shot");
+        const shotRawText = String(shotStep?.rawResponseText ?? shotStep?.responseText ?? "");
+        if (shotRawText) {
+          const extracted = extractIncrementalStoryboardRecords(shotRawText, 0);
+          finalizedStoryboardRows = extracted.records.length
+            ? extracted.records.map((record) => normalizeSingleEpisodeAiTableRecord(record, "storyboards"))
+            : (extracted.incompleteRecordText ? [normalizeSingleEpisodeAiPartialStoryboardRow(extracted.incompleteRecordText)] : []);
+        }
+      }
+      if (finalizedStoryboardRows.length) {
+        const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+        tables.storyboards = {
+          ...(tables.storyboards ?? {}),
+          rows: finalizedStoryboardRows,
+        };
+      }
+      workbench.ui.singleEpisodeAiPreview.data.previewTables =
+        workbench.ui.singleEpisodeAiPreview.data?.previewTables ??
+        workbench.ui.singleEpisodeAiPreview.data?.displayTables ??
+        null;
+      workbench.ui.singleEpisodeAiPreview.liveDisplayTables =
+        workbench.ui.singleEpisodeAiPreview.data?.previewTables ??
+        workbench.ui.singleEpisodeAiPreview.data?.displayTables ??
+        finalizedPreview?.previewTables ??
+        finalizedPreview?.displayTables ??
+        null;
+      workbench.ui.singleEpisodeAiPreview.livePreviewTables =
+        workbench.ui.singleEpisodeAiPreview.liveDisplayTables;
     } catch (error) {
+      if (isAbortError(error)) {
+        if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
+          workbench.singleEpisodeAiPreviewAbortController = null;
+        }
+        clearSingleEpisodeAiPreviewRenderTimer(workbench);
+        if (workbench.ui.singleEpisodeAiPreview?.status === "loading") {
+          workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+          render(workbench);
+        }
+        return;
+      }
+      if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
+        workbench.singleEpisodeAiPreviewAbortController = null;
+      }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
       workbench.ui.singleEpisodeAiPreview = {
         status: "error",
@@ -8626,6 +9251,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         scriptPromptText: workbench.ui.singleEpisodeAiPreview.scriptPromptText ?? "",
         promptPromptText: workbench.ui.singleEpisodeAiPreview.promptPromptText ?? "",
         assetPromptSteps: workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [],
+        liveStoryboardStreamState: workbench.ui.singleEpisodeAiPreview.liveStoryboardStreamState ?? null,
         activeStage: "error",
       };
       showWorkbenchToast(workbench, `AI 分镜失败：${friendlyError(error)}`, { tone: "error" });
@@ -8739,7 +9365,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.projectPanelMode = "workspace";
         workbench.ui.projectInteriorSection = "episodes";
         workbench.ui.selectedStoryboardId = null;
-        window.location.hash = "project-workspace";
+        syncProjectWorkspaceHash(workbench);
       }
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
@@ -8765,6 +9391,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-project-asset-tab") {
     clearAssetLibraryReturnState(workbench);
+    closeAssetImportOverlays(workbench);
     workbench.ui.projectAssetTab = target.dataset.assetTab ?? "character";
     await ensureEpisodeWorkbenchAssetsHydrated(workbench);
     syncSelectedEpisodeAssetForCurrentTab(workbench);
@@ -8782,7 +9409,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-project-other-asset-media") {
     clearAssetLibraryReturnState(workbench);
-    workbench.ui.projectOtherAssetMediaType = target.dataset.mediaType ?? "video";
+    workbench.ui.projectOtherAssetMediaType = normalizeProjectOtherAssetMediaType(
+      target.dataset.mediaType,
+      "audio",
+    );
     workbench.ui.assetCardMenuId = null;
     render(workbench);
     return;
@@ -8824,7 +9454,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "edit-imported-asset") {
     const assetId = target.dataset.assetId ?? "";
     const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
-    const mediaType = target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType ?? "video";
+    const mediaType = normalizeProjectOtherAssetMediaType(
+      target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType,
+      "audio",
+    );
     const asset = findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId);
     workbench.ui.assetGeneratorModal = assetKind;
     workbench.ui.assetGeneratorMode = "edit";
@@ -8833,6 +9466,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       : null;
     workbench.ui.assetGeneratorName = asset?.name ?? "";
     workbench.ui.assetGeneratorPrompt = asset?.description ?? "";
+    workbench.ui.assetGeneratorPreviewUrl = resolvePreferredFixedImageUrl(
+      asset?.fixedImageUrl,
+      asset?.previewUrl,
+      asset?.preview,
+      asset?.latestVersion?.metadata?.fixedImageUrl,
+      asset?.latestVersion?.previewUrl,
+      asset?.latestVersion?.metadata?.previewUrl,
+    );
+    workbench.ui.assetGeneratorPreviewFile = asset?.latestVersion
+      ? {
+          storageObjectId: asset.latestVersion.storageObjectId ?? null,
+          storageObjectKey: asset.latestVersion.storageObjectKey ?? null,
+          mimeType: asset.latestVersion.metadata?.mimeType ?? null,
+        }
+      : null;
     workbench.ui.assetCardMenuId = null;
     render(workbench);
     return;
@@ -8841,7 +9489,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "rename-imported-asset") {
     const assetId = target.dataset.assetId ?? "";
     const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
-    const mediaType = target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType ?? "video";
+    const mediaType = normalizeProjectOtherAssetMediaType(
+      target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType,
+      "audio",
+    );
     const asset = findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId);
     workbench.ui.renameImportedAsset = { assetId, assetKind, mediaType, name: asset?.name ?? "" };
     workbench.ui.renameImportedAssetName = asset?.name ?? "";
@@ -8918,7 +9569,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "download-imported-asset") {
     const assetId = target.dataset.assetId ?? "";
     const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
-    const mediaType = target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType ?? "video";
+    const mediaType = normalizeProjectOtherAssetMediaType(
+      target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType,
+      "audio",
+    );
     const asset = findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId);
     if (!asset?.preview) {
       workbench.ui.toast = "当前资源暂无可下载文件。";
@@ -8926,7 +9580,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    triggerAssetDownload(asset.preview, asset.name, mediaType === "video" ? "mp4" : "png");
+    triggerAssetDownload(
+      asset.preview,
+      asset.name,
+      mediaType === "video" ? "mp4" : mediaType === "audio" ? "mp3" : "png",
+    );
     workbench.ui.assetCardMenuId = null;
     workbench.ui.toast = `已开始下载 ${asset.name}。`;
     render(workbench);
@@ -8936,11 +9594,48 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "delete-imported-asset") {
     const assetId = target.dataset.assetId ?? "";
     const assetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
-    const mediaType = target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType ?? "video";
+    const mediaType = normalizeProjectOtherAssetMediaType(
+      target.dataset.mediaType ?? workbench.ui.projectOtherAssetMediaType,
+      "audio",
+    );
     const asset = findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId);
     workbench.ui.deleteImportedAsset = { assetId, assetKind, mediaType, name: asset?.name ?? "" };
     workbench.ui.assetCardMenuId = null;
     render(workbench);
+    return;
+  }
+
+  if (action === "preview-project-audio-asset") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const datasetAudioUrl = String(target.dataset.audioUrl ?? "").trim();
+    if (!assetId && !datasetAudioUrl) {
+      return;
+    }
+    const item = (workbench.ui.importedAssets?.other?.audio ?? []).find((asset) => asset?.id === assetId) ?? null;
+    const audioUrl = datasetAudioUrl || resolveImportedProjectAudioUrl(item);
+    if (!audioUrl || typeof Audio === "undefined") {
+      workbench.ui.toast = "当前音频暂不可播放。";
+      render(workbench);
+      return;
+    }
+    if (workbench.projectAssetPreviewAudio) {
+      try {
+        workbench.projectAssetPreviewAudio.pause();
+        workbench.projectAssetPreviewAudio.currentTime = 0;
+      } catch {}
+      workbench.projectAssetPreviewAudio = null;
+    }
+    const audio = new Audio(audioUrl);
+    audio.volume = 0.7;
+    audio.onended = () => {
+      workbench.projectAssetPreviewAudio = null;
+    };
+    workbench.projectAssetPreviewAudio = audio;
+    void audio.play().catch(() => {
+      workbench.projectAssetPreviewAudio = null;
+      workbench.ui.toast = "音频播放失败。";
+      render(workbench);
+    });
     return;
   }
 
@@ -8997,7 +9692,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-asset-import-modal") {
-    const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const requestedAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const nextAssetKind = isRealEpisodeWorkbench(workbench)
+      ? normalizeEpisodeWorkbenchAssetKind(requestedAssetKind)
+      : requestedAssetKind;
+    const otherMediaType = normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio");
     if (isRealEpisodeWorkbench(workbench) && nextAssetKind !== "other") {
       await ensureEpisodeWorkbenchAssetsHydrated(workbench);
     }
@@ -9011,6 +9710,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportPage = 1;
     workbench.ui.assetImportPageSize = 10;
     workbench.ui.assetImportPageSizeMenuOpen = false;
+    workbench.ui.audioAssetImportDraft =
+      nextAssetKind === "other" && otherMediaType === "audio"
+        ? {
+            name: "",
+            audioUpload: null,
+            audioFileName: "",
+            audioPreviewUrl: "",
+            audioUploading: false,
+            exampleImageUpload: null,
+            exampleImagePreview: "",
+            exampleImageSourceUrl: "",
+            exampleImageUploading: false,
+          }
+        : null;
     workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, nextAssetKind, {
       source: "project",
     });
@@ -9019,22 +9732,28 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-official-asset-library") {
-    const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const nextAssetKind = normalizeEpisodeWorkbenchAssetKind(
+      target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character",
+    );
     workbench.ui.episodeAssetLibraryModal = "official";
     workbench.ui.episodeAssetLibraryCategory = nextAssetKind;
     workbench.ui.episodeAssetLibraryFolder = "";
     workbench.ui.episodeAssetLibraryQuery = "";
+    workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportModal = null;
     render(workbench);
     return;
   }
 
   if (action === "open-episode-team-asset-library") {
-    const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const nextAssetKind = normalizeEpisodeWorkbenchAssetKind(
+      target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character",
+    );
     workbench.ui.episodeAssetLibraryModal = "team";
     workbench.ui.episodeAssetLibraryCategory = nextAssetKind;
     workbench.ui.episodeAssetLibraryFolder = "";
     workbench.ui.episodeAssetLibraryQuery = "";
+    workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportModal = null;
     render(workbench);
     return;
@@ -9049,6 +9768,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "switch-episode-asset-library-scope") {
     workbench.ui.episodeAssetLibraryModal = target.dataset.libraryScope === "team" ? "team" : "official";
     workbench.ui.episodeAssetLibraryQuery = "";
+    workbench.ui.assetImportSelection = [];
     render(workbench);
     return;
   }
@@ -9060,6 +9780,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       : workbench.ui.episodeAssetLibraryCategory ?? "character";
     workbench.ui.episodeAssetLibraryFolder = "";
     workbench.ui.episodeAssetLibraryQuery = "";
+    workbench.ui.assetImportSelection = [];
     render(workbench);
     return;
   }
@@ -9067,19 +9788,129 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-episode-asset-library-folder") {
     workbench.ui.episodeAssetLibraryFolder = target.dataset.libraryFolder ?? "";
     workbench.ui.episodeAssetLibraryQuery = "";
+    workbench.ui.assetImportSelection = [];
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-episode-asset-library-asset") {
+    const assetId = target.dataset.assetId ?? "";
+    workbench.ui.assetImportSelection = toggleSelection(
+      workbench.ui.assetImportSelection ?? [],
+      assetId,
+    );
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-episode-asset-library-import") {
+    const assetKind = ["character", "scene", "prop"].includes(workbench.ui.episodeAssetLibraryCategory)
+      ? workbench.ui.episodeAssetLibraryCategory
+      : workbench.ui.projectAssetTab ?? "character";
+    const selectedIds = new Set(workbench.ui.assetImportSelection ?? []);
+    const folder = workbench.ui.episodeAssetLibraryFolder || "国内仿真人-现代都市";
+    const librarySource = workbench.ui.episodeAssetLibraryModal === "team" ? "team" : "official";
+    const importRecords = getLibraryAssetsForImport({
+      assetKind,
+      folder,
+      searchQuery: workbench.ui.episodeAssetLibraryQuery ?? "",
+    }).map((asset) => ({
+      id: asset.id,
+      name: asset.name ?? "未命名资产",
+      preview: asset.previewUrl ?? asset.preview ?? "",
+      previewDataUrl: asset.previewUrl ?? asset.preview ?? "",
+      sourceUrl: asset.previewUrl ?? asset.preview ?? "",
+      sourceAssetId: asset.id,
+      source: librarySource,
+    })).filter((asset) => selectedIds.has(asset.id));
+
+    if (!importRecords.length) {
+      workbench.ui.toast = "请先选择至少一张图片。";
+      render(workbench);
+      return;
+    }
+
+    workbench.ui.projectAssetTab = assetKind;
+    workbench.ui.assetImportModal = null;
+    workbench.ui.assetImportModalTab = "official";
+    workbench.ui.assetImportModalSource = workbench.ui.episodeAssetLibraryModal ?? "team";
+    workbench.ui.assetImportOfficialAssets = importRecords;
+    workbench.ui.episodeAssetLibraryModal = null;
+    await handleAction(workbench, { dataset: { action: "confirm-asset-import" } });
     render(workbench);
     return;
   }
 
   if (action === "close-asset-import-modal") {
+    revokeAudioAssetImportPreviewUrl(workbench.ui.audioAssetImportDraft);
     workbench.ui.assetImportModal = null;
     workbench.ui.assetImportModalSource = null;
+    workbench.ui.audioAssetImportDraft = null;
     workbench.ui.referenceAssetPickerKind = null;
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportPage = 1;
     workbench.ui.assetImportPageSize = 10;
     workbench.ui.assetImportPageSizeMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "trigger-audio-import-audio-file" || action === "trigger-audio-import-example-image") {
+    triggerAudioAssetImportFilePicker(target);
+    return;
+  }
+
+  if (action === "confirm-audio-asset-import") {
+    const draft = workbench.ui.audioAssetImportDraft ?? {};
+    const name = String(draft.name ?? "").trim();
+    const audioUpload = draft.audioUpload ?? null;
+    if (!name || !audioUpload) {
+      workbench.ui.toast = "请先填写配音员名称并上传主播音频。";
+      render(workbench);
+      return;
+    }
+    let importedAssetId = null;
+    await runAction(workbench, "正在导入音频...", async () => {
+      const imported = await workbench.api.importAsset({
+        projectId: resolveActiveProjectId(workbench),
+        kind: "video",
+        name,
+        description: "",
+        uploadSessionId: audioUpload.uploadSessionId ?? null,
+        storageObjectId: audioUpload.storageObjectId ?? null,
+        storageObjectKey: audioUpload.storageObjectKey ?? null,
+        sourceUrl: audioUpload.publicUrl ?? audioUpload.previewUrl ?? null,
+        mimeType: audioUpload.mimeType ?? "audio/mpeg",
+        width: 0,
+        height: 0,
+      });
+      importedAssetId = imported?.asset?.id ?? null;
+      if (importedAssetId && typeof workbench.api.updateProjectAsset === "function" && draft.exampleImageUpload) {
+        await workbench.api.updateProjectAsset(importedAssetId, {
+          previewUrl: draft.exampleImageUpload.previewUrl ?? draft.exampleImageUpload.publicUrl ?? null,
+        });
+      }
+      if (!isRealEpisodeWorkbench(workbench) && workbench.ui.selectedProjectCardId) {
+        applyProjectDetail(
+          workbench,
+          await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
+        );
+      }
+      workbench.ui.assetImportModal = null;
+      workbench.ui.assetImportModalSource = null;
+      workbench.ui.audioAssetImportDraft = null;
+      workbench.ui.assetImportDrafts = [];
+      workbench.ui.assetImportSelection = [];
+    });
+    if (!isRealEpisodeWorkbench(workbench)) {
+      prepareAssetLibraryReturn(workbench, {
+        assetKind: "other",
+        mediaType: "audio",
+        assetIds: importedAssetId ? [importedAssetId] : [],
+        count: importedAssetId ? 1 : 0,
+      });
+    }
     render(workbench);
     return;
   }
@@ -9170,7 +10001,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "confirm-asset-import") {
     const assetKind = workbench.ui.assetImportModal ?? workbench.ui.projectAssetTab ?? "character";
     const selectedIds = new Set(workbench.ui.assetImportSelection ?? []);
-    const importKind = assetKind === "other" ? workbench.ui.projectOtherAssetMediaType : assetKind;
+    const otherMediaType = normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio");
+    const importKind = assetKind === "other" ? resolveProjectOtherAssetImportKind(otherMediaType) : assetKind;
     const importRecords = [];
     const importedAssetIds = [];
     const seededImportedAssets = [];
@@ -9180,7 +10012,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         .filter((asset) => selectedIds.has(asset.id))
         .map((asset) => ({
           ...asset,
-          source: asset.source ?? "official",
+          source: ["team", "official", "library"].includes(asset.source) ? asset.source : "official",
         })));
     } else {
       importRecords.push(...(workbench.ui.assetImportDrafts ?? [])
@@ -9228,7 +10060,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await runAction(workbench, "正在导入资产...", async () => {
       for (const record of importRecords) {
         const importPayload =
-          record.source === "official"
+          record.source === "official" || record.source === "team"
             ? await buildOfficialAssetImportPayload(workbench, record, assetKind)
             : {
                 name: record.name?.trim() || "未命名资产",
@@ -9293,7 +10125,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       seedImportedEpisodeAssets(workbench, assetKind, seededImportedAssets);
       if (isRealEpisodeWorkbench(workbench) && workbench.ui.selectedEpisodeId) {
+        workbench.ui.episodeWorkbenchContext = null;
+        workbench.ui.episodeWorkbenchContextLoadedEpisodeId = null;
         await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+        seedImportedEpisodeAssets(workbench, assetKind, seededImportedAssets);
+        const selectedImportedAssetId = importedAssetIds[0] ?? seededImportedAssets[0]?.id ?? null;
+        if (selectedImportedAssetId) {
+          workbench.ui.museScopeMode = "assets";
+          workbench.ui.projectAssetTab = assetKind;
+          workbench.ui.selectedEpisodeAssetId = selectedImportedAssetId;
+          workbench.ui.selectedEpisodeCardId = selectedImportedAssetId;
+          workbench.ui.selectedEpisodeAssetIds = selectedImportedAssetId ? [selectedImportedAssetId] : [];
+          workbench.ui.episodeWorkbenchScrollTarget = assetKind;
+          syncSelectedEpisodeAssetForCurrentTab(workbench);
+        }
       }
       if (!isRealEpisodeWorkbench(workbench) && workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
@@ -9306,11 +10151,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.assetImportSelection = [];
     });
     if (isRealEpisodeWorkbench(workbench)) {
-      workbench.ui.toast = `已导入 ${importRecords.length} 项${getAssetLibraryKindLabel(assetKind, assetKind === "other" ? importKind : "image")}到当前剧集。`;
+      syncSelectedEpisodeAssetForCurrentTab(workbench);
+      workbench.ui.toast = `已导入 ${importRecords.length} 项${getAssetLibraryKindLabel(assetKind, assetKind === "other" ? otherMediaType : "image")}到当前剧集。`;
     } else {
       prepareAssetLibraryReturn(workbench, {
         assetKind,
-        mediaType: assetKind === "other" ? importKind : "image",
+        mediaType: assetKind === "other" ? otherMediaType : "image",
         assetIds: importedAssetIds,
         count: importRecords.length,
       });
@@ -9323,16 +10169,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorModal = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
-    workbench.ui.assetGeneratorCharacterType = "human";
-    workbench.ui.assetGeneratorStyleValue = "废土写实 / 官方";
-    workbench.ui.assetGeneratorStyleCategory = "official";
-    workbench.ui.assetGeneratorStyleOption = "none";
-    workbench.ui.assetGeneratorMaterialCategory = "official";
-    workbench.ui.assetGeneratorMaterialOption = "fantasy-doomsday";
-    workbench.ui.assetGeneratorImageType = "main";
-    workbench.ui.assetGeneratorModel = "Seedream 2.0";
-    workbench.ui.assetGeneratorResolution = "2K";
-    workbench.ui.assetGeneratorCount = 1;
+    workbench.ui.assetGeneratorPreviewUrl = "";
+    workbench.ui.assetGeneratorPreviewFile = null;
     render(workbench);
     return;
   }
@@ -9341,6 +10179,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
+    workbench.ui.assetGeneratorPreviewUrl = "";
+    workbench.ui.assetGeneratorPreviewFile = null;
     render(workbench);
     return;
   }
@@ -9355,10 +10195,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (workbench.ui.assetGeneratorMode === "edit" && workbench.ui.assetGeneratorEditingAsset?.id) {
       await runAction(workbench, "正在保存资产...", async () => {
-        await workbench.api.updateProjectAsset(workbench.ui.assetGeneratorEditingAsset.id, {
+        const updatePayload = {
           name: nextName,
           description: workbench.ui.assetGeneratorPrompt.trim(),
-        });
+        };
+        if (workbench.ui.assetGeneratorPreviewUrl) {
+          Object.assign(updatePayload, {
+            previewUrl: workbench.ui.assetGeneratorPreviewUrl,
+            sourceUrl: workbench.ui.assetGeneratorPreviewUrl,
+            downloadUrl: workbench.ui.assetGeneratorPreviewUrl,
+            storageObjectId: workbench.ui.assetGeneratorPreviewFile?.storageObjectId ?? null,
+            storageObjectKey: workbench.ui.assetGeneratorPreviewFile?.storageObjectKey ?? null,
+            mimeType: workbench.ui.assetGeneratorPreviewFile?.mimeType ?? null,
+          });
+        }
+        await workbench.api.updateProjectAsset(workbench.ui.assetGeneratorEditingAsset.id, updatePayload);
         if (workbench.ui.selectedProjectCardId) {
           applyProjectDetail(
             workbench,
@@ -9368,12 +10219,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.assetGeneratorModal = null;
         workbench.ui.assetGeneratorMode = "generate";
         workbench.ui.assetGeneratorEditingAsset = null;
+        workbench.ui.assetGeneratorPreviewUrl = "";
+        workbench.ui.assetGeneratorPreviewFile = null;
       });
       return;
     }
     await runAction(workbench, "正在生成资产...", async () => {
       await workbench.api.generateAsset({
-        kind: assetKind === "other" ? workbench.ui.projectOtherAssetMediaType : assetKind,
+        kind:
+          assetKind === "other"
+            ? resolveProjectOtherAssetImportKind(workbench.ui.projectOtherAssetMediaType)
+            : assetKind,
         name: nextName,
         prompt: workbench.ui.assetGeneratorPrompt.trim(),
         model: workbench.ui.assetGeneratorModel,
@@ -9389,6 +10245,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.assetGeneratorModal = null;
       workbench.ui.assetGeneratorMode = "generate";
       workbench.ui.assetGeneratorEditingAsset = null;
+      workbench.ui.assetGeneratorPreviewUrl = "";
+      workbench.ui.assetGeneratorPreviewFile = null;
     });
     return;
   }
@@ -9412,6 +10270,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectLibraryPage = Math.min(totalPages, Math.max(1, nextPage));
     workbench.ui.selectedProjectIds = [];
     workbench.ui.toast = "";
+    if (typeof workbench.api?.getProjects === "function") {
+      await syncProjectLibraryFromApi(workbench, {
+        page: workbench.ui.projectLibraryPage,
+        includeAssets: false,
+      });
+    }
     render(workbench);
     return;
   }
@@ -10467,19 +11331,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         created?.project ??
         created?.body?.project ??
         null;
+      workbench.ui.projectLibraryPage = 1;
       if (createdProject?.id) {
-        const nextCard = mapProjectRecordToCard(createdProject);
-        const projects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [];
-        const existingIndex = projects.findIndex((candidate) => candidate.id === nextCard.id);
-        workbench.ui.projectLibrary =
-          existingIndex >= 0
-            ? projects.map((candidate, index) => (index === existingIndex ? { ...candidate, ...nextCard } : candidate))
-            : [nextCard, ...projects];
-        workbench.ui.selectedProjectCardId = nextCard.id;
+        await syncProjectLibraryFromApi(workbench, { page: 1, includeAssets: false });
+        workbench.ui.selectedProjectCardId = createdProject.id;
       } else {
         await syncProjectLibraryFromApi(workbench);
       }
-      workbench.ui.projectLibraryPage = 1;
       workbench.ui.activeNavTab = "project";
       workbench.ui.projectPanelMode = "library";
       workbench.ui.isCreateModalOpen = false;
@@ -10590,7 +11448,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       await runAction(workbench, statusForAction(action), async () => {
         await generateAssetImages(workbench);
-      });
+      }, { successToast: "" });
       return;
     }
 
@@ -10959,13 +11817,6 @@ async function saveProjectCanvasNow(workbench) {
     workbench.ui.canvasSaveError = "";
     return canvas;
   } catch (error) {
-    if (isCanvasMembershipRequiredError(error)) {
-      workbench.ui.membershipStatus = { status: "none" };
-      workbench.ui.canvasSaveStatus = "idle";
-      workbench.ui.canvasSaveError = "";
-      render(workbench);
-      return null;
-    }
     if (error?.errorCode === "canvas_revision_conflict" && error?.details?.serverDocument) {
       workbench.ui.canvasDocument = error.details.serverDocument;
       workbench.ui.canvasDocumentsByProject = {
@@ -11477,6 +12328,60 @@ function startCanvasPan(workbench, event) {
 
   ownerDocument.addEventListener(moveEventName, onPointerMove);
   ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function startEpisodeWorkbenchLayoutResize(workbench, event, centerPanel) {
+  if (!centerPanel || event.button !== 0 || workbench.ui.projectPanelMode !== "episode-workbench") {
+    return;
+  }
+  const layout = centerPanel.closest?.(".episode-replica-layout");
+  if (!layout) {
+    return;
+  }
+  const layoutRect = layout.getBoundingClientRect();
+  if (!layoutRect.width || layoutRect.width < 980) {
+    return;
+  }
+  event.preventDefault();
+  const ownerDocument = centerPanel.ownerDocument ?? document;
+  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
+  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
+  const startX = event.clientX;
+  const startWidth = centerPanel.getBoundingClientRect().width;
+  const viewportWidth = ownerDocument.defaultView?.innerWidth ?? window.innerWidth;
+  let dragging = false;
+
+  const activate = () => {
+    if (dragging) {
+      return;
+    }
+    dragging = true;
+    centerPanel.classList.add("is-resize-target");
+    ownerDocument.body?.classList?.add?.("is-episode-layout-resizing");
+  };
+
+  const finish = () => {
+    ownerDocument.removeEventListener(moveEventName, onPointerMove);
+    ownerDocument.removeEventListener(upEventName, finish);
+    centerPanel.classList.remove("is-resize-target");
+    ownerDocument.body?.classList?.remove?.("is-episode-layout-resizing");
+    if (dragging) {
+      persistWorkbenchState(workbench);
+    }
+  };
+
+  const onPointerMove = (moveEvent) => {
+    const nextWidth = startWidth - (moveEvent.clientX - startX);
+    const clampedWidth = clampEpisodeWorkbenchCenterWidthPx(nextWidth, viewportWidth);
+    const nextRatio = clampEpisodeWorkbenchCenterWidthRatio(clampedWidth / layoutRect.width);
+    workbench.ui.episodeWorkbenchCenterWidthPx = clampedWidth;
+    workbench.ui.episodeWorkbenchCenterWidthRatio = nextRatio;
+    syncEpisodeWorkbenchLayoutVars(workbench);
+  };
+
+  activate();
+  ownerDocument.addEventListener(moveEventName, onPointerMove);
+  ownerDocument.addEventListener(upEventName, finish, { once: true });
 }
 
 function zoomCanvasAtPoint(workbench, direction, options = {}) {
@@ -12104,6 +13009,29 @@ function resolveWorkbenchCreditBalance(workbench) {
     }
   }
   return 0;
+}
+
+function resolveKnownWorkbenchCreditBalance(workbench) {
+  const candidates = [
+    workbench?.session?.user?.availableCredits,
+    workbench?.session?.user?.creditBalance,
+    workbench?.session?.user?.credits,
+    workbench?.session?.availableCredits,
+    workbench?.session?.creditBalance,
+    workbench?.ui?.creditBalance,
+    workbench?.ui?.episodeGenerationConfig?.creditBalance,
+    workbench?.ui?.episodeWorkbenchContext?.creditBalance,
+  ];
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === "") {
+      continue;
+    }
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function resolveCurrentSessionCreditBalance(session = {}) {
@@ -13021,6 +13949,9 @@ function applyDraggedEpisodeAssetToGenerationImage(workbench, dataTransfer, { fr
   if (isSingleFrameVideoInputMode(workbench)) {
     return applyDraggedEpisodeAssetToGenerationFrame(workbench, dataTransfer, { frameTarget });
   }
+  if ((workbench.ui?.museScopeMode ?? "storyboard") === "assets") {
+    return applyDraggedEpisodeAssetToAssetPromptDraft(workbench, asset, payload, preview);
+  }
   const selectedStoryboard = getSelectedStoryboard(
     getActiveStoryboards(workbench),
     workbench.ui.selectedStoryboardId,
@@ -13059,6 +13990,43 @@ function applyDraggedEpisodeAssetToGenerationImage(workbench, dataTransfer, { fr
     reference.id,
     ...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter((id) => id !== reference.id),
   ];
+  workbench.ui.toast = "已拖入参考图。";
+  return true;
+}
+
+function applyDraggedEpisodeAssetToAssetPromptDraft(workbench, asset, payload, preview) {
+  const reference = {
+    id: `drag-ref:asset-reference:${asset.id ?? payload.assetId}`,
+    assetId: asset.id ?? payload.assetId,
+    kind: "image",
+    type: "image",
+    name: asset.name ?? "参考图",
+    description: asset.description ?? "",
+    summary: asset.description ?? "已拖入参考图",
+    preview,
+    url: preview,
+    src: preview,
+    fromQuickReference: true,
+  };
+  const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
+  workbench.ui.assetPromptDraft = {
+    ...assetPromptDraft,
+    scopeMode: "assets",
+    selectionContext: {
+      ...(assetPromptDraft.selectionContext ?? {}),
+      ...resolveEpisodeAssetSelectionContext(workbench),
+    },
+    quickReferenceItems: dedupeQuickReferenceItems([
+      ...(assetPromptDraft.quickReferenceItems ?? []),
+      reference,
+    ]),
+    mentionReferences: assetPromptDraft.mentionReferences ?? [],
+  };
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = [
+    reference.id,
+    ...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter((id) => id !== reference.id),
+  ];
+  workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
   workbench.ui.toast = "已拖入参考图。";
   return true;
 }
@@ -13170,6 +14138,10 @@ export function mapEpisodeStoryboardContractForTest(storyboard) {
   return mapEpisodeStoryboardContract(storyboard);
 }
 
+export function syncEpisodeStoryboardMapForTest(currentMap, primaryStoryboards, customEpisodes = []) {
+  return syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes);
+}
+
 async function openSingleEpisodeFlow(workbench) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = true;
@@ -13183,8 +14155,19 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
-  await syncStoryboardPromptPackages(workbench);
+  await Promise.all([
+    syncStoryboardPromptPackages(workbench),
+    syncSingleEpisodeGenerationConfig(workbench),
+  ]);
   render(workbench);
+}
+
+async function syncSingleEpisodeGenerationConfig(workbench) {
+  try {
+    await loadGlobalGenerationConfig(workbench, { fresh: true });
+  } catch (error) {
+    console.warn("[creator-app] single episode generation config preload failed", error);
+  }
 }
 
 async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = {}) {
@@ -13229,7 +14212,10 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
 async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
   const previewState = workbench.ui.singleEpisodeAiPreview ?? {};
   const previewData = previewState.data?.commitPayload ? previewState.data : previewState.data?.data ?? previewState.data;
-  const commitPayload = bindSingleEpisodeAiPreviewStoryboardPrompts(previewData?.commitPayload ?? null, previewData);
+  const commitPayload = bindSingleEpisodeAiPreviewCommitPayload(
+    previewData?.commitPayload ?? null,
+    createSingleEpisodeAiPreviewSnapshot({ previewState, previewData }),
+  );
   const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
   if (!projectId) {
     workbench.ui.singleEpisodeNotice = "请先选择项目后再创建章节。";
@@ -13273,11 +14259,21 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
       result?.body?.episode?.id ??
       result?.body?.episode?.episodeId ??
       null;
+    hydrateEpisodeWorkbenchFromAiStoryboardCommit(workbench, {
+      result,
+      commitPayload,
+      projectId,
+      episodeId: createdEpisodeId,
+      episodeTitle:
+        result?.episode?.title ??
+        result?.body?.episode?.title ??
+        workbench.ui.singleEpisodeName ??
+        "",
+    });
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
       toast: "已创建章节并进入分镜工作台。",
-      shouldRender: false,
       scopeMode: "storyboard",
     });
   }, {
@@ -13290,6 +14286,332 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
       };
     },
   });
+}
+
+function hydrateEpisodeWorkbenchFromAiStoryboardCommit(
+  workbench,
+  { result, commitPayload, projectId, episodeId, episodeTitle = "" } = {},
+) {
+  const normalizedEpisodeId = String(episodeId ?? "").trim();
+  if (!normalizedEpisodeId) {
+    return;
+  }
+  const resultBody = resolveAiStoryboardCommitResultBody(result);
+  const resolvedProjectId =
+    resultBody?.episode?.projectId ??
+    result?.episode?.projectId ??
+    projectId ??
+    workbench.ui.selectedProjectCardId ??
+    workbench.state?.project?.id ??
+    null;
+  const episodeCreatedAt =
+    resultBody?.episode?.createdAt ??
+    result?.episode?.createdAt ??
+    new Date().toISOString();
+  const mappedStoryboards = mapAiStoryboardCommitStoryboards(
+    resultBody?.storyboards ?? result?.storyboards ?? [],
+    commitPayload?.storyboards ?? [],
+    normalizedEpisodeId,
+  );
+  if (mappedStoryboards.length) {
+    workbench.ui.episodeStoryboardMap = {
+      ...(workbench.ui.episodeStoryboardMap ?? {}),
+      [normalizedEpisodeId]: syncStoryboards(
+        getEpisodeStoryboards(workbench, normalizedEpisodeId),
+        mappedStoryboards,
+      ),
+    };
+  }
+  const localContext = {
+    data: {
+      project: resolvedProjectId ? { projectId: resolvedProjectId, id: resolvedProjectId } : {},
+      episode: {
+        id: normalizedEpisodeId,
+        episodeId: normalizedEpisodeId,
+        projectId: resolvedProjectId,
+        title: episodeTitle,
+        createdAt: episodeCreatedAt,
+      },
+      assetsByType: mapAiStoryboardCommitAssets(
+        resultBody?.assets ?? result?.assets ?? null,
+        commitPayload,
+        normalizedEpisodeId,
+      ),
+    },
+  };
+  workbench.ui.episodeWorkbenchContext = localContext;
+  workbench.ui.episodeWorkbenchContextLoadedEpisodeId = normalizedEpisodeId;
+  if (resolvedProjectId) {
+    workbench.ui.selectedProjectCardId = resolvedProjectId;
+  }
+  applyEpisodeWorkbenchAssetsFromContext(workbench, localContext);
+}
+
+function resolveAiStoryboardCommitResultBody(result) {
+  if (result?.body && typeof result.body === "object") {
+    return result.body;
+  }
+  return result && typeof result === "object" ? result : {};
+}
+
+function mapAiStoryboardCommitStoryboards(createdStoryboards, fallbackStoryboards, episodeId) {
+  const backendItems = Array.isArray(createdStoryboards) ? createdStoryboards : [];
+  const fallbackItems = Array.isArray(fallbackStoryboards) ? fallbackStoryboards : [];
+  const sourceItems = backendItems.length > 0 ? backendItems : fallbackItems;
+  return sourceItems.map((item, index) => {
+    const backendItem = backendItems[index] && typeof backendItems[index] === "object" ? backendItems[index] : {};
+    const fallbackItem = fallbackItems[index] && typeof fallbackItems[index] === "object" ? fallbackItems[index] : {};
+    const imagePrompt = resolveAiStoryboardCommitPrompt(fallbackItem, "image");
+    const videoPrompt = resolveAiStoryboardCommitPrompt(fallbackItem, "video");
+    const generationDrafts = [];
+    if (imagePrompt) {
+      generationDrafts.push({
+        mode: "image",
+        prompt: imagePrompt,
+        payload: { source: "ai_storyboard_commit" },
+        updatedAt: null,
+      });
+    }
+    if (videoPrompt) {
+      generationDrafts.push({
+        mode: "video",
+        prompt: videoPrompt,
+        payload: { source: "ai_storyboard_commit" },
+        updatedAt: null,
+      });
+    }
+    return mapEpisodeStoryboardContract({
+      ...backendItem,
+      episodeId: backendItem?.episodeId ?? episodeId ?? null,
+      storyboardId:
+        backendItem?.storyboardId ??
+        backendItem?.shotId ??
+        backendItem?.id ??
+        fallbackItem?.storyboardId ??
+        fallbackItem?.shotId ??
+        fallbackItem?.id,
+      shotId:
+        backendItem?.shotId ??
+        backendItem?.id ??
+        fallbackItem?.shotId ??
+        fallbackItem?.storyboardId ??
+        fallbackItem?.id,
+      linkedShotId:
+        backendItem?.id ??
+        backendItem?.shotId ??
+        backendItem?.storyboardId ??
+        fallbackItem?.linkedShotId ??
+        fallbackItem?.shotId ??
+        fallbackItem?.id,
+      indexNo:
+        backendItem?.indexNo ??
+        backendItem?.sortOrder ??
+        backendItem?.index ??
+        fallbackItem?.shotNo ??
+        index + 1,
+      description:
+        String(
+          fallbackItem?.description ??
+          fallbackItem?.plot ??
+          backendItem?.description ??
+          backendItem?.sceneAnalysis ??
+          "",
+        ).trim(),
+      sceneAnalysis:
+        String(fallbackItem?.plot ?? fallbackItem?.description ?? backendItem?.sceneAnalysis ?? "").trim(),
+      plotPreview:
+        String(fallbackItem?.dialogue ?? fallbackItem?.voiceover ?? fallbackItem?.narration ?? "").trim(),
+      chapterImagePrompt: imagePrompt,
+      imagePrompt,
+      chapterVideoPrompt: videoPrompt,
+      videoPrompt,
+      generationDrafts,
+    });
+  });
+}
+
+function resolveAiStoryboardCommitPrompt(storyboard, kind) {
+  const candidates = kind === "image"
+    ? [
+        storyboard?.chapterImagePrompt,
+        storyboard?.chapter_image_prompt,
+        storyboard?.imagePrompt,
+        storyboard?.image_prompt,
+        storyboard?.staticImagePrompt,
+        storyboard?.static_image_prompt,
+      ]
+    : [
+        storyboard?.chapterVideoPrompt,
+        storyboard?.chapter_video_prompt,
+        storyboard?.videoPrompt,
+        storyboard?.video_prompt,
+        storyboard?.motionPrompt,
+        storyboard?.motion_prompt,
+      ];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function mapAiStoryboardCommitAssets(createdAssets, commitPayload, episodeId) {
+  const assets = createdAssets && typeof createdAssets === "object" ? createdAssets : {};
+  return {
+    character: mapAiStoryboardCommitAssetRecords(
+      assets.characters ?? assets.character ?? [],
+      commitPayload?.characters ?? [],
+      "character",
+      episodeId,
+    ),
+    scene: mapAiStoryboardCommitAssetRecords(
+      assets.scenes ?? assets.scene ?? [],
+      commitPayload?.scenes ?? [],
+      "scene",
+      episodeId,
+    ),
+    prop: mapAiStoryboardCommitAssetRecords(
+      assets.props ?? assets.prop ?? [],
+      commitPayload?.props ?? [],
+      "prop",
+      episodeId,
+    ),
+  };
+}
+
+function mapAiStoryboardCommitAssetRecords(createdAssets, fallbackRecords, kind, episodeId) {
+  const createdItems = Array.isArray(createdAssets) ? createdAssets : [];
+  const fallbackItems = Array.isArray(fallbackRecords) ? fallbackRecords : [];
+  if (createdItems.length > 0) {
+    return createdItems.map((item, index) =>
+      normalizeAiStoryboardCommitAssetRecord(item, fallbackItems[index], kind, episodeId, index),
+    );
+  }
+  return fallbackItems.map((item, index) =>
+    normalizeAiStoryboardCommitAssetRecord(null, item, kind, episodeId, index),
+  );
+}
+
+function normalizeAiStoryboardCommitAssetRecord(createdAsset, fallbackRecord, kind, episodeId, index) {
+  const snapshot = createdAsset && typeof createdAsset === "object" ? createdAsset : {};
+  const asset = snapshot?.asset && typeof snapshot.asset === "object" ? snapshot.asset : snapshot;
+  const latestVersion =
+    snapshot?.version && typeof snapshot.version === "object"
+      ? snapshot.version
+      : snapshot?.latestVersion && typeof snapshot.latestVersion === "object"
+        ? snapshot.latestVersion
+        : null;
+  const metadata = latestVersion?.metadata && typeof latestVersion.metadata === "object"
+    ? latestVersion.metadata
+    : asset?.metadata && typeof asset.metadata === "object"
+      ? asset.metadata
+      : {};
+  const name =
+    String(
+      metadata?.label ??
+      snapshot?.name ??
+      snapshot?.label ??
+      asset?.name ??
+      asset?.label ??
+      resolveAiStoryboardCommitAssetField(fallbackRecord, kind, "name") ??
+      `${kind}-${index + 1}`,
+    ).trim() || `${kind}-${index + 1}`;
+  const description = String(
+    metadata?.description ??
+    snapshot?.description ??
+    asset?.description ??
+    resolveAiStoryboardCommitAssetField(fallbackRecord, kind, "description") ??
+    "",
+  ).trim();
+  const prompt = String(
+    metadata?.prompt ??
+    snapshot?.prompt ??
+    resolveAiStoryboardCommitAssetField(fallbackRecord, kind, "prompt") ??
+    "",
+  ).trim();
+  const previewUrl = resolvePreferredFixedImageUrl(
+    snapshot?.fixedImageUrl,
+    snapshot?.previewUrl,
+    asset?.fixedImageUrl,
+    asset?.previewUrl,
+    latestVersion?.previewUrl,
+    metadata?.fixedImageUrl,
+    metadata?.previewUrl,
+    metadata?.sourceUrl,
+  );
+  const assetId =
+    asset?.id ??
+    snapshot?.assetId ??
+    snapshot?.id ??
+    `episode-${kind}-${episodeId}-${index + 1}`;
+  return {
+    assetId,
+    id: assetId,
+    episodeId,
+    name,
+    label: name,
+    description,
+    promptPreview: prompt,
+    previewUrl,
+    fixedImageUrl: previewUrl,
+    sourceUrl: String(metadata?.sourceUrl ?? previewUrl ?? "").trim(),
+    updatedAt: asset?.updatedAt ?? latestVersion?.createdAt ?? snapshot?.updatedAt ?? null,
+    latestVersion: latestVersion
+      ? {
+          ...latestVersion,
+          previewUrl: latestVersion.previewUrl ?? previewUrl,
+          metadata: {
+            ...metadata,
+            label: metadata?.label ?? name,
+            description,
+            prompt,
+            previewUrl: metadata?.previewUrl ?? previewUrl,
+            fixedImageUrl: metadata?.fixedImageUrl ?? previewUrl,
+          },
+        }
+      : {
+          id: null,
+          previewUrl,
+          metadata: {
+            label: name,
+            description,
+            prompt,
+            previewUrl,
+            fixedImageUrl: previewUrl,
+          },
+        },
+  };
+}
+
+function resolveAiStoryboardCommitAssetField(record, kind, field) {
+  const source = record && typeof record === "object" ? record : {};
+  const fieldMap = kind === "character"
+    ? {
+        name: ["characterName", "name", "label"],
+        description: ["characterDescription", "description"],
+        prompt: ["characterImagePrompt", "imagePrompt", "prompt"],
+      }
+    : kind === "scene"
+      ? {
+          name: ["sceneName", "name", "label"],
+          description: ["sceneDescription", "description"],
+          prompt: ["sceneImagePrompt", "imagePrompt", "prompt"],
+        }
+      : {
+          name: ["propName", "name", "label"],
+          description: ["propDescription", "description"],
+          prompt: ["propImagePrompt", "imagePrompt", "prompt"],
+        };
+  const keys = fieldMap[field] ?? [];
+  for (const key of keys) {
+    const text = String(source?.[key] ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 async function saveManualScriptAnalysisToReader(workbench) {
@@ -13433,18 +14755,139 @@ function splitManualScriptTextIntoEpisodeSections(scriptText, episodes = []) {
   });
 }
 
+function bindSingleEpisodeAiPreviewCommitPayload(commitPayload, previewData) {
+  return bindSingleEpisodeAiPreviewStoryboardPrompts(
+    bindSingleEpisodeAiPreviewAssetPrompts(
+      bindSingleEpisodeAiPreviewAssetRows(commitPayload, previewData),
+      previewData,
+    ),
+    previewData,
+  );
+}
+
+function bindSingleEpisodeAiPreviewAssetRows(commitPayload, previewData) {
+  if (!commitPayload || typeof commitPayload !== "object") {
+    return commitPayload;
+  }
+  const assetConfigs = [
+    { tableKey: "scenes", commitKey: "scenes" },
+    { tableKey: "characters", commitKey: "characters" },
+    { tableKey: "props", commitKey: "props" },
+  ];
+  return assetConfigs.reduce((nextPayload, config) => {
+    const commitRows = Array.isArray(nextPayload?.[config.commitKey]) ? nextPayload[config.commitKey] : [];
+    const previewRows = resolveSingleEpisodeAiPreviewAssetRows(previewData, config.tableKey);
+    const sourceRows = previewRows.length > 0 ? previewRows : commitRows;
+    if (!sourceRows.length) {
+      return nextPayload;
+    }
+    return {
+      ...nextPayload,
+      [config.commitKey]: sourceRows
+        .map((sourceRow, index) => {
+          const commitRow = commitRows[index];
+          if (
+            sourceRow &&
+            typeof sourceRow === "object" &&
+            !Array.isArray(sourceRow) &&
+            commitRow &&
+            typeof commitRow === "object" &&
+            !Array.isArray(commitRow)
+          ) {
+            return {
+              ...commitRow,
+              ...sourceRow,
+            };
+          }
+          return sourceRow ?? commitRow;
+        })
+        .filter((row) => row !== undefined && row !== null),
+    };
+  }, commitPayload);
+}
+
+function bindSingleEpisodeAiPreviewAssetPrompts(commitPayload, previewData) {
+  if (!commitPayload || typeof commitPayload !== "object") {
+    return commitPayload;
+  }
+  const assetConfigs = [
+    {
+      tableKey: "scenes",
+      commitKey: "scenes",
+      descriptionField: "sceneDescription",
+      promptField: "sceneImagePrompt",
+      descriptionKeys: ["sceneDescription", "scene_description", "description"],
+      promptKeys: ["sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"],
+    },
+    {
+      tableKey: "characters",
+      commitKey: "characters",
+      descriptionField: "characterDescription",
+      promptField: "characterImagePrompt",
+      descriptionKeys: ["characterDescription", "character_description", "description"],
+      promptKeys: ["characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"],
+    },
+    {
+      tableKey: "props",
+      commitKey: "props",
+      descriptionField: "propDescription",
+      promptField: "propImagePrompt",
+      descriptionKeys: ["propDescription", "prop_description", "description"],
+      promptKeys: ["propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"],
+    },
+  ];
+  return assetConfigs.reduce((nextPayload, config) => {
+    const commitRows = Array.isArray(nextPayload?.[config.commitKey]) ? nextPayload[config.commitKey] : [];
+    const previewRows = resolveSingleEpisodeAiPreviewAssetRows(previewData, config.tableKey);
+    const sourceRows = previewRows.length > 0 ? previewRows : commitRows;
+    if (!sourceRows.length) {
+      return nextPayload;
+    }
+    return {
+      ...nextPayload,
+      [config.commitKey]: sourceRows.map((sourceRow, index) => {
+        const commitRow = commitRows[index];
+        const mergedRow =
+          sourceRow === previewRows[index]
+            ? commitRow && typeof commitRow === "object" && !Array.isArray(commitRow)
+              ? { ...commitRow, ...sourceRow }
+              : sourceRow
+            : sourceRow;
+        if (!mergedRow || typeof mergedRow !== "object" || Array.isArray(mergedRow)) {
+          return mergedRow;
+        }
+        const previewRow = previewRows[index];
+        const description = firstSingleEpisodeAiPreviewRowText(previewRow, config.descriptionKeys)
+          || firstSingleEpisodeAiPreviewRowText(mergedRow, config.descriptionKeys);
+        const prompt = firstSingleEpisodeAiPreviewRowText(previewRow, config.promptKeys)
+          || firstSingleEpisodeAiPreviewRowText(mergedRow, config.promptKeys);
+        const composedPrompt = buildSingleEpisodeAiComposedAssetPrompt(description, prompt);
+        if (!composedPrompt) {
+          return mergedRow;
+        }
+        return {
+          ...mergedRow,
+          [config.descriptionField]: description || prompt,
+          [config.promptField]: composedPrompt,
+          imagePrompt: composedPrompt,
+        };
+      }),
+    };
+  }, commitPayload);
+}
+
 function bindSingleEpisodeAiPreviewStoryboardPrompts(commitPayload, previewData) {
   if (!commitPayload || typeof commitPayload !== "object" || !Array.isArray(commitPayload.storyboards)) {
+    return commitPayload;
+  }
+  if (!hasSingleEpisodeAiPreviewStoryboardSource(previewData)) {
     return commitPayload;
   }
   const storyboardRows = resolveSingleEpisodeAiPreviewStoryboardRows(previewData);
   if (!storyboardRows.length) {
     return commitPayload;
   }
-  const sourceStoryboards =
-    storyboardRows.length > 0 && storyboardRows.length !== commitPayload.storyboards.length
-      ? storyboardRows
-      : commitPayload.storyboards;
+  const sourceStoryboards = storyboardRows.length > 0 ? storyboardRows : commitPayload.storyboards;
   return {
     ...commitPayload,
     storyboards: sourceStoryboards.map((sourceStoryboard, index) => {
@@ -13462,6 +14905,8 @@ function bindSingleEpisodeAiPreviewStoryboardPrompts(commitPayload, previewData)
         return storyboard;
       }
       const videoPrompt = firstSingleEpisodeAiPreviewRowText(row, [
+        "displayVideoPrompt",
+        "display_video_prompt",
         "chapterVideoPrompt",
         "chapter_video_prompt",
         "videoPrompt",
@@ -13472,6 +14917,8 @@ function bindSingleEpisodeAiPreviewStoryboardPrompts(commitPayload, previewData)
         "视频提示词",
       ]);
       const imagePrompt = firstSingleEpisodeAiPreviewRowText(row, [
+        "displayImagePrompt",
+        "display_image_prompt",
         "chapterImagePrompt",
         "chapter_image_prompt",
         "imagePrompt",
@@ -13492,13 +14939,105 @@ function bindSingleEpisodeAiPreviewStoryboardPrompts(commitPayload, previewData)
   };
 }
 
-function resolveSingleEpisodeAiPreviewStoryboardRows(previewData) {
-  const candidates = [
+function hasSingleEpisodeAiPreviewStoryboardSource(previewData) {
+  const directRows = [
+    previewData?.previewTables?.storyboards?.rows,
+    previewData?.data?.previewTables?.storyboards?.rows,
+    previewData?.livePreviewTables?.storyboards?.rows,
+    previewData?.liveDisplayTables?.storyboards?.rows,
     previewData?.displayTables?.storyboards?.rows,
     previewData?.data?.displayTables?.storyboards?.rows,
     previewData?.preview?.displayTables?.storyboards?.rows,
-  ];
-  return candidates.find((rows) => Array.isArray(rows)) ?? [];
+  ].find((rows) => Array.isArray(rows) && rows.length > 0);
+  if (Array.isArray(directRows) && directRows.length > 0) {
+    return true;
+  }
+  const shotRawMarkdown = String(
+    previewData?.rawMarkdown?.shot ??
+    previewData?.data?.rawMarkdown?.shot ??
+    "",
+  ).trim();
+  return Boolean(shotRawMarkdown);
+}
+
+function resolveSingleEpisodeAiPreviewAssetRows(previewData, tableKey) {
+  const directPreviewRows = [
+    previewData?.previewTables?.[tableKey]?.rows,
+    previewData?.data?.previewTables?.[tableKey]?.rows,
+    previewData?.livePreviewTables?.[tableKey]?.rows,
+    previewData?.liveDisplayTables?.[tableKey]?.rows,
+    previewData?.displayTables?.[tableKey]?.rows,
+    previewData?.data?.displayTables?.[tableKey]?.rows,
+    previewData?.preview?.displayTables?.[tableKey]?.rows,
+  ].find((rows) => Array.isArray(rows) && rows.length > 0);
+  if (Array.isArray(directPreviewRows) && directPreviewRows.length > 0) {
+    return cloneSingleEpisodeAiRows(directPreviewRows);
+  }
+  const rawMarkdownKeyByTable = {
+    scenes: "scene",
+    characters: "character",
+    props: "prop",
+  };
+  const rawMarkdown = String(
+    previewData?.rawMarkdown?.[rawMarkdownKeyByTable[tableKey]] ??
+    previewData?.data?.rawMarkdown?.[rawMarkdownKeyByTable[tableKey]] ??
+    "",
+  );
+  const parsedRows = parseSingleEpisodeAiStageRows(rawMarkdown, tableKey);
+  if (Array.isArray(parsedRows) && parsedRows.length > 0) {
+    return parsedRows;
+  }
+  const hasStageRawMarkdown = String(rawMarkdown).trim().length > 0;
+  const sharedShotMarkdown = String(
+    previewData?.rawMarkdown?.shot ??
+    previewData?.data?.rawMarkdown?.shot ??
+    "",
+  );
+  if (!hasStageRawMarkdown) {
+    const sharedRows = parseSingleEpisodeAiStageRows(sharedShotMarkdown, tableKey);
+    if (Array.isArray(sharedRows) && sharedRows.length > 0) {
+      return sharedRows;
+    }
+  }
+  if (tableKey === "scenes") {
+    const storyboardRows = resolveSingleEpisodeAiPreviewStoryboardRows(previewData);
+    const inferredRows = inferSingleEpisodeAiSceneRowsFromStoryboards(storyboardRows);
+    if (Array.isArray(inferredRows) && inferredRows.length > 0) {
+      return inferredRows;
+    }
+  }
+  return normalizeSingleEpisodeAiCommitPayloadRows(
+    previewData?.commitPayload ?? previewData?.data?.commitPayload,
+    tableKey,
+  );
+}
+
+function resolveSingleEpisodeAiPreviewStoryboardRows(previewData) {
+  const directPreviewRows = [
+    previewData?.previewTables?.storyboards?.rows,
+    previewData?.data?.previewTables?.storyboards?.rows,
+    previewData?.livePreviewTables?.storyboards?.rows,
+    previewData?.liveDisplayTables?.storyboards?.rows,
+    previewData?.displayTables?.storyboards?.rows,
+    previewData?.data?.displayTables?.storyboards?.rows,
+    previewData?.preview?.displayTables?.storyboards?.rows,
+  ].find((rows) => Array.isArray(rows) && rows.length > 0);
+  if (Array.isArray(directPreviewRows) && directPreviewRows.length > 0) {
+    return cloneSingleEpisodeAiRows(directPreviewRows);
+  }
+  const rawMarkdown = String(
+    previewData?.rawMarkdown?.shot ??
+    previewData?.data?.rawMarkdown?.shot ??
+    "",
+  );
+  const parsedRows = parseSingleEpisodeAiStageRows(rawMarkdown, "storyboards");
+  if (Array.isArray(parsedRows) && parsedRows.length > 0) {
+    return parsedRows;
+  }
+  return normalizeSingleEpisodeAiCommitPayloadRows(
+    previewData?.commitPayload ?? previewData?.data?.commitPayload,
+    "storyboards",
+  );
 }
 
 function firstSingleEpisodeAiPreviewRowText(row, keys) {
@@ -13540,6 +15079,7 @@ function upsertSingleEpisodeAiAssetStep(workbench, data = {}, patch = {}) {
     title: String(data.title ?? patch.title ?? stage),
     promptText: "",
     responseText: "",
+    fullResponseText: "",
     status: "idle",
     ...(index >= 0 ? current[index] : {}),
     ...patch,
@@ -13562,10 +15102,76 @@ function appendSingleEpisodeAiAssetStepText(workbench, data = {}) {
     ? workbench.ui.singleEpisodeAiPreview.assetPromptSteps
     : [];
   const existing = current.find((item) => item.stage === stage);
+  const fullResponseText = `${String(existing?.fullResponseText ?? "")}${text}`;
   upsertSingleEpisodeAiAssetStep(workbench, data, {
     status: "loading",
-    responseText: appendBoundedText(existing?.responseText, text, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+    responseText: stage === "shot"
+      ? fullResponseText
+      : appendBoundedText(existing?.responseText, text, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+    fullResponseText,
   });
+}
+
+function scheduleSingleEpisodeAiTableSync(workbench, stage) {
+  if (!workbench?.ui?.singleEpisodeAiPreview || workbench.ui.singleEpisodeAiPreview.status !== "loading") {
+    return;
+  }
+  const normalizedStage = String(stage ?? "");
+  if (!normalizedStage) {
+    return;
+  }
+  workbench.singleEpisodeAiTableSyncPendingStages = new Set([
+    ...(workbench.singleEpisodeAiTableSyncPendingStages ?? []),
+    normalizedStage,
+  ]);
+  if (workbench.singleEpisodeAiTableSyncTimer) {
+    return;
+  }
+  workbench.singleEpisodeAiTableSyncTimer = setTimeout(() => {
+    workbench.singleEpisodeAiTableSyncTimer = null;
+    const pendingStages = [...(workbench.singleEpisodeAiTableSyncPendingStages ?? [])];
+    workbench.singleEpisodeAiTableSyncPendingStages = new Set();
+    if (!pendingStages.length) {
+      return;
+    }
+    if (workbench?.ui?.singleEpisodeAiPreview?.status !== "loading") {
+      return;
+    }
+    for (const pendingStage of pendingStages) {
+      syncSingleEpisodeAiTableForStage(workbench, pendingStage);
+    }
+    renderSingleEpisodeAiPreviewProgress(workbench);
+  }, SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS);
+}
+
+function flushSingleEpisodeAiTableSync(workbench, stage = "") {
+  if (workbench.singleEpisodeAiTableSyncTimer) {
+    clearTimeout(workbench.singleEpisodeAiTableSyncTimer);
+    workbench.singleEpisodeAiTableSyncTimer = null;
+  }
+  const requestedStage = String(stage ?? "");
+  const pendingStages = new Set(workbench.singleEpisodeAiTableSyncPendingStages ?? []);
+  if (requestedStage) {
+    pendingStages.add(requestedStage);
+  }
+  workbench.singleEpisodeAiTableSyncPendingStages = new Set();
+  if (!pendingStages.size) {
+    return;
+  }
+  if (workbench?.ui?.singleEpisodeAiPreview?.status !== "loading") {
+    return;
+  }
+  for (const pendingStage of pendingStages) {
+    syncSingleEpisodeAiTableForStage(workbench, pendingStage);
+  }
+}
+
+function syncSingleEpisodeAiTableForStage(workbench, stage) {
+  if (String(stage ?? "") === "shot") {
+    syncSingleEpisodeAiStoryboardTableFromStream(workbench);
+    return;
+  }
+  syncSingleEpisodeAiAssetTable(workbench, stage);
 }
 
 function appendBoundedText(current, next, maxChars) {
@@ -13576,7 +15182,125 @@ function appendBoundedText(current, next, maxChars) {
   return combined.slice(-maxChars);
 }
 
+function resolveSingleEpisodeAiPreviewStreamEventName(event) {
+  return String(event?.event ?? event?.data?.type ?? "").trim();
+}
+
+function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) {
+  const eventName = resolveSingleEpisodeAiPreviewStreamEventName(event);
+  const data = event?.data ?? {};
+  const isManualScriptAnalysis = options.isManualScriptAnalysis === true;
+  if (!eventName || eventName === "ping") {
+    return null;
+  }
+  if (eventName === "script_prompt") {
+    workbench.ui.singleEpisodeAiPreview.scriptPromptText = String(data.text ?? "");
+    return null;
+  }
+  if (eventName === "script_start") {
+    workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+    return null;
+  }
+  if (eventName === "script_delta") {
+    workbench.ui.singleEpisodeAiPreview.scriptText = appendBoundedText(
+      workbench.ui.singleEpisodeAiPreview.scriptText,
+      data.text,
+      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+    );
+    workbench.ui.singleEpisodeAiPreview.scriptRawText = appendBoundedText(
+      workbench.ui.singleEpisodeAiPreview.scriptRawText,
+      data.text,
+      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+    );
+    syncSingleEpisodeAiScriptTable(workbench);
+    workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+    return null;
+  }
+  if (eventName === "script_done") {
+    workbench.ui.singleEpisodeAiPreview.scriptText = String(
+      data.text ?? workbench.ui.singleEpisodeAiPreview.scriptText ?? "",
+    );
+    workbench.ui.singleEpisodeAiPreview.scriptRawText = String(
+      data.rawText ?? workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "",
+    );
+    syncSingleEpisodeAiScriptTable(workbench);
+    workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+    return null;
+  }
+  if (isManualScriptAnalysis && eventName.startsWith("asset_")) {
+    return null;
+  }
+  if (eventName === "prompt_prompt") {
+    workbench.ui.singleEpisodeAiPreview.promptPromptText = String(data.text ?? "");
+    return null;
+  }
+  if (eventName === "prompt_start") {
+    workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
+    return null;
+  }
+  if (eventName === "prompt_delta") {
+    workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
+      workbench.ui.singleEpisodeAiPreview.promptText,
+      data.text,
+      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+    );
+    workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
+    return null;
+  }
+  if (eventName === "asset_prompt") {
+    upsertSingleEpisodeAiAssetStep(workbench, data, { promptText: String(data.text ?? "") });
+    workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+    return null;
+  }
+  if (eventName === "asset_start") {
+    upsertSingleEpisodeAiAssetStep(workbench, data, { status: "loading" });
+    workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+    return null;
+  }
+  if (eventName === "asset_delta") {
+    appendSingleEpisodeAiAssetStepText(workbench, data);
+    const stage = String(data.stage ?? "");
+    if (stage === "shot") {
+      workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
+        workbench.ui.singleEpisodeAiPreview.promptText,
+        data.text,
+        SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
+      );
+    }
+    scheduleSingleEpisodeAiTableSync(workbench, stage);
+    workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
+    return null;
+  }
+  if (eventName === "asset_done") {
+    flushSingleEpisodeAiTableSync(workbench, data.stage);
+    const rawResponseText = String(data.text ?? "");
+    upsertSingleEpisodeAiAssetStep(workbench, data, {
+      status: "done",
+      responseText: String(data.stage ?? "") === "shot"
+        ? rawResponseText
+        : appendBoundedText("", rawResponseText, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+      fullResponseText: rawResponseText,
+      rawResponseText,
+    });
+    syncSingleEpisodeAiAssetTable(workbench, data.stage);
+    return null;
+  }
+  if (eventName === "complete") {
+    flushSingleEpisodeAiTableSync(workbench);
+    return data?.preview && typeof data.preview === "object" ? data.preview : data;
+  }
+  if (eventName === "error") {
+    const error = new Error(data.error ?? "ai_storyboard_stream_failed");
+    error.status = Number(data.status ?? 0) || undefined;
+    error.errorCode = String(data.errorCode ?? data.code ?? "");
+    error.requestId = data.requestId ?? null;
+    throw error;
+  }
+  return null;
+}
+
 function createSingleEpisodeAiLiveDisplayTables() {
+  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   return {
     script: {
       title: "剧本",
@@ -13585,22 +15309,22 @@ function createSingleEpisodeAiLiveDisplayTables() {
     },
     scenes: {
       title: "场景",
-      columns: ["场景名称", "场景描述", "场景图片提示词"],
+      columns: ["场景名称", "场景描述"],
       rows: [],
     },
     characters: {
       title: "角色",
-      columns: ["角色名称", "角色描述", "角色图片提示词"],
+      columns: ["角色名称", "角色描述"],
       rows: [],
     },
     props: {
       title: "道具",
-      columns: ["道具名称", "道具描述", "道具图片提示词"],
+      columns: ["道具名称", "道具描述"],
       rows: [],
     },
     storyboards: {
       title: "分镜",
-      columns: ["镜号", "分镜剧情", "对话/旁白", "时长", "时间段", "转场", "景别/运镜", "静态图片提示词", "动态视频提示词", "分镜详细字段"],
+      columns: storyboardColumns,
       rows: [],
     },
   };
@@ -13609,25 +15333,478 @@ function createSingleEpisodeAiLiveDisplayTables() {
 function ensureSingleEpisodeAiLiveDisplayTables(workbench) {
   const preview = workbench.ui.singleEpisodeAiPreview;
   if (!preview.data || typeof preview.data !== "object") {
-    preview.data = { displayTables: createSingleEpisodeAiLiveDisplayTables() };
+    preview.data = {};
   }
-  if (!preview.data.displayTables) {
-    preview.data.displayTables = createSingleEpisodeAiLiveDisplayTables();
+  const tables = mergeSingleEpisodeAiPreviewDisplayTables(
+    preview.data.previewTables,
+    preview.data.displayTables,
+  );
+  preview.data.previewTables = tables;
+  preview.data.displayTables = tables;
+  preview.livePreviewTables = tables;
+  preview.liveDisplayTables = tables;
+  return tables;
+}
+
+function finalizeSingleEpisodeAiPreviewData(preview, previewState) {
+  const fallbackPreview = buildSingleEpisodeAiPreviewFromStreamState(previewState);
+  const finalizedPreview = preview && typeof preview === "object" ? { ...preview } : {};
+  const resolvedScriptText = String(
+    finalizedPreview.scriptText ??
+    fallbackPreview.scriptText ??
+    previewState?.scriptText ??
+    previewState?.scriptRawText ??
+    "",
+  );
+  const fallbackCommitPayload = fallbackPreview.commitPayload;
+  const finalizedCommitPayload = finalizedPreview.commitPayload && typeof finalizedPreview.commitPayload === "object"
+    ? { ...finalizedPreview.commitPayload }
+    : null;
+  const rawMarkdown = {
+    ...(fallbackPreview.rawMarkdown ?? {}),
+    ...(finalizedPreview.rawMarkdown ?? {}),
+  };
+  const commitPayload = {
+    ...(fallbackCommitPayload ?? {}),
+    ...(finalizedCommitPayload ?? {}),
+    scriptText: String(
+      finalizedCommitPayload?.scriptText ??
+      resolvedScriptText ??
+      fallbackCommitPayload?.scriptText ??
+      "",
+    ),
+    scenes: chooseSingleEpisodeAiPreviewRows(
+      finalizedCommitPayload?.scenes,
+      fallbackCommitPayload?.scenes,
+    ),
+    characters: chooseSingleEpisodeAiPreviewRows(
+      finalizedCommitPayload?.characters,
+      fallbackCommitPayload?.characters,
+    ),
+    props: chooseSingleEpisodeAiPreviewRows(
+      finalizedCommitPayload?.props,
+      fallbackCommitPayload?.props,
+    ),
+    storyboards: chooseSingleEpisodeAiPreviewRows(
+      finalizedCommitPayload?.storyboards,
+      fallbackCommitPayload?.storyboards,
+    ),
+  };
+  const previewSeed = {
+    ...fallbackPreview,
+    ...finalizedPreview,
+    scriptText: resolvedScriptText,
+    rawMarkdown,
+    commitPayload,
+  };
+  const boundCommitPayload = bindSingleEpisodeAiPreviewCommitPayload(
+    commitPayload,
+    createSingleEpisodeAiPreviewSnapshot({
+      previewState,
+      previewData: previewSeed,
+    }),
+  );
+  const previewTables = buildSingleEpisodeAiPreviewTables({
+    scriptText: resolvedScriptText,
+    rawMarkdown,
+    commitPayload: boundCommitPayload,
+    previewTables: finalizedPreview.previewTables ?? finalizedPreview.displayTables,
+    fallbackTables:
+      fallbackPreview.previewTables ??
+      fallbackPreview.displayTables ??
+      previewState?.data?.previewTables ??
+      previewState?.data?.displayTables,
+    streamStoryboardRows: resolveSingleEpisodeAiStreamStoryboardRows(previewState),
+  });
+  const mergedPreviewData = {
+    ...previewSeed,
+    scriptText: resolvedScriptText,
+    rawMarkdown,
+    commitPayload: boundCommitPayload,
+    previewTables,
+    displayTables: previewTables,
+  };
+  return mergedPreviewData;
+}
+
+function createSingleEpisodeAiPreviewSnapshot({ previewState, previewData } = {}) {
+  const normalizedPreviewState = previewState && typeof previewState === "object" ? previewState : {};
+  const normalizedPreviewData = previewData && typeof previewData === "object" ? previewData : {};
+  return {
+    ...normalizedPreviewState,
+    ...normalizedPreviewData,
+    data: normalizedPreviewData,
+    previewTables:
+      normalizedPreviewData.previewTables ??
+      normalizedPreviewData.displayTables ??
+      normalizedPreviewState.livePreviewTables ??
+      normalizedPreviewState.liveDisplayTables ??
+      null,
+    displayTables:
+      normalizedPreviewData.displayTables ??
+      normalizedPreviewData.previewTables ??
+      normalizedPreviewState.liveDisplayTables ??
+      normalizedPreviewState.livePreviewTables ??
+      null,
+    livePreviewTables:
+      normalizedPreviewState.livePreviewTables ??
+      normalizedPreviewData.previewTables ??
+      normalizedPreviewData.displayTables ??
+      null,
+    liveDisplayTables:
+      normalizedPreviewState.liveDisplayTables ??
+      normalizedPreviewData.displayTables ??
+      normalizedPreviewData.previewTables ??
+      null,
+  };
+}
+
+function buildSingleEpisodeAiPreviewFromStreamState(previewState) {
+  const rawMarkdown = {
+    scene: String(previewState?.data?.rawMarkdown?.scene ?? resolveSingleEpisodeAiPreviewStageRaw(previewState, "scene") ?? ""),
+    character: String(previewState?.data?.rawMarkdown?.character ?? resolveSingleEpisodeAiPreviewStageRaw(previewState, "character") ?? ""),
+    prop: String(previewState?.data?.rawMarkdown?.prop ?? resolveSingleEpisodeAiPreviewStageRaw(previewState, "prop") ?? ""),
+    shot: String(previewState?.data?.rawMarkdown?.shot ?? resolveSingleEpisodeAiPreviewStageRaw(previewState, "shot") ?? ""),
+  };
+  const commitPayload = {
+    scriptText: String(previewState?.scriptText ?? previewState?.scriptRawText ?? ""),
+    scenes: resolveSingleEpisodeAiPreviewStageRows(previewState, "scene", "scenes"),
+    characters: resolveSingleEpisodeAiPreviewStageRows(previewState, "character", "characters"),
+    props: resolveSingleEpisodeAiPreviewStageRows(previewState, "prop", "props"),
+    storyboards: chooseSingleEpisodeAiPreviewRows(
+      resolveSingleEpisodeAiPreviewStageRows(previewState, "shot", "storyboards"),
+      resolveSingleEpisodeAiStreamStoryboardRows(previewState),
+    ),
+  };
+  const previewTables = buildSingleEpisodeAiPreviewTables({
+    scriptText: commitPayload.scriptText,
+    rawMarkdown: Object.fromEntries(
+      Object.entries(rawMarkdown).filter(([, value]) => String(value ?? "").trim()),
+    ),
+    commitPayload,
+    previewTables: previewState?.data?.previewTables ?? previewState?.data?.displayTables,
+    fallbackTables: previewState?.data?.displayTables,
+    streamStoryboardRows: resolveSingleEpisodeAiStreamStoryboardRows(previewState),
+  });
+  return {
+    scriptText: commitPayload.scriptText,
+    rawMarkdown: Object.fromEntries(
+      Object.entries(rawMarkdown).filter(([, value]) => String(value ?? "").trim()),
+    ),
+    commitPayload,
+    previewTables,
+    displayTables: previewTables,
+  };
+}
+
+function resolveSingleEpisodeAiPreviewStageRows(previewState, stage, tableKey) {
+  const stageRaw = resolveSingleEpisodeAiPreviewStageRaw(previewState, stage);
+  const parsedRows = parseSingleEpisodeAiStageRows(stageRaw, tableKey);
+  if (Array.isArray(parsedRows) && parsedRows.length > 0) {
+    return parsedRows;
   }
-  return preview.data.displayTables;
+  if (stage !== "shot" && !String(stageRaw).trim()) {
+    const sharedRows = parseSingleEpisodeAiStageRows(
+      resolveSingleEpisodeAiPreviewStageRaw(previewState, "shot"),
+      tableKey,
+    );
+    if (Array.isArray(sharedRows) && sharedRows.length > 0) {
+      return sharedRows;
+    }
+  }
+  const commitRows = normalizeSingleEpisodeAiCommitPayloadRows(
+    previewState?.data?.commitPayload,
+    tableKey,
+  );
+  if (commitRows.length > 0) {
+    return commitRows;
+  }
+  const previewRows = previewState?.data?.previewTables?.[tableKey]?.rows;
+  if (Array.isArray(previewRows) && previewRows.length > 0) {
+    return cloneSingleEpisodeAiRows(previewRows);
+  }
+  const displayRows = previewState?.data?.displayTables?.[tableKey]?.rows;
+  return Array.isArray(displayRows) ? cloneSingleEpisodeAiRows(displayRows) : [];
+}
+
+function resolveSingleEpisodeAiPreviewStageRaw(previewState, stage) {
+  const step = (previewState?.assetPromptSteps ?? []).find((item) => item?.stage === stage);
+  if (!step) {
+    return "";
+  }
+  return String(step.rawResponseText ?? step.responseText ?? "");
+}
+
+function resolveSingleEpisodeAiStreamStoryboardRows(previewState) {
+  const streamState = previewState?.liveStoryboardStreamState;
+  const rows = Array.isArray(streamState?.rows) ? [...streamState.rows] : [];
+  if (streamState?.partialRow && typeof streamState.partialRow === "object") {
+    rows.push(streamState.partialRow);
+  }
+  return rows;
+}
+
+function chooseSingleEpisodeAiPreviewRows(primaryRows, fallbackRows) {
+  if (Array.isArray(primaryRows) && primaryRows.length > 0 && Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+    const merged = primaryRows.map((row, index) => {
+      const fallbackRow = fallbackRows[index];
+      if (row && typeof row === "object" && !Array.isArray(row) && fallbackRow && typeof fallbackRow === "object" && !Array.isArray(fallbackRow)) {
+        return {
+          ...fallbackRow,
+          ...row,
+        };
+      }
+      return row ?? fallbackRow;
+    });
+    return merged.filter((row) => row !== undefined && row !== null);
+  }
+  if (Array.isArray(primaryRows) && primaryRows.length > 0) {
+    return [...primaryRows];
+  }
+  if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+    return [...fallbackRows];
+  }
+  return [];
+}
+
+function cloneSingleEpisodeAiRows(rows) {
+  return Array.isArray(rows)
+    ? rows.map((row) => (
+      row && typeof row === "object" && !Array.isArray(row)
+        ? { ...row }
+        : row
+    ))
+    : [];
+}
+
+function normalizeSingleEpisodeAiCommitPayloadRows(commitPayload, tableKey) {
+  const commitKeyByTable = {
+    scenes: "scenes",
+    characters: "characters",
+    props: "props",
+    storyboards: "storyboards",
+  };
+  const commitRows = commitPayload?.[commitKeyByTable[tableKey]];
+  if (!Array.isArray(commitRows) || commitRows.length === 0) {
+    return [];
+  }
+  return commitRows
+    .filter((row) => row && typeof row === "object" && !Array.isArray(row))
+    .map((row) => normalizeSingleEpisodeAiTableRecord(row, tableKey));
+}
+
+function buildSingleEpisodeAiPreviewTables(input = {}) {
+  const defaults = createSingleEpisodeAiLiveDisplayTables();
+  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const mergedTables = mergeSingleEpisodeAiPreviewDisplayTables(
+    input.previewTables,
+    input.fallbackTables,
+  );
+  const rawMarkdown = input.rawMarkdown && typeof input.rawMarkdown === "object"
+    ? input.rawMarkdown
+    : {};
+  const rawRowsByTable = {
+    scenes: parseSingleEpisodeAiStageRows(rawMarkdown.scene, "scenes")
+      ?? (!String(rawMarkdown.scene ?? "").trim()
+        ? (parseSingleEpisodeAiStageRows(rawMarkdown.shot, "scenes") ?? [])
+        : []),
+    characters: parseSingleEpisodeAiStageRows(rawMarkdown.character, "characters")
+      ?? (!String(rawMarkdown.character ?? "").trim()
+        ? (parseSingleEpisodeAiStageRows(rawMarkdown.shot, "characters") ?? [])
+        : []),
+    props: parseSingleEpisodeAiStageRows(rawMarkdown.prop, "props")
+      ?? (!String(rawMarkdown.prop ?? "").trim()
+        ? (parseSingleEpisodeAiStageRows(rawMarkdown.shot, "props") ?? [])
+        : []),
+    storyboards: parseSingleEpisodeAiStageRows(rawMarkdown.shot, "storyboards") ?? [],
+  };
+  const commitRowsByTable = {
+    scenes: normalizeSingleEpisodeAiCommitPayloadRows(input.commitPayload, "scenes"),
+    characters: normalizeSingleEpisodeAiCommitPayloadRows(input.commitPayload, "characters"),
+    props: normalizeSingleEpisodeAiCommitPayloadRows(input.commitPayload, "props"),
+    storyboards: normalizeSingleEpisodeAiCommitPayloadRows(input.commitPayload, "storyboards"),
+  };
+  const existingRowsByTable = {
+    scenes: mergedTables.scenes?.rows,
+    characters: mergedTables.characters?.rows,
+    props: mergedTables.props?.rows,
+    storyboards: mergedTables.storyboards?.rows,
+  };
+  const inferredSceneRows = inferSingleEpisodeAiSceneRowsFromStoryboards(
+    chooseSingleEpisodeAiPreviewRows(
+      rawRowsByTable.storyboards,
+      chooseSingleEpisodeAiPreviewRows(
+        commitRowsByTable.storyboards,
+        existingRowsByTable.storyboards,
+      ),
+    ),
+  );
+  const preferredStoryboardRows = chooseSingleEpisodeAiPreviewRows(
+    rawRowsByTable.storyboards,
+    chooseSingleEpisodeAiPreviewRows(
+      commitRowsByTable.storyboards,
+      input.streamStoryboardRows,
+    ),
+  );
+  const storyboardsWithStreamFallback = chooseSingleEpisodeAiPreviewRows(
+    preferredStoryboardRows,
+    existingRowsByTable.storyboards,
+  );
+  return {
+    ...mergedTables,
+    script: {
+      ...defaults.script,
+      ...(mergedTables.script ?? {}),
+      title: "剧本",
+      columns: ["剧本文字"],
+      rows: String(input.scriptText ?? "").trim()
+        ? [{ beatNo: 1, scriptContent: String(input.scriptText), scriptRawContent: String(input.scriptText), dialogue: "" }]
+        : [],
+    },
+    scenes: {
+      ...defaults.scenes,
+      ...(mergedTables.scenes ?? {}),
+      rows: chooseSingleEpisodeAiPreviewRows(
+        chooseSingleEpisodeAiPreviewRows(
+          chooseSingleEpisodeAiPreviewRows(rawRowsByTable.scenes, commitRowsByTable.scenes),
+          inferredSceneRows,
+        ),
+        existingRowsByTable.scenes,
+      ),
+    },
+    characters: {
+      ...defaults.characters,
+      ...(mergedTables.characters ?? {}),
+      rows: chooseSingleEpisodeAiPreviewRows(
+        chooseSingleEpisodeAiPreviewRows(rawRowsByTable.characters, commitRowsByTable.characters),
+        existingRowsByTable.characters,
+      ),
+    },
+    props: {
+      ...defaults.props,
+      ...(mergedTables.props ?? {}),
+      rows: chooseSingleEpisodeAiPreviewRows(
+        chooseSingleEpisodeAiPreviewRows(rawRowsByTable.props, commitRowsByTable.props),
+        existingRowsByTable.props,
+      ),
+    },
+    storyboards: {
+      ...defaults.storyboards,
+      ...(mergedTables.storyboards ?? {}),
+      columns: storyboardColumns,
+      rows: storyboardsWithStreamFallback,
+    },
+  };
+}
+
+function inferSingleEpisodeAiSceneRowsFromStoryboards(rows) {
+  const storyboards = Array.isArray(rows) ? rows : [];
+  if (!storyboards.length) {
+    return [];
+  }
+  const inferredRows = [];
+  const seen = new Set();
+  for (const row of storyboards) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const sources = [
+      String(row.videoPrompt ?? ""),
+      String(row.displayVideoPrompt ?? ""),
+      String(row.plot ?? ""),
+      String(row.imagePrompt ?? ""),
+    ];
+    const sceneName = resolveSingleEpisodeAiSceneNameFromStoryboardText(sources);
+    if (!sceneName || seen.has(sceneName)) {
+      continue;
+    }
+    seen.add(sceneName);
+    const sceneDescription = resolveSingleEpisodeAiSceneDescriptionFromStoryboardText(sources);
+    inferredRows.push(normalizeSingleEpisodeAiTableRecord({
+      sceneName,
+      sceneDescription,
+      sceneImagePrompt: sceneDescription,
+    }, "scenes"));
+  }
+  return inferredRows;
+}
+
+function resolveSingleEpisodeAiSceneNameFromStoryboardText(sources = []) {
+  for (const source of sources) {
+    const text = String(source ?? "");
+    const directName =
+      text.match(/场景名称[:：]\s*([^\n]+)/)?.[1]
+      ?? text.match(/视频场景对照表[:：]\s*([^\n]+)/)?.[1]
+      ?? "";
+    const normalized = String(directName)
+      .split(/[；;=]/)[0]
+      .replace(/【@[^】]+】/g, "")
+      .trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function resolveSingleEpisodeAiSceneDescriptionFromStoryboardText(sources = []) {
+  for (const source of sources) {
+    const text = String(source ?? "");
+    const directDescription = [
+      text.match(/画面描述[:：]\s*([^\n]+)/)?.[1],
+      text.match(/【镜头\d+】[^\n]*画面描述[:：]\s*([^\n]+)/)?.[1],
+      text.match(/场景名称[:：]\s*[^\n]+\n承接[:：]\s*[^\n]+\n过渡[:：]\s*[^\n]+\n情绪意图[:：]\s*([^\n]+)/)?.[1],
+    ]
+      .map((item) => String(item ?? "").trim())
+      .find(Boolean);
+    if (directDescription) {
+      return directDescription;
+    }
+  }
+  return "";
+}
+
+function mergeSingleEpisodeAiPreviewDisplayTables(primaryTables, fallbackTables) {
+  const defaults = createSingleEpisodeAiLiveDisplayTables();
+  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const result = {};
+  for (const key of Object.keys(defaults)) {
+    const defaultTable = defaults[key];
+    const primaryTable = primaryTables?.[key];
+    const fallbackTable = fallbackTables?.[key];
+    const primaryColumns = Array.isArray(primaryTable?.columns) ? primaryTable.columns : [];
+    const fallbackColumns = Array.isArray(fallbackTable?.columns) ? fallbackTable.columns : [];
+    const candidates = [primaryColumns, fallbackColumns, defaultTable.columns]
+      .filter((candidate) => Array.isArray(candidate) && candidate.length > 0);
+    const columns = key === "storyboards"
+      ? storyboardColumns
+      : candidates.sort((left, right) => right.length - left.length)[0];
+    result[key] = {
+      ...defaultTable,
+      ...(fallbackTable ?? {}),
+      ...(primaryTable ?? {}),
+      title: String(primaryTable?.title ?? fallbackTable?.title ?? defaultTable.title),
+      columns: [...columns],
+      rows: chooseSingleEpisodeAiPreviewRows(primaryTable?.rows, fallbackTable?.rows),
+    };
+  }
+  return result;
 }
 
 function syncSingleEpisodeAiScriptTable(workbench) {
   const scriptText = String(workbench.ui.singleEpisodeAiPreview?.scriptText ?? "");
+  const scriptRawText = String(workbench.ui.singleEpisodeAiPreview?.scriptRawText ?? scriptText);
   const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
   tables.script = {
     ...(tables.script ?? {}),
     title: "剧本",
     columns: ["剧本文字"],
-    rows: scriptText.trim()
-      ? [{ beatNo: 1, scriptContent: scriptText, dialogue: "" }]
+    rows: scriptRawText.trim()
+      ? [{ beatNo: 1, scriptContent: scriptText, scriptRawContent: scriptRawText, dialogue: "" }]
       : [],
   };
+  workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+  workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
 }
 
 function syncSingleEpisodeAiAssetTable(workbench, stage) {
@@ -13644,23 +15821,484 @@ function syncSingleEpisodeAiAssetTable(workbench, stage) {
   }
   const step = (workbench.ui.singleEpisodeAiPreview?.assetPromptSteps ?? [])
     .find((item) => item.stage === normalizedStage);
-  const raw = String(step?.rawResponseText ?? step?.responseText ?? "");
-  const rows = parseSingleEpisodeAiStageRows(raw, tableKey);
-  if (!rows) {
+  const previewData = workbench.ui.singleEpisodeAiPreview?.data ?? null;
+  const rawMarkdownByStage = {
+    scene: String(previewData?.rawMarkdown?.scene ?? ""),
+    character: String(previewData?.rawMarkdown?.character ?? ""),
+    prop: String(previewData?.rawMarkdown?.prop ?? ""),
+    shot: String(previewData?.rawMarkdown?.shot ?? ""),
+  };
+  const rawMarkdown = rawMarkdownByStage[normalizedStage] ?? "";
+  const raw = String(rawMarkdown || (step?.rawResponseText ?? step?.responseText ?? ""));
+  let rows = parseSingleEpisodeAiStageRows(raw, tableKey);
+  const hasStageRaw = String(raw).trim().length > 0;
+  if ((!Array.isArray(rows) || rows.length === 0) && normalizedStage !== "shot" && !hasStageRaw) {
+    const sharedShotRaw = String(
+      rawMarkdownByStage.shot ||
+      ((workbench.ui.singleEpisodeAiPreview?.assetPromptSteps ?? []).find((item) => item.stage === "shot")?.rawResponseText ?? "") ||
+      ((workbench.ui.singleEpisodeAiPreview?.assetPromptSteps ?? []).find((item) => item.stage === "shot")?.responseText ?? ""),
+    );
+    const sharedShotRows = parseSingleEpisodeAiStageRows(sharedShotRaw, tableKey);
+    if (Array.isArray(sharedShotRows) && sharedShotRows.length > 0) {
+      rows = sharedShotRows;
+    } else if (tableKey === "scenes") {
+      const inferredSceneRows = inferSingleEpisodeAiSceneRowsFromStoryboards(
+        parseSingleEpisodeAiStageRows(sharedShotRaw, "storyboards") ?? [],
+      );
+      if (Array.isArray(inferredSceneRows) && inferredSceneRows.length > 0) {
+        rows = inferredSceneRows;
+      }
+    }
+  }
+  if ((!Array.isArray(rows) || rows.length === 0) && tableKey === "storyboards") {
+    rows = resolveSingleEpisodeAiStreamStoryboardRows(workbench.ui.singleEpisodeAiPreview);
+  }
+  if (!rows || (!Array.isArray(rows) && rows !== null)) {
     return;
   }
   const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+  if (normalizedStage === "shot") {
+    const chapterCharacters = parseSingleEpisodeAiStageRows(raw, "characters") ?? [];
+    const chapterScenes = parseSingleEpisodeAiStageRows(raw, "scenes") ?? [];
+    const chapterProps = parseSingleEpisodeAiStageRows(raw, "props") ?? [];
+    if (chapterCharacters.length > 0) {
+      tables.characters = {
+        ...(tables.characters ?? {}),
+        title: AI_LIVE_TABLE_TITLES.characters,
+        rows: chapterCharacters,
+      };
+    }
+    if (chapterScenes.length > 0) {
+      tables.scenes = {
+        ...(tables.scenes ?? {}),
+        title: AI_LIVE_TABLE_TITLES.scenes,
+        rows: chapterScenes,
+      };
+    }
+    if (chapterProps.length > 0) {
+      tables.props = {
+        ...(tables.props ?? {}),
+        title: AI_LIVE_TABLE_TITLES.props,
+        rows: chapterProps,
+      };
+    }
+  }
   tables[tableKey] = {
     ...(tables[tableKey] ?? {}),
     title: AI_LIVE_TABLE_TITLES[tableKey],
+    ...(tableKey === "storyboards"
+      ? { columns: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"] }
+      : {}),
+    rows: Array.isArray(rows) && rows.length === 0
+      ? (Array.isArray(tables[tableKey]?.rows) ? tables[tableKey].rows : [])
+      : rows,
+  };
+  workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+  workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+}
+
+function syncSingleEpisodeAiStoryboardTableFromStream(workbench) {
+  const step = (workbench.ui.singleEpisodeAiPreview?.assetPromptSteps ?? [])
+    .find((item) => item.stage === "shot");
+  const raw = String(step?.fullResponseText ?? step?.responseText ?? "");
+  if (!raw) {
+    return;
+  }
+  const streamState = ensureSingleEpisodeAiStoryboardStreamState(workbench);
+  const streamedSegmentRows = extractIncrementalSegmentStoryboardRows(raw);
+  if (streamedSegmentRows.completedRows.length || streamedSegmentRows.partialRow) {
+    streamState.rows = streamedSegmentRows.completedRows;
+    streamState.partialRow = streamedSegmentRows.partialRow;
+    const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+    const rows = streamState.partialRow
+      ? [...streamState.rows, streamState.partialRow]
+      : [...streamState.rows];
+    tables.storyboards = {
+      ...(tables.storyboards ?? {}),
+      title: AI_LIVE_TABLE_TITLES.storyboards,
+      rows,
+    };
+    workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+    workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+    return;
+  }
+  const rawHasStoryboardArray = /"(?:storyboards|shots|data)"\s*:\s*\[/.test(raw);
+  if (rawHasStoryboardArray) {
+    const extracted = extractIncrementalStoryboardRecords(raw, 0);
+    const rows = extracted.records
+      .map((record) => normalizeSingleEpisodeAiTableRecord(record, "storyboards"))
+      .filter((row) => row && typeof row === "object");
+    const partialRow = extracted.incompleteRecordText
+      ? normalizeSingleEpisodeAiPartialStoryboardRow(extracted.incompleteRecordText, rows.length)
+      : null;
+    if (rows.length || partialRow) {
+      streamState.scanIndex = extracted.nextIndex;
+      streamState.rows = rows;
+      streamState.partialRow = partialRow;
+      const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+      tables.storyboards = {
+        ...(tables.storyboards ?? {}),
+        title: AI_LIVE_TABLE_TITLES.storyboards,
+        rows: partialRow ? [...rows, partialRow] : rows,
+      };
+      workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+      workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+      return;
+    }
+  }
+  const parsedLiveRows = parseSingleEpisodeAiStageRows(raw, "storyboards");
+  if (Array.isArray(parsedLiveRows) && parsedLiveRows.length > 0) {
+    streamState.rows = parsedLiveRows;
+    streamState.partialRow = null;
+    const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+    tables.storyboards = {
+      ...(tables.storyboards ?? {}),
+      title: AI_LIVE_TABLE_TITLES.storyboards,
+      rows: [...parsedLiveRows],
+    };
+    workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+    workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+    return;
+  }
+  const extracted = extractIncrementalStoryboardRecords(raw, streamState.scanIndex ?? 0);
+  streamState.scanIndex = extracted.nextIndex;
+  if (!extracted.records.length && !extracted.incompleteRecordText) {
+    const labeledRows = parseSingleEpisodeAiLabeledStoryboardRows(raw);
+    const liveLabeledRows = Array.isArray(labeledRows) && labeledRows.length > 0
+      ? labeledRows
+      : parseSingleEpisodeAiLiveLabeledStoryboardRows(raw);
+    if (!Array.isArray(liveLabeledRows) || liveLabeledRows.length === 0) {
+      return;
+    }
+    streamState.rows = liveLabeledRows;
+    streamState.partialRow = null;
+    const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+    tables.storyboards = {
+      ...(tables.storyboards ?? {}),
+      title: AI_LIVE_TABLE_TITLES.storyboards,
+      rows: [...liveLabeledRows],
+    };
+    workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+    workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+    return;
+  }
+
+  const completedRows = extracted.records.map((record) => normalizeSingleEpisodeAiTableRecord(record, "storyboards"));
+  if (completedRows.length) {
+    streamState.rows.push(...completedRows);
+  }
+
+  streamState.partialRow = extracted.incompleteRecordText
+    ? normalizeSingleEpisodeAiPartialStoryboardRow(extracted.incompleteRecordText, streamState.rows.length)
+    : null;
+
+  const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
+  const rows = streamState.partialRow
+    ? [...streamState.rows, streamState.partialRow]
+    : [...streamState.rows];
+  tables.storyboards = {
+    ...(tables.storyboards ?? {}),
+    title: AI_LIVE_TABLE_TITLES.storyboards,
     rows,
   };
+  workbench.ui.singleEpisodeAiPreview.livePreviewTables = tables;
+  workbench.ui.singleEpisodeAiPreview.liveDisplayTables = tables;
+}
+
+function extractIncrementalSegmentStoryboardRows(raw) {
+  const segmentsMatch = String(raw ?? "").match(/"segments"\s*:\s*\[([\s\S]*)$/);
+  if (!segmentsMatch) {
+    return { completedRows: [], partialRow: null };
+  }
+  const segmentsContent = segmentsMatch[1] ?? "";
+  const records = [];
+  let index = 0;
+  while (index < segmentsContent.length) {
+    const nextOpenBrace = segmentsContent.indexOf("{", index);
+    if (nextOpenBrace === -1) {
+      break;
+    }
+    const objectResult = extractJsonObjectFromText(segmentsContent, nextOpenBrace);
+    if (!objectResult.complete) {
+      const partialRow = normalizeSingleEpisodeAiPartialStoryboardRow(
+        segmentsContent.slice(nextOpenBrace),
+        records.length,
+      );
+      return {
+        completedRows: buildSingleEpisodeAiChapterStoryboardRows({ segments: records }),
+        partialRow,
+      };
+    }
+    try {
+      records.push(JSON.parse(objectResult.text));
+    } catch {
+      const partialRow = normalizeSingleEpisodeAiPartialStoryboardRow(
+        segmentsContent.slice(nextOpenBrace),
+        records.length,
+      );
+      return {
+        completedRows: buildSingleEpisodeAiChapterStoryboardRows({ segments: records }),
+        partialRow,
+      };
+    }
+    index = objectResult.endIndex;
+  }
+  const completedRows = buildSingleEpisodeAiChapterStoryboardRows({ segments: records });
+  return {
+    completedRows,
+    partialRow: null,
+  };
+}
+
+function ensureSingleEpisodeAiStoryboardStreamState(workbench) {
+  const preview = workbench.ui.singleEpisodeAiPreview;
+  if (!preview.liveStoryboardStreamState || typeof preview.liveStoryboardStreamState !== "object") {
+    preview.liveStoryboardStreamState = {
+      scanIndex: 0,
+      rows: [],
+      partialRow: null,
+    };
+  }
+  if (!Array.isArray(preview.liveStoryboardStreamState.rows)) {
+    preview.liveStoryboardStreamState.rows = [];
+  }
+  return preview.liveStoryboardStreamState;
+}
+
+function extractIncrementalStoryboardRecords(raw, startIndex = 0) {
+  const markerMatch = /"(storyboards|shots|data)"\s*:\s*\[/g;
+  markerMatch.lastIndex = startIndex;
+  const marker = markerMatch.exec(raw);
+  let index = marker
+    ? marker.index + marker[0].length
+    : startIndex;
+  if (!marker && !(raw[index] === "{" || raw[index] === "]")) {
+    return { records: [], incompleteRecordText: "", nextIndex: startIndex };
+  }
+  const records = [];
+  let incompleteRecordText = "";
+
+  while (index < raw.length) {
+    const nextChar = raw[index];
+    if (nextChar === "]") {
+      return { records, incompleteRecordText: "", nextIndex: index + 1 };
+    }
+    if (nextChar === "{") {
+      const objectResult = extractJsonObjectFromText(raw, index);
+      if (!objectResult.complete) {
+        incompleteRecordText = raw.slice(index);
+        return { records, incompleteRecordText, nextIndex: index };
+      }
+      try {
+        records.push(JSON.parse(objectResult.text));
+      } catch {
+        incompleteRecordText = raw.slice(index);
+        return { records, incompleteRecordText, nextIndex: index };
+      }
+      index = objectResult.endIndex;
+      continue;
+    }
+    index += 1;
+  }
+
+  return { records, incompleteRecordText, nextIndex: index };
+}
+
+function extractJsonObjectFromText(raw, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          complete: true,
+          text: raw.slice(startIndex, index + 1),
+          endIndex: index + 1,
+        };
+      }
+    }
+  }
+  return {
+    complete: false,
+    text: raw.slice(startIndex),
+    endIndex: raw.length,
+  };
+}
+
+function normalizeSingleEpisodeAiPartialStoryboardRow(raw, index = 0) {
+  const extracted = extractSingleEpisodeAiPartialStoryboardFields(raw);
+  const text = extracted.plot || compactSingleEpisodeAiPartialText(raw);
+  return {
+    shotNo: extracted.shotNo || String(Number(index) + 1 || ""),
+    plot: text,
+    dialogue: extracted.dialogue,
+    durationSec: "",
+    timeRange: extracted.timeRange,
+    transition: extracted.transition,
+    shotDirection: extracted.shotDirection,
+    imagePrompt: extracted.imagePrompt,
+    displayImagePrompt: extracted.imagePrompt,
+    videoPrompt: extracted.videoPrompt || text,
+    displayVideoPrompt: extracted.videoPrompt || text,
+    shotDetails: "",
+  };
+}
+
+function extractSingleEpisodeAiPartialStoryboardFields(raw) {
+  const source = String(raw ?? "");
+  const read = (...keys) => {
+    for (const key of keys) {
+      const value = readJsonLikeFieldValue(source, key);
+      if (value) {
+        return value;
+      }
+    }
+    return "";
+  };
+  const shotSize = read("shotSize", "shot_size", "shot", "frameSize", "frame_size", "cameraShot", "camera_shot", "景别", "镜头");
+  const cameraMovement = read("cameraMovement", "camera_movement", "cameraMove", "camera_move", "movement", "motion", "运镜", "镜头运动");
+  return {
+    shotNo: read("shotNo", "shot_no", "index", "no", "镜号"),
+    plot: read("plot", "action", "story", "summary", "description", "scene", "画面", "动作"),
+    dialogue: read("dialogue", "dialog", "lines", "dialogue_or_os", "dialogueOrOs", "voiceover", "voice_over", "narration", "台词", "旁白"),
+    imagePrompt: read("imagePrompt", "image_prompt", "prompt", "visualPrompt", "visual_prompt", "visual_focus", "description"),
+    videoPrompt: read("videoPrompt", "video_prompt", "video_prompt_text", "motionPrompt", "motion_prompt", "视频提示词", "动态视频提示词"),
+    timeRange: read("timeRange", "time_range", "time", "timestamp", "timeline", "时间", "时间范围"),
+    transition: read("transition", "cut", "sceneTransition", "scene_transition", "转场"),
+    shotDirection: [shotSize, cameraMovement].filter(Boolean).join("/"),
+  };
+}
+
+function readJsonLikeFieldValue(source, key) {
+  const pattern = new RegExp(`["']?${escapeRegExpForSingleEpisodeAi(key)}["']?\\s*:\\s*`, "i");
+  const match = pattern.exec(String(source ?? ""));
+  if (!match || match.index == null) {
+    return "";
+  }
+  let index = match.index + match[0].length;
+  const text = String(source ?? "");
+  while (index < text.length && /\s/.test(text[index])) {
+    index += 1;
+  }
+  const quote = text[index];
+  if (quote === "\"" || quote === "'") {
+    return readSingleEpisodeAiJsonLikeQuotedValue(text, index + 1, quote);
+  }
+  let end = index;
+  while (end < text.length && !/[,\]}]/.test(text[end])) {
+    end += 1;
+  }
+  return text.slice(index, end).trim();
+}
+
+function readSingleEpisodeAiJsonLikeQuotedValue(source, startIndex, quote) {
+  let value = "";
+  let escaped = false;
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      value += decodeSingleEpisodeAiJsonLikeEscape(char);
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === quote) {
+      return value.trim();
+    }
+    value += char;
+  }
+  return value.trim();
+}
+
+function decodeSingleEpisodeAiJsonLikeEscape(char) {
+  if (char === "n") {
+    return "\n";
+  }
+  if (char === "r") {
+    return "\r";
+  }
+  if (char === "t") {
+    return "\t";
+  }
+  return char ?? "";
+}
+
+function escapeRegExpForSingleEpisodeAi(value) {
+  return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function compactSingleEpisodeAiPartialText(raw) {
+  return String(raw ?? "")
+    .replace(/^[^{]*/, "")
+    .replace(/[{}",[\]]/g, " ")
+    .replace(/\\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function parseSingleEpisodeAiStageRows(raw, tableKey) {
   const parsed = parseSingleEpisodeAiJsonObject(raw);
   if (!parsed) {
+    const chapterRows = parseSingleEpisodeAiChapterTableRows(raw, tableKey);
+    if (Array.isArray(chapterRows) && chapterRows.length > 0) {
+      return chapterRows;
+    }
+    const standaloneAssetRows = parseSingleEpisodeAiStandaloneAssetTableRows(raw, tableKey);
+    if (Array.isArray(standaloneAssetRows) && standaloneAssetRows.length > 0) {
+      return standaloneAssetRows;
+    }
+    if (tableKey === "storyboards") {
+      const sectionTableRows = parseSingleEpisodeAiStoryboardSectionTableRows(raw);
+      if (Array.isArray(sectionTableRows) && sectionTableRows.length > 0) {
+        return sectionTableRows.map((record) => normalizeSingleEpisodeAiTableRecord(record, tableKey));
+      }
+      const plainTableRows = parseSingleEpisodeAiPlainStoryboardTableRows(raw);
+      if (Array.isArray(plainTableRows) && plainTableRows.length > 0) {
+        return plainTableRows.map((record) => normalizeSingleEpisodeAiTableRecord(record, tableKey));
+      }
+      const markdownRows = parseSingleEpisodeAiStoryboardMarkdown(raw);
+      if (Array.isArray(markdownRows) && markdownRows.length > 0) {
+        return markdownRows.map((record) => normalizeSingleEpisodeAiTableRecord(record, tableKey));
+      }
+      const labeledRows = parseSingleEpisodeAiLabeledStoryboardRows(raw);
+      if (Array.isArray(labeledRows) && labeledRows.length > 0) {
+        return labeledRows;
+      }
+    }
     return null;
+  }
+  if (tableKey === "storyboards" && Array.isArray(parsed.segments)) {
+    return buildSingleEpisodeAiChapterStoryboardRows(parsed);
+  }
+  if (Array.isArray(parsed.segments) && ["scenes", "characters", "props"].includes(tableKey)) {
+    const chapterAssetRows = buildSingleEpisodeAiChapterAssetRows(parsed, tableKey);
+    if (Array.isArray(chapterAssetRows) && chapterAssetRows.length > 0) {
+      return chapterAssetRows;
+    }
   }
   const keyAliases = {
     scenes: ["scenes", "data"],
@@ -13673,12 +16311,176 @@ function parseSingleEpisodeAiStageRows(raw, tableKey) {
     .find(Array.isArray);
   const records = Array.isArray(source)
     ? source
-    : parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    : parsed && typeof parsed === "object" && !Array.isArray(parsed) && hasSingleEpisodeAiDirectRecordFields(parsed, tableKey)
       ? [parsed]
       : [];
   return records
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
     .map((record) => normalizeSingleEpisodeAiTableRecord(record, tableKey));
+}
+
+function hasSingleEpisodeAiDirectRecordFields(record, tableKey) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const fieldMap = tableKey === "scenes"
+    ? [
+        "sceneName",
+        "scene_name",
+        "name",
+        "locationName",
+        "location_name",
+        "scene",
+        "sceneDescription",
+        "scene_description",
+        "description",
+        "sceneImagePrompt",
+        "scene_image_prompt",
+        "imagePrompt",
+        "image_prompt",
+        "prompt",
+      ]
+    : tableKey === "characters"
+      ? [
+          "characterName",
+          "character_name",
+          "name",
+          "role",
+          "character",
+          "characterDescription",
+          "character_description",
+          "description",
+          "characterImagePrompt",
+          "character_image_prompt",
+          "imagePrompt",
+          "image_prompt",
+          "prompt",
+        ]
+      : tableKey === "props"
+        ? [
+            "propName",
+            "prop_name",
+            "name",
+            "prop",
+            "propDescription",
+            "prop_description",
+            "description",
+            "propImagePrompt",
+            "prop_image_prompt",
+            "imagePrompt",
+            "image_prompt",
+            "prompt",
+          ]
+        : [
+            "shotNo",
+            "shot_no",
+            "plot",
+            "dialogue",
+            "imagePrompt",
+            "image_prompt",
+            "videoPrompt",
+            "video_prompt",
+          ];
+  return fieldMap.some((key) => String(record[key] ?? "").trim());
+}
+
+function parseSingleEpisodeAiStandaloneAssetTableRows(raw, tableKey) {
+  if (!["scenes", "characters", "props"].includes(tableKey)) {
+    return null;
+  }
+  const table = parseSingleEpisodeAiMarkdownTable(raw);
+  if (!table || !Array.isArray(table.rows) || table.rows.length === 0) {
+    return null;
+  }
+  const schema = resolveSingleEpisodeAiStandaloneAssetTableSchema(table.header, tableKey);
+  if (!schema) {
+    return null;
+  }
+  if (tableKey === "characters") {
+    return table.rows
+      .map((cells) => {
+        const name = String(cells[schema.nameIndex] ?? "").trim();
+        const description = String(cells[schema.descriptionIndex] ?? "").trim();
+        const prompt = String(cells[schema.promptIndex] ?? "").trim();
+        return {
+          characterName: name,
+          characterDescription: description || prompt,
+          characterImagePrompt: prompt || description,
+        };
+      })
+      .filter((row) => row.characterName || row.characterDescription || row.characterImagePrompt);
+  }
+  if (tableKey === "scenes") {
+    return table.rows
+      .map((cells) => {
+        const name = String(cells[schema.nameIndex] ?? "").trim();
+        const description = String(cells[schema.descriptionIndex] ?? "").trim();
+        const prompt = String(cells[schema.promptIndex] ?? "").trim();
+        return {
+          sceneName: name,
+          sceneDescription: description || prompt,
+          sceneImagePrompt: prompt || description,
+        };
+      })
+      .filter((row) => row.sceneName || row.sceneDescription || row.sceneImagePrompt);
+  }
+  return table.rows
+    .map((cells) => {
+      const name = String(cells[schema.nameIndex] ?? "").trim();
+      const description = String(cells[schema.descriptionIndex] ?? "").trim();
+      const prompt = String(cells[schema.promptIndex] ?? "").trim();
+      return {
+        propName: name,
+        propDescription: description || prompt,
+        propImagePrompt: prompt || description,
+      };
+    })
+    .filter((row) => row.propName || row.propDescription || row.propImagePrompt);
+}
+
+function hasSingleEpisodeAiStandaloneAssetTableHeader(headerCells, tableKey) {
+  return Boolean(resolveSingleEpisodeAiStandaloneAssetTableSchema(headerCells, tableKey));
+}
+
+function resolveSingleEpisodeAiStandaloneAssetTableSchema(headerCells, tableKey) {
+  const normalized = (Array.isArray(headerCells) ? headerCells : [])
+    .map((cell) => String(cell ?? "").replace(/\s+/g, ""))
+    .filter(Boolean);
+  if (normalized.length < 2) {
+    return null;
+  }
+  const findIndex = (patterns) => normalized.findIndex((cell) => patterns.some((pattern) => cell.includes(pattern)));
+  const config = tableKey === "characters"
+    ? {
+        namePatterns: ["角色名称"],
+        descriptionPatterns: ["角色描述"],
+        promptPatterns: ["角色提示词", "角色图片提示词", "角色形象提示词", "角色组合提示词", "组合提示词", "图片提示词"],
+      }
+    : tableKey === "scenes"
+      ? {
+          namePatterns: ["场景名称"],
+          descriptionPatterns: ["场景描述"],
+          promptPatterns: ["场景提示词", "场景图片提示词", "场景组合提示词", "组合提示词", "图片提示词"],
+        }
+      : {
+          namePatterns: ["道具名称"],
+          descriptionPatterns: ["道具描述"],
+          promptPatterns: ["道具提示词", "道具图片提示词", "道具组合提示词", "组合提示词", "图片提示词"],
+        };
+  const nameIndex = findIndex(config.namePatterns);
+  if (nameIndex === -1) {
+    return null;
+  }
+  const descriptionIndex = findIndex(config.descriptionPatterns);
+  const promptIndex = findIndex(config.promptPatterns);
+  if (descriptionIndex === -1 && promptIndex === -1) {
+    return null;
+  }
+  return {
+    nameIndex,
+    descriptionIndex: descriptionIndex >= 0 ? descriptionIndex : promptIndex,
+    promptIndex: promptIndex >= 0 ? promptIndex : descriptionIndex,
+  };
 }
 
 function parseSingleEpisodeAiJsonObject(raw) {
@@ -13695,6 +16497,945 @@ function parseSingleEpisodeAiJsonObject(raw) {
   }
 }
 
+function parseSingleEpisodeAiChapterTableRows(raw, tableKey) {
+  const sections = parseSingleEpisodeAiChapterTableSections(raw);
+  if (!sections) {
+    return null;
+  }
+  const section = sections[tableKey];
+  if (!section) {
+    return null;
+  }
+  const table = parseSingleEpisodeAiMarkdownTable(section);
+  if (!table || !Array.isArray(table.rows) || table.rows.length === 0) {
+    return null;
+  }
+  if (tableKey === "characters") {
+    return table.rows
+      .map((cells) => ({
+        characterName: String(cells[0] ?? "").trim(),
+        characterDescription: String(cells[1] ?? "").trim(),
+        characterImagePrompt: String(cells[2] ?? "").trim(),
+        __chapterTable: true,
+      }))
+      .filter((row) => row.characterName || row.characterDescription || row.characterImagePrompt);
+  }
+  if (tableKey === "scenes") {
+    return table.rows
+      .map((cells) => ({
+        sceneName: String(cells[0] ?? "").trim(),
+        sceneDescription: String(cells[1] ?? "").trim(),
+        sceneImagePrompt: String(cells[2] ?? "").trim(),
+        __chapterTable: true,
+      }))
+      .filter((row) => row.sceneName || row.sceneDescription || row.sceneImagePrompt);
+  }
+  if (tableKey === "props") {
+    return table.rows
+      .map((cells) => ({
+        propName: String(cells[0] ?? "").trim(),
+        propDescription: String(cells[1] ?? "").trim(),
+        propImagePrompt: String(cells[2] ?? "").trim(),
+        __chapterTable: true,
+      }))
+      .filter((row) => row.propName || row.propDescription || row.propImagePrompt);
+  }
+  return table.rows
+    .map((cells, index) => {
+      const shotCells = cells.length >= 5 ? cells.slice(1) : cells;
+      return {
+        shotNo: cells.length >= 5 ? String(cells[0] ?? "").trim() : String(index + 1),
+        plot: String(shotCells[0] ?? "").trim(),
+        dialogue: String(shotCells[1] ?? "").trim(),
+        imagePrompt: String(shotCells[2] ?? "").trim(),
+        chapterImagePrompt: String(shotCells[2] ?? "").trim(),
+        videoPrompt: String(shotCells[3] ?? "").trim(),
+        chapterVideoPrompt: String(shotCells[3] ?? "").trim(),
+        __chapterTable: true,
+      };
+    })
+    .filter((row) => row.plot || row.dialogue || row.imagePrompt || row.videoPrompt);
+}
+
+function parseSingleEpisodeAiChapterTableSections(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || !/[\[【](?:剧本)?(?:角色|场景|道具|分镜)列表[\]】]/.test(markdownBody)) {
+    return null;
+  }
+  const sectionKeyByLabel = {
+    "角色": "characters",
+    "场景": "scenes",
+    "道具": "props",
+    "分镜": "storyboards",
+  };
+  const sections = {};
+  let currentKey = "";
+  let buffer = [];
+
+  const flush = () => {
+    if (!currentKey) {
+      buffer = [];
+      return;
+    }
+    const content = buffer.join("\n").trim();
+    if (content) {
+      sections[currentKey] = content;
+    }
+    buffer = [];
+  };
+
+  for (const rawLine of markdownBody.split("\n")) {
+    const line = String(rawLine ?? "").trim();
+    const heading = line
+      .replace(/^\*+/, "")
+      .replace(/\*+$/, "")
+      .trim()
+      .match(/^[\[【](?:剧本)?(角色|场景|道具|分镜)列表[\]】]$/);
+    if (heading) {
+      flush();
+      currentKey = sectionKeyByLabel[heading[1]] ?? "";
+      continue;
+    }
+    if (!currentKey) {
+      continue;
+    }
+    buffer.push(rawLine);
+  }
+  flush();
+
+  return Object.keys(sections).length > 0 ? sections : null;
+}
+
+function parseSingleEpisodeAiMarkdownTable(raw) {
+  const lines = String(raw ?? "")
+    .split("\n")
+    .map((line) => String(line ?? "").trim())
+    .filter((line) => line.includes("|"));
+  if (lines.length < 2) {
+    return null;
+  }
+  let header = null;
+  const rows = [];
+  for (const line of lines) {
+    const cells = line
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+    if (cells.length < 2) {
+      continue;
+    }
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell) || !cell)) {
+      continue;
+    }
+    if (!header) {
+      header = cells;
+      continue;
+    }
+    rows.push(cells);
+  }
+  return header && rows.length ? { header, rows } : null;
+}
+
+function parseSingleEpisodeAiStoryboardMarkdown(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || !/\*\*(动作|对白|画面)\*\*/.test(markdownBody)) {
+    return null;
+  }
+  const rows = [];
+  let current = createSingleEpisodeAiStoryboardMarkdownDraft();
+  let activeSection = "";
+  let buffer = [];
+
+  const flushBuffer = () => {
+    const content = compactSingleEpisodeAiMarkdownSection(buffer);
+    buffer = [];
+    if (!content || !activeSection) {
+      return;
+    }
+    current[activeSection] = current[activeSection]
+      ? `${current[activeSection]}\n${content}`
+      : content;
+  };
+
+  for (const line of markdownBody.split("\n")) {
+    const header = parseSingleEpisodeAiStoryboardMarkdownHeader(line);
+    if (header) {
+      flushBuffer();
+      if (header.section === "plot" && hasSingleEpisodeAiStoryboardMarkdownContent(current)) {
+        rows.push(current);
+        current = createSingleEpisodeAiStoryboardMarkdownDraft();
+      }
+      activeSection = header.section;
+      if (header.transition && !current.transition) {
+        current.transition = header.transition;
+      }
+      if (header.inlineText) {
+        buffer.push(header.inlineText);
+      }
+      continue;
+    }
+    if (!activeSection) {
+      continue;
+    }
+    buffer.push(line);
+  }
+  flushBuffer();
+
+  if (hasSingleEpisodeAiStoryboardMarkdownContent(current)) {
+    rows.push(current);
+  }
+
+  if (!rows.length) {
+    return null;
+  }
+  return rows
+    .filter(hasSingleEpisodeAiStoryboardMarkdownContent)
+    .map((row, index) => ({
+      shotNo: index + 1,
+      plot: row.plot,
+      dialogue: row.dialogue,
+      imagePrompt: row.visual || row.plot,
+      description: row.visual || row.plot,
+      visualDescription: row.visual,
+      subjectAction: row.plot,
+      coreAction: firstSingleEpisodeAiMarkdownLine(row.plot),
+      transition: row.transition,
+    }));
+}
+
+function parseSingleEpisodeAiStoryboardSectionTableRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || !/^\s*#{1,6}\s*分镜/m.test(markdownBody) || !/分镜剧情/.test(markdownBody)) {
+    return null;
+  }
+  const sections = splitSingleEpisodeAiStoryboardSections(markdownBody);
+  if (!sections.length) {
+    return null;
+  }
+  const rows = sections.flatMap((section, index) => {
+    const table = parseSingleEpisodeAiMarkdownTable(section.body);
+    if (!table || !Array.isArray(table.rows) || table.rows.length === 0) {
+      return [];
+    }
+    const sectionMeta = parseSingleEpisodeAiStoryboardSectionMeta(section.heading, index);
+    return table.rows
+      .map((cells) => normalizeSingleEpisodeAiStoryboardSectionTableRow(cells, sectionMeta, index))
+      .filter((row) => row && (row.plot || row.dialogue || row.imagePrompt || row.videoPrompt));
+  });
+  return rows.length ? rows : null;
+}
+
+function parseSingleEpisodeAiPlainStoryboardTableRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || /^\s*#{1,6}\s*分镜/m.test(markdownBody)) {
+    return null;
+  }
+  const table = parseSingleEpisodeAiMarkdownTable(markdownBody);
+  if (!table || !hasSingleEpisodeAiStoryboardTableHeader(table.header)) {
+    return null;
+  }
+  return table.rows
+    .map((cells, index) => normalizeSingleEpisodeAiStoryboardSectionTableRow(cells, {}, index))
+    .filter((row) => row && (row.plot || row.dialogue || row.imagePrompt || row.videoPrompt));
+}
+
+function parseSingleEpisodeAiLabeledStoryboardRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || !hasSingleEpisodeAiLabeledStoryboardFields(markdownBody)) {
+    return null;
+  }
+  const blocks = splitSingleEpisodeAiLabeledStoryboardBlocks(markdownBody);
+  const rows = blocks
+    .map((block, index) => normalizeSingleEpisodeAiLabeledStoryboardBlock(block, index))
+    .filter((row) => row && (row.plot || row.dialogue || row.imagePrompt || row.videoPrompt));
+  return rows.length ? rows : null;
+}
+
+function parseSingleEpisodeAiLiveLabeledStoryboardRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody || !hasSingleEpisodeAiLabeledStoryboardFields(markdownBody)) {
+    return null;
+  }
+  const blocks = splitSingleEpisodeAiLiveLabeledStoryboardBlocks(markdownBody);
+  const rows = blocks
+    .map((block, index) => normalizeSingleEpisodeAiLabeledStoryboardBlock(block, index))
+    .filter((row) => row && (row.plot || row.dialogue || row.imagePrompt || row.videoPrompt));
+  return rows.length ? rows : null;
+}
+
+function hasSingleEpisodeAiLabeledStoryboardFields(raw) {
+  return /(?:^|\n)\s*(?:场景名|场景|人物|关键道具|画面\/动作|画面动作|动作|对白|情绪节奏|本场高光时刻|本场结尾定格|下场承接点|预计时长)\s*[:：]/.test(
+    String(raw ?? ""),
+  );
+}
+
+function splitSingleEpisodeAiLabeledStoryboardBlocks(raw) {
+  const lines = String(raw ?? "").split("\n");
+  const blocks = [];
+  let currentLines = [];
+
+  const flush = () => {
+    const content = currentLines.join("\n").trim();
+    if (content) {
+      blocks.push(content);
+    }
+    currentLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = String(rawLine ?? "").trim();
+    const startsExplicitBlock = isSingleEpisodeAiLabeledStoryboardHeader(line);
+    const startsSceneLabel = /^场景名\s*[:：]/.test(line) || /^场景\s*[:：]/.test(line);
+    const startsImplicitBlock = /^人物\s*[:：]/.test(line)
+      && currentLines.some((item) => /^\s*(?:预计时长|下场承接点)\s*[:：]/.test(String(item ?? "").trim()));
+    if ((startsExplicitBlock || startsSceneLabel || startsImplicitBlock) && currentLines.length > 0) {
+      flush();
+    }
+    currentLines.push(rawLine);
+  }
+  flush();
+
+  return blocks.length ? blocks : [String(raw ?? "").trim()].filter(Boolean);
+}
+
+function splitSingleEpisodeAiLiveLabeledStoryboardBlocks(raw) {
+  const lines = String(raw ?? "").split("\n");
+  const blocks = [];
+  let currentLines = [];
+
+  const flush = () => {
+    const content = currentLines.join("\n").trim();
+    if (content && hasSingleEpisodeAiLabeledStoryboardFields(content)) {
+      blocks.push(content);
+    }
+    currentLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = String(rawLine ?? "").trim();
+    const startsExplicitBlock = isSingleEpisodeAiLabeledStoryboardHeader(line);
+    const startsSceneLabel = /^场景名\s*[:：]/.test(line) || /^场景\s*[:：]/.test(line);
+    const startsImplicitBlock = /^人物\s*[:：]/.test(line)
+      && currentLines.some((item) => /^\s*(?:预计时长|下场承接点)\s*[:：]/.test(String(item ?? "").trim()));
+    if ((startsExplicitBlock || startsSceneLabel || startsImplicitBlock) && currentLines.length > 0) {
+      flush();
+    }
+    currentLines.push(rawLine);
+  }
+  flush();
+
+  return blocks.length ? blocks : [String(raw ?? "").trim()].filter(hasSingleEpisodeAiLabeledStoryboardFields);
+}
+
+function isSingleEpisodeAiLabeledStoryboardHeader(line) {
+  return /^第\s*[一二三四五六七八九十百千两零〇\d]+\s*场\b/.test(line)
+    || /^【?\s*分镜\s*[一二三四五六七八九十百千两零〇\d]+/.test(line)
+    || /^#{1,6}\s*分镜/.test(line);
+}
+
+function normalizeSingleEpisodeAiLabeledStoryboardBlock(block, index) {
+  const text = String(block ?? "").trim();
+  if (!text) {
+    return null;
+  }
+  const lines = text.split("\n");
+  let heading = "";
+  if (lines.length > 0 && !/^[^:：]+[:：]/.test(lines[0].trim()) && !hasSingleEpisodeAiLabeledFieldLine(lines[0])) {
+    heading = String(lines.shift() ?? "").trim();
+  }
+  const sections = extractSingleEpisodeAiLabeledStoryboardSections(lines);
+  const shotNo = resolveSingleEpisodeAiLabeledStoryboardShotNo(heading, index);
+  const plot = [
+    heading,
+    sections.scene ? `场景：${sections.scene}` : "",
+    sections.characters ? `人物：${sections.characters}` : "",
+    sections.props ? `关键道具：${sections.props}` : "",
+    sections.action ? `画面/动作：${sections.action}` : "",
+    sections.highlight ? `本场高光时刻：${sections.highlight}` : "",
+    sections.ending ? `本场结尾定格：${sections.ending}` : "",
+    sections.handoff ? `下场承接点：${sections.handoff}` : "",
+    sections.duration ? `预计时长：${sections.duration}` : "",
+  ].filter(Boolean).join("\n");
+  const dialogue = [
+    sections.dialogue ? `对白：${sections.dialogue}` : "",
+    sections.emotion ? `情绪节奏：${sections.emotion}` : "",
+  ].filter(Boolean).join("\n");
+  const imagePrompt = [
+    heading,
+    sections.scene ? `场景：${sections.scene}` : "",
+    sections.characters ? `人物：${sections.characters}` : "",
+    sections.props ? `关键道具：${sections.props}` : "",
+    sections.action ? `画面/动作：${sections.action}` : "",
+    sections.emotion ? `情绪节奏：${sections.emotion}` : "",
+    sections.highlight ? `本场高光时刻：${sections.highlight}` : "",
+    sections.ending ? `本场结尾定格：${sections.ending}` : "",
+  ].filter(Boolean).join("\n");
+  const durationMatch = String(sections.duration ?? "").match(/(\d+(?:\.\d+)?)/);
+  return {
+    shotNo,
+    plot,
+    dialogue,
+    durationSec: String(durationMatch?.[1] ?? "").trim(),
+    timeRange: "",
+    transition: "",
+    shotDirection: "",
+    imagePrompt,
+    displayImagePrompt: imagePrompt,
+    videoPrompt: text,
+    displayVideoPrompt: text,
+    shotDetails: "",
+  };
+}
+
+function hasSingleEpisodeAiLabeledFieldLine(line) {
+  return /^\s*(?:场景名|场景|人物|关键道具|画面\/动作|画面动作|动作|对白|情绪节奏|本场高光时刻|本场结尾定格|下场承接点|预计时长)\s*[:：]/.test(
+    String(line ?? "").trim(),
+  );
+}
+
+function extractSingleEpisodeAiLabeledStoryboardSections(lines) {
+  const sections = {
+    scene: "",
+    characters: "",
+    props: "",
+    action: "",
+    dialogue: "",
+    emotion: "",
+    highlight: "",
+    ending: "",
+    handoff: "",
+    duration: "",
+  };
+  const keyByLabel = {
+    "场景名": "scene",
+    "场景": "scene",
+    "人物": "characters",
+    "关键道具": "props",
+    "画面/动作": "action",
+    "画面动作": "action",
+    "动作": "action",
+    "对白": "dialogue",
+    "情绪节奏": "emotion",
+    "本场高光时刻": "highlight",
+    "本场结尾定格": "ending",
+    "下场承接点": "handoff",
+    "预计时长": "duration",
+  };
+  let activeKey = "";
+  for (const rawLine of Array.isArray(lines) ? lines : []) {
+    const line = String(rawLine ?? "");
+    const match = line.match(/^\s*(场景名|场景|人物|关键道具|画面\/动作|画面动作|动作|对白|情绪节奏|本场高光时刻|本场结尾定格|下场承接点|预计时长)\s*[:：]\s*(.*)$/);
+    if (match) {
+      activeKey = keyByLabel[match[1]] ?? "";
+      if (!activeKey) {
+        continue;
+      }
+      const firstLine = String(match[2] ?? "").trim();
+      sections[activeKey] = firstLine;
+      continue;
+    }
+    if (!activeKey) {
+      continue;
+    }
+    const nextLine = String(rawLine ?? "").trim();
+    if (!nextLine) {
+      continue;
+    }
+    sections[activeKey] = sections[activeKey]
+      ? `${sections[activeKey]}\n${nextLine}`
+      : nextLine;
+  }
+  return sections;
+}
+
+function resolveSingleEpisodeAiLabeledStoryboardShotNo(heading, index) {
+  const normalizedHeading = String(heading ?? "").trim();
+  const match = normalizedHeading.match(/(?:第\s*([一二三四五六七八九十百千两零〇\d]+)\s*场|分镜\s*([一二三四五六七八九十百千两零〇\d]+))/);
+  const candidate = String(match?.[1] ?? match?.[2] ?? "").trim();
+  if (!candidate) {
+    return String(index + 1);
+  }
+  if (/^\d+$/.test(candidate)) {
+    return candidate;
+  }
+  const parsed = parseSingleEpisodeAiChineseNumber(candidate);
+  return parsed ? String(parsed) : String(index + 1);
+}
+
+function hasSingleEpisodeAiStoryboardTableHeader(headerCells) {
+  const normalized = (Array.isArray(headerCells) ? headerCells : [])
+    .map((cell) => String(cell ?? "").replace(/\s+/g, ""))
+    .filter(Boolean);
+  if (normalized.length < 4) {
+    return false;
+  }
+  return normalized.some((cell) => cell.includes("分镜剧情"))
+    && normalized.some((cell) => cell.includes("对话/旁白") || cell.includes("对话旁白"))
+    && normalized.some((cell) => cell.includes("静态图片提示词"))
+    && normalized.some((cell) => cell.includes("动态视频提示词"));
+}
+
+function splitSingleEpisodeAiStoryboardSections(markdownBody) {
+  const lines = String(markdownBody ?? "").split("\n");
+  const sections = [];
+  let currentHeading = "";
+  let currentLines = [];
+
+  const flush = () => {
+    if (!currentHeading) {
+      currentLines = [];
+      return;
+    }
+    const body = currentLines.join("\n").trim();
+    if (body) {
+      sections.push({ heading: currentHeading, body });
+    }
+    currentLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = String(rawLine ?? "").trim();
+    if (/^#{1,6}\s*分镜/.test(line)) {
+      flush();
+      currentHeading = line;
+      continue;
+    }
+    if (!currentHeading) {
+      continue;
+    }
+    currentLines.push(rawLine);
+  }
+  flush();
+
+  return sections;
+}
+
+function parseSingleEpisodeAiStoryboardSectionMeta(heading, index) {
+  const normalizedHeading = String(heading ?? "")
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+  const shotNoMatch = normalizedHeading.match(/^分镜\s*([一二三四五六七八九十百千两零〇\d]+)/);
+  const durationMatch = normalizedHeading.match(/时长\s*[:：]\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?/i);
+  const transitionMatch = normalizedHeading.match(/转场\s*[:：]\s*([^|]+)/);
+  return {
+    shotNo: normalizeSingleEpisodeAiStoryboardSectionShotNo(shotNoMatch?.[1], index),
+    durationSec: String(durationMatch?.[1] ?? "").trim(),
+    transition: String(transitionMatch?.[1] ?? "").trim(),
+  };
+}
+
+function normalizeSingleEpisodeAiStoryboardSectionShotNo(value, index) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return String(index + 1);
+  }
+  if (/^\d+$/.test(text)) {
+    return text;
+  }
+  const normalized = parseSingleEpisodeAiChineseNumber(text);
+  return normalized ? String(normalized) : String(index + 1);
+}
+
+function parseSingleEpisodeAiChineseNumber(value) {
+  const digits = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+  };
+  const units = {
+    "十": 10,
+    "百": 100,
+    "千": 1000,
+  };
+  let total = 0;
+  let current = 0;
+  for (const char of String(value ?? "").trim()) {
+    if (Object.prototype.hasOwnProperty.call(digits, char)) {
+      current = digits[char];
+      continue;
+    }
+    const unit = units[char];
+    if (unit) {
+      total += (current || 1) * unit;
+      current = 0;
+    }
+  }
+  return total + current;
+}
+
+function normalizeSingleEpisodeAiStoryboardSectionTableRow(cells, sectionMeta, index) {
+  const normalizedCells = Array.isArray(cells)
+    ? cells.map((cell) => compactSingleEpisodeAiStoryboardSectionCell(cell))
+    : [];
+  if (normalizedCells.length < 4) {
+    return null;
+  }
+  const hasShotNoCell = normalizedCells.length >= 5;
+  const offset = hasShotNoCell ? 1 : 0;
+  return {
+    shotNo: hasShotNoCell
+      ? (normalizedCells[0] || sectionMeta.shotNo || String(index + 1))
+      : (sectionMeta.shotNo || String(index + 1)),
+    plot: normalizedCells[offset] || "",
+    dialogue: normalizedCells[offset + 1] || "",
+    imagePrompt: normalizedCells[offset + 2] || "",
+    displayImagePrompt: normalizedCells[offset + 2] || "",
+    videoPrompt: normalizedCells[offset + 3] || "",
+    displayVideoPrompt: normalizedCells[offset + 3] || "",
+    durationSec: sectionMeta.durationSec || "",
+    transition: sectionMeta.transition || "",
+  };
+}
+
+function compactSingleEpisodeAiStoryboardSectionCell(value) {
+  return String(value ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractSingleEpisodeAiMarkdownBody(raw) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const fenced = trimmed.match(/^```(?:markdown|md|text)?\s*([\s\S]*?)\s*```$/i);
+  return (fenced?.[1] ?? trimmed).replace(/\r\n?/g, "\n").trim();
+}
+
+function createSingleEpisodeAiStoryboardMarkdownDraft() {
+  return {
+    plot: "",
+    dialogue: "",
+    visual: "",
+    transition: "",
+  };
+}
+
+function parseSingleEpisodeAiStoryboardMarkdownHeader(line) {
+  const match = String(line ?? "").match(/^\s*\*\*(动作|对白|画面)\*\*(?:\s*[（(]([^）)]*)[）)])?\s*[:：]?\s*(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const label = match[1];
+  const modifier = String(match[2] ?? "").trim();
+  const inlineText = String(match[3] ?? "").trim();
+  return {
+    section: label === "动作" ? "plot" : label === "对白" ? "dialogue" : "visual",
+    transition: /转/.test(modifier) ? modifier : "",
+    inlineText,
+  };
+}
+
+export function parseSingleEpisodeAiStoryboardMarkdownForTest(raw) {
+  return parseSingleEpisodeAiStoryboardMarkdown(raw);
+}
+
+function compactSingleEpisodeAiMarkdownSection(lines) {
+  return (Array.isArray(lines) ? lines : [])
+    .map((line) => String(line ?? "").replace(/^\s*[-*•]\s*/, "").replace(/\*\*/g, "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function hasSingleEpisodeAiStoryboardMarkdownContent(row) {
+  return Boolean(
+    String(row?.plot ?? "").trim()
+    || String(row?.dialogue ?? "").trim()
+    || String(row?.visual ?? "").trim(),
+  );
+}
+
+function firstSingleEpisodeAiMarkdownLine(value) {
+  return String(value ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+function buildSingleEpisodeAiChapterStoryboardRows(parsed) {
+  return (Array.isArray(parsed?.segments) ? parsed.segments : [])
+    .filter((segment) => segment && typeof segment === "object" && !Array.isArray(segment))
+    .map((segment, segmentIndex) => {
+      const shots = Array.isArray(segment.shots) ? segment.shots : [];
+      const dialogue = shots
+        .map((shot, index) => {
+          const shotLabel = String(shot?.shot_id ?? shot?.shotId ?? shot?.shotNo ?? index + 1).trim();
+          const shotDialogue = firstSingleEpisodeAiNestedText(shot, ["dialogue_or_os", "dialogueOrOs", "dialogue", "narration"]);
+          return shotDialogue ? `[镜头${shotLabel}] ${shotDialogue}` : "";
+        })
+        .filter(Boolean)
+        .join("\n");
+      const assetTable = segment.asset_table && typeof segment.asset_table === "object" && !Array.isArray(segment.asset_table)
+        ? segment.asset_table
+        : {};
+      const videoScenePrompt = formatSingleEpisodeAiListText(
+        assetTable["视频场景对照表"] ??
+        assetTable.scene ??
+        assetTable.scenes ??
+        assetTable["场景"],
+      );
+      const videoCharacterPrompt = formatSingleEpisodeAiListText(
+        assetTable["视频角色对照表"] ??
+        assetTable.character ??
+        assetTable.characters ??
+        assetTable["角色"],
+      );
+      const videoPropPrompt = formatSingleEpisodeAiListText(
+        assetTable["视频道具对照表"] ??
+        assetTable.prop ??
+        assetTable.props ??
+        assetTable["道具"],
+      );
+      return {
+        shotNo: segmentIndex + 1,
+        plot: buildSingleEpisodeAiChapterSceneAnalysisBlock(segment, segmentIndex),
+        dialogue,
+        durationSec: "",
+        timeRange: "",
+        transition: resolveSingleEpisodeAiSegmentTransitionType(segment),
+        shotDirection: "",
+        imagePrompt: [
+          videoScenePrompt ? `视频场景对照表: ${videoScenePrompt}` : "",
+          videoCharacterPrompt ? `视频角色对照表: ${videoCharacterPrompt}` : "",
+          videoPropPrompt ? `视频道具对照表: ${videoPropPrompt}` : "",
+        ].filter(Boolean).join("\n"),
+        videoPrompt: buildSingleEpisodeAiChapterVideoPrompt(segment, segmentIndex),
+        shotDetails: "",
+      };
+    });
+}
+
+function buildSingleEpisodeAiChapterAssetRows(parsed, tableKey) {
+  const segments = Array.isArray(parsed?.segments) ? parsed.segments : [];
+  if (!segments.length) {
+    return [];
+  }
+  const rows = [];
+  const seen = new Set();
+  const pushUniqueRow = (row, identityKeys) => {
+    if (!row || typeof row !== "object") {
+      return;
+    }
+    const normalizedRow = normalizeSingleEpisodeAiTableRecord(row, tableKey);
+    const signature = identityKeys
+      .map((key) => String(normalizedRow?.[key] ?? "").trim())
+      .filter(Boolean)
+      .join("::");
+    if (!signature || seen.has(signature)) {
+      return;
+    }
+    seen.add(signature);
+    rows.push(normalizedRow);
+  };
+  segments.forEach((segment, segmentIndex) => {
+    const assetTable = segment?.asset_table && typeof segment.asset_table === "object" && !Array.isArray(segment.asset_table)
+      ? segment.asset_table
+      : {};
+    if (tableKey === "scenes") {
+      const sceneName = resolveSingleEpisodeAiSegmentSceneName(segment, segmentIndex);
+      const scenePrompt = formatSingleEpisodeAiListText(
+        assetTable["视频场景对照表"] ??
+        assetTable.scene ??
+        assetTable.scenes ??
+        assetTable["场景"],
+      );
+      const sceneDescription = [
+        buildSingleEpisodeAiAssetDescription(segment?.scene_analysis, [
+          "summary",
+          "description",
+          "scene_description",
+          "sceneDescription",
+          "空间结构",
+          "spaceStructure",
+          "architecturalStyle",
+          "buildingStyle",
+          "建筑风格",
+          "buildingDetails",
+          "建筑细节",
+          "lighting",
+          "lightingRules",
+          "光影规则",
+          "atmosphere",
+          "氛围基调",
+          "emotion_intent",
+          "emotionIntent",
+          "情绪意图",
+          "continuity",
+          "continuity_from_previous",
+          "承接",
+        ]),
+        firstSingleEpisodeAiNestedText(segment, ["time", "timeOfDay", "时间"]),
+      ]
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .filter((item, index, list) => list.indexOf(item) === index)
+        .join("\n");
+      pushUniqueRow({
+        sceneName,
+        sceneDescription,
+        sceneImagePrompt: scenePrompt || sceneDescription,
+      }, ["sceneName"]);
+      return;
+    }
+    const assetValue = tableKey === "characters"
+      ? (assetTable["视频角色对照表"] ?? assetTable["角色"] ?? assetTable.character ?? assetTable.characters)
+      : (assetTable["视频道具对照表"] ?? assetTable["道具"] ?? assetTable.prop ?? assetTable.props);
+    const sharedDescription = buildSingleEpisodeAiAssetDescription(segment?.scene_analysis, [
+      "summary",
+      "description",
+      "scene_description",
+      "sceneDescription",
+      "emotion_intent",
+      "emotionIntent",
+      "情绪意图",
+      "continuity",
+      "continuity_from_previous",
+      "承接",
+    ]);
+    extractSingleEpisodeAiAssetReferenceNames(assetValue).forEach((name) => {
+      if (tableKey === "characters") {
+        pushUniqueRow({
+          characterName: name,
+          characterDescription: sharedDescription,
+          characterImagePrompt: sharedDescription,
+        }, ["characterName"]);
+        return;
+      }
+      pushUniqueRow({
+        propName: name,
+        propDescription: sharedDescription,
+        propImagePrompt: sharedDescription,
+      }, ["propName"]);
+    });
+  });
+  return rows;
+}
+
+function buildSingleEpisodeAiChapterSceneAnalysisBlock(segment, segmentIndex) {
+  return [
+    `【分镜${resolveSingleEpisodeAiSegmentLabel(segment, segmentIndex)}】`,
+    "【场景分析】",
+    `场景名称：${resolveSingleEpisodeAiSegmentSceneName(segment, segmentIndex)}`,
+    `承接：${resolveSingleEpisodeAiSegmentContinuity(segment, segmentIndex)}`,
+    `过渡：${resolveSingleEpisodeAiSegmentTransitionType(segment)}`,
+    `情绪意图：${firstSingleEpisodeAiNestedText(segment.scene_analysis, ["情绪意图", "emotion_intent", "emotionIntent"]) || "无"}`,
+    `人物表演底层逻辑总纲：${firstSingleEpisodeAiNestedText(segment.scene_analysis, ["人物表演底层逻辑总纲", "performance_logic", "performanceLogic"]) || "无"}`,
+  ].filter(Boolean).join("\n");
+}
+
+function buildSingleEpisodeAiChapterVideoPrompt(segment, segmentIndex) {
+  const shots = Array.isArray(segment?.shots) ? segment.shots : [];
+  const assetSection = buildSingleEpisodeAiAssetTableSection(segment?.asset_table, { includeHeader: true });
+  return [
+    buildSingleEpisodeAiChapterSceneAnalysisBlock(segment, segmentIndex),
+    "【镜头列表】",
+    ...shots.map((shot, index) => buildSingleEpisodeAiChapterShotText(shot, index)),
+    assetSection,
+  ].filter(Boolean).join("\n");
+}
+
+function buildSingleEpisodeAiChapterShotText(shot, index) {
+  const shotLabel = String(shot?.shot_id ?? shot?.shotId ?? shot?.shotNo ?? index + 1).trim() || String(index + 1);
+  const timeRange = formatSingleEpisodeAiSegmentTimeRange(shot?.time_range ?? shot?.timeRange ?? shot?.time ?? "");
+  const transition = String(shot?.transition ?? "").trim() || "无";
+  const shotCamera = [
+    String(shot?.shot_type ?? shot?.shotType ?? shot?.shotSize ?? "").trim(),
+    String(shot?.camera_angle ?? shot?.cameraAngle ?? "").trim(),
+    String(shot?.camera_movement ?? shot?.cameraMovement ?? shot?.movement ?? "").trim(),
+  ].filter(Boolean).join("/");
+  return [
+    `【镜头${shotLabel}】${timeRange} 转场: ${transition} 镜头类型: ${shotCamera || "未注明"} 画面描述:`,
+    firstSingleEpisodeAiNestedText(shot, ["description", "plot", "story"]) || "无",
+    `核心动作: ${firstSingleEpisodeAiNestedText(shot, ["core_action", "coreAction"]) || "无"}`,
+    `对手戏设计: ${firstSingleEpisodeAiNestedText(shot, ["opponent_design", "opponentDesign", "interactionDesign"]) || "无"}`,
+    `人物底层逻辑: ${firstSingleEpisodeAiNestedText(shot, ["character_logic", "characterLogic"]) || "无"}`,
+    "主体动作与台词:",
+    buildSingleEpisodeAiActionDialogueText({
+      subjectAction: firstSingleEpisodeAiNestedText(shot, ["subject_action", "subjectAction"]),
+      dialogue: firstSingleEpisodeAiNestedText(shot, ["dialogue_or_os", "dialogueOrOs", "dialogue", "narration"]),
+    }),
+    `音效: ${buildSingleEpisodeAiSoundEffectLine({
+      soundEffect: firstSingleEpisodeAiNestedText(shot, ["sound_effects", "soundEffect", "sound_effect"]),
+      bgm: firstSingleEpisodeAiNestedText(shot, ["bgm", "music", "backgroundMusic", "background_music"]),
+    })}`,
+  ].filter(Boolean).join("\n");
+}
+
+function resolveSingleEpisodeAiSegmentLabel(segment, segmentIndex) {
+  return String(segment?.segment_id ?? segment?.segmentId ?? segmentIndex + 1).trim() || String(segmentIndex + 1);
+}
+
+function resolveSingleEpisodeAiSegmentSceneName(segment, segmentIndex) {
+  return firstSingleEpisodeAiNestedText(segment?.scene_analysis, ["scene_name", "sceneName", "场景名称"]) || `第${segmentIndex + 1}分镜`;
+}
+
+function resolveSingleEpisodeAiSegmentContinuity(segment, segmentIndex) {
+  const direct = firstSingleEpisodeAiNestedText(segment?.scene_analysis, ["承接", "continuity", "continuity_from_previous"]);
+  if (direct) {
+    return direct;
+  }
+  const transition = segment?.segment_transition && typeof segment.segment_transition === "object" && !Array.isArray(segment.segment_transition)
+    ? segment.segment_transition
+    : {};
+  const continuityParts = [
+    firstSingleEpisodeAiNestedText(transition, ["承接", "continuity", "continuity_from_previous"]),
+    firstSingleEpisodeAiNestedText(transition, ["承接逻辑", "continuity_logic", "continuityLogic"]),
+  ].filter(Boolean);
+  const previousFrame = firstSingleEpisodeAiNestedText(transition, ["前一分镜末尾画面", "previous_last_frame", "previousLastFrame"]);
+  const currentFrame = firstSingleEpisodeAiNestedText(transition, ["本分镜开场画面", "current_opening_frame", "currentOpeningFrame"]);
+  if (previousFrame && currentFrame) {
+    continuityParts.push(`由“${previousFrame}”过渡到“${currentFrame}”`);
+  } else if (previousFrame) {
+    continuityParts.push(`承接上一分镜画面：${previousFrame}`);
+  } else if (currentFrame) {
+    continuityParts.push(`本分镜开场画面：${currentFrame}`);
+  }
+  return continuityParts.length ? continuityParts.join("；") : (segmentIndex === 0 ? "无" : "延续上一分镜动作与情绪");
+}
+
+function resolveSingleEpisodeAiSegmentTransitionType(segment) {
+  return firstSingleEpisodeAiNestedText(segment?.scene_analysis, ["过渡", "transition"])
+    || firstSingleEpisodeAiNestedText(segment?.segment_transition, ["过渡", "transition", "transition_type", "transitionType"])
+    || "硬切";
+}
+
+function firstSingleEpisodeAiNestedText(record, keys) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return "";
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      const joined = value.map((item) => String(item ?? "").trim()).filter(Boolean).join("、");
+      if (joined) {
+        return joined;
+      }
+      continue;
+    }
+    const text = String(value ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function formatSingleEpisodeAiListText(value) {
+  return extractSingleEpisodeAiAssetReferenceNames(value)
+    .map((name) => `${name}=【@${name}】`)
+    .join("；");
+}
+
 function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
   const first = (...keys) => {
     for (const key of keys) {
@@ -13706,109 +17447,106 @@ function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
     return "";
   };
   if (tableKey === "scenes") {
+    const sceneDescription = buildSingleEpisodeAiAssetDescription(record, [
+      "sceneDescription",
+      "scene_description",
+      "description",
+      "summary",
+      "environment",
+      "weather",
+      "天气",
+      "time",
+      "timeOfDay",
+      "时间",
+      "空间结构",
+      "spaceStructure",
+      "architecturalStyle",
+      "buildingStyle",
+      "建筑风格",
+      "buildingDetails",
+      "建筑细节",
+      "lighting",
+      "lightingRules",
+      "光影规则",
+      "atmosphere",
+      "氛围基调",
+      "keyProps",
+      "关键道具",
+    ]);
     return {
       sceneName: first("sceneName", "scene_name", "name", "locationName", "location_name", "scene"),
-      sceneDescription: buildSingleEpisodeAiAssetDescription(record, [
-        "sceneDescription",
-        "scene_description",
-        "description",
-        "summary",
-        "environment",
-        "weather",
-        "天气",
-        "time",
-        "timeOfDay",
-        "时间",
-        "空间结构",
-        "spaceStructure",
-        "architecturalStyle",
-        "buildingStyle",
-        "建筑风格",
-        "buildingDetails",
-        "建筑细节",
-        "lighting",
-        "lightingRules",
-        "光影规则",
-        "atmosphere",
-        "氛围基调",
-        "keyProps",
-        "关键道具",
-        "sceneImagePrompt",
-        "scene_image_prompt",
-        "imagePrompt",
-        "image_prompt",
-        "prompt",
-      ]),
-      sceneImagePrompt: first("sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      sceneDescription,
+      sceneImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
+        sceneDescription,
+        first("sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      ),
     };
   }
   if (tableKey === "characters") {
+    const characterDescription = buildSingleEpisodeAiAssetDescription(record, [
+      "characterDescription",
+      "character_description",
+      "description",
+      "appearance",
+      "summary",
+      "age",
+      "年龄",
+      "nationality",
+      "国籍",
+      "gender",
+      "性别",
+      "costume",
+      "clothing",
+      "服装",
+      "face",
+      "facialFeatures",
+      "脸部特征",
+      "detailFeatures",
+      "细节特征",
+      "bodyFeatures",
+      "personality",
+    ]);
     return {
       characterName: first("characterName", "character_name", "name", "role", "character"),
-      characterDescription: buildSingleEpisodeAiAssetDescription(record, [
-        "characterDescription",
-        "character_description",
-        "description",
-        "appearance",
-        "summary",
-        "age",
-        "年龄",
-        "nationality",
-        "国籍",
-        "gender",
-        "性别",
-        "costume",
-        "clothing",
-        "服装",
-        "face",
-        "facialFeatures",
-        "脸部特征",
-        "detailFeatures",
-        "细节特征",
-        "bodyFeatures",
-        "personality",
-        "characterImagePrompt",
-        "character_image_prompt",
-        "imagePrompt",
-        "image_prompt",
-        "prompt",
-      ]),
-      characterImagePrompt: first("characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      characterDescription,
+      characterImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
+        characterDescription,
+        first("characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      ),
     };
   }
   if (tableKey === "props") {
+    const propDescription = buildSingleEpisodeAiAssetDescription(record, [
+      "propDescription",
+      "prop_description",
+      "description",
+      "summary",
+      "usage",
+      "用途",
+      "appearance",
+      "外观",
+      "color",
+      "颜色",
+      "material",
+      "材质",
+      "size",
+      "尺寸",
+      "state",
+      "状态",
+      "ownerOrUser",
+      "所属角色",
+      "firstAppearance",
+      "首次出现",
+      "consistency",
+      "一致性约束",
+    ]);
     return {
       propName: first("propName", "prop_name", "name", "prop"),
-      propDescription: buildSingleEpisodeAiAssetDescription(record, [
-        "propDescription",
-        "prop_description",
-        "description",
-        "summary",
-        "usage",
-        "用途",
-        "appearance",
-        "外观",
-        "color",
-        "颜色",
-        "material",
-        "材质",
-        "size",
-        "尺寸",
-        "state",
-        "状态",
-        "ownerOrUser",
-        "所属角色",
-        "firstAppearance",
-        "首次出现",
-        "consistency",
-        "一致性约束",
-        "propImagePrompt",
-        "prop_image_prompt",
-        "imagePrompt",
-        "image_prompt",
-        "prompt",
-      ]),
-      propImagePrompt: first("propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      propDescription,
+      propImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
+        propDescription,
+        first("propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"),
+      ),
     };
   }
   const timeRange = normalizeSingleEpisodeAiPerShotTimeRange(
@@ -13834,20 +17572,29 @@ function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
     transition,
     shotDirection: [shotSize, cameraMovement].filter(Boolean).join("/"),
     imagePrompt: first("imagePrompt", "image_prompt", "prompt", "visualPrompt", "visual_prompt", "visual_focus"),
+    displayImagePrompt: first("imagePrompt", "image_prompt", "prompt", "visualPrompt", "visual_prompt", "visual_focus"),
     videoPrompt: buildSingleEpisodeAiLiveVideoPrompt({
+      shotNo: first("shotNo", "shot_no", "index", "no", "镜号") || "1",
       baseVideoPrompt: sanitizeSingleEpisodeAiPerShotVideoPrompt(first("videoPrompt", "video_prompt", "video_prompt_text", "motionPrompt", "motion_prompt", "视频提示词", "动态视频提示词")),
       timeRange,
       transition,
       shotSize,
       cameraMovement,
+      scene: first("sceneName", "scene_name", "sceneId", "scene_id", "scene"),
+      continuity: first("continuity", "continuity_from_previous", "承接"),
+      emotion: first("emotion", "情绪意图"),
+      description: first("description", "plot", "story", "summary", "scene", "画面", "动作"),
+      prompt: first("prompt", "visual_focus", "visualFocus"),
       visualDescription,
       coreAction,
       interactionDesign,
       characterLogic,
       subjectAction,
+      dialogue: first("dialogue", "dialog", "lines", "voiceover", "voice_over", "narration", "台词", "旁白"),
       soundEffect,
       bgm,
     }),
+    displayVideoPrompt: first("videoPrompt", "video_prompt", "video_prompt_text", "motionPrompt", "motion_prompt", "视频提示词", "动态视频提示词"),
     shotDetails: buildSingleEpisodeAiStoryboardDetails({
       visualDescription,
       coreAction,
@@ -13896,22 +17643,124 @@ function buildSingleEpisodeAiAssetDescription(record, keys) {
   return lines.join("\n");
 }
 
+function buildSingleEpisodeAiComposedAssetPrompt(description, prompt) {
+  const normalizedDescription = String(description ?? "").trim();
+  const normalizedPrompt = String(prompt ?? "").trim();
+  if (normalizedDescription && normalizedPrompt) {
+    if (normalizedPrompt === normalizedDescription || normalizedPrompt.includes(normalizedDescription)) {
+      return normalizedPrompt;
+    }
+    return `${normalizedDescription}\n${normalizedPrompt}`;
+  }
+  return normalizedPrompt || normalizedDescription;
+}
+
 function buildSingleEpisodeAiLiveVideoPrompt(parts = {}) {
-  const labeledParts = [
-    ["时间", parts.timeRange],
-    ["转场", parts.transition],
-    ["镜头", [parts.shotSize, parts.cameraMovement].filter(Boolean).join("/")],
-    ["画面描述", parts.visualDescription],
-    ["核心动作", parts.coreAction],
-    ["对手戏设计", parts.interactionDesign],
-    ["人物底层逻辑", parts.characterLogic],
-    ["主体动作", parts.subjectAction],
-    ["音效", parts.soundEffect],
-    ["配乐", parts.bgm],
-  ]
-    .filter(([, value]) => value)
-    .map(([label, value]) => `${label}: ${value}`);
-  return [parts.baseVideoPrompt, ...labeledParts].filter(Boolean).join("\n");
+  return [
+    `【分镜${parts.shotNo || "1"}】`,
+    "【场景分析】",
+    `场景名称：${parts.scene || "未注明"}`,
+    `承接：${parts.continuity || "无"}`,
+    `过渡：${parts.transition || "无"}`,
+    `情绪意图：${parts.emotion || "无"}`,
+    `人物表演底层逻辑总纲：${parts.characterLogic || parts.emotion || "无"}`,
+    "【镜头列表】",
+    `【镜头${parts.shotNo || "1"}】${parts.timeRange || ""} 转场: ${parts.transition || "无"} 镜头类型: ${[parts.shotSize, parts.cameraMovement].filter(Boolean).join("/") || "未注明"} 画面描述:`,
+    parts.visualDescription || parts.description || parts.prompt || parts.baseVideoPrompt || "无",
+    `核心动作: ${parts.coreAction || "无"}`,
+    `对手戏设计: ${parts.interactionDesign || "无"}`,
+    `人物底层逻辑: ${parts.characterLogic || parts.emotion || "无"}`,
+    "主体动作与台词:",
+    buildSingleEpisodeAiActionDialogueText({
+      subjectAction: parts.subjectAction,
+      dialogue: parts.dialogue,
+    }),
+    `音效: ${buildSingleEpisodeAiSoundEffectLine({ soundEffect: parts.soundEffect, bgm: parts.bgm })}`,
+  ].filter(Boolean).join("\n");
+}
+
+function buildSingleEpisodeAiAssetTableSection(assetTable, options = {}) {
+  const table = assetTable && typeof assetTable === "object" && !Array.isArray(assetTable)
+    ? assetTable
+    : {};
+  const lines = [
+    buildSingleEpisodeAiAssetTableLine("视频场景对照表", table["视频场景对照表"] ?? table["场景"] ?? table.scene ?? table.scenes),
+    buildSingleEpisodeAiAssetTableLine("视频角色对照表", table["视频角色对照表"] ?? table["角色"] ?? table.character ?? table.characters),
+    buildSingleEpisodeAiAssetTableLine("视频道具对照表", table["视频道具对照表"] ?? table["道具"] ?? table.prop ?? table.props),
+  ].filter(Boolean);
+  if (!lines.length) {
+    return "";
+  }
+  return [options.includeHeader ? "【资产对照表】" : "", ...lines].filter(Boolean).join("\n");
+}
+
+function buildSingleEpisodeAiAssetTableLine(label, value) {
+  const names = extractSingleEpisodeAiAssetReferenceNames(value);
+  return names.length ? `${label}: ${names.map((name) => `${name}=【@${name}】`).join("；")}` : "";
+}
+
+function extractSingleEpisodeAiAssetReferenceNames(value) {
+  const names = [];
+  const visit = (candidate) => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      const directName = firstSingleEpisodeAiNestedText(candidate, ["sceneName", "characterName", "propName", "name", "label", "title"]);
+      if (directName) {
+        names.push(directName);
+        return;
+      }
+      Object.values(candidate).forEach(visit);
+      return;
+    }
+    const raw = String(candidate ?? "").trim();
+    if (!raw) {
+      return;
+    }
+    raw
+      .split(/[；;\r\n]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        const left = part.includes("=") ? part.split("=")[0] : part;
+        const normalized = left
+          .replace(/^视频(?:场景|角色|道具)对照表[:：]\s*/u, "")
+          .replace(/【@[^】]+】/g, "")
+          .replace(/（[^）]*）/g, "")
+          .replace(/^@/, "")
+          .trim();
+        if (normalized && !names.includes(normalized)) {
+          names.push(normalized);
+        }
+      });
+  };
+  visit(value);
+  return names;
+}
+
+function buildSingleEpisodeAiActionDialogueText(parts = {}) {
+  const lines = [parts.subjectAction, parts.dialogue, parts.dialogue ? "" : "无台词，仅动作"]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+  return lines.length ? lines.join("\n") : "无台词，仅动作";
+}
+
+function buildSingleEpisodeAiSoundEffectLine(parts = {}) {
+  const lines = [parts.soundEffect, parts.bgm ? `配乐: ${parts.bgm}` : ""]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+  return lines.length ? lines.join("；") : "无";
+}
+
+function formatSingleEpisodeAiSegmentTimeRange(value) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/(\d+(?:\.\d+)?)\s*(?:秒|s)?\s*[-~—–至到]\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?/i);
+  if (!match) {
+    return raw;
+  }
+  return `${Number(match[1]).toFixed(1)}-${Number(match[2]).toFixed(1)}秒`;
 }
 
 function sanitizeSingleEpisodeAiPerShotVideoPrompt(prompt) {
@@ -14038,6 +17887,22 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       ? resolvePersistedEpisodeWorkbenchId(workbench, candidateEpisodeId)
       : candidateEpisodeId;
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
+  const cachedEpisodeContext =
+    resolvedEpisodeId &&
+    workbench.ui.episodeWorkbenchContextLoadedEpisodeId === resolvedEpisodeId &&
+    workbench.ui.episodeWorkbenchContext
+      ? workbench.ui.episodeWorkbenchContext
+      : null;
+  const shouldLoadRemoteEpisode =
+    resolvedEpisodeId &&
+    resolvedEpisodeId !== "episode-primary" &&
+    typeof workbench.api.getEpisodeWorkbench === "function";
+  const episodeContextPromise = shouldLoadRemoteEpisode
+    ? workbench.api.getEpisodeWorkbench(resolvedEpisodeId)
+    : null;
+  const episodeStoryboardsPromise = shouldLoadRemoteEpisode
+    ? loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId)
+    : null;
   workbench.ui.episodeWorkbenchError = "";
   resetEpisodeWorkbenchAssets(workbench);
 
@@ -14069,6 +17934,9 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   } else {
     workbench.ui.selectedStoryboardId = null;
   }
+  if (cachedEpisodeContext) {
+    applyEpisodeWorkbenchAssetsFromContext(workbench, cachedEpisodeContext);
+  }
   syncSelectedEpisodeAssetForCurrentTab(workbench);
   syncPromptFromCurrentScope(workbench);
   if (!options.preserveRoute) {
@@ -14090,13 +17958,12 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     render(workbench);
   }
 
-  if (
-    resolvedEpisodeId &&
-    resolvedEpisodeId !== "episode-primary" &&
-    typeof workbench.api.getEpisodeWorkbench === "function"
-  ) {
+  if (shouldLoadRemoteEpisode) {
     try {
-      const context = await workbench.api.getEpisodeWorkbench(resolvedEpisodeId);
+      const [context, loadedStoryboards] = await Promise.all([
+        episodeContextPromise,
+        episodeStoryboardsPromise,
+      ]);
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
       }
@@ -14110,13 +17977,6 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
         context?.episode?.projectId ??
         workbench.ui.selectedProjectCardId;
       applyEpisodeWorkbenchAssetsFromContext(workbench, context);
-      const [_, loadedStoryboards] = await Promise.all([
-        loadEpisodeGenerationConfig(workbench, resolvedEpisodeId),
-        loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId),
-      ]);
-      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
-        return;
-      }
       storyboards = loadedStoryboards;
     } catch (error) {
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
@@ -14145,13 +18005,11 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     workbench.ui.selectedStoryboardId = preferredStoryboardId;
     workbench.ui.selectedStoryboard = getSelectedStoryboard(activeStoryboards, preferredStoryboardId);
     if (preferredStoryboardId) {
-      await loadSelectedStoryboardConversationHistory(workbench, {
-        storyboardId: preferredStoryboardId,
-        mediaKind: resolveStoryboardConversationMediaKind(workbench),
-      });
-      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
-        return;
-      }
+      syncSelectedStoryboardConversationResult(
+        workbench,
+        preferredStoryboardId,
+        resolveStoryboardConversationMediaKind(workbench),
+      );
     } else {
       workbench.ui.imageGenerationResult = null;
       workbench.ui.videoGenerationResult = null;
@@ -14167,13 +18025,36 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     render(workbench);
   }
   runLazyWorkbenchTask(workbench, "episode workbench history hydration", async () => {
+    await Promise.resolve();
     if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
       return;
+    }
+    if (shouldLoadRemoteEpisode) {
+      await Promise.allSettled([
+        loadEpisodeGenerationConfig(workbench, resolvedEpisodeId),
+        ensureProjectAssetLibraryReadyForEpisode(workbench),
+      ]);
+      if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+        return;
+      }
+      if (workbench.ui.episodeWorkbenchContext) {
+        applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
+      }
     }
     if (workbench.ui.museScopeMode === "assets") {
       await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
     }
-    await restoreEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
+    if (workbench.ui.museScopeMode !== "assets") {
+      if (shouldLoadRemoteEpisode) {
+        applyEpisodeGenerationTasksForWorkbench(
+          workbench,
+          resolvedEpisodeId,
+          await fetchEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId),
+        );
+      } else {
+        await restoreEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
+      }
+    }
     if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
       return;
     }
@@ -14198,6 +18079,7 @@ function resetEpisodeWorkbenchAssets(workbench) {
     scene: [],
     prop: [],
     other: {
+      audio: [...(workbench.ui.importedAssets?.other?.audio ?? [])],
       image: [...(workbench.ui.importedAssets?.other?.image ?? [])],
       video: [...(workbench.ui.importedAssets?.other?.video ?? [])],
     },
@@ -14207,7 +18089,21 @@ function resetEpisodeWorkbenchAssets(workbench) {
   workbench.ui.selectedEpisodeAssetIds = [];
 }
 
+function removeEpisodeAssetFromImportedAssets(workbench, assetId) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return;
+  }
+  const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  for (const kind of ["character", "scene", "prop"]) {
+    nextAssets[kind] = (nextAssets[kind] ?? []).filter((item) => item?.id !== normalizedAssetId);
+  }
+  workbench.ui.importedAssets = nextAssets;
+}
+
 function applyEpisodeWorkbenchAssetsFromContext(workbench, context) {
+  const previousSelectedCardId = workbench.ui.selectedEpisodeCardId ?? null;
+  const previousSelectedAssetId = workbench.ui.selectedEpisodeAssetId ?? null;
   const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
   const assetsByType =
     resolvedContext?.assetsByType ??
@@ -14228,41 +18124,70 @@ function applyEpisodeWorkbenchAssetsFromContext(workbench, context) {
   const sceneAssets = resolveEpisodeWorkbenchAssetEntries(assetsByType, "scene");
   const propAssets = resolveEpisodeWorkbenchAssetEntries(assetsByType, "prop");
   const existingImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  const mappedCharacterAssets = mapEpisodeAssetContracts(characterAssets, "character");
+  const mappedSceneAssets = mapEpisodeAssetContracts(sceneAssets, "scene");
+  const mappedPropAssets = mapEpisodeAssetContracts(propAssets, "prop");
+  const characterWithProjectPreviews = hydrateEpisodeAssetsFromProjectLibraryByName(
+    workbench,
+    mappedCharacterAssets.length ? mappedCharacterAssets : existingImportedAssets.character,
+    "character",
+  );
+  const sceneWithProjectPreviews = hydrateEpisodeAssetsFromProjectLibraryByName(
+    workbench,
+    mappedSceneAssets.length ? mappedSceneAssets : existingImportedAssets.scene,
+    "scene",
+  );
+  const propWithProjectPreviews = hydrateEpisodeAssetsFromProjectLibraryByName(
+    workbench,
+    mappedPropAssets.length ? mappedPropAssets : existingImportedAssets.prop,
+    "prop",
+  );
   workbench.ui.importedAssets = {
     ...(workbench.ui.importedAssets ?? {}),
     character: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.character,
-        mapEpisodeAssetContracts(characterAssets, "character"),
+        characterWithProjectPreviews,
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
     scene: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.scene,
-        mapEpisodeAssetContracts(sceneAssets, "scene"),
+        sceneWithProjectPreviews,
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
     prop: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.prop,
-        mapEpisodeAssetContracts(propAssets, "prop"),
+        propWithProjectPreviews,
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
     other: {
+      audio: [...(workbench.ui.importedAssets?.other?.audio ?? [])],
       image: [...(workbench.ui.importedAssets?.other?.image ?? [])],
       video: [...(workbench.ui.importedAssets?.other?.video ?? [])],
     },
   };
-  workbench.ui.selectedEpisodeCardId = null;
-  workbench.ui.selectedEpisodeAssetId = null;
+  const activeAssetKind = workbench.ui.projectAssetTab ?? "character";
+  const activeAssets =
+    activeAssetKind === "other"
+      ? workbench.ui.importedAssets.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
+      : workbench.ui.importedAssets[activeAssetKind] ?? [];
+  const activeIds = new Set(activeAssets.map((asset) => asset?.id).filter(Boolean));
+  const preservedSelectedId =
+    (previousSelectedCardId && activeIds.has(previousSelectedCardId) ? previousSelectedCardId : null) ??
+    (previousSelectedAssetId && activeIds.has(previousSelectedAssetId) ? previousSelectedAssetId : null) ??
+    null;
+  workbench.ui.selectedEpisodeCardId = preservedSelectedId;
+  workbench.ui.selectedEpisodeAssetId = preservedSelectedId;
   workbench.ui.selectedEpisodeAssetIds = [];
   return workbench.ui.importedAssets;
 }
 
-async function ensureEpisodeWorkbenchAssetsHydrated(workbench) {
+async function ensureEpisodeWorkbenchAssetsHydrated(workbench, options = {}) {
   if (
     !isRealEpisodeWorkbench(workbench) ||
     !workbench.ui.selectedEpisodeId ||
@@ -14272,13 +18197,15 @@ async function ensureEpisodeWorkbenchAssetsHydrated(workbench) {
   }
 
   const episodeId = workbench.ui.selectedEpisodeId;
+  const force = options.force === true;
   if (
+    !force &&
     workbench.ui.episodeWorkbenchContextLoadedEpisodeId === episodeId &&
     workbench.ui.episodeWorkbenchContext
   ) {
     return applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
   }
-  if (workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
+  if (!force && workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
     return workbench.ui.importedAssets;
   }
 
@@ -14339,15 +18266,174 @@ async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId) {
   if (typeof workbench.api.listStoryboards !== "function") {
     return ensureEpisodeStoryboards(workbench, episodeId);
   }
+  const existingStoryboards = getEpisodeStoryboards(workbench, episodeId);
   const page = await workbench.api.listStoryboards(episodeId, { page: 1, pageSize: 200 });
   const items = Array.isArray(page?.items) ? page.items : [];
-  const mappedStoryboards = items.map(mapEpisodeStoryboardContract);
-  const nextStoryboards = syncStoryboards(getEpisodeStoryboards(workbench, episodeId), mappedStoryboards);
+  const mappedStoryboards = items
+    .map(mapEpisodeStoryboardContract)
+    .map((storyboard) => {
+      const matchedCurrentStoryboard = existingStoryboards.find((currentStoryboard) =>
+        doesEpisodeStoryboardIdentityMatch(currentStoryboard, storyboard),
+      );
+      return preserveStoryboardPromptRichText(matchedCurrentStoryboard, storyboard);
+    });
+  if (!mappedStoryboards.length) {
+    workbench.ui.episodeStoryboardMap = {
+      ...workbench.ui.episodeStoryboardMap,
+      [episodeId]: [],
+    };
+    return [];
+  }
+  const nextStoryboards = syncStoryboards(existingStoryboards, mappedStoryboards);
   workbench.ui.episodeStoryboardMap = {
     ...workbench.ui.episodeStoryboardMap,
     [episodeId]: nextStoryboards,
   };
   return nextStoryboards;
+}
+
+function doesEpisodeStoryboardIdentityMatch(currentStoryboard, nextStoryboard) {
+  const current = currentStoryboard && typeof currentStoryboard === "object" ? currentStoryboard : {};
+  const next = nextStoryboard && typeof nextStoryboard === "object" ? nextStoryboard : {};
+  const currentIds = [
+    current.id,
+    current.linkedShotId,
+    current.storyboardId,
+    current.shotId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  const nextIds = [
+    next.id,
+    next.linkedShotId,
+    next.storyboardId,
+    next.shotId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  if (currentIds.some((id) => nextIds.includes(id))) {
+    return true;
+  }
+  return Number(current.index ?? 0) > 0 &&
+    Number(next.index ?? 0) > 0 &&
+    Number(current.index ?? 0) === Number(next.index ?? 0);
+}
+
+function preserveStoryboardPromptRichText(currentStoryboard, nextStoryboard) {
+  const current = currentStoryboard && typeof currentStoryboard === "object" ? currentStoryboard : null;
+  const next = nextStoryboard && typeof nextStoryboard === "object" ? nextStoryboard : null;
+  if (!current || !next) {
+    return nextStoryboard;
+  }
+  const currentVideoPrompt = resolveEpisodeStoryboardVideoPrompt(current);
+  const nextVideoPrompt = resolveEpisodeStoryboardVideoPrompt(next);
+  const currentImagePrompt = resolveEpisodeStoryboardImagePrompt(current);
+  const nextImagePrompt = resolveEpisodeStoryboardImagePrompt(next);
+  const nextGenerationDrafts = normalizeEpisodeStoryboardGenerationDrafts(next.generationDrafts);
+  const currentGenerationDrafts = normalizeEpisodeStoryboardGenerationDrafts(current.generationDrafts);
+  const mergedGenerationDrafts = mergeEpisodeStoryboardGenerationDrafts(
+    currentGenerationDrafts,
+    nextGenerationDrafts,
+  );
+  const preferredVideoPrompt = chooseEpisodeStoryboardPreferredPrompt(currentVideoPrompt, nextVideoPrompt);
+  const preferredImagePrompt = chooseEpisodeStoryboardPreferredPrompt(currentImagePrompt, nextImagePrompt);
+  const mergedStoryboard = {
+    ...next,
+    generationDrafts: mergedGenerationDrafts,
+  };
+  const mergedVideoDraft = mergedGenerationDrafts.find((draft) => draft.mode === "video") ?? null;
+  const mergedImageDraft = mergedGenerationDrafts.find((draft) => draft.mode === "image") ?? null;
+  if (preferredVideoPrompt) {
+    mergedStoryboard.chapterVideoPrompt = preferredVideoPrompt;
+    mergedStoryboard.videoPrompt = preferredVideoPrompt;
+    mergedStoryboard.description = preferredVideoPrompt;
+    mergedStoryboard.videoPromptDraft = mergedVideoDraft
+      ? { ...mergedVideoDraft, prompt: preferredVideoPrompt }
+      : {
+          mode: "video",
+          prompt: preferredVideoPrompt,
+          payload: { source: "storyboard_reload_merge" },
+          updatedAt: null,
+        };
+  }
+  if (preferredImagePrompt) {
+    mergedStoryboard.chapterImagePrompt = preferredImagePrompt;
+    mergedStoryboard.imagePrompt = preferredImagePrompt;
+    mergedStoryboard.imagePromptDraft = mergedImageDraft
+      ? { ...mergedImageDraft, prompt: preferredImagePrompt }
+      : {
+          mode: "image",
+          prompt: preferredImagePrompt,
+          payload: { source: "storyboard_reload_merge" },
+          updatedAt: null,
+        };
+  }
+  mergedStoryboard.generationState = {
+    ...createEmptyGenerationState(),
+    ...(next.generationState ?? {}),
+    ...(current.generationState ?? {}),
+    prompt:
+      preferredVideoPrompt ||
+      preferredImagePrompt ||
+      (current?.generationState?.prompt ?? next?.generationState?.prompt ?? ""),
+    imagePrompt:
+      preferredImagePrompt ||
+      (current?.generationState?.imagePrompt ?? next?.generationState?.imagePrompt ?? ""),
+    videoPrompt:
+      preferredVideoPrompt ||
+      (current?.generationState?.videoPrompt ?? next?.generationState?.videoPrompt ?? ""),
+  };
+  if (!String(mergedStoryboard.sceneAnalysis ?? "").trim() && String(current.sceneAnalysis ?? "").trim()) {
+    mergedStoryboard.sceneAnalysis = current.sceneAnalysis;
+  }
+  if (!String(mergedStoryboard.plotPreview ?? "").trim() && String(current.plotPreview ?? "").trim()) {
+    mergedStoryboard.plotPreview = current.plotPreview;
+  }
+  return mergedStoryboard;
+}
+
+function mergeEpisodeStoryboardGenerationDrafts(currentDrafts, nextDrafts) {
+  const mergedByMode = new Map();
+  for (const draft of Array.isArray(nextDrafts) ? nextDrafts : []) {
+    if (!draft?.mode) {
+      continue;
+    }
+    mergedByMode.set(draft.mode, { ...draft });
+  }
+  for (const draft of Array.isArray(currentDrafts) ? currentDrafts : []) {
+    if (!draft?.mode) {
+      continue;
+    }
+    const existing = mergedByMode.get(draft.mode);
+    if (!existing) {
+      mergedByMode.set(draft.mode, { ...draft });
+      continue;
+    }
+    const preferredPrompt = chooseEpisodeStoryboardPreferredPrompt(draft.prompt, existing.prompt);
+    const shouldUseCurrent = preferredPrompt === String(draft.prompt ?? "").trim() && preferredPrompt !== "";
+    mergedByMode.set(draft.mode, {
+      ...(shouldUseCurrent ? existing : draft),
+      ...(shouldUseCurrent ? draft : existing),
+      prompt: preferredPrompt || existing.prompt || draft.prompt || "",
+      payload: existing.payload && Object.keys(existing.payload).length > 0 ? existing.payload : (draft.payload ?? {}),
+      updatedAt: existing.updatedAt ?? draft.updatedAt ?? null,
+    });
+  }
+  return [...mergedByMode.values()];
+}
+
+function chooseEpisodeStoryboardPreferredPrompt(currentPrompt, nextPrompt) {
+  const currentText = String(currentPrompt ?? "").trim();
+  const nextText = String(nextPrompt ?? "").trim();
+  if (!currentText) {
+    return nextText;
+  }
+  if (!nextText) {
+    return currentText;
+  }
+  return shouldPreferIncomingGenerationPrompt(currentText, nextText)
+    ? nextText
+    : currentText;
 }
 
 async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
@@ -14366,26 +18452,38 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
       character: [],
       scene: [],
       prop: [],
-      other: { image: [], video: [] },
+      other: { audio: [], image: [], video: [] },
     }),
     character: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.character,
-        mapEpisodeAssetContracts(characterPage?.items, "character"),
+        hydrateEpisodeAssetsFromProjectLibraryByName(
+          workbench,
+          mapEpisodeAssetContracts(characterPage?.items, "character"),
+          "character",
+        ),
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
     scene: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.scene,
-        mapEpisodeAssetContracts(scenePage?.items, "scene"),
+        hydrateEpisodeAssetsFromProjectLibraryByName(
+          workbench,
+          mapEpisodeAssetContracts(scenePage?.items, "scene"),
+          "scene",
+        ),
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
     prop: applyAssetConversationPreviewFallback(
       preserveRealEpisodeAssetPreviews(
         existingImportedAssets.prop,
-        mapEpisodeAssetContracts(propPage?.items, "prop"),
+        hydrateEpisodeAssetsFromProjectLibraryByName(
+          workbench,
+          mapEpisodeAssetContracts(propPage?.items, "prop"),
+          "prop",
+        ),
       ),
       workbench.ui.assetConversationHistory ?? {},
     ),
@@ -14393,7 +18491,7 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
   return workbench.ui.importedAssets;
 }
 
-async function loadEpisodeGenerationConfig(workbench, episodeId) {
+async function loadEpisodeGenerationConfig(workbench, episodeId, options = {}) {
   if (typeof workbench.api.listGenerationConfig !== "function") {
     workbench.ui.episodeGenerationConfig = {
       ...(workbench.ui.episodeGenerationConfig ?? {}),
@@ -14401,7 +18499,9 @@ async function loadEpisodeGenerationConfig(workbench, episodeId) {
     };
     return workbench.ui.episodeGenerationConfig;
   }
-  const config = await workbench.api.listGenerationConfig(episodeId);
+  const config = await workbench.api.listGenerationConfig(episodeId, {
+    fresh: options.fresh === true,
+  });
   workbench.ui.episodeGenerationConfig = {
     ...config,
     uploadLimits: config?.uploadLimits ?? defaultUploadLimits,
@@ -14412,7 +18512,55 @@ async function loadEpisodeGenerationConfig(workbench, episodeId) {
   return workbench.ui.episodeGenerationConfig;
 }
 
-async function loadGlobalGenerationConfig(workbench) {
+async function refreshEpisodeBatchGenerationConfig(workbench) {
+  const episodeId = resolvePersistedEpisodeWorkbenchId(workbench, workbench.ui.selectedEpisodeId);
+  if (episodeId && typeof workbench.api?.listBatchImageModelOptions === "function") {
+    const config = await workbench.api.listBatchImageModelOptions(episodeId, { fresh: true });
+    workbench.ui.episodeBatchImageModelConfig = normalizeBatchImageModelOptionsConfig(config);
+    return;
+  }
+  if (!episodeId && typeof workbench.api?.listGlobalBatchImageModelOptions === "function") {
+    const config = await workbench.api.listGlobalBatchImageModelOptions({ fresh: true });
+    workbench.ui.episodeBatchImageModelConfig = normalizeBatchImageModelOptionsConfig(config);
+    return;
+  }
+  if (episodeId && typeof workbench.api?.listGenerationConfig === "function") {
+    await loadEpisodeGenerationConfig(workbench, episodeId, { fresh: true });
+    return;
+  }
+  if (typeof workbench.api?.listGlobalGenerationConfig === "function") {
+    await loadGlobalGenerationConfig(workbench, { fresh: true });
+  }
+}
+
+function normalizeBatchImageModelOptionsConfig(payload = {}) {
+  const models = Array.isArray(payload?.models) ? payload.models : [];
+  const normalizedModels = models
+    .map((model) => {
+      const modelCode = String(model?.modelId ?? model?.modelCode ?? model?.id ?? "").trim();
+      if (!modelCode) {
+        return null;
+      }
+      const supportedRatios = normalizeGenerationOptionValues(model?.ratios ?? model?.supportedRatios);
+      const supportedQuality = normalizeGenerationOptionValues(model?.qualities ?? model?.supportedQuality);
+      return {
+        modelCode,
+        modelLabel: String(model?.modelName ?? model?.modelLabel ?? model?.label ?? modelCode).trim() || modelCode,
+        mediaType: "image",
+        supportedModes: ["multi-image"],
+        supportedRatios,
+        supportedQuality,
+        defaultParams: {},
+      };
+    })
+    .filter(Boolean);
+  return {
+    models: normalizedModels,
+    defaultImageModelCode: String(normalizedModels[0]?.modelCode ?? "").trim(),
+  };
+}
+
+async function loadGlobalGenerationConfig(workbench, options = {}) {
   if (typeof workbench.api.listGlobalGenerationConfig !== "function") {
     workbench.ui.episodeGenerationConfig = {
       ...(workbench.ui.episodeGenerationConfig ?? {}),
@@ -14420,7 +18568,9 @@ async function loadGlobalGenerationConfig(workbench) {
     };
     return workbench.ui.episodeGenerationConfig;
   }
-  const config = await workbench.api.listGlobalGenerationConfig();
+  const config = await workbench.api.listGlobalGenerationConfig({
+    fresh: options.fresh === true,
+  });
   workbench.ui.episodeGenerationConfig = {
     ...config,
     uploadLimits: config?.uploadLimits ?? defaultUploadLimits,
@@ -14464,6 +18614,12 @@ function hasLoadedGenerationModelsForMedia(workbench, mediaType) {
 }
 
 async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
+  const tasks = await fetchEpisodeGenerationTasksForWorkbench(workbench, episodeId);
+  applyEpisodeGenerationTasksForWorkbench(workbench, episodeId, tasks);
+  return tasks;
+}
+
+async function fetchEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
   if (
     !episodeId ||
     episodeId === "episode-primary" ||
@@ -14473,33 +18629,35 @@ async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
   }
   try {
     const page = await workbench.api.listGenerationTasks(episodeId, { page: 1, pageSize: 20 });
-    const tasks = Array.isArray(page?.items) ? page.items : [];
-    const storyboards = getEpisodeStoryboards(workbench, episodeId);
-    const storyboardByTargetId = new Map();
-    for (const storyboard of storyboards) {
-      for (const key of [storyboard?.id, storyboard?.linkedShotId, storyboard?.shotId, storyboard?.storyboardId]) {
-        const normalizedKey = String(key ?? "").trim();
-        if (normalizedKey) {
-          storyboardByTargetId.set(normalizedKey, storyboard);
-        }
-      }
-    }
-    for (const task of [...tasks].reverse()) {
-      const mediaKind = task?.kind === "video" || task?.result?.mediaKind === "video" ? "video" : "image";
-      const targetId = String(task?.targetId ?? "").trim();
-      const storyboard = storyboardByTargetId.get(targetId) ?? storyboards[0] ?? null;
-      if (!storyboard) {
-        continue;
-      }
-      applyEpisodeGenerationTaskResult(workbench, task, storyboard.id, mediaKind, {
-        persistConversation: false,
-        suppressFailureToast: true,
-      });
-    }
-    return tasks;
+    return Array.isArray(page?.items) ? page.items : [];
   } catch (error) {
     workbench.ui.episodeWorkbenchError = workbench.ui.episodeWorkbenchError || friendlyError(error);
     return [];
+  }
+}
+
+function applyEpisodeGenerationTasksForWorkbench(workbench, episodeId, tasks = []) {
+  const storyboards = getEpisodeStoryboards(workbench, episodeId);
+  const storyboardByTargetId = new Map();
+  for (const storyboard of storyboards) {
+    for (const key of [storyboard?.id, storyboard?.linkedShotId, storyboard?.shotId, storyboard?.storyboardId]) {
+      const normalizedKey = String(key ?? "").trim();
+      if (normalizedKey) {
+        storyboardByTargetId.set(normalizedKey, storyboard);
+      }
+    }
+  }
+  for (const task of [...tasks].reverse()) {
+    const mediaKind = task?.kind === "video" || task?.result?.mediaKind === "video" ? "video" : "image";
+    const targetId = String(task?.targetId ?? "").trim();
+    const storyboard = storyboardByTargetId.get(targetId) ?? storyboards[0] ?? null;
+    if (!storyboard) {
+      continue;
+    }
+    applyEpisodeGenerationTaskResult(workbench, task, storyboard.id, mediaKind, {
+      persistConversation: false,
+      suppressFailureToast: true,
+    });
   }
 }
 
@@ -14923,6 +19081,117 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
     previewUrl: result.upload.previewUrl ?? null,
   });
   return result.upload;
+}
+
+function isAudioAssetImportFileInput(target) {
+  return (
+    target?.matches?.('input[data-action="select-audio-import-audio-file"]') ||
+    target?.matches?.('input[data-action="select-audio-import-example-image"]')
+  );
+}
+
+function triggerAudioAssetImportFilePicker(target) {
+  const action = target?.dataset?.action ?? "";
+  const inputAction =
+    action === "trigger-audio-import-audio-file"
+      ? "select-audio-import-audio-file"
+      : action === "trigger-audio-import-example-image"
+        ? "select-audio-import-example-image"
+        : "";
+  if (!inputAction) {
+    return false;
+  }
+  const input = target
+    ?.closest?.(".audio-import-field")
+    ?.querySelector?.(`input[data-action="${inputAction}"]`);
+  if (!input) {
+    return false;
+  }
+  try {
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+    } else {
+      input.click?.();
+    }
+  } catch {
+    input.click?.();
+  }
+  return Boolean(input);
+}
+
+async function handleAudioAssetImportFileInputChange(workbench, target) {
+  const [file] = [...(target.files ?? [])];
+  const action = target.dataset.action ?? "";
+  target.value = "";
+  if (!file) {
+    return;
+  }
+
+  if (action === "select-audio-import-audio-file") {
+    workbench.ui.audioAssetImportDraft = {
+      ...(workbench.ui.audioAssetImportDraft ?? {}),
+      audioFileName: file.name,
+      audioUpload: null,
+      audioPreviewUrl: "",
+      audioUploading: true,
+    };
+    render(workbench);
+    try {
+      const upload = await uploadLocalFile(workbench, file, "asset-import/other");
+      const nextPreviewUrl = resolveApiUrl(upload.publicUrl ?? upload.previewUrl ?? "");
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        audioUpload: upload,
+        audioFileName: file.name,
+        audioPreviewUrl: nextPreviewUrl,
+        audioUploading: false,
+      };
+    } catch (error) {
+      console.error("[audio-import] audio upload failed", error);
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        audioUpload: null,
+        audioPreviewUrl: "",
+        audioUploading: false,
+      };
+      workbench.ui.toast = "音频上传失败，请重试。";
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-audio-import-example-image") {
+    workbench.ui.audioAssetImportDraft = {
+      ...(workbench.ui.audioAssetImportDraft ?? {}),
+      exampleImageUpload: null,
+      exampleImagePreview: "",
+      exampleImageSourceUrl: "",
+      exampleImageUploading: true,
+    };
+    render(workbench);
+    try {
+      const upload = await uploadLocalFile(workbench, file, "asset-import/other-image");
+      const nextPreviewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? "");
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        exampleImageUpload: upload,
+        exampleImagePreview: nextPreviewUrl,
+        exampleImageSourceUrl: resolveApiUrl(upload.publicUrl ?? upload.previewUrl ?? "") || nextPreviewUrl,
+        exampleImageUploading: false,
+      };
+    } catch (error) {
+      console.error("[audio-import] example image upload failed", error);
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        exampleImageUpload: null,
+        exampleImagePreview: "",
+        exampleImageSourceUrl: "",
+        exampleImageUploading: false,
+      };
+      workbench.ui.toast = "示例图上传失败，请重试。";
+    }
+    render(workbench);
+  }
 }
 
 function setScriptUploadFile(workbench, file) {
@@ -15418,6 +19687,7 @@ function mergeScriptCardUpdate(workbench, script) {
         ...detail.script,
         ...script,
       };
+      syncSingleEpisodeAiAssetTable(workbench, "character");
     }
     if (Array.isArray(detail.scripts)) {
       nextDetail.scripts = detail.scripts.map((candidate) =>
@@ -16144,7 +20414,7 @@ function resolveEpisodeAssetSelectionContext(workbench) {
   const assetTab = workbench.ui.projectAssetTab ?? "character";
   const importedAssetEntries =
     assetTab === "other"
-      ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
+      ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
       : workbench.ui.importedAssets?.[assetTab] ?? [];
   const assetEntries = importedAssetEntries;
   const selectedAsset =
@@ -17884,6 +22154,25 @@ async function persistAssetConversationEntry(workbench, entry, { includeUserRequ
   return response;
 }
 
+async function reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind = "image") {
+  if (typeof workbench.api?.getGenerationTask !== "function") {
+    return null;
+  }
+  const entry = syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+  const taskId = resolveGenerationTaskIdForConversation(entry);
+  const status = resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus);
+  if (!taskId || !isGenerationTaskPendingStatus(status)) {
+    return entry;
+  }
+  try {
+    const latestTask = await workbench.api.getGenerationTask(taskId);
+    applyAssetBatchGenerationTaskResult(workbench, latestTask, entry, mediaKind);
+    return workbench.ui[resolveAssetConversationTargetKey(mediaKind)] ?? null;
+  } catch {
+    return entry;
+  }
+}
+
 export async function loadSelectedAssetConversationHistory(workbench, options = {}) {
   const mediaKind = options.mediaKind === "video" ? "video" : "image";
   const assetId =
@@ -17900,10 +22189,12 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
   }
   if (!force && workbench.ui.assetConversationHistoryLoadedKeys?.[historyKey]) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
   if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
   if (
@@ -17911,6 +22202,7 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     typeof workbench.api?.getAssetConversationHistory !== "function"
   ) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
   try {
@@ -17930,9 +22222,11 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       [historyKey]: true,
     };
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return entries;
   } catch {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   } finally {
     if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
@@ -18016,17 +22310,19 @@ function inferEpisodeAssetKind(name = "") {
   return "character";
 }
 
+function normalizeEpisodeWorkbenchAssetKind(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized === "scene" || normalized === "prop" || normalized === "character"
+    ? normalized
+    : "character";
+}
+
 function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", items = [] } = {}) {
-  const imageResolution = String(workbench.ui.imageResolution ?? "2K").toUpperCase();
-  const aspectRatio = workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9";
   const publicStyles = resolveEpisodeBatchPublicStyles(workbench);
   const imageModelOptions = resolveEpisodeBatchImageModelOptions(workbench);
   const batchPromptPresetCategories = resolveBatchPromptPresetCategories(workbench);
-  const defaultImageModelId =
-    resolveConfiguredImageModelCode(workbench, "multi-image", imageModelOptions[0]?.value ?? "tnb-pro");
-  const defaultScenePresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.scene, "");
-  const defaultRolePresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.character, "");
-  const defaultPropPresetId = resolveDefaultBatchPromptPresetId(batchPromptPresetCategories.prop, "");
+  const defaultImageModelId = resolveEpisodeBatchImageModelId(workbench, imageModelOptions);
+  const defaultImageModel = imageModelOptions.find((option) => option.value === defaultImageModelId) ?? imageModelOptions[0] ?? null;
   const nextModal = {
     show: true,
     scope,
@@ -18036,21 +22332,35 @@ function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", it
     openField: null,
     imageModelId: defaultImageModelId,
     imageModelOptions,
+    imageAspectRatio: resolveEpisodeBatchModelRatio(defaultImageModel) ?? workbench.state?.project?.aspectRatio ?? "16:9",
+    imageClarity: resolveEpisodeBatchModelClarity(defaultImageModel) ?? "2K",
     styleTab: "public",
     publicStyles,
     customStyles: [],
     selectedStyleId: publicStyles[0]?.id ?? "",
     batchPromptPresetCategories,
-    scenePresetId: defaultScenePresetId,
-    rolePresetId: defaultRolePresetId,
-    propPresetId: defaultPropPresetId,
-    aspectRatio,
-    size: ["1K", "2K"].includes(imageResolution) ? imageResolution : "2K",
     videoModelId: workbench.ui.selectedModelId ?? "vidu-q3-pro",
     videoDurationSec: String(workbench.ui.videoDurationSec ?? "10"),
     videoResolution: String(workbench.ui.videoResolution ?? "720P").toUpperCase(),
   };
   return syncEpisodeBatchModal(nextModal);
+}
+
+function resolveEpisodeBatchImageModelId(workbench, imageModelOptions = []) {
+  const optionIds = new Set(
+    imageModelOptions
+      .map((option) => String(option?.value ?? "").trim())
+      .filter(Boolean),
+  );
+  const currentBatchModelId = String(workbench.ui?.episodeBatchModal?.imageModelId ?? "").trim();
+  if (currentBatchModelId && optionIds.has(currentBatchModelId)) {
+    return currentBatchModelId;
+  }
+  const selectedModelId = String(workbench.ui?.selectedModelId ?? "").trim();
+  if (selectedModelId && optionIds.has(selectedModelId)) {
+    return selectedModelId;
+  }
+  return imageModelOptions[0]?.value ?? "tnb-pro";
 }
 
 function resolveEpisodeBatchAnchorTop(workbench) {
@@ -18064,10 +22374,45 @@ function resolveEpisodeBatchAnchorTop(workbench) {
 }
 
 function syncEpisodeBatchModal(modal) {
+  if (modal?.mode === "image") {
+    const imageModel =
+      (modal?.imageModelOptions ?? []).find((option) => String(option?.value ?? "").trim() === String(modal?.imageModelId ?? "").trim()) ??
+      (modal?.imageModelOptions ?? [])[0] ??
+      null;
+    modal = {
+      ...modal,
+      imageAspectRatio: resolveEpisodeBatchAllowedValue(
+        modal?.imageAspectRatio,
+        normalizeGenerationOptionValues(imageModel?.supportedRatios),
+        resolveEpisodeBatchModelRatio(imageModel) || "16:9",
+      ),
+      imageClarity: resolveEpisodeBatchAllowedValue(
+        modal?.imageClarity,
+        [
+          ...normalizeGenerationOptionValues(imageModel?.supportedQuality),
+          ...normalizeGenerationOptionValues(imageModel?.supportedResolutions),
+        ],
+        resolveEpisodeBatchModelClarity(imageModel) || "2K",
+      ),
+    };
+  }
   return {
     ...modal,
     totalCredits: resolveEpisodeBatchTotalCredits(modal),
   };
+}
+
+function resolveEpisodeBatchAllowedValue(value, options = [], fallback = "") {
+  const normalizedValue = String(value ?? "").trim();
+  const normalizedOptions = normalizeGenerationOptionValues(options);
+  if (!normalizedOptions.length) {
+    return normalizedValue || fallback;
+  }
+  if (normalizedValue && normalizedOptions.includes(normalizedValue)) {
+    return normalizedValue;
+  }
+  const normalizedFallback = String(fallback ?? "").trim();
+  return normalizedOptions.includes(normalizedFallback) ? normalizedFallback : normalizedOptions[0] ?? normalizedFallback;
 }
 
 function resolveEpisodeBatchTotalCredits(modal) {
@@ -18083,8 +22428,76 @@ function resolveEpisodeBatchUnitCredit(modal) {
   if (mode === "upscale") {
     return 30;
   }
+  const selectedModelId = String(modal?.imageModelId ?? "").trim();
+  const configuredCredit = resolveEpisodeBatchConfiguredModelCredit(
+    (modal?.imageModelOptions ?? []).find((option) => {
+      return String(option?.value ?? option?.id ?? "").trim() === selectedModelId;
+    }),
+  );
+  if (Number.isFinite(configuredCredit) && configuredCredit > 0) {
+    return configuredCredit;
+  }
+  return resolveEpisodeBatchFallbackUnitCredit(modal);
+}
+
+function resolveEpisodeBatchModelRatio(model) {
+  const defaultParams = model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {};
+  return firstGenerationValue(defaultParams.aspectRatio, ...(normalizeGenerationOptionValues(model?.supportedRatios)));
+}
+
+function resolveEpisodeBatchModelClarity(model) {
+  const defaultParams = model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {};
+  return firstGenerationValue(
+    defaultParams.quality,
+    defaultParams.resolution,
+    ...(normalizeGenerationOptionValues(model?.supportedQuality)),
+    ...(normalizeGenerationOptionValues(model?.supportedResolutions)),
+  );
+}
+
+function resolveEpisodeBatchConfiguredModelCredit(model) {
+  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
+    ? model.pricing
+    : {};
+  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
+    ? model.pricingJson
+    : {};
+  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
+    ? model.pricing_json
+    : {};
+  const candidates = [
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    pricingJson.baseCredits,
+    pricingJson.credits,
+    pricingJson.cost,
+    pricingJson.price,
+    pricingSnakeJson.baseCredits,
+    pricingSnakeJson.credits,
+    pricingSnakeJson.cost,
+    pricingSnakeJson.price,
+    model?.displayBaseCost,
+    model?.baseCredits,
+    model?.credits,
+    model?.creditCost,
+    model?.cost,
+    model?.price,
+    model?.priceCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return Math.round(value);
+    }
+  }
+  return null;
+}
+
+function resolveEpisodeBatchFallbackUnitCredit(modal) {
   const modelId = modal?.imageModelId ?? "tnb-pro";
-  const size = String(modal?.size ?? "2K").toUpperCase();
+  const size = String(modal?.imageClarity ?? "2K").toUpperCase();
   if (modelId === "jimeng-4-5" || modelId === "jimeng-4-5-vip") {
     return size === "1K" ? 40 : 50;
   }
@@ -18098,9 +22511,14 @@ function resolveEpisodeBatchUnitCredit(modal) {
 }
 
 function resolveEpisodeBatchImageModelOptions(workbench) {
-  const configuredModels = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
-    ? workbench.ui.episodeGenerationConfig.models
+  const batchModels = Array.isArray(workbench.ui?.episodeBatchImageModelConfig?.models)
+    ? workbench.ui.episodeBatchImageModelConfig.models
     : [];
+  const configuredModels = batchModels.length
+    ? batchModels
+    : Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+      ? workbench.ui.episodeGenerationConfig.models
+      : [];
   const options = configuredModels
     .filter((model) => normalizeGenerationModelMediaKind(model) === "image")
     .filter((model) => modelSupportsGenerationMode(model, "multi-image"))
@@ -18114,6 +22532,20 @@ function resolveEpisodeBatchImageModelOptions(workbench) {
         value: modelCode,
         label: String(model?.modelLabel ?? model?.label ?? modelCode).trim() || modelCode,
         group: providerGroup || "后台配置",
+        supportedRatios: normalizeGenerationOptionValues(model?.supportedRatios),
+        supportedQuality: normalizeGenerationOptionValues(model?.supportedQuality),
+        supportedResolutions: normalizeGenerationOptionValues(model?.supportedResolutions),
+        defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {},
+        pricing: model?.pricing,
+        pricingJson: model?.pricingJson,
+        pricing_json: model?.pricing_json,
+        displayBaseCost: model?.displayBaseCost,
+        baseCredits: model?.baseCredits,
+        credits: model?.credits,
+        creditCost: model?.creditCost,
+        cost: model?.cost,
+        price: model?.price,
+        priceCredits: model?.priceCredits,
       };
     })
     .filter(Boolean);
@@ -18147,10 +22579,11 @@ function normalizeBatchPromptPresetCategoryList(value) {
     .map((item) => {
       const id = String(item?.id ?? "").trim();
       const label = String(item?.label ?? "").trim();
+      const promptContent = String(item?.prompt_content ?? item?.promptContent ?? "").trim();
       if (!id || !label || id === "none") {
         return null;
       }
-      return { id, label };
+      return promptContent ? { id, label, prompt_content: promptContent, promptContent } : { id, label };
     })
     .filter(Boolean)
     .filter((item) => {
@@ -18168,6 +22601,56 @@ function resolveDefaultBatchPromptPresetId(options, fallbackId) {
     return fallbackId;
   }
   return options?.[0]?.id ?? "none";
+}
+
+function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind, promptPreview, selectionContext, createdAt) {
+  return {
+    mediaKind: "image",
+    assetId: item?.id ?? null,
+    promptPreview,
+    quickReferenceItems: [],
+    attachmentItems: [],
+    selectionContext,
+    selectedModelId: modal?.imageModelId ?? "gpt-image-2-cn",
+    resolution: modal?.imageClarity ?? "2K",
+    aspectRatio: modal?.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
+    creditCost: resolveEpisodeBatchUnitCredit(modal),
+    createdAt,
+    status: "running",
+  };
+}
+
+function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission) {
+  const model = String(modal?.imageModelId ?? "gpt-image-2-cn").trim() || "gpt-image-2-cn";
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
+  const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
+  const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
+  return {
+    shotId: null,
+    promptOverride: submission?.promptPreview ?? "",
+    model,
+    parameters: {
+      ...configuredParameters,
+      mode: "multi-image",
+      count: 1,
+      ...(qualityVisible ? { quality: modal?.imageClarity ?? "2K" } : {}),
+      ...(resolutionVisible ? { resolution: modal?.imageClarity ?? "2K" } : {}),
+      ...(aspectRatioVisible ? { aspectRatio: modal?.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9" } : {}),
+      strategy: workbench.ui.multiImageStrategy ?? "spatial-multi-view",
+      references: [],
+      quickReferences: [],
+      firstFrame: null,
+      imageReference: null,
+      localReferenceRoles: [],
+      selectionContext: submission?.selectionContext ?? {},
+    },
+    targetType: "asset",
+    targetId: item?.id ?? null,
+    assetId: item?.id ?? null,
+    assetType: assetKind,
+    prompt: submission?.promptPreview ?? "",
+  };
 }
 
 export async function generateAssetImages(workbench) {
@@ -18515,9 +22998,9 @@ function scheduleCanvasGenerationPolling(workbench, preview, options = {}) {
           }));
           workbench.ui.canvasRunPreview = null;
         }
-        workbench.ui.toast = succeeded
-          ? "画布节点生成完成。"
-          : { tone: "error", message: generationTaskNoticePrefix(latestTask) + generationTaskFailureMessage(latestTask) };
+        if (!succeeded) {
+          workbench.ui.toast = { tone: "error", message: generationTaskNoticePrefix(latestTask) + generationTaskFailureMessage(latestTask) };
+        }
         render(workbench);
         return;
       }
@@ -18692,6 +23175,64 @@ function scheduleSelectedAssetGenerationPolling(workbench, mediaKind = "image", 
   }, delayMs);
 }
 
+function scheduleAssetBatchGenerationPolling(workbench, mediaKind = "image", options = {}) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.setTimeout !== "function" ||
+    typeof workbench.api?.getGenerationTask !== "function"
+  ) {
+    return;
+  }
+  const targets = resolveAssetBatchGenerationPollTargets(workbench, mediaKind);
+  if (!targets.length) {
+    stopAssetBatchGenerationPolling(workbench);
+    workbench.ui.generationPollingActive = false;
+    return;
+  }
+  const scopeKey = targets.map((target) => target.scopeKey).sort().join("|");
+  if (workbench.assetBatchGenerationPollTimer && workbench.assetBatchGenerationPollScopeKey === scopeKey) {
+    return;
+  }
+
+  stopAssetBatchGenerationPolling(workbench);
+  workbench.assetBatchGenerationPollScopeKey = scopeKey;
+  const delayMs = options.immediate ? 0 : GENERATION_POLL_INTERVAL_MS;
+  workbench.assetBatchGenerationPollTimer = window.setTimeout(async () => {
+    workbench.assetBatchGenerationPollTimer = null;
+    const settled = await Promise.all(targets.map(async (target) => {
+      try {
+        const latestTask = await workbench.api.getGenerationTask(target.taskId);
+        applyAssetBatchGenerationTaskResult(workbench, latestTask, target.entry, target.mediaKind);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    }));
+    const firstError = settled.find((item) => item.ok === false)?.error;
+    if (firstError) {
+      workbench.ui.toast = `轮询刷新失败：${friendlyError(firstError)}`;
+    }
+    const hasPending = resolveAssetBatchGenerationPollTargets(workbench, mediaKind).length > 0;
+    workbench.ui.generationPollingActive = hasPending;
+    render(workbench);
+    if (hasPending) {
+      scheduleAssetBatchGenerationPolling(workbench, mediaKind);
+    } else {
+      stopAssetBatchGenerationPolling(workbench);
+    }
+  }, delayMs);
+}
+
+function stopAssetBatchGenerationPolling(workbench) {
+  if (workbench.assetBatchGenerationPollTimer) {
+    if (typeof window !== "undefined" && typeof window.clearTimeout === "function") {
+      window.clearTimeout(workbench.assetBatchGenerationPollTimer);
+    }
+    workbench.assetBatchGenerationPollTimer = null;
+  }
+  workbench.assetBatchGenerationPollScopeKey = null;
+}
+
 function stopAssetGenerationPolling(workbench) {
   if (workbench.assetGenerationPollTimer) {
     if (typeof window !== "undefined" && typeof window.clearTimeout === "function") {
@@ -18773,6 +23314,70 @@ function resolveSelectedAssetGenerationPollTarget(workbench, mediaKind = "image"
     taskId,
     scopeKey: `${mediaKind}:${assetId}:${taskId}`,
   };
+}
+
+function resolveAssetBatchGenerationPollTargets(workbench, mediaKind = "image") {
+  if (
+    workbench.ui.projectPanelMode !== "episode-workbench" ||
+    (workbench.ui.museScopeMode ?? "storyboard") !== "assets" ||
+    typeof workbench.api?.getGenerationTask !== "function"
+  ) {
+    return [];
+  }
+  const batchResults = workbench.ui.episodeBatchResults ?? {};
+  return Object.entries(batchResults)
+    .map(([assetId, entry]) => {
+      const taskId = resolveGenerationTaskIdForConversation(entry);
+      const status = resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus);
+      const entryMediaKind = entry?.mediaKind === "video" ? "video" : "image";
+      if (!taskId || entryMediaKind !== mediaKind || !isGenerationTaskPendingStatus(status)) {
+        return null;
+      }
+      return {
+        assetId,
+        mediaKind,
+        taskId,
+        entry,
+        scopeKey: `${mediaKind}:${assetId}:${taskId}`,
+      };
+    })
+    .filter(Boolean);
+}
+
+function applyAssetBatchGenerationTaskResult(workbench, task, submission, mediaKind = "image") {
+  if (!task || !submission) {
+    return;
+  }
+  const normalized = normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind);
+  const assetId =
+    normalized?.assetId ??
+    submission?.assetId ??
+    normalized?.selectionContext?.selectedAssetId ??
+    submission?.selectionContext?.selectedAssetId ??
+    null;
+  if (!assetId) {
+    return;
+  }
+  const result = {
+    ...submission,
+    ...normalized,
+    status: resolveWorkflowStatus(normalized?.platform?.workflowStatus ?? normalized?.status),
+    taskId: normalized?.platform?.tasks?.[0]?.taskId ?? normalized?.taskId ?? submission?.taskId ?? null,
+    fixedImages: normalized?.fixedImages ?? submission?.fixedImages ?? [],
+    selectionContext: normalized?.selectionContext ?? submission.selectionContext,
+  };
+  workbench.ui.episodeBatchResults = {
+    ...(workbench.ui.episodeBatchResults ?? {}),
+    [assetId]: result,
+  };
+  appendAssetConversationHistoryEntry(workbench, result);
+  if (Number.isFinite(Number(result?.creditBalance))) {
+    setWorkbenchCreditBalance(workbench, Number(result.creditBalance));
+  }
+  if (workbench.ui.selectedEpisodeAssetId === assetId || workbench.ui.selectedEpisodeCardId === assetId) {
+    workbench.ui.imageGenerationResult = result;
+  }
+  void persistAssetConversationEntry(workbench, result).catch(() => {});
 }
 
 function isGenerationTaskPendingStatus(status) {
@@ -19438,8 +24043,8 @@ function syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes
       continue;
     }
 
-    if (!Array.isArray(nextMap[episode.id]) || nextMap[episode.id].length === 0) {
-      nextMap[episode.id] = addStoryboard([]);
+    if (!Array.isArray(nextMap[episode.id])) {
+      nextMap[episode.id] = [];
     }
   }
 
@@ -19487,6 +24092,33 @@ function getEpisodeStoryboards(
   }
 
   return workbench.ui.episodeStoryboardMap?.[episodeId] ?? [];
+}
+
+function normalizeStoryboardWorkbenchPageSize(value) {
+  return Number(value) === 10 ? 10 : 10;
+}
+
+function clampStoryboardWorkbenchPage(value, totalPages) {
+  const page = Number(value);
+  if (!Number.isFinite(page)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
+}
+
+function syncStoryboardPaginationForSelection(workbench) {
+  const storyboards = getActiveStoryboards(workbench);
+  const pageSize = normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize);
+  const totalPages = Math.max(1, Math.ceil(storyboards.length / pageSize));
+  const selectedIndex = storyboards.findIndex((item) => item.id === workbench.ui.selectedStoryboardId);
+  if (selectedIndex >= 0) {
+    workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(
+      Math.floor(selectedIndex / pageSize) + 1,
+      totalPages,
+    );
+    return;
+  }
+  workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(workbench.ui.storyboardPage, totalPages);
 }
 
 function ensureEpisodeStoryboards(workbench, episodeId) {
@@ -19906,6 +24538,7 @@ function resolveAdjacentStoryboardId(storyboards, removedIndex) {
 function syncSelectedStoryboardId(workbench, storyboards) {
   if (!workbench.ui.selectedStoryboardId && storyboards.length > 0) {
     workbench.ui.selectedStoryboardId = storyboards[0].id;
+    syncStoryboardPaginationForSelection(workbench);
     return;
   }
 
@@ -19915,6 +24548,7 @@ function syncSelectedStoryboardId(workbench, storyboards) {
   ) {
     workbench.ui.selectedStoryboardId = storyboards[0]?.id ?? null;
   }
+  syncStoryboardPaginationForSelection(workbench);
 }
 
 function hydratePersistedWorkbenchState(workbench) {
@@ -19938,17 +24572,54 @@ function hydratePersistedWorkbenchState(workbench) {
   if (typeof persisted.selectedStoryboardId === "string" || persisted.selectedStoryboardId === null) {
     workbench.ui.selectedStoryboardId = persisted.selectedStoryboardId;
   }
+  if (typeof persisted.storyboardPage === "number") {
+    workbench.ui.storyboardPage = persisted.storyboardPage;
+  }
+  if (typeof persisted.storyboardPageSize === "number") {
+    workbench.ui.storyboardPageSize = normalizeStoryboardWorkbenchPageSize(persisted.storyboardPageSize);
+  }
   if (typeof persisted.projectPanelMode === "string") {
     workbench.ui.projectPanelMode = persisted.projectPanelMode;
   }
   if (typeof persisted.projectInteriorSection === "string") {
-    workbench.ui.projectInteriorSection = persisted.projectInteriorSection;
+    workbench.ui.projectInteriorSection = normalizeProjectInteriorSection(persisted.projectInteriorSection);
   }
   if (typeof persisted.museScopeMode === "string") {
     workbench.ui.museScopeMode = persisted.museScopeMode;
   }
   if (typeof persisted.projectAssetTab === "string") {
     workbench.ui.projectAssetTab = persisted.projectAssetTab;
+  }
+  if (typeof persisted.episodeWorkbenchCenterWidthRatio === "number") {
+    workbench.ui.episodeWorkbenchCenterWidthRatio = clampEpisodeWorkbenchCenterWidthRatio(
+      persisted.episodeWorkbenchCenterWidthRatio,
+    );
+    if (
+      typeof persisted.episodeWorkbenchCenterWidthPx !== "number"
+      && (
+        Math.abs(workbench.ui.episodeWorkbenchCenterWidthRatio - EPISODE_LAYOUT_LEGACY_DEFAULT_CENTER_WIDTH) < 0.001
+        || Math.abs(workbench.ui.episodeWorkbenchCenterWidthRatio - EPISODE_LAYOUT_EARLY_DEFAULT_CENTER_WIDTH) < 0.001
+      )
+    ) {
+      workbench.ui.episodeWorkbenchCenterWidthRatio = EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH;
+    }
+  } else if (typeof persisted.episodeWorkbenchLeftWidthRatio === "number") {
+    workbench.ui.episodeWorkbenchCenterWidthRatio = clampEpisodeWorkbenchCenterWidthRatio(
+      persisted.episodeWorkbenchLeftWidthRatio + 0.26,
+    );
+  }
+  if (typeof persisted.episodeWorkbenchCenterWidthPx === "number") {
+    workbench.ui.episodeWorkbenchCenterWidthPx = clampEpisodeWorkbenchCenterWidthPx(
+      persisted.episodeWorkbenchCenterWidthPx,
+    );
+  }
+  const persistedWidthVersion = Number(persisted.episodeWorkbenchCenterWidthVersion ?? 0);
+  if (persistedWidthVersion < EPISODE_LAYOUT_WIDTH_VERSION) {
+    const defaultPixelWidth = buildEpisodeWorkbenchDefaultCenterWidthPx();
+    if (defaultPixelWidth) {
+      workbench.ui.episodeWorkbenchCenterWidthPx = defaultPixelWidth;
+      workbench.ui.episodeWorkbenchCenterWidthRatio = EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH;
+    }
   }
   if (typeof persisted.selectedEpisodeAssetId === "string" || persisted.selectedEpisodeAssetId === null) {
     workbench.ui.selectedEpisodeAssetId = persisted.selectedEpisodeAssetId;
@@ -19992,7 +24663,7 @@ function syncWorkbenchRouteState(workbench, hash) {
   if (parseProjectRouteToken(token)) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "workspace";
-    workbench.ui.projectInteriorSection = "episodes";
+    workbench.ui.projectInteriorSection = "overview";
     return;
   }
   if (token === "project") {
@@ -20004,6 +24675,12 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "workspace";
     workbench.ui.projectInteriorSection = workbench.ui.projectInteriorSection ?? "overview";
+    return;
+  }
+  if (token === "community") {
+    workbench.ui.activeNavTab = "community";
+    workbench.ui.projectPanelMode = "workspace";
+    workbench.ui.projectInteriorSection = "episodes";
     return;
   }
   if (token === "home" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
@@ -20099,12 +24776,14 @@ async function restoreProjectRouteState(workbench, locationLike) {
 
   workbench.ui.activeNavTab = "project";
   workbench.ui.projectPanelMode = "workspace";
-  workbench.ui.projectInteriorSection = "episodes";
+  workbench.ui.projectInteriorSection = "overview";
   workbench.ui.selectedProjectCardId = route.projectId;
 
   try {
     applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, route.projectId));
-    await syncProjectInteriorSupplementary(workbench);
+    if (shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)) {
+      await syncProjectInteriorSupplementary(workbench);
+    }
     return true;
   } catch (error) {
     workbench.ui.projectPanelMode = "library";
@@ -20208,6 +24887,7 @@ export function sanitizeEpisodeWorkbenchSelection(workbench, options = {}) {
     workbench.ui.imageGenerationResult = null;
     workbench.ui.videoGenerationResult = null;
   }
+  syncStoryboardPaginationForSelection(workbench);
   if (options.persist === true) {
     writeWorkbenchState(workbench.state?.project?.id ?? null, buildPersistedWorkbenchStatePayload(workbench));
   }
@@ -20259,11 +24939,23 @@ function buildPersistedWorkbenchStatePayload(workbench) {
   return {
     selectedEpisodeId,
     selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
+    storyboardPage: clampStoryboardWorkbenchPage(
+      workbench.ui.storyboardPage,
+      Math.max(1, Math.ceil(getActiveStoryboards(workbench).length / normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize))),
+    ),
+    storyboardPageSize: normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize),
     selectedEpisodeAssetId: workbench.ui.selectedEpisodeAssetId ?? null,
     selectedEpisodeCardId: workbench.ui.selectedEpisodeCardId ?? null,
     projectPanelMode: workbench.ui.projectPanelMode ?? "library",
-    projectInteriorSection: workbench.ui.projectInteriorSection ?? "overview",
+    projectInteriorSection: normalizeProjectInteriorSection(workbench.ui.projectInteriorSection),
     museScopeMode: workbench.ui.museScopeMode ?? "storyboard",
+    episodeWorkbenchCenterWidthRatio: clampEpisodeWorkbenchCenterWidthRatio(
+      workbench.ui.episodeWorkbenchCenterWidthRatio,
+    ),
+    episodeWorkbenchCenterWidthPx: clampEpisodeWorkbenchCenterWidthPx(
+      workbench.ui.episodeWorkbenchCenterWidthPx,
+    ),
+    episodeWorkbenchCenterWidthVersion: EPISODE_LAYOUT_WIDTH_VERSION,
     projectAssetTab: workbench.ui.projectAssetTab ?? "character",
     storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
     episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
@@ -20283,7 +24975,7 @@ function syncSelectedEpisodeAssetForCurrentTab(workbench) {
   const assetTab = workbench.ui.projectAssetTab ?? "character";
   const assetEntries =
     assetTab === "other"
-      ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
+      ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
       : workbench.ui.importedAssets?.[assetTab] ?? [];
   const selectedId =
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeCardId)?.id ??
@@ -21211,6 +25903,7 @@ async function ensureStoryboardShot(workbench, storyboardId) {
 }
 
 function applyPostRenderEffects(workbench) {
+  syncEpisodeWorkbenchLayoutVars(workbench);
   positionPromptMentionPreview(workbench);
   scheduleSelectedAssetGenerationPolling(workbench, "image");
   const episodeWorkbenchScrollTarget = workbench.ui.episodeWorkbenchScrollTarget ?? null;
@@ -21547,7 +26240,7 @@ function normalizeAssetImportName(fileName) {
 async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value) {
   const description = String(value ?? "").trim();
   const currentAssets = assetKind === "other"
-    ? workbench.ui.importedAssets?.other?.[workbench.ui.projectOtherAssetMediaType ?? "image"] ?? []
+    ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
     : workbench.ui.importedAssets?.[assetKind] ?? [];
   const targetAsset =
     currentAssets.find((item) => matchesAssetRecordId(item, assetId)) ??
@@ -21705,11 +26398,12 @@ function prepareAssetLibraryReturn(workbench, { assetKind, mediaType, assetIds, 
   workbench.ui.assetFilterMode = "all";
   workbench.ui.assetOnlyMain = false;
   if (assetKind === "other") {
-    workbench.ui.projectOtherAssetMediaType = mediaType === "image" ? "image" : "video";
+    workbench.ui.projectOtherAssetMediaType = normalizeProjectOtherAssetMediaType(mediaType, "audio");
   }
   workbench.ui.assetLibraryHighlightAssetIds = normalizedIds;
   workbench.ui.assetLibraryHighlightKind = assetKind;
-  workbench.ui.assetLibraryHighlightMediaType = assetKind === "other" ? mediaType : "image";
+  workbench.ui.assetLibraryHighlightMediaType =
+    assetKind === "other" ? normalizeProjectOtherAssetMediaType(mediaType, "audio") : "image";
   workbench.ui.assetLibraryHighlightMessage =
     count > 0
       ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。`
@@ -21729,9 +26423,68 @@ function clearAssetLibraryReturnState(workbench) {
   workbench.ui.assetLibraryPendingFocusAssetIds = [];
 }
 
+function closeAssetImportOverlays(workbench) {
+  revokeAudioAssetImportPreviewUrl(workbench.ui.audioAssetImportDraft);
+  workbench.ui.assetImportModal = null;
+  workbench.ui.assetImportModalSource = null;
+  workbench.ui.audioAssetImportDraft = null;
+  workbench.ui.episodeAssetLibraryModal = null;
+  workbench.ui.assetImportDrafts = [];
+  workbench.ui.assetImportSelection = [];
+  workbench.ui.assetImportPage = 1;
+  workbench.ui.assetImportPageSizeMenuOpen = false;
+}
+
+function normalizeProjectOtherAssetMediaType(value, fallback = "audio") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "audio" || normalized === "image" || normalized === "video") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function resolveProjectOtherAssetImportKind(mediaType) {
+  const normalized = normalizeProjectOtherAssetMediaType(mediaType, "audio");
+  return normalized === "audio" ? "video" : normalized;
+}
+
+function resolveImportedProjectAudioUrl(asset) {
+  const candidates = [
+    asset?.audioUrl,
+    asset?.sourceUrl,
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.latestVersion?.metadata?.sourceUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+  ];
+  const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    if (
+      mimeType.startsWith("audio/") ||
+      /^data:audio\//i.test(value) ||
+      /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(value)
+    ) {
+      return value;
+    }
+  }
+  return "";
+}
+
 function getAssetLibraryKindLabel(assetKind, mediaType = "image") {
   if (assetKind === "other") {
-    return mediaType === "video" ? "视频素材" : "图片素材";
+    const normalized = normalizeProjectOtherAssetMediaType(mediaType, "audio");
+    if (normalized === "video") {
+      return "视频素材";
+    }
+    if (normalized === "image") {
+      return "图片素材";
+    }
+    return "音频素材";
   }
   return (
     {
@@ -21823,15 +26576,16 @@ function cloneImportedAssets(importedAssets) {
     scene: [...(importedAssets?.scene ?? [])],
     prop: [...(importedAssets?.prop ?? [])],
     other: {
+      audio: [...(importedAssets?.other?.audio ?? [])],
       image: [...(importedAssets?.other?.image ?? [])],
       video: [...(importedAssets?.other?.video ?? [])],
     },
   };
 }
 
-function getImportedAssetBucket(importedAssets, assetKind, otherMediaType = "video") {
+function getImportedAssetBucket(importedAssets, assetKind, otherMediaType = "audio") {
   if (assetKind === "other") {
-    return importedAssets?.other?.[otherMediaType] ?? [];
+    return importedAssets?.other?.[normalizeProjectOtherAssetMediaType(otherMediaType, "audio")] ?? [];
   }
   return importedAssets?.[assetKind] ?? [];
 }
@@ -21914,7 +26668,7 @@ export function syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, 
 
   const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
   if (assetKind === "other") {
-    const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
+    const mediaType = normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio");
     nextImportedAssets.other[mediaType] = updateAssetRecordBucket(
       nextImportedAssets.other[mediaType],
       assetId,
@@ -22009,7 +26763,7 @@ function syncProjectAssetNameState(workbench, assetKind, assetId, name) {
 
   const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
   if (assetKind === "other") {
-    const mediaType = workbench.ui.projectOtherAssetMediaType ?? "image";
+    const mediaType = normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio");
     nextImportedAssets.other[mediaType] = updateAssetRecordBucket(
       nextImportedAssets.other[mediaType],
       assetId,
@@ -22277,6 +27031,108 @@ function applyAssetConversationPreviewFallback(assets = [], historyMap = {}) {
       fixedImageUrl: conversationPreview,
     };
   });
+}
+
+function hydrateEpisodeAssetsFromProjectLibraryByName(workbench, assets = [], kind = "character") {
+  const projectAssetPreviews = buildProjectAssetPreviewMapByName(workbench, kind);
+  if (!projectAssetPreviews.size) {
+    return Array.isArray(assets) ? assets : [];
+  }
+  return (Array.isArray(assets) ? assets : []).map((asset) => {
+    const currentPreview = resolvePreferredFixedImageUrl(
+      asset?.preview,
+      asset?.previewUrl,
+      asset?.fixedImageUrl,
+      asset?.sourceUrl,
+      asset?.latestVersion?.previewUrl,
+      asset?.latestVersion?.metadata?.fixedImageUrl,
+      asset?.latestVersion?.metadata?.previewUrl,
+    );
+    if (currentPreview && !isMockImageUrl(currentPreview)) {
+      return asset;
+    }
+    const matchedPreview = findProjectAssetPreviewForEpisodeAsset(projectAssetPreviews, asset);
+    if (!matchedPreview) {
+      return asset;
+    }
+    return {
+      ...asset,
+      preview: matchedPreview,
+      previewUrl: matchedPreview,
+      fixedImageUrl: matchedPreview,
+      sourceUrl: asset?.sourceUrl ?? matchedPreview,
+    };
+  });
+}
+
+function buildProjectAssetPreviewMapByName(workbench, kind) {
+  const previewByName = new Map();
+  const projectAssets = collectProjectAssetsForNameHydration(workbench, kind);
+  for (const asset of projectAssets) {
+    const preview = resolvePreferredFixedImageUrl(
+      asset?.preview,
+      asset?.previewUrl,
+      asset?.fixedImageUrl,
+      asset?.sourceUrl,
+      asset?.latestVersion?.previewUrl,
+      asset?.latestVersion?.metadata?.fixedImageUrl,
+      asset?.latestVersion?.metadata?.previewUrl,
+    );
+    if (!preview || isMockImageUrl(preview)) {
+      continue;
+    }
+    for (const name of listProjectAssetMatchNames(asset)) {
+      const normalizedName = normalizeEpisodeAssetNameForMatch(name);
+      if (normalizedName && !previewByName.has(normalizedName)) {
+        previewByName.set(normalizedName, preview);
+      }
+    }
+  }
+  return previewByName;
+}
+
+function collectProjectAssetsForNameHydration(workbench, kind) {
+  const projectLibraryAssets = workbench.ui.projectLibraryAssetsByType?.[kind] ?? [];
+  const detailAssets =
+    workbench.ui.projectDetail?.assetsByType?.[kind] ??
+    workbench.state?.projectDetail?.assetsByType?.[kind] ??
+    [];
+  return [
+    ...(Array.isArray(projectLibraryAssets) ? projectLibraryAssets : []),
+    ...(Array.isArray(detailAssets) ? detailAssets : []),
+  ];
+}
+
+function findProjectAssetPreviewForEpisodeAsset(previewByName, asset) {
+  for (const name of listProjectAssetMatchNames(asset)) {
+    const normalizedName = normalizeEpisodeAssetNameForMatch(name);
+    if (normalizedName && previewByName.has(normalizedName)) {
+      return previewByName.get(normalizedName);
+    }
+  }
+  return "";
+}
+
+function listProjectAssetMatchNames(asset) {
+  return [
+    asset?.name,
+    asset?.label,
+    asset?.assetKey,
+    extractAssetDisplayNameFromKey(asset?.assetKey),
+  ].filter(Boolean);
+}
+
+function extractAssetDisplayNameFromKey(value) {
+  const raw = String(value ?? "").trim();
+  const match = /^(?:character|role|scene|prop|asset)[-_](.+?)(?:[-_][a-f0-9]{6,}|[-_]\d{6,})?$/i.exec(raw);
+  return match?.[1]?.trim() ?? "";
+}
+
+function normalizeEpisodeAssetNameForMatch(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(/^[@#]+/, "")
+    .toLowerCase();
 }
 
 function preserveRealEpisodeAssetPreviews(existingAssets = [], nextAssets = []) {
@@ -22846,7 +27702,10 @@ export function friendlyError(error) {
   if (
     errorCode === "unexpected_response" ||
     error instanceof SyntaxError ||
-    message.includes("Unexpected token")
+    message.includes("Unexpected token") ||
+    message.includes("Expected double-quoted property name") ||
+    message.includes("property name in JSON") ||
+    message.includes("JSON at position")
   ) {
     return `服务返回异常，请刷新页面或重新登录。${requestId}`;
   }
@@ -22884,6 +27743,7 @@ export function friendlyError(error) {
 function modelGenerationErrorMessage(value) {
   return (
     {
+      generation_membership_required: "有效会员已过期或未开通，请先开通会员。",
       model_reference_limit_exceeded: "参考素材数量超出模型限制",
       model_reference_not_found: "参考素材不存在或无权访问",
       model_reference_unavailable: "参考素材尚未准备好，请重新选择",
@@ -22893,7 +27753,7 @@ function modelGenerationErrorMessage(value) {
       model_disabled: "当前模型维护中，请切换模型",
       model_task_mode_unsupported: "当前模型不支持该生成方式",
       model_media_type_mismatch: "当前模型类型不匹配",
-      insufficient_credits: "积分不足，请充值后再生成",
+      insufficient_credits: "积分余额不足，请充值。",
       generation_queue_unavailable: "生成队列未启动，请先启动 Redis、generation-outbox 和 generation-worker。",
     }[String(value ?? "")] ?? ""
   );
@@ -22953,6 +27813,36 @@ function resolveEventElement(target) {
     return target.parentElement;
   }
   return null;
+}
+
+export function hasActiveWorkbenchTextSelection(target, selection = globalThis.window?.getSelection?.()) {
+  const doc = target?.ownerDocument ?? globalThis.document ?? null;
+  const activeElement = doc?.activeElement ?? null;
+  if (activeElement?.matches?.("textarea, input")) {
+    const selectionStart = Number(activeElement.selectionStart ?? 0);
+    const selectionEnd = Number(activeElement.selectionEnd ?? selectionStart);
+    if (selectionEnd > selectionStart) {
+      return true;
+    }
+  }
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  const selectedText = String(selection.toString?.() ?? "").trim();
+  if (!selectedText) {
+    return false;
+  }
+  if (target && selection.rangeCount > 0 && typeof selection.getRangeAt === "function") {
+    try {
+      const range = selection.getRangeAt(0);
+      if (range && typeof range.intersectsNode === "function" && !range.intersectsNode(target)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function findScopedInput(root, trigger, selector) {
@@ -23025,6 +27915,9 @@ function deriveInitialNavTab(hash) {
   if (parseEpisodeRouteToken(token) || parseProjectRouteToken(token)) {
     return "project";
   }
+  if (token === "community") {
+    return "community";
+  }
   if (token === "home") {
     return "home";
   }
@@ -23053,12 +27946,6 @@ function deriveInitialNavTab(hash) {
 }
 
 const LINGXI_COMMUNITY_STORAGE_KEY = "lingxi-community-board";
-
-function openLingxiCommunityWindow() {
-  const url = new URL(window.location.href);
-  url.hash = "community";
-  window.open(url.toString(), "_blank", "noopener,noreferrer");
-}
 
 function readLingxiCommunityData() {
   const fallback = createDefaultLingxiCommunityData();
@@ -23449,11 +28336,12 @@ function mapEpisodeStoryboardContract(storyboard) {
   const imageDraft = generationDrafts.find((draft) => draft.mode === "image") ?? null;
   const fallbackVideoPrompt = resolveEpisodeStoryboardVideoPrompt(storyboard);
   const fallbackImagePrompt = resolveEpisodeStoryboardImagePrompt(storyboard);
+  const resolvedVideoPrompt = videoDraft?.prompt ?? fallbackVideoPrompt;
   const activeDraft = videoDraft ?? imageDraft ?? (
-    fallbackVideoPrompt || fallbackImagePrompt
+    resolvedVideoPrompt || fallbackImagePrompt
       ? {
-          mode: fallbackVideoPrompt ? "video" : "image",
-          prompt: fallbackVideoPrompt || fallbackImagePrompt,
+          mode: resolvedVideoPrompt ? "video" : "image",
+          prompt: resolvedVideoPrompt || fallbackImagePrompt,
           payload: {},
           updatedAt: null,
         }
@@ -23465,7 +28353,7 @@ function mapEpisodeStoryboardContract(storyboard) {
     episodeId: storyboard?.episodeId ?? null,
     index: Number(storyboard?.index ?? storyboard?.indexNo ?? storyboard?.sortOrder ?? 1),
     title: storyboard?.title ?? String(storyboard?.indexNo ?? storyboard?.sortOrder ?? 1),
-    description: storyboard?.description ?? storyboard?.sceneAnalysis ?? storyboard?.plotPreview ?? "",
+    description: resolvedVideoPrompt || (storyboard?.description ?? storyboard?.sceneAnalysis ?? storyboard?.plotPreview ?? ""),
     sceneAnalysis: storyboard?.sceneAnalysis ?? "",
     plotPreview: storyboard?.plotPreview ?? "",
     previewImageUrl,
@@ -23494,7 +28382,7 @@ function mapEpisodeStoryboardContract(storyboard) {
       ...createEmptyGenerationState(),
       prompt: activeDraft?.prompt ?? "",
       imagePrompt: imageDraft?.prompt ?? fallbackImagePrompt,
-      videoPrompt: videoDraft?.prompt ?? fallbackVideoPrompt,
+      videoPrompt: resolvedVideoPrompt,
     },
   };
 }
@@ -23502,10 +28390,18 @@ function mapEpisodeStoryboardContract(storyboard) {
 function resolveEpisodeStoryboardVideoPrompt(storyboard) {
   const candidates = [
     storyboard?.chapterVideoPrompt,
+    storyboard?.chapter_video_prompt,
     storyboard?.videoPrompt,
     storyboard?.video_prompt,
     storyboard?.motionPrompt,
     storyboard?.motion_prompt,
+    storyboard?.videoPromptDraft?.prompt,
+    storyboard?.generationState?.videoPrompt,
+    ...(Array.isArray(storyboard?.generationDrafts)
+      ? storyboard.generationDrafts
+        .filter((draft) => String(draft?.mode ?? "").trim() === "video")
+        .map((draft) => draft?.prompt)
+      : []),
   ];
   for (const candidate of candidates) {
     const text = String(candidate ?? "").trim();
@@ -23514,7 +28410,11 @@ function resolveEpisodeStoryboardVideoPrompt(storyboard) {
     }
   }
   const description = String(storyboard?.description ?? "").trim();
-  return description.includes("[场景分析]") || description.includes("动态视频提示词")
+  return description.includes("[场景分析]") ||
+    description.includes("【场景分析】") ||
+    description.includes("[镜头") ||
+    description.includes("【镜头") ||
+    description.includes("动态视频提示词")
     ? description
     : "";
 }
@@ -23526,6 +28426,13 @@ function resolveEpisodeStoryboardImagePrompt(storyboard) {
     storyboard?.image_prompt,
     storyboard?.staticImagePrompt,
     storyboard?.static_image_prompt,
+    storyboard?.imagePromptDraft?.prompt,
+    storyboard?.generationState?.imagePrompt,
+    ...(Array.isArray(storyboard?.generationDrafts)
+      ? storyboard.generationDrafts
+        .filter((draft) => String(draft?.mode ?? "").trim() === "image")
+        .map((draft) => draft?.prompt)
+      : []),
   ];
   for (const candidate of candidates) {
     const text = String(candidate ?? "").trim();
@@ -23600,13 +28507,21 @@ function resolveEpisodeAssetDescription(asset) {
 }
 
 function mapProjectDetailAssets(assetsByType = {}) {
+  const otherImageAssets = mapProjectDetailAssetRecords(assetsByType.other?.image, "other");
+  const otherVideoAssets = mapProjectDetailAssetRecords(assetsByType.other?.video, "other");
+  const explicitAudioAssets = mapProjectDetailAssetRecords(assetsByType.other?.audio, "other");
+  const otherAudioAssets = [
+    ...explicitAudioAssets,
+    ...otherVideoAssets.filter((asset) => resolveImportedProjectAudioUrl(asset)),
+  ];
   return {
     character: mapProjectDetailAssetRecords(assetsByType.character, "character"),
     scene: mapProjectDetailAssetRecords(assetsByType.scene, "scene"),
     prop: mapProjectDetailAssetRecords(assetsByType.prop, "prop"),
     other: {
-      image: mapProjectDetailAssetRecords(assetsByType.other?.image, "other"),
-      video: mapProjectDetailAssetRecords(assetsByType.other?.video, "other"),
+      audio: otherAudioAssets,
+      image: otherImageAssets.filter((asset) => !resolveImportedProjectAudioUrl(asset)),
+      video: otherVideoAssets.filter((asset) => !resolveImportedProjectAudioUrl(asset)),
     },
   };
 }
@@ -23781,7 +28696,7 @@ function getDetailEpisodes(state) {
     sequence: Number(episode.sequence ?? 0),
     status: episode.status === "ready" ? "已完成" : "草稿",
     createdAt: formatProjectDate(new Date(episode.createdAt ?? Date.now())),
-    createdAtMs: Date.parse(episode.createdAt ?? ""),
+    createdAtMs: Date.parse(episode.createdAt ?? "") || Date.now(),
     storyboardCount: episode.storyboardCount ?? 0,
     previewUrl: episode.previewUrl ?? null,
   }));
@@ -23791,13 +28706,14 @@ function getDetailEpisodes(state) {
   const hasPrimaryEpisode = detailEpisodes.some((episode) => episode.id === "episode-primary");
   const unassignedShots = shots.filter((shot) => !shot?.episodeId);
   if (!hasPrimaryEpisode && unassignedShots.length) {
+    const primaryCreatedAtSource = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? Date.now();
     detailEpisodes.unshift({
       id: "episode-primary",
       sequence: 0,
       title: "未分配剧集",
       status: "草稿",
-      createdAt: formatProjectDate(new Date(state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "2026/05/22")),
-      createdAtMs: Date.parse(String(state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "2026/05/22")) || 0,
+      createdAt: formatProjectDate(new Date(primaryCreatedAtSource)),
+      createdAtMs: Date.parse(String(primaryCreatedAtSource)) || Date.now(),
       storyboardCount: unassignedShots.length,
       previewUrl: null,
     });
@@ -23871,15 +28787,47 @@ async function buildOfficialAssetImportPayload(workbench, record, assetKind) {
 }
 
 async function syncProjectLibraryFromApi(workbench, options = {}) {
-  const payload = await workbench.api.getProjects();
+  const requestedPage = Math.max(1, Math.floor(Number(options.page ?? workbench.ui.projectLibraryPage ?? 1)));
+  const keyword = String(options.keyword ?? workbench.ui.projectSearchQuery ?? "").trim();
+  const pageSize = normalizeProjectLibraryPageSize(options.pageSize ?? workbench.ui.projectLibraryPagination?.pageSize);
+  const payload = await workbench.api.getProjects({
+    page: requestedPage,
+    pageSize,
+    keyword,
+  });
   const projects = Array.isArray(payload.projects)
     ? payload.projects.map((project) => mapProjectRecordToCard(project))
     : [];
+  const pagination = normalizeProjectLibraryPagination(payload.pagination, {
+    page: requestedPage,
+    pageSize,
+    total: projects.length,
+  });
   workbench.ui.projectLibrary = projects;
+  workbench.ui.projectLibraryPagination = pagination;
+  workbench.ui.projectLibraryPage = pagination.page;
   syncSelectedProjectCard(workbench, projects);
   if (options.includeAssets !== false) {
     await syncProjectLibraryAssets(workbench);
   }
+}
+
+function normalizeProjectLibraryPagination(value, fallback = {}) {
+  const pageSize = normalizeProjectLibraryPageSize(value?.pageSize ?? fallback.pageSize);
+  const total = Math.max(0, Number(value?.total ?? fallback.total ?? 0));
+  const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? fallback.page ?? 1)));
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
+}
+
+function normalizeProjectLibraryPageSize(value) {
+  const pageSize = Math.floor(Number(value ?? 18));
+  return Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 18;
 }
 
 function runLazyWorkbenchTask(workbench, label, task) {
@@ -23912,11 +28860,6 @@ async function syncCanvasProjectsFromApi(workbench) {
       try {
         await loadProjectCanvasForActiveProject(workbench);
       } catch (error) {
-        if (isCanvasMembershipRequiredError(error)) {
-          workbench.ui.membershipStatus = { status: "none" };
-          syncActiveCanvasDocument(workbench);
-          return;
-        }
         workbench.ui.toast = `项目画布同步失败：${friendlyError(error)}`;
       }
     }
@@ -23939,11 +28882,6 @@ async function syncCanvasProjectsFromApi(workbench) {
       workbench.ui.canvasProjects = [];
     }
   } catch (error) {
-    if (isCanvasMembershipRequiredError(error)) {
-      workbench.ui.membershipStatus = { status: "none" };
-      syncActiveCanvasDocument(workbench);
-      return;
-    }
     workbench.ui.toast = `画布项目同步失败：${friendlyError(error)}`;
     workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
   }
@@ -24134,6 +29072,7 @@ function groupLibraryAssetsByType(assets = []) {
     scene: [],
     prop: [],
     other: {
+      audio: [],
       image: [],
       video: [],
     },
@@ -24144,12 +29083,15 @@ function groupLibraryAssetsByType(assets = []) {
       ...asset,
       previewUrl: asset?.previewUrl ?? asset?.latestVersion?.previewUrl ?? "",
     };
+    const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
     if (asset?.assetType === "character_sheet") {
       grouped.character.push(normalized);
     } else if (asset?.assetType === "scene_reference") {
       grouped.scene.push(normalized);
     } else if (asset?.assetType === "prop_reference") {
       grouped.prop.push(normalized);
+    } else if (mimeType.startsWith("audio/")) {
+      grouped.other.audio.push(normalized);
     } else if (asset?.assetType === "shot_video") {
       grouped.other.video.push(normalized);
     } else {

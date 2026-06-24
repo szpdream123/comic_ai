@@ -28,6 +28,7 @@ if (generationQueueEnabled) {
     console.error("[creator-dev] Redis is required for generation queues but is not reachable.");
     console.error(`[creator-dev] Expected Redis at ${redisHost}:${redisPort} from REDIS_URL.`);
     console.error("[creator-dev] Start Redis first, then run this command again.");
+    console.error("[creator-dev] If you only need the local HTTP site, run: npm run dev:http-only");
     console.error("[creator-dev] Without Redis, generation tasks stay at: 等待模型接收.");
     console.error("");
     process.exit(1);

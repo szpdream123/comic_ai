@@ -73,9 +73,27 @@ test("read API calls coalesce duplicate in-flight requests", async () => {
   const [firstPayload, secondPayload] = await Promise.all([first, second]);
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "/api/creator/projects");
+  assert.equal(calls[0].url, "/api/creator/projects?page=1&pageSize=18");
   assert.deepEqual(firstPayload, { projects: [] });
   assert.deepEqual(secondPayload, { projects: [] });
+});
+
+test("getProjects sends backend pagination query parameters", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ projects: [], pagination: { page: 2, pageSize: 18, total: 19, totalPages: 2 } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getProjects({ page: 2, keyword: "龙珠" });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects?page=2&pageSize=18&keyword=%E9%BE%99%E7%8F%A0");
+  assert.deepEqual(payload.pagination, { page: 2, pageSize: 18, total: 19, totalPages: 2 });
 });
 
 test("importEpisodeAsset targets the episode-scoped import route", async () => {
@@ -387,7 +405,7 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
   const previousSetTimeout = globalThis.setTimeout;
   const previousClearTimeout = globalThis.clearTimeout;
   const timeoutDelays = [];
-  const encoded = new TextEncoder().encode('event: ping\ndata: {"ts":"2026-06-19T00:00:00.000Z"}\n\n');
+  const encoded = new TextEncoder().encode('data: {"type":"ping","ts":"2026-06-19T00:00:00.000Z"}\n\n');
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(encoded);
@@ -411,7 +429,7 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
       events.push(event);
     }
 
-    assert.deepEqual(events, [{ event: "ping", data: { ts: "2026-06-19T00:00:00.000Z" } }]);
+    assert.deepEqual(events, [{ event: "ping", data: { type: "ping", ts: "2026-06-19T00:00:00.000Z" } }]);
     assert.deepEqual(timeoutDelays, []);
   } finally {
     globalThis.fetch = previousFetch;
@@ -1043,27 +1061,6 @@ test("resolveApiUrl keeps same-origin URLs on additional membership acceptance d
   );
 });
 
-test("resolveApiUrl keeps same-origin URLs on the local 4325 dev API port", async () => {
-  const { resolveApiUrl } = await import("../src/shared/creator-api.js");
-
-  await withWindowLocation(
-    {
-      protocol: "http:",
-      host: "127.0.0.1:4325",
-      hostname: "127.0.0.1",
-      port: "4325",
-      origin: "http://127.0.0.1:4325",
-    },
-    () => {
-      assert.equal(
-        resolveApiUrl("/api/auth/session"),
-        "http://127.0.0.1:4325/api/auth/session",
-      );
-      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4325/app.html");
-    },
-  );
-});
-
 test("resolveApiUrl keeps same-origin URLs on the user-selected dev port", async () => {
   const { resolveApiUrl } = await import("../src/shared/creator-api.js");
 
@@ -1128,6 +1125,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   const detail = await creatorApi.getProjectDetailV2("project/1");
   const workbench = await creatorApi.getEpisodeWorkbench("episode/1");
   const config = await creatorApi.listGenerationConfig("episode/1");
+  const batchImageModels = await creatorApi.listBatchImageModelOptions("episode/1");
   const storyboards = await creatorApi.listStoryboards("episode/1", { page: 2, pageSize: 5 });
   const conversation = await creatorApi.getAssetConversationHistory("episode/1", "asset/1", "video");
   const task = await creatorApi.createVideoTask(
@@ -1148,6 +1146,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   assert.equal(detail.ok, true);
   assert.equal(workbench.ok, true);
   assert.equal(config.ok, true);
+  assert.equal(batchImageModels.ok, true);
   assert.equal(storyboards.ok, true);
   assert.equal(conversation.ok, true);
   assert.equal(task.ok, true);
@@ -1157,15 +1156,16 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
     "/api/projects/project%2F1/detail",
     "/api/episodes/episode%2F1/workbench",
     "/api/episodes/episode%2F1/generation-config",
+    "/api/episodes/episode%2F1/batch-image-model-options",
     "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video",
     "/api/episodes/episode%2F1/generation/video-tasks",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation/messages",
     "/api/episodes/episode%2F1/export-tasks",
   ]);
-  assert.equal(calls[5].options.headers["idempotency-key"], "video-key");
-  assert.equal(calls[6].options.method, "POST");
-  assert.equal(calls[7].options.headers["idempotency-key"], "export-key");
+  assert.equal(calls[6].options.headers["idempotency-key"], "video-key");
+  assert.equal(calls[7].options.method, "POST");
+  assert.equal(calls[8].options.headers["idempotency-key"], "export-key");
 });
 
 test("new envelope errors expose status code, error code, details, and request id", async () => {

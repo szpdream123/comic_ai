@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { createServer } from "node:http";
-import type { Server, ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import mammoth from "mammoth";
 
-import { maskCnPhone } from "../modules/identity/phone-auth.utils.ts";
+import { maskCnPhone, shanghaiDayWindow, shanghaiMonthWindow } from "../modules/identity/phone-auth.utils.ts";
 import { appendAuditEvent } from "../modules/audit/audit.service.ts";
 import {
   createAdminAuthService,
@@ -45,13 +45,11 @@ import { createAdminUserService } from "../modules/admin-users/admin-user.servic
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
 import { resolveMembershipGenerationPriority } from "../modules/membership/membership-priority.service.ts";
-import { enqueueMissingMembershipActivationForPaidOrder } from "../modules/membership/payment-succeeded-membership-consumer.service.ts";
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
   signPaymentCallback,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
-import { createCreditPackageService } from "../modules/commerce-payment/credit-package.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
   createEnvPaymentProviderRegistry,
@@ -124,7 +122,6 @@ import {
   createUploadSession,
   findUploadSession,
   runStorageRepairJob,
-  StorageCredentialError,
   type UploadSessionRuntime,
 } from "../modules/storage/upload-session.service.ts";
 import { createAssetVersionSnapshot } from "../modules/project/asset-version-record.service.ts";
@@ -143,10 +140,6 @@ import type { AssetType } from "../modules/project/asset.service.ts";
 import { createExportRecord } from "../modules/project/export-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
 import { InsufficientCreditsError, grantCreditsInTransaction, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
-import {
-  createCreditRechargeCenterService,
-  CreditRechargeCenterError,
-} from "../modules/credit-billing/credit-recharge-center.service.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
@@ -342,6 +335,14 @@ class GenerationRequestValidationError extends Error {
   }
 }
 
+class GenerationMembershipRequiredError extends Error {
+  readonly code = "generation_membership_required";
+
+  constructor() {
+    super("有效会员已过期或未开通，请先开通会员。");
+  }
+}
+
 interface AuthenticatedUser {
   id: string;
   phone: string | null;
@@ -362,7 +363,6 @@ interface DevTenantScope {
 
 export interface PhoneAuthDevServer {
   origin: string;
-  db(): Promise<Awaited<ReturnType<typeof createDevDb>>>;
   listen(port: number): Promise<void>;
   close(): Promise<void>;
 }
@@ -512,30 +512,35 @@ function normalizeMembershipPlanStatus(value: unknown) {
   return ["active", "inactive", "archived"].includes(normalized) ? normalized : normalized;
 }
 
+function hasOwn(body: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(body, key);
+}
+
 function storyboardPromptPackageBody(body: Record<string, unknown>) {
-  return {
+  const result: Record<string, unknown> = {
     name: String(body.name ?? ""),
     code: String(body.code ?? ""),
     package_type: String(body.package_type ?? ""),
-    audience: body.audience === undefined || body.audience === null ? null : String(body.audience),
-    tags: stringArray(body.tags),
-    cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
     prompt_content: String(body.prompt_content ?? ""),
-    key_points: stringArray(body.key_points),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    applicable_genres: stringArray(body.applicable_genres),
-    applicable_scene: stringArray(body.applicable_scene),
-    output_type: body.output_type === undefined || body.output_type === null ? null : String(body.output_type),
-    scope: body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {},
-    can_stack: body.can_stack === undefined ? true : Boolean(body.can_stack),
-    max_select_count: body.max_select_count === undefined || body.max_select_count === null ? null : Number(body.max_select_count),
-    is_default: Boolean(body.is_default),
-    is_global_default: Boolean(body.is_global_default),
-    is_recommended: Boolean(body.is_recommended),
-    sort_order: Number(body.sort_order ?? 0),
-    status: String(body.status ?? "enabled"),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
   };
+  if (hasOwn(body, "audience")) result.audience = body.audience === null ? null : String(body.audience ?? "");
+  if (hasOwn(body, "tags")) result.tags = stringArray(body.tags);
+  if (hasOwn(body, "cover_image_url")) result.cover_image_url = body.cover_image_url === null ? null : String(body.cover_image_url ?? "");
+  if (hasOwn(body, "key_points")) result.key_points = stringArray(body.key_points);
+  if (hasOwn(body, "negative_prompt")) result.negative_prompt = body.negative_prompt === null ? null : String(body.negative_prompt ?? "");
+  if (hasOwn(body, "applicable_genres")) result.applicable_genres = stringArray(body.applicable_genres);
+  if (hasOwn(body, "applicable_scene")) result.applicable_scene = stringArray(body.applicable_scene);
+  if (hasOwn(body, "output_type")) result.output_type = body.output_type === null ? null : String(body.output_type ?? "");
+  if (hasOwn(body, "scope")) result.scope = body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {};
+  if (hasOwn(body, "can_stack")) result.can_stack = Boolean(body.can_stack);
+  if (hasOwn(body, "max_select_count")) result.max_select_count = body.max_select_count === null ? null : Number(body.max_select_count);
+  if (hasOwn(body, "is_default") || hasOwn(body, "isDefault")) result.is_default = Boolean(body.is_default ?? body.isDefault);
+  if (hasOwn(body, "is_global_default") || hasOwn(body, "isGlobalDefault")) result.is_global_default = Boolean(body.is_global_default ?? body.isGlobalDefault);
+  if (hasOwn(body, "is_recommended") || hasOwn(body, "isRecommended")) result.is_recommended = Boolean(body.is_recommended ?? body.isRecommended);
+  if (hasOwn(body, "sort_order") || hasOwn(body, "sortOrder")) result.sort_order = Number(body.sort_order ?? body.sortOrder ?? 0);
+  if (hasOwn(body, "status")) result.status = String(body.status ?? "enabled");
+  if (hasOwn(body, "remark")) result.remark = body.remark === null ? null : String(body.remark ?? "");
+  return result;
 }
 
 function imagePromptStyleBody(body: Record<string, unknown>) {
@@ -819,57 +824,6 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
 
   if (error instanceof GenerationModelExecutionResolutionError) {
     writeJson(response, envelopedError(400, error.code, error.message));
-    return true;
-  }
-
-  if (error instanceof CreditRechargeCenterError) {
-    const status =
-      error.code === "invalid_transfer_input"
-        ? 400
-        : error.code === "team_transfer_permission_missing"
-          ? 403
-          : error.code === "real_team_not_found"
-            ? 404
-            : 409;
-    writeJson(response, {
-      status,
-      body: {
-        error: {
-          code: error.code,
-          message:
-            error.code === "invalid_transfer_input"
-              ? "invalid transfer input"
-              : error.code === "team_transfer_permission_missing"
-                ? "team transfer permission missing"
-                : error.code === "real_team_not_found"
-                  ? "real team not found"
-                  : error.code === "insufficient_personal_credits"
-                    ? "insufficient personal credits"
-                    : "transfer replay conflict",
-        },
-      },
-    });
-    return true;
-  }
-
-  if (error instanceof StorageCredentialError) {
-    const status = error.code === "storage_credentials_forbidden" ? 403 : 502;
-    writeJson(
-      response,
-      envelopedError(
-        status,
-        error.code,
-        error.code === "storage_credentials_invalid"
-          ? "cloud storage credentials are invalid"
-          : error.code === "storage_credentials_forbidden"
-            ? "cloud storage credentials do not have permission"
-            : "cloud storage credentials are unavailable",
-        {
-          providerCode: error.providerCode,
-          providerRequestId: error.providerRequestId,
-        },
-      ),
-    );
     return true;
   }
 
@@ -1267,21 +1221,36 @@ async function deleteCanvasProjectRecord(
   return result.rowCount > 0;
 }
 
+export function formatNamedSseChunk(event: string, data: unknown) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+export function formatSseDataChunk(data: unknown) {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
 function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
-  response.write(`event: ${event}\n`);
-  response.write(`data: ${JSON.stringify(data)}\n\n`);
+  response.write(formatNamedSseChunk(event, data));
 }
 
-function toSsePayload(event: { type: string } & Record<string, unknown>) {
-  const { type: _type, ...payload } = event;
-  return payload;
+function writeSseData(response: ServerResponse, data: unknown) {
+  response.write(formatSseDataChunk(data));
 }
 
-function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000) {
-  writeSseEvent(response, "ping", { ts: new Date().toISOString() });
+function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000, options?: { dataOnly?: boolean }) {
+  const sendPing = () => {
+    const payload = { type: "ping", ts: new Date().toISOString() };
+    if (options?.dataOnly) {
+      writeSseData(response, payload);
+      return;
+    }
+    writeSseEvent(response, "ping", { ts: payload.ts });
+  };
+
+  sendPing();
   const timer = setInterval(() => {
     if (!response.destroyed && !response.writableEnded) {
-      writeSseEvent(response, "ping", { ts: new Date().toISOString() });
+      sendPing();
     }
   }, intervalMs);
   response.on("close", () => clearInterval(timer));
@@ -2040,7 +2009,7 @@ async function findEnabledStoryboardPromptPackageForPreview(
   );
 }
 
-async function findGlobalTabooStoryboardPromptPackagesForPreview(
+async function findDefaultTabooStoryboardPromptPackagesForPreview(
   db: Awaited<ReturnType<typeof createDevDb>>,
 ) {
   const rows = await db.query<StoryboardPromptPackageForPreview>(
@@ -2049,12 +2018,61 @@ async function findGlobalTabooStoryboardPromptPackagesForPreview(
       FROM storyboard_prompt_packages
       WHERE package_type = 'taboo'
         AND status = 'enabled'
-        AND (is_global_default = true OR is_default = true)
         AND deleted_at IS NULL
+        AND (
+          is_default = true
+          OR (
+            is_global_default = true
+            AND NOT EXISTS (
+              SELECT 1
+              FROM storyboard_prompt_packages default_taboo
+              WHERE default_taboo.package_type = 'taboo'
+                AND default_taboo.status = 'enabled'
+                AND default_taboo.is_default = true
+                AND default_taboo.deleted_at IS NULL
+            )
+          )
+        )
       ORDER BY sort_order DESC, updated_at DESC, id ASC
     `,
   );
   return rows.rows;
+}
+
+function formatStoryboardPromptPackageContents(packages: StoryboardPromptPackageForPreview[]) {
+  return packages
+    .map((item) => String(item.prompt_content ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function createRequestAbortController(
+  request: IncomingMessage,
+  response: ServerResponse,
+) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+  request.once("aborted", abort);
+  response.once("close", abort);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      request.off("aborted", abort);
+      response.off("close", abort);
+    },
+  };
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && (
+    error.name === "AbortError" ||
+    error.message === "AbortError" ||
+    error.message.toLowerCase().includes("abort")
+  );
 }
 
 async function findDefaultScenePromptTemplateForPreview(
@@ -2066,6 +2084,7 @@ async function findDefaultScenePromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM scene_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'split'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2083,6 +2102,7 @@ async function findDefaultCharacterPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM character_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'extract'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2100,6 +2120,7 @@ async function findDefaultShotPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM shot_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'outline'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2117,6 +2138,7 @@ async function findDefaultPropPromptTemplateForPreview(
       SELECT id, name, prompt_content
       FROM prop_prompt_templates
       WHERE status = 'enabled'
+        AND stage = 'extract'
         AND is_default = true
         AND deleted_at IS NULL
       ORDER BY sort_order DESC, updated_at DESC, id ASC
@@ -2247,6 +2269,26 @@ function generationCostFromModelConfig(
     : fallbackCost;
 }
 
+async function hasActiveGenerationMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { organizationId: string; now: Date },
+) {
+  const activePeriod = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM membership_periods
+      WHERE organization_id = $1
+        AND status = 'active'
+        AND period_start_at <= $2
+        AND period_end_at > $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
+  return Boolean(activePeriod);
+}
+
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
   const videoCategory = readString(modelConfig.uiConfig.videoCategory) || inferVideoModelCategory(modelConfig.taskModes);
@@ -2277,9 +2319,66 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   };
 }
 
-async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+function modelConfigSupportsBatchImage(modelConfig: AiModelConfigRecord) {
+  const supportedModes = readStringArray(modelConfig.uiConfig.supportedModes);
+  const taskModes = [...supportedModes, ...modelConfig.taskModes]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+  if (!taskModes.length) {
+    return false;
+  }
+  const aliases = new Set([
+    "multi-image",
+    "multi_image",
+    "multi_reference",
+    "image.reference_generate",
+    "image_reference_generate",
+    "image.generate",
+    "image_generate",
+  ]);
+  return taskModes.some((taskMode) => aliases.has(taskMode));
+}
+
+function modelConfigToBatchImageModelOption(modelConfig: AiModelConfigRecord) {
+  const schemaRatios = readEnumValues(modelConfig.parameterSchema.aspectRatio);
+  const defaultRatios = readStringArray(modelConfig.defaultParams.aspectRatio);
+  const ratios = schemaRatios.length ? schemaRatios : defaultRatios;
+  const schemaQuality = readEnumValues(modelConfig.parameterSchema.quality);
+  const schemaResolutions = readEnumValues(modelConfig.parameterSchema.resolution);
+  const qualities = schemaQuality.length ? schemaQuality : schemaResolutions;
+  return {
+    modelId: modelConfig.modelCode,
+    modelName: modelConfig.displayName,
+    ratios: ratios.length ? ratios : ["16:9", "9:16"],
+    qualities: qualities.length ? qualities : ["2K"],
+  };
+}
+
+async function buildBatchImageModelOptions(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
   const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
-  const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+  const models = activeImageModels
+    .filter(modelConfigSupportsBatchImage)
+    .map(modelConfigToBatchImageModelOption);
+  const fallbackModels = [
+    {
+      modelId: "nano_banana_2",
+      modelName: "nano banana 2",
+      ratios: ["16:9", "9:16", "1:1"],
+      qualities: ["2K"],
+    },
+  ];
+  const resolvedModels = models.length ? models : fallbackModels;
+  return {
+    models: resolvedModels,
+  };
+}
+
+async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+  const [activeImageModels, activeVideoModels, activeTextModels] = await Promise.all([
+    listActiveAiModelConfigs(db, { mediaType: "image" }),
+    listActiveAiModelConfigs(db, { mediaType: "video" }),
+    listActiveAiModelConfigs(db, { mediaType: "text" }),
+  ]);
   const imageModels = activeImageModels.length
     ? activeImageModels.map(modelConfigToGenerationConfigModel)
     : [
@@ -2314,10 +2413,12 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     videoModels.find((model) => model.videoCategory === "reference") ??
     videoModels[0] ??
     null;
+  const textModels = activeTextModels.map(modelConfigToGenerationConfigModel);
   return {
     models: [
       ...imageModels,
       ...videoModels,
+      ...textModels,
     ],
     presets: [],
     uploadLimits: episodeUploadLimits,
@@ -3647,7 +3748,7 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_reference_unavailable: "\u53c2\u8003\u7d20\u6750\u8fd8\u672a\u51c6\u5907\u597d\u3002",
     model_reference_mime_not_allowed: "\u53c2\u8003\u7d20\u6750\u683c\u5f0f\u4e0d\u53d7\u6a21\u578b\u652f\u6301\u3002",
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
-    insufficient_credits: "\u79ef\u5206\u4e0d\u8db3\uff0c\u4efb\u52a1\u672a\u63d0\u4ea4\u7ed9\u4f9b\u5e94\u5546\u3002",
+    insufficient_credits: "积分余额不足，请充值。",
   };
   return messages[failureCode] ?? `鐢熸垚浠诲姟澶辫触锛?{failureCode || "unknown_failure"}`;
 }
@@ -4469,6 +4570,15 @@ async function createEpisodeGenerationTask(
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
   });
+  if (modelConfig) {
+    const hasMembership = await hasActiveGenerationMembership(db, {
+      organizationId: context.actor.organizationId,
+      now: input.now,
+    });
+    if (!hasMembership) {
+      throw new GenerationMembershipRequiredError();
+    }
+  }
   if (modelConfig) {
     validateGenerationModelRequest({
       kind: input.kind,
@@ -5459,7 +5569,7 @@ async function resolveGenerationReferenceImages(
   });
 }
 
-function parseMetadataJson(value: Record<string, unknown> | string): Record<string, unknown> {
+function parseMetadataJson(value: Record<string, unknown> | string | null | undefined): Record<string, unknown> {
   if (typeof value !== "string") {
     return value ?? {};
   }
@@ -5682,6 +5792,194 @@ function matchesEpisodeScopedAsset(
   return typeof metadata?.episodeId === "string" && metadata.episodeId === episodeId;
 }
 
+function normalizeAssetNameForSameEpisodeMatch(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/^[@#]+/, "")
+    .toLowerCase();
+}
+
+function hasRealEpisodeAssetPreview(metadata: Record<string, unknown> | null | undefined) {
+  const preview = resolvePreferredEpisodeImageUrl(
+    metadata?.fixedImageUrl,
+    metadata?.previewUrl,
+    metadata?.sourceUrl,
+    metadata?.downloadUrl,
+  );
+  return Boolean(preview && !isMockEpisodeImageUrl(preview));
+}
+
+async function findSameNameProjectAssetImage(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    assetType: "character_sheet" | "scene_reference" | "prop_reference";
+    episodeId: string;
+    name: string;
+  },
+) {
+  const normalizedName = normalizeAssetNameForSameEpisodeMatch(input.name);
+  if (!normalizedName) {
+    return null;
+  }
+  const rows = await db.query<{
+    asset_id: string;
+    asset_key: string;
+    version_id: string;
+    storage_object_id: string | null;
+    storage_object_key: string | null;
+    metadata_json: Record<string, unknown> | string | null;
+    content_type: string | null;
+  }>(
+    `
+      SELECT
+        a.id AS asset_id,
+        a.asset_key,
+        v.id AS version_id,
+        v.storage_object_id,
+        v.storage_object_key,
+        v.metadata_json,
+        s.content_type
+      FROM assets a
+      JOIN LATERAL (
+        SELECT *
+        FROM asset_versions
+        WHERE organization_id = a.organization_id
+          AND asset_id = a.id
+        ORDER BY version_number DESC, created_at DESC
+        LIMIT 1
+      ) v ON true
+      LEFT JOIN storage_objects s
+        ON s.organization_id = v.organization_id
+       AND s.id = v.storage_object_id
+      WHERE a.organization_id = $1
+        AND a.project_id = $2
+        AND a.asset_type = $3
+      ORDER BY a.updated_at DESC, a.id DESC
+    `,
+    [input.organizationId, input.projectId, input.assetType],
+  );
+  for (const row of rows.rows) {
+    const metadata = parseMetadataJson(row.metadata_json);
+    if (matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+      continue;
+    }
+    const candidateNames = [
+      metadata.label,
+      metadata.name,
+      row.asset_key,
+      row.asset_key.replace(/^(?:character|role|scene|prop|asset)[-_]/i, "").replace(/[-_][a-f0-9]{6,}$/i, ""),
+    ];
+    if (!candidateNames.some((name) => normalizeAssetNameForSameEpisodeMatch(name) === normalizedName)) {
+      continue;
+    }
+    const previewUrl = resolvePreferredEpisodeImageUrl(
+      metadata.fixedImageUrl,
+      metadata.previewUrl,
+      metadata.sourceUrl,
+      metadata.downloadUrl,
+    );
+    if (!row.storage_object_id && (!previewUrl || isMockEpisodeImageUrl(previewUrl))) {
+      continue;
+    }
+    return {
+      assetId: row.asset_id,
+      versionId: row.version_id,
+      storageObjectId: row.storage_object_id,
+      storageObjectKey: row.storage_object_key,
+      previewUrl,
+      sourceUrl: readString(metadata.sourceUrl) || previewUrl,
+      downloadUrl: readString(metadata.downloadUrl) || previewUrl,
+      contentType: row.content_type ?? readString(metadata.mimeType) ?? "image/png",
+    };
+  }
+  return null;
+}
+
+async function persistSameNameProjectAssetImageForEpisodeAsset(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    episodeId: string;
+    assetId: string;
+    assetType: "character_sheet" | "scene_reference" | "prop_reference";
+    versionId: string;
+    metadata: Record<string, unknown>;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  if (hasRealEpisodeAssetPreview(input.metadata)) {
+    return input.metadata;
+  }
+  const name = readString(input.metadata.label) || readString(input.metadata.name);
+  const matchedImage = await findSameNameProjectAssetImage(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    assetType: input.assetType,
+    episodeId: input.episodeId,
+    name,
+  });
+  if (!matchedImage) {
+    return input.metadata;
+  }
+  const signedUrls = matchedImage.storageObjectId
+    ? await signedUrlsForStorageObject(db, {
+        sessionToken: input.sessionToken,
+        storageObjectId: matchedImage.storageObjectId,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      })
+    : null;
+  const previewUrl = resolvePreferredEpisodeImageUrl(
+    matchedImage.previewUrl,
+    signedUrls?.previewUrl,
+    signedUrls?.sourceUrl,
+    matchedImage.sourceUrl,
+    matchedImage.downloadUrl,
+  );
+  if (!previewUrl) {
+    return input.metadata;
+  }
+  const metadata = {
+    ...input.metadata,
+    fixedImageFileId: matchedImage.versionId,
+    fixedImageStorageObjectId: matchedImage.storageObjectId,
+    fixedImageUrl: previewUrl,
+    previewUrl,
+    sourceUrl: matchedImage.sourceUrl,
+    downloadUrl: matchedImage.downloadUrl,
+    mimeType: matchedImage.contentType,
+    importedFromProjectAssetId: matchedImage.assetId,
+    importedFromProjectAssetVersionId: matchedImage.versionId,
+  };
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3::jsonb
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.versionId, JSON.stringify(metadata)],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, input.assetId, input.now],
+  );
+  return metadata;
+}
+
 async function listEpisodeAssetsFromDb(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -5693,16 +5991,17 @@ async function listEpisodeAssetsFromDb(
     signedUrlExpiresInSeconds: number;
     now: Date;
     capability?: (typeof capabilities)[keyof typeof capabilities] | null;
+    context?: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>;
   },
 ) {
   const normalized = normalizeEpisodeAssetType(input.assetType);
-  const context = await getEpisodeContext(db, {
-    episodeId: input.episodeId,
-    sessionToken: input.sessionToken,
-    userId: input.userId,
-    capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
-    now: input.now,
-  });
+  const context = input.context ?? (await getEpisodeContext(db, {
+      episodeId: input.episodeId,
+      sessionToken: input.sessionToken,
+      userId: input.userId,
+      capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
+      now: input.now,
+    }));
   if (!context) {
     return null;
   }
@@ -5795,9 +6094,25 @@ async function listEpisodeAssetsFromDb(
         if (!metadata || !matchesEpisodeScopedAsset(metadata, input.episodeId)) {
           return null;
         }
-        const fixedImageFileId = typeof metadata.fixedImageFileId === "string" ? metadata.fixedImageFileId : null;
+        const hydratedMetadata = row.version_id
+          ? await persistSameNameProjectAssetImageForEpisodeAsset(db, {
+              organizationId: context.actor.organizationId,
+              projectId: context.project.id,
+              episodeId: input.episodeId,
+            assetId: row.asset_id,
+            assetType: normalized.assetType,
+            versionId: row.version_id,
+            metadata,
+            sessionToken: input.sessionToken,
+            runtime: input.runtime,
+            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+            now: input.now,
+          })
+          : metadata;
+        const fixedImageFileId =
+          typeof hydratedMetadata.fixedImageFileId === "string" ? hydratedMetadata.fixedImageFileId : null;
         const fixedImageStorageObjectId =
-          typeof metadata.fixedImageStorageObjectId === "string" ? metadata.fixedImageStorageObjectId : null;
+          typeof hydratedMetadata.fixedImageStorageObjectId === "string" ? hydratedMetadata.fixedImageStorageObjectId : null;
         const fixedImageVersion =
           fixedImageFileId || fixedImageStorageObjectId
             ? await resolveEpisodeAssetVersion(db, {
@@ -5823,33 +6138,202 @@ async function listEpisodeAssetsFromDb(
           : null;
         const persistedFixedPreviewUrl =
           resolvePreferredEpisodeImageUrl(
-            metadata.fixedImageUrl,
-            metadata.previewUrl,
+            hydratedMetadata.fixedImageUrl,
+            hydratedMetadata.previewUrl,
             fixedImageVersion?.assetVersion.previewUrl,
             fixedImageVersion?.assetVersion.metadata?.previewUrl,
           ) ?? "";
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
-          name: String(metadata.label ?? row.asset_key ?? "Untitled asset"),
-          description: String(metadata.description ?? ""),
+          name: String(hydratedMetadata.label ?? row.asset_key ?? "Untitled asset"),
+          description: String(hydratedMetadata.description ?? ""),
           fixedImageFileId: fixedImageVersion?.assetVersion.versionId ?? fixedImageFileId ?? row.version_id,
           fixedImageStorageObjectId:
             fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id,
-          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(metadata.fixedImageUrl ?? metadata.previewUrl ?? ""),
-          voiceId: typeof metadata.voiceId === "string" ? metadata.voiceId : null,
-          voiceName: typeof metadata.voiceName === "string" ? metadata.voiceName : null,
+          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
+          voiceId: typeof hydratedMetadata.voiceId === "string" ? hydratedMetadata.voiceId : null,
+          voiceName: typeof hydratedMetadata.voiceName === "string" ? hydratedMetadata.voiceName : null,
           dubbingConfig:
-            metadata.dubbingConfig && typeof metadata.dubbingConfig === "object"
-              ? metadata.dubbingConfig
+            hydratedMetadata.dubbingConfig && typeof hydratedMetadata.dubbingConfig === "object"
+              ? hydratedMetadata.dubbingConfig
               : null,
-          sortOrder: Number(metadata.sortOrder ?? 0),
+          sortOrder: Number(hydratedMetadata.sortOrder ?? 0),
           updatedAt: new Date(row.asset_updated_at).toISOString(),
           createdAt: new Date(row.asset_created_at).toISOString(),
         };
       }),
   );
   return items.filter(Boolean);
+}
+
+async function listEpisodeStoryboardsFromDb(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    sessionToken: string;
+    userId: string;
+    runtime: UploadSessionRuntime | null;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.sessionToken,
+    userId: input.userId,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+
+  const shotRows = await db.query<{
+    id: string;
+    title: string;
+    description: string;
+    scene_analysis: string;
+    plot_preview: string;
+    sort_order: number | string;
+    image_status: string;
+    video_status: string;
+    current_image_asset_version_id: string | null;
+    current_video_asset_version_id: string | null;
+    image_storage_object_id: string | null;
+    image_metadata_json: Record<string, unknown> | string | null;
+    video_storage_object_id: string | null;
+    video_metadata_json: Record<string, unknown> | string | null;
+  }>(
+    `
+      SELECT
+        s.id,
+        s.title,
+        s.description,
+        s.scene_analysis,
+        s.plot_preview,
+        s.sort_order,
+        s.image_status,
+        s.video_status,
+        s.current_image_asset_version_id,
+        s.current_video_asset_version_id,
+        image_version.storage_object_id AS image_storage_object_id,
+        image_version.metadata_json AS image_metadata_json,
+        video_version.storage_object_id AS video_storage_object_id,
+        video_version.metadata_json AS video_metadata_json
+      FROM shots s
+      LEFT JOIN asset_versions image_version
+        ON image_version.organization_id = s.organization_id
+       AND image_version.id = s.current_image_asset_version_id
+      LEFT JOIN asset_versions video_version
+        ON video_version.organization_id = s.organization_id
+       AND video_version.id = s.current_video_asset_version_id
+      WHERE s.organization_id = $1
+        AND s.episode_id = $2
+      ORDER BY s.sort_order ASC, s.created_at ASC, s.id ASC
+    `,
+    [context.actor.organizationId, input.episodeId],
+  );
+  const shotIds = shotRows.rows.map((shot) => shot.id);
+  const draftRows = shotIds.length
+    ? await db.query<{
+        target_id: string;
+        prompt: string;
+        mode: "image" | "video" | "lip_sync";
+        payload_json: Record<string, unknown> | string | null;
+        updated_at: Date | string;
+      }>(
+        `
+          SELECT target_id, prompt, mode, payload_json, updated_at
+            FROM episode_generation_drafts
+           WHERE organization_id = $1
+             AND episode_id = $2
+             AND target_type = 'storyboard'
+             AND target_id = ANY($3::uuid[])
+        `,
+        [context.actor.organizationId, input.episodeId, shotIds],
+      )
+    : { rows: [] };
+  const draftsByShotId = new Map<string, Array<{
+    prompt: string;
+    mode: "image" | "video" | "lip_sync";
+    payload: Record<string, unknown>;
+    updatedAt: Date | string;
+  }>>();
+  for (const draft of draftRows.rows) {
+    const drafts = draftsByShotId.get(draft.target_id) ?? [];
+    drafts.push({
+      prompt: draft.prompt ?? "",
+      mode: draft.mode,
+      payload: parseMetadataJson(draft.payload_json),
+      updatedAt: draft.updated_at,
+    });
+    draftsByShotId.set(draft.target_id, drafts);
+  }
+
+  return Promise.all(shotRows.rows.map(async (shot, index) => {
+    const imageMetadata = parseMetadataJson(shot.image_metadata_json);
+    const videoMetadata = parseMetadataJson(shot.video_metadata_json);
+    const imageUrls = input.runtime && shot.image_storage_object_id
+      ? await signedUrlsForStorageObject(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: shot.image_storage_object_id,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        })
+      : null;
+    const videoUrls = input.runtime && shot.video_storage_object_id
+      ? await signedUrlsForStorageObject(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: shot.video_storage_object_id,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        })
+      : null;
+    const currentImageUrl = resolvePreferredEpisodeImageUrl(
+      imageMetadata.previewUrl,
+      imageMetadata.sourceUrl,
+      imageUrls?.previewUrl,
+      imageUrls?.downloadUrl,
+    ) ?? null;
+    const currentVideoUrl =
+      readString(videoMetadata.sourceUrl) ||
+      readString(videoMetadata.downloadUrl) ||
+      readString(videoMetadata.previewUrl) ||
+      videoUrls?.downloadUrl ||
+      videoUrls?.previewUrl ||
+      null;
+    const currentVideoThumbnailUrl =
+      readString(videoMetadata.thumbnailUrl) ||
+      readString(videoMetadata.coverImageUrl) ||
+      null;
+    return {
+      id: shot.id,
+      shotId: shot.id,
+      storyboardId: shot.id,
+      episodeId: input.episodeId,
+      indexNo: index + 1,
+      title: shot.title,
+      sceneAnalysis: shot.scene_analysis || shot.description || "",
+      plotPreview: shot.plot_preview || shot.title || "",
+      description: shot.description || "",
+      currentImageFileId: shot.current_image_asset_version_id,
+      currentImageUrl,
+      currentVideoFileId: shot.current_video_asset_version_id,
+      currentVideoUrl,
+      currentVideoThumbnailUrl,
+      imageStatus: shot.image_status === "completed" || shot.image_status === "ready"
+        ? "succeeded"
+        : shot.image_status || "draft",
+      videoStatus: shot.video_status === "completed" || shot.video_status === "ready"
+        ? "succeeded"
+        : shot.video_status || "not_ready",
+      assetRefs: [],
+      generationDrafts: draftsByShotId.get(shot.id) ?? [],
+      sortOrder: Number(shot.sort_order ?? index),
+    };
+  }));
 }
 
 async function createEpisodeAssetRecord(
@@ -7692,7 +8176,19 @@ async function serveAdminStatic(pathname: string, response: ServerResponse) {
   const filePath = relativePath && extname(relativePath)
     ? join(adminRoot, relativePath)
     : join(adminRoot, "index.html");
-  const file = await readFile(filePath);
+  let file: Buffer;
+  try {
+    file = await readFile(filePath);
+  } catch (error) {
+    if (relativePath && extname(relativePath)) {
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.setHeader("cache-control", "no-store");
+      response.end("Not Found");
+      return;
+    }
+    throw error;
+  }
 
   response.statusCode = 200;
   response.setHeader(
@@ -8047,9 +8543,9 @@ async function resolvePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
 ): Promise<string> {
-  const workspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+  await ensurePersonalProjectWorkspaceForSession(db, authenticated);
   await repairTeamWorkspaceProjectsToPersonalWorkspaces(db);
-  return workspaceId;
+  return personalProjectWorkspaceId(authenticated.user.id);
 }
 
 async function ensurePersonalProjectWorkspaceForSession(
@@ -8078,6 +8574,7 @@ async function ensureCachedPersonalProjectWorkspaceAccess(
     return cached;
   }
   const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
+    .then(() => personalProjectWorkspaceId(userId))
     .catch((error) => {
       promises?.delete(userId);
       throw error;
@@ -8089,8 +8586,7 @@ async function ensureCachedPersonalProjectWorkspaceAccess(
 async function ensurePersonalProjectWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
-): Promise<string> {
-  const scope = personalDevTenantScope(userId);
+) {
   const workspaceId = personalProjectWorkspaceId(userId);
 
   await db.query(
@@ -8104,43 +8600,14 @@ async function ensurePersonalProjectWorkspaceAccess(
     [devOrganizationId],
   );
   await repairDevOrganizationLegacyCreditLots(db);
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Personal Creator Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE
-      SET status = 'active'
-    `,
-    [scope.organizationId],
-  );
-  await ensurePersonalDevWorkspaceAccess(db, userId);
 
-  const existingWorkspace = await queryOne<{ organization_id: string }>(
-    db,
-    "SELECT organization_id FROM workspaces WHERE id = $1",
-    [workspaceId],
-  );
-  if (existingWorkspace && existingWorkspace.organization_id !== scope.organizationId) {
-    const repaired = await tryRepairLegacyPersonalProjectWorkspaceScope(db, {
-      userId,
-      workspaceId,
-      fromOrganizationId: existingWorkspace.organization_id,
-      toOrganizationId: scope.organizationId,
-    });
-    if (!repaired) {
-      return scope.workspaceId;
-    }
-  }
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
       VALUES ($1, $2, 'Personal Project Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE
-      SET
-        name = EXCLUDED.name,
-        status = 'active'
+      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
     `,
-    [workspaceId, scope.organizationId],
+    [workspaceId, devOrganizationId],
   );
   await db.query(
     `
@@ -8149,63 +8616,8 @@ async function ensurePersonalProjectWorkspaceAccess(
       ON CONFLICT (organization_id, workspace_id, user_id)
       DO UPDATE SET role = 'owner_admin', status = 'active'
     `,
-    [randomUUID(), scope.organizationId, workspaceId, userId],
+    [randomUUID(), devOrganizationId, workspaceId, userId],
   );
-  return workspaceId;
-}
-
-async function tryRepairLegacyPersonalProjectWorkspaceScope(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  input: {
-    userId: string;
-    workspaceId: string;
-    fromOrganizationId: string;
-    toOrganizationId: string;
-  },
-) {
-  const linkedProjects = await queryOne<{ count: number | string }>(
-    db,
-    `
-      SELECT count(*) AS count
-      FROM projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-    `,
-    [input.fromOrganizationId, input.workspaceId],
-  );
-  if (Number(linkedProjects?.count ?? 0) > 0) {
-    return false;
-  }
-
-  await db.query("BEGIN");
-  try {
-    await db.query(
-      `
-        DELETE FROM memberships
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND user_id = $3
-      `,
-      [input.fromOrganizationId, input.workspaceId, input.userId],
-    );
-    await db.query(
-      `
-        UPDATE workspaces
-        SET organization_id = $1,
-            name = 'Personal Project Workspace',
-            status = 'active',
-            updated_at = now()
-        WHERE id = $2
-          AND organization_id = $3
-      `,
-      [input.toOrganizationId, input.workspaceId, input.fromOrganizationId],
-    );
-    await db.query("COMMIT");
-    return true;
-  } catch (error) {
-    await db.query("ROLLBACK");
-    return false;
-  }
 }
 
 async function repairDevOrganizationLegacyCreditLots(
@@ -8401,30 +8813,9 @@ async function runTeamWorkspaceProjectRepair(
         AND projects.workspace_id = $2
         AND projects.created_by_user_id IS NOT NULL
         AND projects.created_by_user_id = personal_scope.user_id
-        AND EXISTS (
-          SELECT 1
-          FROM workspaces personal_workspace
-          WHERE personal_workspace.id = personal_scope.workspace_id
-            AND personal_workspace.organization_id = projects.organization_id
-        )
     `,
     [devOrganizationId, devWorkspaceId],
   );
-}
-
-async function resolveOrganizationIdForWorkspace(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  workspaceId: string,
-) {
-  const workspace = await queryOne<{ organization_id: string }>(
-    db,
-    "SELECT organization_id FROM workspaces WHERE id = $1",
-    [workspaceId],
-  );
-  if (!workspace?.organization_id) {
-    throw new Error("workspace_organization_missing");
-  }
-  return workspace.organization_id;
 }
 
 function personalProjectWorkspaceId(userId: string) {
@@ -8610,12 +9001,10 @@ async function ensureDefaultMembershipPlan(
     [
       input.now,
       JSON.stringify([
-        "canvas_access",
         "priority_generation",
         "team_asset_library",
         "team_dashboard",
         "team_member_management",
-        "full_flow_agent",
       ]),
       JSON.stringify({ modelFamilies: ["seedance"] }),
       JSON.stringify({ sortOrder: 20 }),
@@ -9086,20 +9475,12 @@ async function hasActiveOrganizationEntitlement(
   const entitlement = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id::text AS id
+      SELECT id
       FROM organization_entitlements
       WHERE organization_id = $1
         AND entitlement_key = $2
         AND status = 'active'
         AND (expires_at IS NULL OR expires_at > $3)
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND (period.plan_snapshot_json -> 'entitlements') ? $2
       LIMIT 1
     `,
     [input.organizationId, input.entitlementKey, input.now],
@@ -9108,52 +9489,10 @@ async function hasActiveOrganizationEntitlement(
   return Boolean(entitlement);
 }
 
-async function hasActiveOrganizationMembership(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  input: {
-    organizationId: string;
-    now: Date;
-  },
-): Promise<boolean> {
-  const membership = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM organization_membership_subscriptions
-      WHERE organization_id = $1
-        AND status IN ('experience_active', 'professional_active')
-        AND current_period_end_at IS NOT NULL
-        AND current_period_end_at > $2
-      UNION ALL
-      SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
-        AND tier IN ('experience', 'professional')
-        AND status = 'active'
-        AND period_end_at > $2
-      LIMIT 1
-    `,
-    [input.organizationId, input.now],
-  );
-
-  return Boolean(membership);
-}
-
-function canvasMembershipRequiredError(): AuthHttpResponse<unknown> {
-  return envelopedError(
-    403,
-    "canvas_membership_required",
-    "Active membership is required for canvas",
-  );
-}
-
-function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
+function assertRemoteDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
   const databaseUrl = runtimeEnv.DATABASE_URL?.trim();
   if (!databaseUrl) {
-    return;
-  }
-  if (runtimeEnv.ALLOW_PHONE_AUTH_DEV_SERVER_REMOTE_DATABASE === "true") {
-    return;
+    throw new Error("phone_auth_dev_server_database_url_required");
   }
 
   let parsed: URL;
@@ -9164,8 +9503,8 @@ function assertSafeDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
   }
 
   const hostname = parsed.hostname.toLowerCase();
-  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "[::1]") {
-    throw new Error("phone_auth_dev_server_remote_database_forbidden");
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+    throw new Error("phone_auth_dev_server_local_database_forbidden");
   }
 }
 
@@ -9180,7 +9519,7 @@ export function createPhoneAuthDevServer(
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
   if (!options.db) {
-    assertSafeDevServerDatabaseUrl(runtimeEnv);
+    assertRemoteDevServerDatabaseUrl(runtimeEnv);
   }
   const dbPromise = options.db
     ? Promise.resolve(options.db)
@@ -9280,16 +9619,11 @@ export function createPhoneAuthDevServer(
         return;
       }
 
-      if (request.method === "GET") {
-        if (pathname.startsWith("/uploads/")) {
-          return await serveUploadedFile(request, pathname, response);
-        }
-        if (pathname === "/admin" || pathname.startsWith("/admin/")) {
-          return await serveAdminStatic(pathname, response);
-        }
-        if (!pathname.startsWith("/api/")) {
-          return await serveStatic(pathname, response);
-        }
+      if (
+        request.method === "GET" &&
+        (pathname === "/admin" || pathname.startsWith("/admin/"))
+      ) {
+        return await serveAdminStatic(pathname, response);
       }
 
       const db = await dbPromise;
@@ -9309,9 +9643,12 @@ export function createPhoneAuthDevServer(
           adapter: new OpenAICompatibleTextAdapter(),
           env: runtimeEnv,
         }),
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
+        organizationId: devOrganizationId,
+        workspaceId: devWorkspaceId,
       });
+      if (pathname.startsWith("/uploads/")) {
+        return await serveUploadedFile(request, pathname, response);
+      }
 
       if (pathname.startsWith("/vendor/")) {
         return await serveVendorFile(pathname, response);
@@ -10998,6 +11335,30 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      const adminUserModelRequestsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/model-requests$/);
+      if (request.method === "GET" && adminUserModelRequestsMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["user.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const adminUsers = createAdminUserService({ db });
+        const result = await adminUsers.listUserModelRequestLogs({
+          userId: decodeURIComponent(adminUserModelRequestsMatch[1]),
+          pageSize: Number(url.searchParams.get("pageSize") ?? 20),
+        });
+        if ("status" in result && "body" in result) {
+          return writeJson(response, result);
+        }
+        return writeJson(response, {
+          status: 200,
+          body: result,
+        });
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/risks") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -11979,6 +12340,88 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/sms-records") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+
+        const range = String(url.searchParams.get("range") ?? "all");
+        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 100), 1), 500);
+        const now = new Date();
+        let rangeClause = "";
+        const params: Array<unknown> = [];
+        if (range === "day") {
+          rangeClause = `AND created_at >= $1 AND created_at < $2`;
+          const day = shanghaiDayWindow(now);
+          params.push(day.start, day.end);
+        } else if (range === "month") {
+          const month = shanghaiMonthWindow(now);
+          rangeClause = `AND created_at >= $1 AND created_at < $2`;
+          params.push(month.start, month.end);
+        }
+        params.push(pageSize);
+        const rows = await db.query<{
+          id: string;
+          phone_e164: string;
+          challenge_id: string | null;
+          verification_code: string | null;
+          sms_content: string | null;
+          provider: string;
+          status: string;
+          ip_address: string | null;
+          user_agent_hash: string | null;
+          provider_request_id: string | null;
+          error_code: string | null;
+          created_at: Date;
+        }>(
+          `
+            SELECT
+              id,
+              phone_e164,
+              challenge_id,
+              verification_code,
+              sms_content,
+              provider,
+              status,
+              ip_address,
+              user_agent_hash,
+              provider_request_id,
+              error_code,
+              created_at
+            FROM sms_send_records
+            WHERE 1=1
+            ${rangeClause}
+            ORDER BY created_at DESC, id DESC
+            LIMIT $${params.length}
+          `,
+          params,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: rows.rows.map((row) => ({
+              id: row.id,
+              phone: row.phone_e164,
+              verificationCode: row.verification_code,
+              smsContent: row.sms_content,
+              provider: row.provider,
+              status: row.status,
+              ipAddress: row.ip_address,
+              userAgentHash: row.user_agent_hash,
+              providerRequestId: row.provider_request_id,
+              errorCode: row.error_code,
+              createdAt: row.created_at.toISOString(),
+            })),
+          },
+        });
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
         const body = (await readJsonBody(request)) as { phone: string };
         const result = await requestPersistentLoginCode(db, {
@@ -12382,6 +12825,8 @@ export function createPhoneAuthDevServer(
               code: style.code,
               coverImageUrl: style.coverImageUrl,
               cover_image_url: style.cover_image_url,
+              prompt_content: style.prompt_content,
+              promptContent: style.promptContent,
               status: style.status,
               sortOrder: style.sort_order,
               sort_order: style.sort_order,
@@ -12722,26 +13167,14 @@ export function createPhoneAuthDevServer(
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);
         if (request.method === "GET" && orderMatch) {
-          const now = new Date();
-          const orderResult = await commercePayment.getBillingOrder({
-            user: { sessionToken: authenticated.sessionToken },
-            orderId: decodeURIComponent(orderMatch[1]),
-            now,
-          });
-          const order = "order" in orderResult.body ? orderResult.body.order : null;
-          if (
-            orderResult.status === 200 &&
-            order?.orderNo &&
-            order?.status === "paid" &&
-            order.productType === "membership_plan"
-          ) {
-            await enqueueMissingMembershipActivationForPaidOrder(db, {
-              orderNo: order.orderNo,
-              now,
-            });
-            await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 20 });
-          }
-          return writeJson(response, orderResult);
+          return writeJson(
+            response,
+            await commercePayment.getBillingOrder({
+              user: { sessionToken: authenticated.sessionToken },
+              orderId: decodeURIComponent(orderMatch[1]),
+              now: new Date(),
+            }),
+          );
         }
 
         if (request.method === "POST" && pathname === "/api/billing/orders") {
@@ -13111,6 +13544,7 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
+
         const currentWorkspaceId = pathname.startsWith("/api/creator/canvas-projects") || pathname.startsWith("/api/canvas/")
           ? await ensurePersonalProjectWorkspaceForSession(db, authenticated)
           : devWorkspaceId;
@@ -13119,16 +13553,12 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && canvasNodeRunsMatch) {
           const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
-          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
             capability: capabilities.projectView,
-            now,
+            now: new Date(),
           });
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
-          }
           const canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -13149,16 +13579,12 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
           const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
           const body = (await readJsonBody(request)) as { selectionRole?: unknown };
-          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
             capability: capabilities.projectEdit,
-            now,
+            now: new Date(),
           });
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
-          }
           const canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -13193,16 +13619,12 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
             capability: capabilities.generationStart,
-            now,
+            now: new Date(),
           });
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
-          }
           let canvas = await findCanvasByCanvasProjectId(db, {
             organizationId: actor.organizationId,
             workspaceId: actor.workspaceId ?? undefined,
@@ -13461,36 +13883,19 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/workbench")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const episode = await queryOne<{
-            id: string;
-            organization_id: string;
-            project_id: string;
-            title: string;
-            sequence: number;
-            status: string;
-          }>(
-            db,
-            "SELECT id, organization_id, project_id, title, sequence, status FROM episodes WHERE id = $1",
-            [episodeId],
-          );
-          if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在或已被删除"));
-          }
-          const result = await creatorApplication.getProjectDetail({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            projectId: episode.project_id,
+          const context = await getEpisodeContext(db, {
+            episodeId,
+            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
+            capability: capabilities.generationStart,
             now: new Date(),
           });
-          if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
+          if (!context) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const detail = normalizeProjectDetailForEpisodeContract(result.body as Record<string, unknown>);
-          const project = detail.project as Record<string, unknown>;
+          const { episode, project } = context;
           const now = new Date();
-          const [roleAssets, sceneAssets, propAssets] = await Promise.all([
+          const [roleAssets, sceneAssets, propAssets, creditBalance] = await Promise.all([
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
               assetType: "role",
@@ -13500,6 +13905,7 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
@@ -13510,6 +13916,7 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
             listEpisodeAssetsFromDb(db, {
               episodeId: episode.id,
@@ -13520,7 +13927,9 @@ export function createPhoneAuthDevServer(
               signedUrlExpiresInSeconds,
               now,
               capability: null,
+              context,
             }),
+            getOrganizationCreditBalance(db, episode.organization_id),
           ]);
           const assetsByType = {
             role: roleAssets ?? [],
@@ -13539,9 +13948,9 @@ export function createPhoneAuthDevServer(
                 projectId: episode.project_id,
               },
               project: {
-                projectId: project.projectId ?? episode.project_id,
+                projectId: project.id ?? episode.project_id,
                 name: project.name ?? "",
-                status: project.status ?? null,
+                status: project.phase ?? null,
               },
               navigation: {
                 backTarget: "project_episodes",
@@ -13555,7 +13964,7 @@ export function createPhoneAuthDevServer(
                 canDeleteEpisode: true,
               },
               defaultScopeMode: "storyboard",
-              creditBalance: await getOrganizationCreditBalance(db, episode.organization_id),
+              creditBalance,
               assetsByType,
             }),
           );
@@ -13722,106 +14131,17 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/storyboards")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const episode = await queryOne<{ project_id: string }>(
-            db,
-            "SELECT project_id FROM episodes WHERE id = $1",
-            [episodeId],
-          );
-          if (!episode) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
-          }
-          const result = await creatorApplication.getProjectDetail({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            projectId: episode.project_id,
+          const items = await listEpisodeStoryboardsFromDb(db, {
+            episodeId,
+            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
             now: new Date(),
           });
-          if (result.status !== 200) {
-            return writeJson(response, envelopedError(result.status, "resource_not_found", "resource not found"));
+          if (!items) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const detail = result.body as Record<string, unknown>;
-          const shots = Array.isArray(detail.shots) ? detail.shots : [];
-          const shotIds = shots
-            .map((shot) => shot && typeof shot === "object" ? (shot as Record<string, unknown>).id : null)
-            .filter((shotId): shotId is string => typeof shotId === "string" && shotId.length > 0);
-          const draftRows = shotIds.length
-            ? await db.query<{
-                target_id: string;
-                prompt: string;
-                mode: "image" | "video" | "lip_sync";
-                payload_json: Record<string, unknown> | null;
-                updated_at: Date | string;
-              }>(
-                `
-                  SELECT target_id, prompt, mode, payload_json, updated_at
-                    FROM episode_generation_drafts
-                   WHERE episode_id = $1
-                     AND target_type = 'storyboard'
-                     AND target_id = ANY($2::uuid[])
-                `,
-                [episodeId, shotIds],
-              )
-            : { rows: [] };
-          const draftsByShotId = new Map<string, Array<{
-            prompt: string;
-            mode: "image" | "video" | "lip_sync";
-            payload: Record<string, unknown>;
-            updatedAt: Date | string;
-          }>>();
-          for (const draft of draftRows.rows) {
-            const drafts = draftsByShotId.get(draft.target_id) ?? [];
-            drafts.push({
-              prompt: draft.prompt ?? "",
-              mode: draft.mode,
-              payload: draft.payload_json ?? {},
-              updatedAt: draft.updated_at,
-            });
-            draftsByShotId.set(draft.target_id, drafts);
-          }
-          const items = shots
-            .map((shot) => shot && typeof shot === "object" ? shot as Record<string, unknown> : {})
-            .filter((shot) => shot.episodeId === episodeId)
-            .sort((left, right) => Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0))
-            .map((shot, index) => {
-              const videoVersions = Array.isArray(shot.videoVersions) ? shot.videoVersions : [];
-              const currentVideoFileId = shot.currentVideoAssetVersionId ?? null;
-              const currentVideoVersion = currentVideoFileId
-                ? videoVersions.find((version) => version?.id === currentVideoFileId) ?? null
-                : null;
-              return {
-                id: shot.id ?? null,
-                shotId: shot.id ?? null,
-                storyboardId: shot.id ?? null,
-                episodeId,
-                indexNo: index + 1,
-                sceneAnalysis: shot.sceneAnalysis ?? shot.description ?? "",
-                plotPreview: shot.plotPreview ?? shot.title ?? "",
-                currentImageFileId: shot.currentImageAssetVersionId ?? null,
-                currentImageUrl: shot.previewImageUrl ?? null,
-                currentVideoFileId,
-                currentVideoUrl:
-                  currentVideoVersion?.metadata?.sourceUrl ??
-                  currentVideoVersion?.metadata?.downloadUrl ??
-                  currentVideoVersion?.metadata?.previewUrl ??
-                  currentVideoVersion?.sourceUrl ??
-                  currentVideoVersion?.downloadUrl ??
-                  currentVideoVersion?.previewUrl ??
-                  shot.previewVideoUrl ??
-                  null,
-                currentVideoThumbnailUrl:
-                  currentVideoVersion?.metadata?.thumbnailUrl ??
-                  currentVideoVersion?.thumbnailUrl ??
-                  shot.previewVideoThumbnailUrl ??
-                  null,
-                imageStatus: shot.imageStatus === "completed" || shot.imageStatus === "ready" ? "succeeded" : shot.imageStatus ?? "draft",
-                videoStatus: shot.videoStatus === "completed" || shot.videoStatus === "ready" ? "succeeded" : shot.videoStatus ?? "not_ready",
-                assetRefs: Array.isArray(shot.references) ? shot.references : [],
-                generationDrafts: typeof shot.id === "string" ? draftsByShotId.get(shot.id) ?? [] : [],
-                sortOrder: shot.sortOrder ?? index,
-              };
-            });
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
@@ -13865,23 +14185,55 @@ export function createPhoneAuthDevServer(
 
         if (
           request.method === "GET" &&
+          pathname === "/api/batch-image-model-options"
+        ) {
+          return writeJson(response, enveloped(200, await buildBatchImageModelOptions(db)));
+        }
+
+        if (
+          request.method === "GET" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/batch-image-model-options")
+        ) {
+          const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const [context, modelOptions] = await Promise.all([
+            getEpisodeContext(db, {
+              episodeId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              capability: capabilities.generationStart,
+              now: new Date(),
+            }),
+            buildBatchImageModelOptions(db),
+          ]);
+          if (!context) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
+          }
+          return writeJson(response, enveloped(200, modelOptions));
+        }
+
+        if (
+          request.method === "GET" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.endsWith("/generation-config")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const context = await getEpisodeContext(db, {
-            episodeId,
-            sessionToken: authenticated.sessionToken,
-            userId: authenticated.user.id,
-            capability: capabilities.generationStart,
-            now: new Date(),
-          });
+          const [context, activeImageModels, activeVideoModels, activeTextModels, batchPromptPresetCategories] = await Promise.all([
+            getEpisodeContext(db, {
+              episodeId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              capability: capabilities.generationStart,
+              now: new Date(),
+            }),
+            listActiveAiModelConfigs(db, { mediaType: "image" }),
+            listActiveAiModelConfigs(db, { mediaType: "video" }),
+            listActiveAiModelConfigs(db, { mediaType: "text" }),
+            readBatchImagePromptPresetCategoriesFromDb(db),
+          ]);
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
           }
-          const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
-          const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
-          const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
           const imageModels = activeImageModels.length
             ? activeImageModels.map(modelConfigToGenerationConfigModel)
             : [
@@ -13916,12 +14268,14 @@ export function createPhoneAuthDevServer(
             videoModels.find((model) => model.videoCategory === "reference") ??
             videoModels[0] ??
             null;
+          const textModels = activeTextModels.map(modelConfigToGenerationConfigModel);
           return writeJson(
             response,
             enveloped(200, {
               models: [
                 ...imageModels,
                 ...videoModels,
+                ...textModels,
               ],
               presets: [],
               batchPromptPresetCategories,
@@ -13976,7 +14330,10 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(202, error.code, "request is still processing"));
             }
             if (error instanceof InsufficientCreditsError) {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "缁夘垰鍨庢稉宥堝喕"));
+              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值。"));
+            }
+            if (error instanceof GenerationMembershipRequiredError) {
+              return writeJson(response, envelopedError(403, error.code, error.message));
             }
             throw error;
           }
@@ -14513,46 +14870,11 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: await adminUsers.listUserCreditLedger({
               userId: authenticated.user.id,
-              organizationId: await resolveOrganizationIdForWorkspace(db, workspaceId),
+              organizationId: devOrganizationId,
               workspaceId,
               pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             }),
           });
-        }
-
-        if (request.method === "GET" && pathname === "/api/creator/credits/recharge-center") {
-          const rechargeCenter = createCreditRechargeCenterService({
-            db,
-            workspaceId: currentWorkspaceId,
-          });
-          return writeJson(
-            response,
-            await rechargeCenter.getRechargeCenter({
-              user: { sessionToken: authenticated.sessionToken },
-              now: new Date(),
-            }),
-          );
-        }
-
-        if (request.method === "POST" && pathname === "/api/creator/credits/team-pool-transfers") {
-          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
-          if (!idempotencyKey) {
-            return writeIdempotencyKeyRequired(response);
-          }
-          const body = objectBody(await readJsonBody(request));
-          const rechargeCenter = createCreditRechargeCenterService({
-            db,
-            workspaceId: currentWorkspaceId,
-          });
-          return writeJson(
-            response,
-            await rechargeCenter.transferToTeamPool({
-              user: { sessionToken: authenticated.sessionToken },
-              body,
-              idempotencyKey,
-              now: new Date(),
-            }),
-          );
         }
 
         if (request.method === "POST" && pathname === "/api/creator/team/members") {
@@ -14647,6 +14969,9 @@ export function createPhoneAuthDevServer(
                 sessionToken: authenticated.sessionToken,
               },
               now: new Date(),
+              page: Number(url.searchParams.get("page") ?? 1),
+              pageSize: url.searchParams.get("pageSize"),
+              keyword: url.searchParams.get("keyword"),
             }),
           );
         }
@@ -14666,9 +14991,6 @@ export function createPhoneAuthDevServer(
           });
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
-          }
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
           }
           try {
             if (request.method === "GET") {
@@ -14715,18 +15037,14 @@ export function createPhoneAuthDevServer(
         }
 
         if (pathname === "/api/creator/canvas-projects") {
-          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
             capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
-            now,
+            now: new Date(),
           });
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
-          }
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
           }
           const ownedProjects = await listCanvasProjects(db, {
             organizationId: actor.organizationId,
@@ -14825,20 +15143,16 @@ export function createPhoneAuthDevServer(
         const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
-          const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
             capability: request.method === "PATCH" || request.method === "DELETE"
               ? capabilities.projectEdit
               : capabilities.projectView,
-            now,
+            now: new Date(),
           });
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
-          }
-          if (!(await hasActiveOrganizationMembership(db, { organizationId: actor.organizationId, now }))) {
-            return writeJson(response, canvasMembershipRequiredError());
           }
           const project = await findCanvasProjectRecord(db, {
             organizationId: actor.organizationId,
@@ -15137,11 +15451,14 @@ export function createPhoneAuthDevServer(
           const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
             findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
             findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+            findDefaultTabooStoryboardPromptPackagesForPreview(db),
           ]);
           if (!genrePackage || !emotionPackage) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
+          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
+          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
+          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
 
           const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
           response.statusCode = 200;
@@ -15149,28 +15466,40 @@ export function createPhoneAuthDevServer(
           response.setHeader("cache-control", "no-cache, no-transform");
           response.setHeader("connection", "keep-alive");
           response.flushHeaders?.();
-          const stopHeartbeat = startSseHeartbeat(response);
+          const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+          const abortController = createRequestAbortController(request, response);
           try {
             for await (const event of analysisService.generateScriptStream({
               projectId,
               createdByUserId: authenticated.user.id,
               scriptText,
               packages: {
-                genrePrompt: genrePackage.prompt_content,
-                emotionPrompt: emotionPackage.prompt_content,
-                tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+                genrePrompt,
+                emotionPrompt,
+                tabooPrompt,
               },
+              signal: abortController.signal,
             })) {
-              writeSseEvent(response, event.type, toSsePayload(event));
+              if (abortController.signal.aborted) {
+                break;
+              }
+              writeSseData(response, event);
             }
             stopHeartbeat();
-            response.end();
+            abortController.cleanup();
+            if (!response.destroyed && !response.writableEnded) {
+              response.end();
+            }
           } catch (error) {
             stopHeartbeat();
-            writeSseEvent(response, "error", {
-              error: error instanceof Error ? error.message : "ai_script_analysis_failed",
-            });
-            response.end();
+            abortController.cleanup();
+            if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+              writeSseData(response, {
+                type: "error",
+                error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+              });
+              response.end();
+            }
           }
           return;
         }
@@ -15220,7 +15549,7 @@ export function createPhoneAuthDevServer(
           ] = await Promise.all([
             findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
             findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findGlobalTabooStoryboardPromptPackagesForPreview(db),
+            findDefaultTabooStoryboardPromptPackagesForPreview(db),
             findDefaultScenePromptTemplateForPreview(db),
             findDefaultCharacterPromptTemplateForPreview(db),
             findDefaultPropPromptTemplateForPreview(db),
@@ -15232,15 +15561,18 @@ export function createPhoneAuthDevServer(
           if (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
+          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
+          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
+          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
 
           const previewInput = {
             projectId,
             createdByUserId: authenticated.user.id,
             scriptText,
             packages: {
-              genrePrompt: genrePackage.prompt_content,
-              emotionPrompt: emotionPackage.prompt_content,
-              tabooPrompt: tabooPackages.map((item) => item.prompt_content).join("\n\n"),
+              genrePrompt,
+              emotionPrompt,
+              tabooPrompt,
             },
             templates: {
               scenePrompt: sceneTemplate.prompt_content,
@@ -15257,11 +15589,19 @@ export function createPhoneAuthDevServer(
             response.setHeader("cache-control", "no-cache, no-transform");
             response.setHeader("connection", "keep-alive");
             response.flushHeaders?.();
-            const stopHeartbeat = startSseHeartbeat(response);
+            const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+            const abortController = createRequestAbortController(request, response);
             try {
-              for await (const event of previewService.generatePreviewStream(previewInput)) {
+              for await (const event of previewService.generatePreviewStream({
+                ...previewInput,
+                signal: abortController.signal,
+              })) {
+                if (abortController.signal.aborted) {
+                  break;
+                }
                 if (event.type === "complete") {
-                  writeSseEvent(response, "complete", {
+                  writeSseData(response, {
+                    type: "complete",
                     ...event.preview,
                     selectedPackages: {
                       genre: { id: genrePackage.id, name: genrePackage.name },
@@ -15270,17 +15610,24 @@ export function createPhoneAuthDevServer(
                     },
                   });
                 } else {
-                  writeSseEvent(response, event.type, toSsePayload(event));
+                  writeSseData(response, event);
                 }
               }
               stopHeartbeat();
-              response.end();
+              abortController.cleanup();
+              if (!response.destroyed && !response.writableEnded) {
+                response.end();
+              }
             } catch (error) {
               stopHeartbeat();
-              writeSseEvent(response, "error", {
-                error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
-              });
-              response.end();
+              abortController.cleanup();
+              if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+                writeSseData(response, {
+                  type: "error",
+                  error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
+                });
+                response.end();
+              }
             }
             return;
           }
@@ -15527,6 +15874,12 @@ export function createPhoneAuthDevServer(
             name?: string | null;
             description?: string | null;
             isMain?: boolean | null;
+            previewUrl?: string | null;
+            sourceUrl?: string | null;
+            downloadUrl?: string | null;
+            storageObjectId?: string | null;
+            storageObjectKey?: string | null;
+            mimeType?: string | null;
           };
           return writeJson(
             response,
@@ -15563,6 +15916,7 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "POST" && pathname === "/api/creator/assets/import") {
           const body = (await readJsonBody(request)) as {
+            projectId?: string | null;
             kind: "character" | "scene" | "prop" | "image" | "video";
             name?: string | null;
             description?: string | null;
@@ -16732,9 +17086,6 @@ export function createPhoneAuthDevServer(
 
   return {
     origin: "http://127.0.0.1:0",
-    async db() {
-      return dbPromise;
-    },
     async listen(port: number) {
       await new Promise<void>((resolve, reject) => {
         httpServer.once("error", reject);

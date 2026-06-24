@@ -91,9 +91,9 @@ export async function listIndexNames(
 }
 
 function requiredTestDatabaseUrl() {
-  const connectionString = process.env.TEST_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
+  const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
-    throw new Error("TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL tests");
+    throw new Error("DATABASE_URL is required for PostgreSQL tests");
   }
   return connectionString;
 }

@@ -529,7 +529,10 @@
       .table-wrap.compact table { min-width: 760px; font-size: 12px; }
       .table-wrap.dense table { min-width: 900px; font-size: 12px; }
       .table-wrap.models table { min-width: 1040px; }
-      .table-wrap.users table { min-width: 900px; }
+      .table-wrap.users table {
+        min-width: 980px;
+        table-layout: auto;
+      }
       .table-wrap.settings table { min-width: 820px; }
       th, td {
         padding: 11px 12px;
@@ -561,7 +564,23 @@
       .table-wrap.dense td.actions,
       .table-wrap.dense th.actions { width: 132px; min-width: 132px; max-width: 132px; }
       .table-wrap.users td.actions,
-      .table-wrap.users th.actions { width: 96px; min-width: 96px; max-width: 96px; }
+      .table-wrap.users th.actions { width: 300px; min-width: 300px; max-width: 300px; }
+      .table-wrap.users th:nth-child(1),
+      .table-wrap.users td:nth-child(1) { width: 220px; }
+      .table-wrap.users th:nth-child(2),
+      .table-wrap.users td:nth-child(2) { width: 140px; }
+      .table-wrap.users th:nth-child(3),
+      .table-wrap.users td:nth-child(3) { width: 164px; }
+      .table-wrap.users th:nth-child(4),
+      .table-wrap.users td:nth-child(4) { width: 108px; }
+      .table-wrap.users th:nth-child(5),
+      .table-wrap.users td:nth-child(5),
+      .table-wrap.users th:nth-child(6),
+      .table-wrap.users td:nth-child(6) { width: 112px; }
+      .table-wrap.users th:nth-child(7),
+      .table-wrap.users td:nth-child(7) { width: 128px; }
+      .table-wrap.users th:nth-child(8),
+      .table-wrap.users td:nth-child(8) { width: 84px; }
       .tag {
         display: inline-flex;
         align-items: center;
@@ -593,6 +612,13 @@
       .table-wrap.users .user-edit-btn {
         min-width: 58px;
         padding-inline: 12px;
+      }
+      .table-wrap.users .actions-row {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+      .table-wrap.users .actions-row .btn {
+        min-width: 58px;
       }
       .user-action-grid {
         display: grid;
@@ -728,53 +754,6 @@
         margin-top: 6px;
       }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-      .field small {
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.5;
-      }
-      .check-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .check-option {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 40px;
-        padding: 9px 10px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: #fbfcfe;
-        color: #30445f;
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .check-option input {
-        width: 16px;
-        height: 16px;
-        accent-color: var(--primary);
-      }
-      .membership-plan-notice {
-        margin: 0 0 14px;
-        padding: 12px 14px;
-        border: 1px solid #bfdbfe;
-        border-radius: 8px;
-        background: #eff6ff;
-        color: #1e3a5f;
-      }
-      .membership-plan-notice strong {
-        display: block;
-        margin-bottom: 6px;
-      }
-      .membership-plan-notice ul {
-        margin: 8px 0 0;
-        padding-left: 18px;
-      }
-      .membership-plan-notice li {
-        margin: 4px 0;
-      }
       .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
       .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
       #parameter-schema-list table {
@@ -1224,6 +1203,7 @@
         directRecharge: "直充积分",
         prompts: "提示词管理",
         risks: "风控与审计",
+        smsRecords: "短信记录",
         settings: "系统设置",
         account: "管理员账户",
       };
@@ -1235,7 +1215,12 @@
         selectedModelId: null,
         modelLoadError: "",
         users: [],
+        userTotal: 0,
         userFilters: { keyword: "", status: "all", accountType: "all" },
+        userModelRequestInline: {
+          expandedUserId: null,
+          rowsByUserId: {},
+        },
         userLoadError: "",
         membershipPlans: [],
         membershipLoadError: "",
@@ -1251,6 +1236,8 @@
         scriptPromptPackages: [],
         scriptPromptLoadError: "",
         imagePromptStyles: [],
+        imagePromptTotal: 0,
+        imagePromptPageSize: 500,
         imagePromptLoadError: "",
         batchImagePromptPresetCategories: { character: [], scene: [], prop: [] },
         batchImagePromptLoadError: "",
@@ -1282,6 +1269,9 @@
         auditEvents: [],
         riskLoadError: "",
         riskStatusFilter: "all",
+        smsRecords: [],
+        smsRecordLoadError: "",
+        smsRecordRange: "all",
         dashboard: {
           metrics: {
             generationCountToday: 0,
@@ -1316,9 +1306,17 @@
         {
           key: "creator.batch_image_prompt_preset_categories",
           value: {
-            scene: [],
-            character: [],
-            prop: [],
+            scene: [
+              { id: "scene-vr", label: "[系统]VR场景图" },
+              { id: "scene-overlook", label: "[系统]场景-俯视图" },
+              { id: "scene-wide", label: "[系统]场景-广角图" },
+            ],
+            character: [
+              { id: "character-triple", label: "[系统]角色-三视图" },
+            ],
+            prop: [
+              { id: "prop-triple", label: "[系统]道具-三视图" },
+            ],
           },
           valueType: "json",
           scope: "creator",
@@ -1353,6 +1351,8 @@
 
       const app = document.getElementById("admin-app");
       const rememberedLoginStorageKey = "admin-login-remembered-credentials";
+      let userSearchDebounceTimer = null;
+      let userSearchRequestToken = 0;
 
       function readRememberedLogin() {
         try {
@@ -1390,6 +1390,7 @@
         if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/sms-records")) return "smsRecords";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
         return "dashboard";
@@ -1676,6 +1677,7 @@
                 ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "提示词管理")}
                 ${navButton("risks", "风控审计")}
+                ${navButton("smsRecords", "短信记录")}
                 ${navButton("settings", "系统设置")}
               </nav>
             </aside>
@@ -1721,14 +1723,19 @@
       async function loadUsers() {
         setPageLoading("users", true);
         try {
-          const result = await api("/api/admin/users?pageSize=100");
+          const keyword = String(state.userFilters?.keyword || "").trim();
+          const params = new URLSearchParams({ pageSize: "100" });
+          if (keyword) params.set("keyword", keyword);
+          const result = await api(`/api/admin/users?${params.toString()}`);
           state.users = result.data || [];
+          state.userTotal = Number(result.meta?.total || (result.data || []).length || 0);
           state.userLoadError = "";
           clearPageForbidden("users");
         } catch (error) {
           setPageForbidden("users", error);
           state.userLoadError = error.payload?.error?.message || "用户列表加载失败";
           state.users = [];
+          state.userTotal = 0;
         } finally {
           setPageLoading("users", false);
         }
@@ -1761,7 +1768,7 @@
       async function loadDirectRechargePackages() {
         setPageLoading("directRecharge", true);
         try {
-          const result = await api("/api/admin/direct-recharge/packages");
+          const result = await api("/api/admin/direct-recharge/packages?includeArchived=1");
           state.directRechargePackages = result.data?.packages || [];
           state.directRechargeLoadError = "";
           clearPageForbidden("directRecharge");
@@ -1903,7 +1910,7 @@
       }
 
       const shotPromptTemplateFallback = [
-        { id: "shot-prompt-outline-default", name: "默认分镜大纲", code: "shot_outline_from_scene", stage: "outline", model_family: "general", tags: ["分镜大纲", "节奏", "JSON"], variables: ["{{script_scene}}"], json_schema: "shots[].shot_no, scene, action, emotion, visual_focus, prompt", prompt_content: "请根据输入剧本场景生成分镜大纲，输出每个镜头的剧情目标、动作、情绪、视觉重点和简要提示词。\n\n剧本内容：\n{{script_scene}}", is_default: true, sort_order: 400, status: "enabled", remark: "默认分镜大纲模板" },
+        { id: "shot-prompt-outline-default", name: "长篇故事精准分镜", code: "long_story_precise_breakdown", stage: "outline", model_family: "general", tags: ["长篇分镜", "节奏", "JSON"], variables: ["{{story_text}}"], json_schema: "shots[].shot_no, duration_seconds, plot_function, visual_content, shot_size, camera_move, action_expression, dialogue_voiceover, subtitle, sound_bgm, transition, hook_note", prompt_content: "请将输入剧情改写为节奏清晰、镜头目标明确的长篇故事分镜脚本，输出每个镜头的时长、剧情功能、视觉内容、景别、运镜、动作情绪、台词/旁白、字幕、音效和转场。\n\n剧情如下：\n{{story_text}}", is_default: true, sort_order: 900, status: "enabled", remark: "默认长篇故事精准分镜模板" },
       ];
       async function loadShotPromptTemplates() {
         try {
@@ -1941,6 +1948,8 @@
         return source.map((item, index) => ({
           id: String(item?.id || `${target}-batch-prompt-${index + 1}`),
           label: String(item?.label || item?.name || `${batchImagePromptDrawerTitle(target)}${index + 1}`),
+          prompt_content: String(item?.prompt_content || item?.promptContent || ""),
+          promptContent: String(item?.prompt_content || item?.promptContent || ""),
           sort_order: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
           sortOrder: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
         }));
@@ -1975,14 +1984,21 @@
         return {
           scene: normalizeBatchImagePromptTemplates("scene", getBatchImagePromptTemplates("scene"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
           character: normalizeBatchImagePromptTemplates("character", getBatchImagePromptTemplates("character"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
           prop: normalizeBatchImagePromptTemplates("prop", getBatchImagePromptTemplates("prop"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
         };
+      }
+
+      function batchImagePromptTemplatePayloadItem(item) {
+        const promptContent = String(item?.prompt_content || item?.promptContent || "").trim();
+        return promptContent
+          ? { id: item.id, label: item.label, prompt_content: promptContent }
+          : { id: item.id, label: item.label };
       }
 
       async function loadBatchImagePromptTemplates() {
@@ -2430,19 +2446,27 @@
         item.coverImageUrl = item.cover_image_url;
       });
 
-      async function loadImagePromptStyles() {
+      async function loadImagePromptStyles(category = state.imagePromptCategory, keyword = state.imagePromptKeyword) {
+        const normalizedCategory = imagePromptKinds.some((item) => item.key === category) ? category : "all";
+        const params = new URLSearchParams({
+          page_size: String(Number(state.imagePromptPageSize || 500)),
+        });
+        if (normalizedCategory !== "all") params.set("category", normalizedCategory);
+        if ((keyword || "").trim()) params.set("keyword", (keyword || "").trim());
         try {
-          const result = await api("/api/admin/image-prompt/styles?page_size=200");
+          const result = await api(`/api/admin/image-prompt/styles?${params.toString()}`);
           const loadedStyles = Array.isArray(result.data)
             ? result.data
             : Array.isArray(result.data?.data)
               ? result.data.data
               : [];
-          state.imagePromptStyles = normalizeImagePromptStyles(loadedStyles.length ? loadedStyles : imagePromptStyleFallback);
+          state.imagePromptStyles = normalizeImagePromptStyles(loadedStyles);
+          state.imagePromptTotal = Number(result.meta?.total || loadedStyles.length || 0);
           state.imagePromptLoadError = "";
         } catch (error) {
-          state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用，当前展示内置豆包样例";
-          state.imagePromptStyles = normalizeImagePromptStyles(imagePromptStyleFallback);
+          state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用";
+          state.imagePromptStyles = [];
+          state.imagePromptTotal = 0;
         }
       }
 
@@ -2507,6 +2531,32 @@
         }
       }
 
+      async function loadSmsRecords() {
+        setPageLoading("smsRecords", true);
+        try {
+          const params = new URLSearchParams({
+            pageSize: "200",
+            range: state.smsRecordRange || "all",
+          });
+          const result = await api(`/api/admin/sms-records?${params.toString()}`);
+          state.smsRecords = result.data || [];
+          state.smsRecordLoadError = "";
+          clearPageForbidden("smsRecords");
+        } catch (error) {
+          setPageForbidden("smsRecords", error);
+          state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
+          state.smsRecords = [];
+        } finally {
+          setPageLoading("smsRecords", false);
+        }
+      }
+
+      async function updateSmsRecordRange(value) {
+        state.smsRecordRange = value || "all";
+        await loadSmsRecords();
+        renderShell();
+      }
+
       async function loadDashboard() {
         setPageLoading("dashboard", true);
         try {
@@ -2566,6 +2616,26 @@
         }
       }
 
+      async function loadSmsRecords() {
+        setPageLoading("smsRecords", true);
+        try {
+          const params = new URLSearchParams({
+            pageSize: "200",
+            range: state.smsRecordRange || "all",
+          });
+          const result = await api(`/api/admin/sms-records?${params.toString()}`);
+          state.smsRecords = result.data || [];
+          state.smsRecordLoadError = "";
+          clearPageForbidden("smsRecords");
+        } catch (error) {
+          setPageForbidden("smsRecords", error);
+          state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
+          state.smsRecords = [];
+        } finally {
+          setPageLoading("smsRecords", false);
+        }
+      }
+
       function navButton(page, label) {
         return `<button class="${state.page === page ? "active" : ""}" data-page="${page}"><span>${label}</span></button>`;
       }
@@ -2580,6 +2650,7 @@
           directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
+          smsRecords: "/admin/sms-records",
           settings: "/admin/settings",
           account: "/admin/account",
         };
@@ -2604,6 +2675,7 @@
         if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
       }
@@ -3151,6 +3223,10 @@
 
       const updateUserFilter = (key, value) => {
         state.userFilters = { ...(state.userFilters || {}), [key]: value };
+        if (key === "keyword") {
+          scheduleUserKeywordSearch();
+          return;
+        }
         refreshUserTable();
       };
 
@@ -3160,8 +3236,22 @@
         const count = document.getElementById("user-visible-count");
         if (body) body.innerHTML = userRowsHtml(visibleUsers);
         if (count) {
-          count.textContent = `显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}`;
+          const total = Number(state.userTotal || state.users.length || 0);
+          count.textContent = `显示 ${visibleUsers.length.toLocaleString()} / ${total.toLocaleString()}`;
         }
+      }
+
+      function scheduleUserKeywordSearch() {
+        refreshUserTable();
+        if (userSearchDebounceTimer) {
+          clearTimeout(userSearchDebounceTimer);
+        }
+        userSearchDebounceTimer = setTimeout(async () => {
+          const requestToken = ++userSearchRequestToken;
+          await loadUsers();
+          if (requestToken !== userSearchRequestToken) return;
+          refreshUserTable();
+        }, 180);
       }
 
       function bindUserFilterControls() {
@@ -3246,15 +3336,30 @@
           <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
           <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}</span>
         </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
-          <div class="table-wrap users dense"><table><thead><tr><th>前端用户</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
           ${userRowsHtml(visibleUsers)}
         </tbody></table></div>`;
       }
 
       function userRowsHtml(users) {
         return users.length
-          ? users.map((user) => userRow(user)).join("")
-          : `<tr><td colspan="6">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+          ? users.map((user) => `${userRow(user)}${userModelRequestInlineRow(user)}`).join("")
+          : `<tr><td colspan="9">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+      }
+
+      function userModelRequestInlineRow(user) {
+        const inlineState = state.userModelRequestInline || {};
+        if (inlineState.expandedUserId !== user.userId) return "";
+        const rowState = inlineState.rowsByUserId?.[user.userId];
+        let content = `<span class="metric-note">正在加载模型请求记录...</span>`;
+        if (rowState?.error) {
+          content = `<span class="error-text">${escapeHtml(rowState.error)}</span>`;
+        } else if (rowState?.loaded) {
+          content = renderUserModelRequestPanel(rowState.data || [], {
+            title: `模型请求记录（${escapeHtml(user.displayName || user.userId)}）`,
+          });
+        }
+        return `<tr class="user-model-request-inline-row"><td colspan="9"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
       }
 
       function renderMembershipPage() {
@@ -4111,7 +4216,7 @@
         const selected = items[0] || getBatchImagePromptTemplates(target)[0];
         if (!selected) return "暂无可预览的预设。";
         const scope = batchImagePromptScope(target);
-        return escapeHtml(`【${scope.fieldLabel}】\n名称：${selected.label || "-"}\n编码：${selected.id || "-"}\n排序：${Number(selected.sort_order || selected.sortOrder || 0)}`);
+        return escapeHtml(`【${scope.fieldLabel}】\n名称：${selected.label || "-"}\n编码：${selected.id || "-"}\n排序：${Number(selected.sort_order || selected.sortOrder || 0)}\n\n正文内容：\n${selected.prompt_content || selected.promptContent || ""}`);
       }
 
       function batchImagePromptDrawerTitle(target) {
@@ -4455,24 +4560,26 @@
         const activeKind = imagePromptKinds.find((item) => item.key === state.imagePromptCategory) || imagePromptKinds[0];
         const keyword = (state.imagePromptKeyword || "").trim().toLowerCase();
         const filtered = state.imagePromptStyles
-          .filter((item) => activeKind.key === "all" || item.category === activeKind.key)
           .filter((item) => !keyword || [item.name, item.code, item.category, item.model_family || item.modelFamily, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
           .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
         const rows = filtered.length
           ? filtered.map(imagePromptStyleRow).join("")
           : `<tr><td colspan="10">${state.imagePromptLoadError || "暂无该分类的生图题词"}</td></tr>`;
+        const total = Number(state.imagePromptTotal || 0);
+        const filteredCountNote = total > filtered.length ? `显示 ${filtered.length} / ${total}` : `共 ${filtered.length} 条`;
+        const sourceNote = state.imagePromptLoadError ? `真实接口加载失败：${state.imagePromptLoadError}` : "";
         return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
           <aside class="card">
             <div class="prompt-kind-list">${imagePromptKinds.map((item) => `<button class="prompt-kind-card ${item.key === activeKind.key ? "active" : ""}" onclick="updateImagePromptCategory('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
           </aside>
           <section class="section">
             <div class="toolbar">
-              <div class="prompt-toolbar-title"><h3>${activeKind.title}管理</h3><div class="metric-note">${activeKind.note}</div></div>
+              <div class="prompt-toolbar-title"><h3>${activeKind.title}管理</h3><div class="metric-note">${activeKind.note}</div><div class="metric-note">${filteredCountNote}</div>${sourceNote ? `<div class="error-text">${escapeHtml(sourceNote)}</div>` : ""}</div>
               <div class="filters">
                 <input value="${escapeAttribute(state.imagePromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateImagePromptKeyword(this.value)" />
                 <select onchange="updateImagePromptCategory(this.value)">${optionList(imagePromptKinds.map((item) => item.key), activeKind.key)}</select>
                 <button class="btn primary" onclick="openImagePromptStyleDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增生图题词</button>
-                <button class="btn ghost" onclick="loadImagePromptStyles().then(renderShell)">刷新</button>
+                <button class="btn ghost" onclick="loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell)">刷新</button>
               </div>
             </div>
             <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>分类</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th>提示词</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -4514,12 +4621,12 @@
 
       function updateImagePromptCategory(category) {
         state.imagePromptCategory = imagePromptKinds.some((item) => item.key === category) ? category : "all";
-        renderShell();
+        loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell);
       }
 
       function updateImagePromptKeyword(value) {
         state.imagePromptKeyword = value || "";
-        renderShell();
+        loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell);
       }
 
       function formatShortDate(value) {
@@ -4535,7 +4642,68 @@
       function userRow(user) {
         const typeLabel = frontendAccountTypeLabel(user);
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
-        return `<tr><td>${user.displayName}<div class="metric-note">${user.phone || user.email || user.userId}</div></td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">编辑</button></td></tr>`;
+        const nextStatus = user.status === "active" ? "disabled" : "active";
+        const statusAction = nextStatus === "disabled" ? "disable" : "enable";
+        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
+      }
+
+      async function toggleUserModelRequestInline(userId) {
+        const inlineState = state.userModelRequestInline || { expandedUserId: null, rowsByUserId: {} };
+        if (inlineState.expandedUserId === userId) {
+          state.userModelRequestInline = {
+            ...inlineState,
+            expandedUserId: null,
+          };
+          refreshUserTable();
+          return;
+        }
+        state.userModelRequestInline = {
+          ...inlineState,
+          expandedUserId: userId,
+          rowsByUserId: {
+            ...(inlineState.rowsByUserId || {}),
+            [userId]: inlineState.rowsByUserId?.[userId] || {
+              loaded: false,
+              loading: true,
+              error: "",
+              data: [],
+            },
+          },
+        };
+        refreshUserTable();
+        const currentRowState = state.userModelRequestInline.rowsByUserId?.[userId];
+        if (currentRowState?.loaded || currentRowState?.loading) {
+          return;
+        }
+        try {
+          const result = await api(`/api/admin/users/${userId}/model-requests?pageSize=100`);
+          state.userModelRequestInline = {
+            ...(state.userModelRequestInline || {}),
+            rowsByUserId: {
+              ...(state.userModelRequestInline?.rowsByUserId || {}),
+              [userId]: {
+                loaded: true,
+                loading: false,
+                error: "",
+                data: result.data || [],
+              },
+            },
+          };
+        } catch (error) {
+          state.userModelRequestInline = {
+            ...(state.userModelRequestInline || {}),
+            rowsByUserId: {
+              ...(state.userModelRequestInline?.rowsByUserId || {}),
+              [userId]: {
+                loaded: false,
+                loading: false,
+                error: error.payload?.error?.message || "模型请求记录加载失败",
+                data: [],
+              },
+            },
+          };
+        }
+        refreshUserTable();
       }
 
       function openUserActionDrawer(userId) {
@@ -4557,21 +4725,33 @@
             <div><span>任务预占积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <div class="user-action-grid">
-            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户</button>
-            <button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button>
+            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户与模型记录</button>
+            <button class="btn ghost" onclick="openUserModelRequestDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>只看模型记录</button>
             <button class="btn ghost" onclick="openCreditGrantDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动添加积分</button>
             <button class="btn ghost" onclick="openCreditDeductDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动扣减积分</button>
             <button class="btn ghost" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整到目标积分</button>
             ${Number(user.frozenCredits || 0) > 0 ? `<button class="btn ghost" onclick="openFrozenCreditRestoreDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>强制解冻积分</button>` : ""}
             ${isTeamUserAccount(user) ? `<button class="btn ghost" onclick="openTeamLimitDrawer('${user.userId}')" ${userActionAttrs(user, "teamLimit", "user.write")}>团队额度</button>` : ""}
-            <button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用账户" : "启用账户"}</button>
-            <button class="btn danger full-row" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>归档账户</button>
           </div>
         </aside>`;
       }
 
       function userDrawerHead(title, userId) {
         return `<div class="drawer-head"><div class="drawer-title-group"><button class="btn ghost drawer-back-btn" type="button" onclick="openUserActionDrawer('${userId}')">返回</button><h3>${title}</h3></div><button class="icon-btn" onclick="closeDrawer()">×</button></div>`;
+      }
+
+      async function loadUserModelRequestPanel(userId, elementId, pageSize = 100) {
+        const target = document.getElementById(elementId);
+        if (!target) return;
+        target.innerHTML = `<span class="metric-note">正在加载模型请求记录...</span>`;
+        try {
+          const modelRequestResult = await api(`/api/admin/users/${userId}/model-requests?pageSize=${pageSize}`);
+          target.innerHTML = renderUserModelRequestPanel(modelRequestResult.data || [], {
+            title: `模型请求记录（最近 ${Number(modelRequestResult.meta?.total || (modelRequestResult.data || []).length || 0)} 条）`,
+          });
+        } catch (err) {
+          target.innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型请求记录加载失败"}</span>`;
+        }
       }
 
       function risksPage() {
@@ -4605,6 +4785,32 @@
             <div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${auditRows}</tbody></table></div>
           </section>
         </div>`;
+      }
+
+      function smsRecordsPage() {
+        const rows = state.smsRecords.length
+          ? state.smsRecords.map((item) => `
+            <tr>
+              <td>${escapeHtml(formatAdminDateTime(item.createdAt))}</td>
+              <td>${escapeHtml(item.phone || "-")}</td>
+              <td><span class="tag blue">${escapeHtml(item.verificationCode || "-")}</span></td>
+              <td>${escapeHtml(item.ipAddress || "-")}</td>
+              <td><div class="metric-note">${escapeHtml(item.smsContent || "-")}</div></td>
+              <td><span class="tag ${item.status === "sent" ? "green" : "warn"}">${item.status === "sent" ? "成功" : "失败"}</span></td>
+            </tr>
+          `).join("")
+          : `<tr><td colspan="6">${state.smsRecordLoadError || "暂无短信记录"}</td></tr>`;
+        return `<section class="card">
+          <div class="toolbar">
+            <h3>短信记录</h3>
+            <div class="filters">
+              <select onchange="updateSmsRecordRange(this.value)">${smsRecordRangeOptions(state.smsRecordRange || "all")}</select>
+              <button class="btn ghost" onclick="loadSmsRecords().then(renderShell)">刷新</button>
+            </div>
+          </div>
+          <div class="metric-note">默认显示全部记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
+          <div class="table-wrap dense"><table><thead><tr><th>时间</th><th>手机号</th><th>验证码</th><th>IP</th><th>短信内容</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>
+        </section>`;
       }
 
       function riskTable(name, severity, status) {
@@ -5104,6 +5310,76 @@
         });
       }
 
+      async function openUserDetailDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("账户详情", userId)}
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
+          <div class="check-list">
+            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>手机</span><span id="user-contact-phone">${user?.phone || "-"}</span></div>
+            <div><span>邮箱</span><span id="user-contact-email">${user?.email || "-"}</span></div>
+            <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
+            <div><span>关联子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
+            <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
+            <div><span>冻结积分</span><span>${Number(user?.frozenCredits || 0).toLocaleString()}</span></div>
+            <div><span>任务预占积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
+          </div>
+          <form id="contact-reveal-form" style="margin-top:16px;">
+            <div class="error-text" id="contact-reveal-error"></div>
+            <button class="btn ghost full" type="submit" ${userActionAttrs(user, "reveal", "user.write")}>查看完整联系方式</button>
+          </form>
+          <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
+          <div id="user-model-request-panel" style="margin-top:16px;"><span class="metric-note">正在加载模型请求记录...</span></div>
+        </aside>`;
+        document.getElementById("contact-reveal-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (!guardUserAction(user, "reveal")) return;
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("contact-reveal-error");
+          error.textContent = "";
+          try {
+            const result = await api(`/api/admin/users/${userId}/contact/reveal`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-contact-reveal-${userId}-${Date.now()}` },
+              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+            });
+            document.getElementById("user-contact-phone").textContent = result.data?.contact?.phone || "-";
+            document.getElementById("user-contact-email").textContent = result.data?.contact?.email || "-";
+          } catch (err) {
+            error.textContent = err.payload?.error?.message || "查看完整联系方式失败";
+          }
+        });
+        loadUserModelRequestPanel(userId, "user-model-request-panel", 100).catch(() => undefined);
+        try {
+          const [ledgerResult, subaccountsResult] = await Promise.all([
+            api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
+            api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
+          ]);
+          const creditSummary = renderCreditSummary(ledgerResult.summary || {});
+          const ledgerRows = (ledgerResult.data || [])
+            .map((entry) => {
+              const creditChange = creditLedgerDisplayChange(entry);
+              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
+            })
+            .join("") || `<tr><td colspan="6">暂无流水</td></tr>`;
+          const subRows = (subaccountsResult.data || [])
+            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
+            .join("");
+          document.getElementById("user-ledger-panel").innerHTML = `
+            ${creditSummary}
+            <h4>积分流水</h4>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+            <h4 style="margin-top:14px;">关联子账户</h4>
+            <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
+          `;
+        } catch (err) {
+          document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
+        }
+      }
+
       function openFrozenCreditRestoreDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
         if (!guardUserAction(user, "credit")) return;
@@ -5142,72 +5418,101 @@
         });
       }
 
-      async function openUserDetailDrawer(userId) {
+      async function openUserModelRequestDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          ${userDrawerHead("账户详情", userId)}
+          ${userDrawerHead("模型请求记录", userId)}
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
           <div class="check-list">
             <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
-            <div><span>手机</span><span id="user-contact-phone">${user?.phone || "-"}</span></div>
-            <div><span>邮箱</span><span id="user-contact-email">${user?.email || "-"}</span></div>
+            <div><span>手机 / 邮箱</span><span>${user?.phone || user?.email || "-"}</span></div>
             <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
-            <div><span>关联子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
-            <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
-            <div><span>冻结积分</span><span>${Number(user?.frozenCredits || 0).toLocaleString()}</span></div>
-            <div><span>任务预占积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
+            <div><span>说明</span><span>这里展示用户调用 DeepSeek / 文本模型时的请求与返回正文</span></div>
           </div>
-          <form id="contact-reveal-form" style="margin-top:16px;">
-            <div class="error-text" id="contact-reveal-error"></div>
-            <button class="btn ghost full" type="submit" ${userActionAttrs(user, "reveal", "user.write")}>查看完整联系方式</button>
-          </form>
-          <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
+          <div id="user-model-request-drawer-panel" style="margin-top:16px;"><span class="metric-note">正在加载模型请求记录...</span></div>
         </aside>`;
-        document.getElementById("contact-reveal-form").addEventListener("submit", async (event) => {
-          event.preventDefault();
-          if (!guardUserAction(user, "reveal")) return;
-          const form = new FormData(event.currentTarget);
-          const error = document.getElementById("contact-reveal-error");
-          error.textContent = "";
-          try {
-            const result = await api(`/api/admin/users/${userId}/contact/reveal`, {
-              method: "POST",
-              headers: { "idempotency-key": `admin-ui-contact-reveal-${userId}-${Date.now()}` },
-              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
-            });
-            document.getElementById("user-contact-phone").textContent = result.data?.contact?.phone || "-";
-            document.getElementById("user-contact-email").textContent = result.data?.contact?.email || "-";
-          } catch (err) {
-            error.textContent = err.payload?.error?.message || "查看完整联系方式失败";
-          }
-        });
-        try {
-          const [ledgerResult, subaccountsResult] = await Promise.all([
-            api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
-            api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
-          ]);
-          const creditSummary = renderCreditSummary(ledgerResult.summary || {});
-          const ledgerRows = (ledgerResult.data || [])
-            .map((entry) => {
-              const creditChange = creditLedgerDisplayChange(entry);
-              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
-            })
-            .join("") || `<tr><td colspan="6">暂无流水</td></tr>`;
-          const subRows = (subaccountsResult.data || [])
-            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
-            .join("");
-          document.getElementById("user-ledger-panel").innerHTML = `
-            ${creditSummary}
-            <h4>积分流水</h4>
-            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
-            <h4 style="margin-top:14px;">关联子账户</h4>
-            <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
+        await loadUserModelRequestPanel(userId, "user-model-request-drawer-panel", 100);
+      }
+
+      function renderUserModelRequestPanel(logs, options = {}) {
+        const title = options.title || "模型请求记录";
+        const rows = (logs || []).map((item) => {
+          const usage = renderModelUsage(item.responseUsage);
+          const requestBody = escapeHtml(JSON.stringify(item.requestBody || {}, null, 2));
+          const requestText = escapeHtml(item.requestText || "");
+          const responseText = escapeHtml(item.responseText || "");
+          const finishReasons = (item.responseFinishReasons || []).length
+            ? (item.responseFinishReasons || []).map((reason) => `<span class="tag blue">${escapeHtml(reason)}</span>`).join("")
+            : `<span class="metric-note">无</span>`;
+          return `
+            <div class="card" style="padding:14px;margin-top:12px;">
+              <div class="toolbar" style="align-items:flex-start;gap:12px;">
+                <div>
+                  <strong>${escapeHtml(item.modelId || "-")}</strong>
+                  <div class="metric-note">${escapeHtml(item.providerName || "-")} / ${escapeHtml(item.providerModel || "-")}</div>
+                </div>
+                <div style="margin-left:auto;text-align:right;">
+                  <span class="tag ${item.status === "succeeded" ? "green" : item.status === "failed" ? "warn" : "blue"}">${escapeHtml(item.status || "-")}</span>
+                  <div class="metric-note">${escapeHtml(formatAdminDateTime(item.createdAt))}</div>
+                </div>
+              </div>
+              <div class="check-list" style="margin-top:12px;">
+                <div><span>请求摘要</span><span>${escapeHtml(item.payloadSummary || "-")}</span></div>
+                <div><span>Provider Request ID</span><span>${escapeHtml(item.providerRequestId || "-")}</span></div>
+                <div><span>组织 ID</span><span>${escapeHtml(item.organizationId || "-")}</span></div>
+                <div><span>工作区 ID</span><span>${escapeHtml(item.workspaceId || "-")}</span></div>
+                <div><span>项目 ID</span><span>${escapeHtml(item.projectId || "-")}</span></div>
+                <div><span>请求标识</span><span>${escapeHtml(item.requestKey || "-")}</span></div>
+                <div><span>请求哈希</span><span>${escapeHtml(item.requestHash || "-")}</span></div>
+                <div><span>载荷哈希</span><span>${escapeHtml(item.payloadHash || "-")}</span></div>
+                <div><span>操作</span><span>${escapeHtml(item.providerOperation || "-")}</span></div>
+                <div><span>失败原因</span><span>${escapeHtml(item.failureCode || "-")}</span></div>
+                <div><span>开始时间</span><span>${escapeHtml(formatAdminDateTime(item.startedAt))}</span></div>
+                <div><span>完成时间</span><span>${escapeHtml(formatAdminDateTime(item.completedAt))}</span></div>
+                <div><span>Finish Reasons</span><span>${finishReasons}</span></div>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">请求参数</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;">${requestBody}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">发送给模型的文本</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;">${requestText || "无"}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">模型返回文本</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:260px;overflow:auto;">${responseText || "无"}</pre>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="metric-note">Token / Usage</div>
+                <pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;overflow:auto;">${escapeHtml(usage)}</pre>
+              </div>
+            </div>
           `;
-        } catch (err) {
-          document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
+        }).join("");
+
+        return `
+          <h4>${escapeHtml(title)}</h4>
+          ${rows || '<div class="metric-note" style="margin-top:10px;">暂无该用户的模型请求记录</div>'}
+        `;
+      }
+
+      function renderModelUsage(value) {
+        if (!value || typeof value !== "object") return "无";
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return "无";
         }
+      }
+
+      function formatAdminDateTime(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleString("zh-CN");
       }
 
       function openUserProfileDrawer(userId) {
@@ -6902,6 +7207,11 @@
               sort_order: Number(form.get("sort_order") || 0),
               remark: String(form.get("remark") || ""),
             };
+            if (existing) {
+              payload.is_default = Boolean(existing.is_default || existing.isDefault);
+              payload.is_global_default = Boolean(existing.is_global_default || existing.isGlobalDefault);
+              payload.is_recommended = Boolean(existing.is_recommended || existing.isRecommended);
+            }
             if (!payload.prompt_content || payload.prompt_content.length < 20) throw new Error("剧本提示词正文不得为空，建议不少于 20 字");
             await api(existing ? `/api/admin/storyboard-prompt/packages/${encodeURIComponent(existing.id)}` : "/api/admin/storyboard-prompt/packages", {
               method: existing ? "PUT" : "POST",
@@ -6949,7 +7259,14 @@
       async function setScriptPromptPackageDefault(packageId) {
         const existing = scriptPromptPackageById(packageId);
         if (!existing) return;
-        const payload = { ...existing, is_default: true, isDefault: true };
+        const isTaboo = (existing.package_type || existing.packageType) === "taboo";
+        const payload = {
+          ...existing,
+          is_default: true,
+          isDefault: true,
+          is_global_default: isTaboo,
+          isGlobalDefault: isTaboo,
+        };
         try {
           await api(`/api/admin/storyboard-prompt/packages/${encodeURIComponent(packageId)}`, {
             method: "PUT",
@@ -6967,7 +7284,13 @@
 
       function setDefaultInList(items, id, sameGroup) {
         return (items || []).map((item) => sameGroup(item)
-          ? { ...item, is_default: String(item.id) === String(id), isDefault: String(item.id) === String(id) }
+          ? {
+            ...item,
+            is_default: String(item.id) === String(id),
+            isDefault: String(item.id) === String(id),
+            is_global_default: (item.package_type || item.packageType) === "taboo" ? String(item.id) === String(id) : Boolean(item.is_global_default || item.isGlobalDefault),
+            isGlobalDefault: (item.package_type || item.packageType) === "taboo" ? String(item.id) === String(id) : Boolean(item.is_global_default || item.isGlobalDefault),
+          }
           : item);
       }
 
@@ -7126,9 +7449,12 @@
       function batchImagePromptTemplatePayloadFromForm(target, form, existing) {
         const items = getBatchImagePromptTemplates(target);
         const maxSortOrder = items.reduce((max, item) => Math.max(max, Number(item.sort_order || item.sortOrder || 0)), 0);
+        const promptContent = String(form.get("prompt_content") || "").trim();
         return {
           id: existing?.id || String(form.get("id") || "").trim(),
           label: String(form.get("label") || "").trim(),
+          prompt_content: promptContent,
+          promptContent,
           sort_order: Number(form.get("sort_order") || (maxSortOrder + 100 || 100)),
         };
       }
@@ -7146,6 +7472,7 @@
               <label class="field"><span>编码</span><input name="id" value="${escapeAttribute(existing?.id || "")}" pattern="[a-z0-9-]+" ${existing ? "readonly" : ""} required /></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
             </div>
+            <label class="field"><span>正文内容</span><textarea name="prompt_content" rows="12">${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
             <div class="error-text" id="batch-image-preset-error"></div>
             <div class="toolbar">
               <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
@@ -7624,6 +7951,15 @@
         return options.map((option) => `<option value="${option}" ${option === selected ? "selected" : ""}>${option}</option>`).join("");
       }
 
+      function smsRecordRangeOptions(selected) {
+        const options = [
+          { value: "all", label: "全部" },
+          { value: "day", label: "天" },
+          { value: "month", label: "月" },
+        ];
+        return options.map((option) => `<option value="${option.value}" ${option.value === selected ? "selected" : ""}>${option.label}</option>`).join("");
+      }
+
       function escapeAttribute(value) {
         return escapeHtml(value).replaceAll('"', "&quot;");
       }
@@ -7767,7 +8103,6 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
-        if (path.includes("/membership")) return "membership";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/agreements")) return "agreements";
@@ -7801,7 +8136,6 @@
           dashboard: "/admin/dashboard",
           models: "/admin/models",
           users: "/admin/users",
-          membership: "/admin/membership",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           agreements: "/admin/agreements",
@@ -7822,9 +8156,9 @@
                 ${navButton("dashboard", "\u603b\u89c8")}
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
-                ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
                 ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
               </nav>
@@ -7861,6 +8195,7 @@
         if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "agreements") return agreementsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
@@ -8228,6 +8563,7 @@
         directRecharge: () => loadDirectRechargePackages(),
         prompts: () => loadPromptManagement(),
         risks: () => loadRiskAudit(),
+        smsRecords: () => loadSmsRecords(),
         agreements: () => loadLegalDocuments(),
         settings: () => loadSettings(),
         account: () => loadAdminSessions(),
@@ -8376,11 +8712,12 @@
       });
       window.openDrawer = openDrawer;
       window.openCreditGrantDrawer = openCreditGrantDrawer;
-      window.openFrozenCreditRestoreDrawer = openFrozenCreditRestoreDrawer;
       window.openCreditDeductDrawer = openCreditDeductDrawer;
       window.openCreditSetBalanceDrawer = openCreditSetBalanceDrawer;
       window.openUserActionDrawer = openUserActionDrawer;
       window.openUserDetailDrawer = openUserDetailDrawer;
+      window.toggleUserModelRequestInline = toggleUserModelRequestInline;
+      window.openUserModelRequestDrawer = openUserModelRequestDrawer;
       window.openUserProfileDrawer = openUserProfileDrawer;
       window.openUserStatusDrawer = openUserStatusDrawer;
       window.openTeamLimitDrawer = openTeamLimitDrawer;
@@ -8510,6 +8847,7 @@
         if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/sms-records")) return "smsRecords";
         if (path.includes("/agreements")) return "agreements";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
@@ -8527,12 +8865,14 @@
           directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
+          smsRecords: "/admin/sms-records",
           agreements: "/admin/agreements",
           settings: "/admin/settings",
           account: "/admin/account",
         };
         history.pushState(null, "", pathMap[page] || "/admin/dashboard");
         renderShell();
+        ensureAdminPageData(page).catch(() => undefined);
       };
 
       renderShell = function renderShell() {
@@ -8549,6 +8889,7 @@
                 ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
                 ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
               </nav>
@@ -8586,6 +8927,7 @@
         if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "agreements") return agreementsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();

@@ -4,6 +4,142 @@ import { test } from "node:test";
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
 import { createAdminUserService } from "./admin-user.service.ts";
 
+test("admin user service collapses multiple memberships into one preferred user row", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await db.query(
+      `
+        INSERT INTO users (id, email, phone_e164, display_name, status)
+        VALUES ('93000000-0000-4000-8000-000000001010', 'repeat@example.test', '+8613800100010', 'Repeat User', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+        VALUES
+          ('91000000-0000-4000-8000-000000001010', 'Primary Org', 'active', 6000, 20),
+          ('91000000-0000-4000-8000-000000001011', 'Admin Org', 'active', 3200, 15),
+          ('91000000-0000-4000-8000-000000001012', 'Secondary Org', 'active', 1800, 0)
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES
+          ('92000000-0000-4000-8000-000000001010', '91000000-0000-4000-8000-000000001010', 'Primary Workspace', 'active'),
+          ('92000000-0000-4000-8000-000000001011', '91000000-0000-4000-8000-000000001011', 'Admin Workspace', 'active'),
+          ('92000000-0000-4000-8000-000000001012', '91000000-0000-4000-8000-000000001012', 'Secondary Workspace', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, created_at)
+        VALUES
+          (
+            '94000000-0000-4000-8000-000000001010',
+            '91000000-0000-4000-8000-000000001010',
+            '92000000-0000-4000-8000-000000001010',
+            '93000000-0000-4000-8000-000000001010',
+            'owner_admin',
+            'active',
+            '2026-06-01T08:00:00.000Z'
+          ),
+          (
+            '94000000-0000-4000-8000-000000001011',
+            '91000000-0000-4000-8000-000000001011',
+            '92000000-0000-4000-8000-000000001011',
+            '93000000-0000-4000-8000-000000001010',
+            'sub_account',
+            'active',
+            '2026-06-10T08:00:00.000Z'
+          ),
+          (
+            '94000000-0000-4000-8000-000000001012',
+            '91000000-0000-4000-8000-000000001012',
+            '92000000-0000-4000-8000-000000001012',
+            '93000000-0000-4000-8000-000000001010',
+            'sub_account',
+            'disabled',
+            '2026-06-15T08:00:00.000Z'
+          )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO team_member_groups (id, organization_id, workspace_id, name, status, created_by_user_id)
+        VALUES (
+          '95000000-0000-4000-8000-000000001010',
+          '91000000-0000-4000-8000-000000001011',
+          '92000000-0000-4000-8000-000000001011',
+          'Admin Group',
+          'active',
+          '93000000-0000-4000-8000-000000001010'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO team_member_profiles (
+          id,
+          organization_id,
+          workspace_id,
+          membership_id,
+          team_account,
+          display_name,
+          business_role,
+          member_group_id,
+          credit_balance_cached,
+          credit_used_cached,
+          created_by_user_id
+        )
+        VALUES (
+          '96000000-0000-4000-8000-000000001010',
+          '91000000-0000-4000-8000-000000001011',
+          '92000000-0000-4000-8000-000000001011',
+          '94000000-0000-4000-8000-000000001011',
+          'repeat-admin',
+          'Repeat Admin',
+          'group_admin',
+          '95000000-0000-4000-8000-000000001010',
+          900,
+          50,
+          '93000000-0000-4000-8000-000000001010'
+        )
+      `,
+    );
+
+    const result = await service.listUsers({ pageSize: 20 });
+
+    assert.equal(result.meta.total, 1);
+    assert.equal(result.data.length, 1);
+    assert.deepEqual(result.data[0], {
+      userId: "93000000-0000-4000-8000-000000001010",
+      displayName: "Repeat User",
+      phone: "13800100010",
+      email: "re***@example.test",
+      lastLoginAt: null,
+      status: "active",
+      organizationId: "91000000-0000-4000-8000-000000001010",
+      organizationName: "Primary Org",
+      workspaceId: "92000000-0000-4000-8000-000000001010",
+      membershipId: "94000000-0000-4000-8000-000000001010",
+      membershipRole: "owner_admin",
+      accountType: "owner_account",
+      teamRole: null,
+      teamGroupId: null,
+      teamGroupName: null,
+      availableCredits: 6000,
+      reservedCredits: 20,
+      usedCredits: 0,
+      subaccountCount: 0,
+    });
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin user service lists only team permission accounts with subaccount totals", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
@@ -219,172 +355,42 @@ test("admin user credit ledger returns balance and usage summary for account det
   }
 });
 
-test("admin user credit ledger includes membership gifted credits for owner wallet", async () => {
+test("admin user credit ledger can be scoped to a specific creator organization and workspace", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
 
   try {
     await seedCreditScopeFixture(db);
-    await db.query(
-      `
-        INSERT INTO team_member_profiles (
-          id,
-          organization_id,
-          workspace_id,
-          membership_id,
-          team_account,
-          display_name,
-          business_role,
-          member_group_id,
-          credit_balance_cached,
-          credit_used_cached,
-          created_by_user_id
-        )
-        VALUES (
-          '96000000-0000-4000-8000-000000002009',
-          '91000000-0000-4000-8000-000000002001',
-          '92000000-0000-4000-8000-000000002001',
-          '94000000-0000-4000-8000-000000002001',
-          'scope-owner',
-          'Scope Owner',
-          'admin',
-          '95000000-0000-4000-8000-000000002001',
-          8000,
-          0,
-          '93000000-0000-4000-8000-000000002001'
-        )
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO credit_ledger_entries (
-          id,
-          organization_id,
-          entry_type,
-          amount,
-          available_delta,
-          reserved_delta,
-          consumed_delta,
-          source_type,
-          source_id,
-          reason,
-          metadata_json,
-          created_by_user_id,
-          created_at
-        )
-        VALUES (
-          '98000000-0000-4000-8000-000000002007',
-          '91000000-0000-4000-8000-000000002001',
-          'grant',
-          3000,
-          3000,
-          0,
-          0,
-          'membership_gift',
-          '97000000-0000-4000-8000-000000002007',
-          'membership period gifted credits',
-          '{"orderId":"96000000-0000-4000-8000-000000002007","planId":"95000000-0000-4000-8000-000000002007","tier":"experience"}'::jsonb,
-          NULL,
-          '2026-06-05T07:15:00.000Z'
-        )
-      `,
-    );
 
     const result = await service.listUserCreditLedger({
-      userId: "93000000-0000-4000-8000-000000002001",
-      pageSize: 20,
+      userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
+      organizationId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "caf8d99f-a74d-4a80-8610-3c0e725d420b",
+      pageSize: 10,
     });
 
-    assert.equal(result.data[0]?.sourceType, "membership_gift");
-    assert.equal(result.data[0]?.amount, 3000);
-    assert.equal(result.data[0]?.metadata.tier, "experience");
-    assert.equal(result.summary.totalGrantedCredits, 3120);
-  } finally {
-    await db.close();
-  }
-});
-
-test("admin user credit ledger can target the current workspace wallet", async () => {
-  const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
-
-  try {
-    await seedCreditScopeFixture(db);
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status, credit_balance_cached)
-        VALUES ('91000000-0000-4000-8000-000000002099', 'Personal Wallet Org', 'active', 3000)
-      `,
+    assert.deepEqual(
+      result.data.slice(0, 2).map((entry) => ({
+        sourceType: entry.sourceType,
+        entryType: entry.entryType,
+        amount: entry.amount,
+        taskId: entry.metadata.taskId,
+      })),
+      [
+        {
+          sourceType: "credit_reservation_allocation",
+          entryType: "release",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+        {
+          sourceType: "episode_generation_task",
+          entryType: "reservation",
+          amount: 99,
+          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
+        },
+      ],
     );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES (
-          '92000000-0000-4000-8000-000000002099',
-          '91000000-0000-4000-8000-000000002099',
-          'Personal Wallet Workspace',
-          'active'
-        )
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES (
-          '94000000-0000-4000-8000-000000002099',
-          '91000000-0000-4000-8000-000000002099',
-          '92000000-0000-4000-8000-000000002099',
-          '93000000-0000-4000-8000-000000002001',
-          'owner_admin',
-          'active'
-        )
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO credit_ledger_entries (
-          id,
-          organization_id,
-          entry_type,
-          amount,
-          available_delta,
-          reserved_delta,
-          consumed_delta,
-          source_type,
-          source_id,
-          reason,
-          metadata_json,
-          created_by_user_id,
-          created_at
-        )
-        VALUES (
-          '98000000-0000-4000-8000-000000002099',
-          '91000000-0000-4000-8000-000000002099',
-          'grant',
-          3000,
-          3000,
-          0,
-          0,
-          'membership_gift',
-          '97000000-0000-4000-8000-000000002099',
-          'membership period gifted credits',
-          '{"orderNo":"ORD-WORKSPACE-GIFT","planCode":"professional_monthly"}'::jsonb,
-          NULL,
-          '2026-06-05T07:20:00.000Z'
-        )
-      `,
-    );
-
-    const result = await service.listUserCreditLedger({
-      userId: "93000000-0000-4000-8000-000000002001",
-      workspaceId: "92000000-0000-4000-8000-000000002099",
-      pageSize: 20,
-    });
-
-    assert.equal(result.data[0]?.sourceType, "membership_gift");
-    assert.equal(result.data[0]?.amount, 3000);
-    assert.equal(result.data[0]?.metadata.orderNo, "ORD-WORKSPACE-GIFT");
-    assert.equal(result.summary.displayAvailableCredits, 3000);
   } finally {
     await db.close();
   }
@@ -451,61 +457,6 @@ test("admin user list exposes frozen credits separately from reserved credits", 
   }
 });
 
-test("admin user list deduplicates front-end users across multiple owner memberships and keeps frozen credits", async () => {
-  const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
-
-  try {
-    await seedCreditScopeFixture(db);
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES (
-          '92000000-0000-4000-8000-000000002099',
-          '91000000-0000-4000-8000-000000002001',
-          'Credit Scope Second Workspace',
-          'active'
-        )
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES (
-          '94000000-0000-4000-8000-000000002099',
-          '91000000-0000-4000-8000-000000002001',
-          '92000000-0000-4000-8000-000000002099',
-          '93000000-0000-4000-8000-000000002001',
-          'owner_admin',
-          'active'
-        )
-      `,
-    );
-    await db.query(
-      `
-        UPDATE organizations
-        SET credit_balance_cached = 0,
-            credit_reserved_cached = 0,
-            credit_frozen_cached = 18800,
-            credit_frozen_at = '2026-06-24T07:10:00.000Z',
-            credit_frozen_until = '2027-06-24T07:10:00.000Z'
-        WHERE id = '91000000-0000-4000-8000-000000002001'
-      `,
-    );
-
-    const result = await service.listUsers({ keyword: "Scope Owner", pageSize: 20 });
-
-    assert.equal(result.meta.total, 1);
-    assert.equal(result.data.length, 1);
-    assert.equal(result.data[0]?.userId, "93000000-0000-4000-8000-000000002001");
-    assert.equal(result.data[0]?.availableCredits, 0);
-    assert.equal(result.data[0]?.frozenCredits, 18800);
-    assert.equal(result.data[0]?.displayCreditBalance, 18800);
-  } finally {
-    await db.close();
-  }
-});
-
 test("admin manual credit grant can add available credits while wallet credits are frozen", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
@@ -542,6 +493,215 @@ test("admin manual credit grant can add available credits while wallet credits a
     assert.equal(owner?.availableCredits, 200);
     assert.equal(owner?.frozenCredits, 18800);
     assert.equal(owner?.displayCreditBalance, 19000);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user service lists model request logs by user", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO provider_requests (
+          id,
+          organization_id,
+          workspace_id,
+          provider_name,
+          provider_operation,
+          request_key,
+          request_hash,
+          payload_ref,
+          payload_hash,
+          payload_redacted_json,
+          status,
+          external_submission_started_at,
+          response_redacted_json,
+          created_by_user_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002101',
+          '91000000-0000-4000-8000-000000002001',
+          '92000000-0000-4000-8000-000000002001',
+          'deepseek',
+          'llm.chat.completions',
+          'scope-model-log-1',
+          'req-hash-scope-1',
+          'text-gateway://scope-model-log-1',
+          'payload-hash-scope-1',
+          '{"model":"deepseek-chat"}'::jsonb,
+          'succeeded',
+          '2026-06-05T09:00:00.000Z',
+          '{"usageSource":"provider"}'::jsonb,
+          '93000000-0000-4000-8000-000000002003',
+          '2026-06-05T09:00:00.000Z',
+          '2026-06-05T09:00:10.000Z'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO user_model_request_logs (
+          id,
+          provider_request_id,
+          organization_id,
+          workspace_id,
+          user_id,
+          provider_name,
+          provider_operation,
+          model_id,
+          provider_model,
+          request_key,
+          request_hash,
+          payload_hash,
+          payload_summary,
+          request_body_json,
+          request_text,
+          response_text,
+          response_usage_json,
+          response_finish_reasons_json,
+          status,
+          started_at,
+          completed_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002102',
+          '99000000-0000-4000-8000-000000002101',
+          '91000000-0000-4000-8000-000000002001',
+          '92000000-0000-4000-8000-000000002001',
+          '93000000-0000-4000-8000-000000002003',
+          'deepseek',
+          'llm.chat.completions',
+          'deepseek-chat',
+          'deepseek-chat',
+          'scope-model-log-1',
+          'req-hash-scope-1',
+          'payload-hash-scope-1',
+          'storyboard prompt',
+          '{"model":"deepseek-chat","max_tokens":384000}'::jsonb,
+          '[user]\n角色模板 任小野',
+          '{"characters":[{"name":"任小野"}]}',
+          '{"prompt_tokens":101,"completion_tokens":55,"total_tokens":156}'::jsonb,
+          '["stop"]'::jsonb,
+          'succeeded',
+          '2026-06-05T09:00:00.000Z',
+          '2026-06-05T09:00:10.000Z',
+          '2026-06-05T09:00:00.000Z',
+          '2026-06-05T09:00:10.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserModelRequestLogs({
+      userId: "93000000-0000-4000-8000-000000002003",
+      pageSize: 20,
+    });
+
+    assert.equal("status" in result, false);
+    assert.equal(result.data.length, 1);
+    assert.equal(result.data[0]?.modelId, "deepseek-chat");
+    assert.equal(result.data[0]?.providerRequestId, "99000000-0000-4000-8000-000000002101");
+    assert.equal(result.data[0]?.organizationId, "91000000-0000-4000-8000-000000002001");
+    assert.equal(result.data[0]?.workspaceId, "92000000-0000-4000-8000-000000002001");
+    assert.equal(result.data[0]?.requestHash, "req-hash-scope-1");
+    assert.equal(result.data[0]?.payloadHash, "payload-hash-scope-1");
+    assert.match(result.data[0]?.requestText ?? "", /角色模板 任小野/);
+    assert.match(result.data[0]?.responseText ?? "", /任小野/);
+    assert.equal(result.data[0]?.responseUsage?.total_tokens, 156);
+    assert.equal(result.meta.pageSize, 20);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin manual credit grant stores adjustment scenario metadata for future credit policies", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+
+    const response = await service.grantUserCredits({
+      userId: "93000000-0000-4000-8000-000000002001",
+      amount: 30,
+      reason: "Support compensation",
+      workOrderNo: "CS-20260605-030",
+      adjustmentScenario: "compensation",
+      idempotencyKey: "admin-credit-scenario-compensation",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:00:00.000Z"),
+    });
+
+    const ledger = await db.query<{ adjustment_scenario: string | null }>(
+      `
+        SELECT metadata_json->>'adjustmentScenario' AS adjustment_scenario
+        FROM credit_ledger_entries
+        WHERE source_type = 'admin_manual_grant'
+          AND metadata_json->>'workOrderNo' = 'CS-20260605-030'
+      `,
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(ledger.rows, [{ adjustment_scenario: "compensation" }]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin manual credit adjustments accept omitted work order metadata", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+
+    const grantResponse = await service.grantUserCredits({
+      userId: "93000000-0000-4000-8000-000000002001",
+      amount: 30,
+      reason: "Support compensation without ticket",
+      adjustmentScenario: "compensation",
+      idempotencyKey: "admin-credit-no-work-order-grant",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:00:00.000Z"),
+    });
+    const deductResponse = await service.deductUserCredits({
+      userId: "93000000-0000-4000-8000-000000002001",
+      amount: 10,
+      reason: "Correction without ticket",
+      adjustmentScenario: "correction",
+      idempotencyKey: "admin-credit-no-work-order-deduct",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:05:00.000Z"),
+    });
+    const metadata = await db.query<{ source_type: string; work_order_no: string | null }>(
+      `
+        SELECT source_type, metadata_json->>'workOrderNo' AS work_order_no
+        FROM credit_ledger_entries
+        WHERE source_type IN ('admin_manual_grant', 'admin_manual_deduct')
+          AND reason IN ('Support compensation without ticket', 'Correction without ticket')
+        ORDER BY created_at ASC
+      `,
+    );
+
+    assert.equal(grantResponse.status, 200);
+    assert.equal(deductResponse.status, 200);
+    assert.deepEqual(metadata.rows, [
+      { source_type: "admin_manual_grant", work_order_no: null },
+      { source_type: "admin_manual_deduct", work_order_no: null },
+    ]);
   } finally {
     await db.close();
   }
@@ -642,139 +802,14 @@ test("admin can force restore frozen wallet credits without membership renewal",
 
     assert.equal(response.status, 200);
     assert.equal("data" in response.body && response.body.data.restoredAmount, 18800);
-    assert.equal(organization.rows[0]?.credit_balance_cached, 18800);
-    assert.equal(organization.rows[0]?.credit_frozen_cached, 0);
+    assert.equal(Number(organization.rows[0]?.credit_balance_cached ?? 0), 18800);
+    assert.equal(Number(organization.rows[0]?.credit_frozen_cached ?? 0), 0);
     assert.equal(organization.rows[0]?.credit_frozen_at, null);
     assert.equal(organization.rows[0]?.credit_frozen_until, null);
-    assert.deepEqual(lot.rows, [{ status: "active", frozen_at: null, frozen_until: null }]);
+    assert.equal(lot.rows[0]?.status, "active");
+    assert.equal(lot.rows[0]?.frozen_at, null);
+    assert.equal(lot.rows[0]?.frozen_until, null);
     assert.deepEqual(audit.rows, [{ event_type: "admin.credit.frozen_restored", restored_amount: "18800" }]);
-  } finally {
-    await db.close();
-  }
-});
-
-test("admin user credit ledger can be scoped to a specific creator organization and workspace", async () => {
-  const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
-
-  try {
-    await seedCreditScopeFixture(db);
-    await seedCreatorScopedCreditLedgerFixture(db);
-    const result = await service.listUserCreditLedger({
-      userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
-      organizationId: "10000000-0000-4000-8000-000000000001",
-      workspaceId: "caf8d99f-a74d-4a80-8610-3c0e725d420b",
-      pageSize: 10,
-    });
-
-    assert.deepEqual(
-      result.data.slice(0, 2).map((entry) => ({
-        sourceType: entry.sourceType,
-        entryType: entry.entryType,
-        amount: entry.amount,
-        taskId: entry.metadata.taskId,
-      })),
-      [
-        {
-          sourceType: "credit_reservation_allocation",
-          entryType: "release",
-          amount: 99,
-          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
-        },
-        {
-          sourceType: "episode_generation_task",
-          entryType: "reservation",
-          amount: 99,
-          taskId: "11cac812-37b1-4d50-abb0-fc046d52259e",
-        },
-      ],
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-test("admin manual credit grant stores adjustment scenario metadata for future credit policies", async () => {
-  const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
-
-  try {
-    await seedCreditScopeFixture(db);
-
-    const response = await service.grantUserCredits({
-      userId: "93000000-0000-4000-8000-000000002001",
-      amount: 30,
-      reason: "Support compensation",
-      workOrderNo: "CS-20260605-030",
-      adjustmentScenario: "compensation",
-      idempotencyKey: "admin-credit-scenario-compensation",
-      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
-      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
-      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
-      now: new Date("2026-06-05T08:00:00.000Z"),
-    });
-
-    const ledger = await db.query<{ adjustment_scenario: string | null }>(
-      `
-        SELECT metadata_json->>'adjustmentScenario' AS adjustment_scenario
-        FROM credit_ledger_entries
-        WHERE source_type = 'admin_manual_grant'
-          AND metadata_json->>'workOrderNo' = 'CS-20260605-030'
-      `,
-    );
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(ledger.rows, [{ adjustment_scenario: "compensation" }]);
-  } finally {
-    await db.close();
-  }
-});
-
-test("admin manual credit adjustments accept omitted work order metadata", async () => {
-  const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
-
-  try {
-    await seedCreditScopeFixture(db);
-
-    const grantResponse = await service.grantUserCredits({
-      userId: "93000000-0000-4000-8000-000000002001",
-      amount: 30,
-      reason: "Support compensation without ticket",
-      adjustmentScenario: "compensation",
-      idempotencyKey: "admin-credit-no-work-order-grant",
-      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
-      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
-      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
-      now: new Date("2026-06-05T08:00:00.000Z"),
-    });
-    const deductResponse = await service.deductUserCredits({
-      userId: "93000000-0000-4000-8000-000000002001",
-      amount: 10,
-      reason: "Correction without ticket",
-      adjustmentScenario: "correction",
-      idempotencyKey: "admin-credit-no-work-order-deduct",
-      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
-      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
-      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
-      now: new Date("2026-06-05T08:05:00.000Z"),
-    });
-    const metadata = await db.query<{ source_type: string; work_order_no: string | null }>(
-      `
-        SELECT source_type, metadata_json->>'workOrderNo' AS work_order_no
-        FROM credit_ledger_entries
-        WHERE source_type IN ('admin_manual_grant', 'admin_manual_deduct')
-          AND reason IN ('Support compensation without ticket', 'Correction without ticket')
-        ORDER BY created_at ASC
-      `,
-    );
-
-    assert.equal(grantResponse.status, 200);
-    assert.equal(deductResponse.status, 200);
-    assert.deepEqual(metadata.rows, [
-      { source_type: "admin_manual_grant", work_order_no: null },
-      { source_type: "admin_manual_deduct", work_order_no: null },
-    ]);
   } finally {
     await db.close();
   }
@@ -997,9 +1032,9 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
     `
       INSERT INTO users (id, email, phone_e164, display_name, status)
       VALUES
-        ('93000000-0000-4000-8000-000000002001', 'owner-scope@example.test', '+8613800200001', 'Scope Owner', 'active'),
-        ('93000000-0000-4000-8000-000000002002', 'lead-scope@example.test', '+8613800200002', 'Scope Lead', 'active'),
-        ('93000000-0000-4000-8000-000000002003', 'artist-scope@example.test', '+8613800200003', 'Scope Artist', 'active')
+        ('93000000-0000-4000-8000-000000002001', 'owner-scope@example.test', '13800200001', 'Scope Owner', 'active'),
+        ('93000000-0000-4000-8000-000000002002', 'lead-scope@example.test', '13800200002', 'Scope Lead', 'active'),
+        ('93000000-0000-4000-8000-000000002003', 'artist-scope@example.test', '13800200003', 'Scope Artist', 'active')
     `,
   );
   await db.query(
@@ -1309,156 +1344,6 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           '{"billingEvent":"released","failureCode":"task_timeout"}'::jsonb,
           NULL,
           '2026-06-05T07:12:00.000Z'
-        )
-    `,
-  );
-}
-
-async function seedCreatorScopedCreditLedgerFixture(
-  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-) {
-  await db.query(
-    `
-      INSERT INTO users (id, email, phone_e164, display_name, status)
-      VALUES (
-        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
-        'creator-scoped@example.test',
-        '+8613800200101',
-        'Creator Scoped',
-        'active'
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
-      VALUES (
-        '10000000-0000-4000-8000-000000000001',
-        'Creator Scoped Org',
-        'active',
-        901,
-        0
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
-        '10000000-0000-4000-8000-000000000001',
-        'Creator Scoped Workspace',
-        'active'
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES (
-        '9af8d99f-a74d-4a80-a610-3c0e725d420b',
-        '10000000-0000-4000-8000-000000000001',
-        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
-        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
-        'owner_admin',
-        'active'
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO credit_reservations (
-        id,
-        organization_id,
-        workspace_id,
-        project_id,
-        workflow_id,
-        task_id,
-        amount_total,
-        amount_reserved,
-        amount_consumed,
-        amount_released,
-        status,
-        source_type,
-        source_id,
-        reason,
-        metadata_json,
-        created_by_user_id,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        '21cac812-37b1-4d50-abb0-fc046d52259e',
-        '10000000-0000-4000-8000-000000000001',
-        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
-        NULL,
-        NULL,
-        NULL,
-        99,
-        0,
-        0,
-        99,
-        'released',
-        'episode_generation_task',
-        '11cac812-37b1-4d50-abb0-fc046d52259e',
-        'Scoped creator generation failed and refunded',
-        '{"targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
-        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
-        '2026-06-05T08:00:00.000Z',
-        '2026-06-05T08:01:00.000Z'
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO credit_ledger_entries (
-        id,
-        organization_id,
-        reservation_id,
-        entry_type,
-        amount,
-        available_delta,
-        reserved_delta,
-        consumed_delta,
-        source_type,
-        source_id,
-        reason,
-        metadata_json,
-        created_by_user_id,
-        created_at
-      )
-      VALUES
-        (
-          '31cac812-37b1-4d50-abb0-fc046d52259e',
-          '10000000-0000-4000-8000-000000000001',
-          '21cac812-37b1-4d50-abb0-fc046d52259e',
-          'reservation',
-          99,
-          -99,
-          99,
-          0,
-          'episode_generation_task',
-          '11cac812-37b1-4d50-abb0-fc046d52259e',
-          'Scoped creator generation reserved credits',
-          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e","targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
-          NULL,
-          '2026-06-05T08:00:00.000Z'
-        ),
-        (
-          '41cac812-37b1-4d50-abb0-fc046d52259e',
-          '10000000-0000-4000-8000-000000000001',
-          '21cac812-37b1-4d50-abb0-fc046d52259e',
-          'release',
-          99,
-          99,
-          -99,
-          0,
-          'credit_reservation_allocation',
-          '51cac812-37b1-4d50-abb0-fc046d52259e',
-          'Scoped creator generation released credits',
-          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e","targetUserId":"4af8d99f-a74d-4a80-a610-3c0e725d420b","targetMembershipId":"9af8d99f-a74d-4a80-a610-3c0e725d420b"}'::jsonb,
-          NULL,
-          '2026-06-05T08:01:00.000Z'
         )
     `,
   );

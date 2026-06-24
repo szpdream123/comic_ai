@@ -11,7 +11,10 @@ const ignoredDirectories = new Set([
   "tmp-ui-screenshots",
 ]);
 
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const separatorIndex = rawArgs.indexOf("--");
+const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : rawArgs;
+const forwardedArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
 loadDotEnvFile(join(process.cwd(), ".env"));
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
@@ -82,6 +85,7 @@ function resolveTestCommand(testFiles, hasTypeScriptTests) {
         ...resolveTsxRuntimeArgs(runtime),
         "--test",
         ...testFiles,
+        ...forwardedArgs,
       ],
     };
   }
@@ -91,6 +95,7 @@ function resolveTestCommand(testFiles, hasTypeScriptTests) {
     args: [
       "--test",
       ...testFiles,
+      ...forwardedArgs,
     ],
   };
 }

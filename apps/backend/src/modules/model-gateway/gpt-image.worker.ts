@@ -90,7 +90,7 @@ export async function processGptImageSubmitJob(
             providerModel: modelConfig.providerModel,
             providerConfig: modelConfig.providerConfig,
           }
-        : fallbackGptImageModelConfig(input.env),
+        : fallbackGptImageModelConfig(),
       input.env,
       input.fetchImpl,
     );
@@ -739,26 +739,19 @@ function resolveEpisodeGenerationAssetType(input: {
   return "shot_image";
 }
 
-function fallbackGptImageModelConfig(env: NodeJS.ProcessEnv) {
+function fallbackGptImageModelConfig() {
   return {
     providerProtocol: "openai_images",
-    providerModel: env.GPT_IMAGE2_PROVIDER_MODEL?.trim() || "gpt-image-2",
+    providerModel: "gpt-image-2",
     providerConfig: {
-      baseURL: env.GPT_IMAGE2_BASE_URL?.trim() || "https://api.openai.com",
-      endpoint: env.GPT_IMAGE2_ENDPOINT?.trim() || "/v1/images/generations",
-      editEndpoint: env.GPT_IMAGE2_EDIT_ENDPOINT?.trim() || joinProviderUrl(
-        env.GPT_IMAGE2_BASE_URL?.trim() || "https://api.openai.com",
-        "/v1/images/edits",
-      ),
-      apiKeyEnv: env.GPT_IMAGE2_API_KEY_ENV?.trim() || "GPT_IMAGE2_API_KEY",
-      resultFormat: env.GPT_IMAGE2_RESULT_FORMAT?.trim() || "b64_json",
-      timeoutMs: parsePositiveInteger(env.GPT_IMAGE2_TIMEOUT_MS, 600_000, 30 * 60_000),
+      baseURL: "https://api.openai.com",
+      endpoint: "/v1/images/generations",
+      editEndpoint: "https://api.openai.com/v1/images/edits",
+      apiKeyEnv: "GPT_IMAGE2_API_KEY",
+      resultFormat: "b64_json",
+      timeoutMs: 600_000,
     },
   };
-}
-
-function joinProviderUrl(baseURL: string, endpoint: string): string {
-  return `${baseURL.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
 }
 
 function parseSnapshot(value: Record<string, unknown> | string) {
@@ -912,14 +905,6 @@ function readErrorStorageObjectKey(error: unknown): string | undefined {
 
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number, max: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.min(Math.floor(parsed), max);
 }
 
 function parseNonNegativeInteger(value: string | undefined, fallback: number, max: number) {

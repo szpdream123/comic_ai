@@ -120,6 +120,9 @@ import {
 import type { ProjectBundle, ProjectRecord, ScriptRecord } from "./project.service.ts";
 import type { ShotRecord } from "./shot.service.ts";
 
+const DEFAULT_CREATOR_PROJECT_PAGE_SIZE = 18;
+const MAX_CREATOR_PROJECT_PAGE_SIZE = 100;
+
 interface AuthenticatedCreatorUser {
   id: string;
   sessionToken: string;
@@ -378,6 +381,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   async function writeLibraryAsset(input: {
     user: AuthenticatedCreatorUser;
     body: {
+      projectId?: string | null;
       kind: "character" | "scene" | "prop" | "image" | "video";
       name?: string | null;
       description?: string | null;
@@ -397,7 +401,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     const { creatorApp, sqlState } = getCreatorState(input.user.id);
     await ensureSqlState(input.user.id, sqlState);
     const state = await creatorApp.getState();
-    const projectId = sqlState.projectId ?? state.project?.id ?? null;
+    const requestedProjectId = String(input.body.projectId ?? "").trim() || null;
+    const projectId = requestedProjectId ?? sqlState.projectId ?? state.project?.id ?? null;
     if (!projectId) {
       return { status: 409, body: { error: "creator_project_missing" } };
     }
@@ -812,19 +817,28 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async listProjects(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
+      page?: number;
+      pageSize?: number | string | null;
+      keyword?: string | null;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         workspaceId: deps.workspaceId,
         now: input.now,
       });
-      const projects = await listProjectsForWorkspace(deps.db, {
+      const page = normalizeCreatorProjectPage(input.page);
+      const pageSize = normalizeCreatorProjectPageSize(input.pageSize);
+      const keyword = normalizeCreatorProjectKeyword(input.keyword);
+      const projectPage = await listProjectsForWorkspace(deps.db, {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
+        page,
+        pageSize,
+        keyword,
       });
       const signedProjects = deps.storageRuntime
         ? await Promise.all(
-            projects.map((project) =>
+            projectPage.projects.map((project) =>
               hydrateProjectCoverUrl(deps.db, {
                 project,
                 sessionToken: input.user.sessionToken,
@@ -834,10 +848,19 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               }),
             ),
           )
-        : projects;
+        : projectPage.projects;
+      const totalPages = Math.max(1, Math.ceil(projectPage.total / projectPage.pageSize));
       return {
         status: 200,
-        body: { projects: signedProjects },
+        body: {
+          projects: signedProjects,
+          pagination: {
+            page: projectPage.page,
+            pageSize: projectPage.pageSize,
+            total: projectPage.total,
+            totalPages,
+          },
+        },
       };
     },
 
@@ -1395,6 +1418,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         name?: string | null;
         description?: string | null;
         isMain?: boolean | null;
+        previewUrl?: string | null;
+        sourceUrl?: string | null;
+        downloadUrl?: string | null;
+        storageObjectId?: string | null;
+        storageObjectKey?: string | null;
+        mimeType?: string | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -1413,6 +1442,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         name: input.body.name,
         description: input.body.description,
         isMain: input.body.isMain,
+        previewUrl: input.body.previewUrl ?? undefined,
+        sourceUrl: input.body.sourceUrl ?? undefined,
+        downloadUrl: input.body.downloadUrl ?? undefined,
+        storageObjectId: input.body.storageObjectId ?? undefined,
+        storageObjectKey: input.body.storageObjectKey ?? undefined,
+        mimeType: input.body.mimeType ?? undefined,
         now: input.now,
       });
       return updated
@@ -1458,6 +1493,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       user: AuthenticatedCreatorUser;
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
+        projectId?: string | null;
         name?: string | null;
         description?: string | null;
         uploadSessionId?: string | null;
@@ -1948,21 +1984,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId: input.projectId,
         now: input.now,
       });
-      const detail = await buildProjectDetail(deps.db, {
-        organizationId: actor.organizationId,
-        projectId: input.projectId,
-        sessionToken: input.user.sessionToken,
-        runtime: deps.storageRuntime,
-        signedUrlExpiresInSeconds,
-        now: input.now,
-      });
       return {
         status: 200,
         body: {
           stats: await buildProjectStats(deps.db, {
             organizationId: actor.organizationId,
             projectId: input.projectId,
-            detail,
             now: input.now,
           }),
         },
@@ -4168,8 +4195,46 @@ async function appendCalibrationAuditEvent(
 
 async function listProjectsForWorkspace(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string },
+  input: { organizationId: string; workspaceId: string; page: number; pageSize: number; keyword: string },
 ) {
+  const params: unknown[] = [input.organizationId, input.workspaceId];
+  const whereClauses = [
+    "organization_id = $1",
+    "workspace_id = $2",
+    `NOT EXISTS (
+          SELECT 1
+          FROM creator_canvas_projects ccp
+          WHERE ccp.organization_id = projects.organization_id
+            AND ccp.project_id = projects.id
+            AND ccp.deleted_at IS NULL
+        )`,
+    `NOT EXISTS (
+          SELECT 1
+          FROM scripts s
+          WHERE s.organization_id = projects.organization_id
+            AND s.project_id = projects.id
+            AND s.title IS NOT NULL
+            AND s.deleted_at IS NULL
+        )`,
+  ];
+  if (input.keyword) {
+    params.push(input.keyword);
+    whereClauses.push(`POSITION($${params.length} IN LOWER(projects.name)) > 0`);
+  }
+  const whereSql = whereClauses.join("\n        AND ");
+  const totalRow = await queryOne<{ total: number | string }>(
+    db,
+    `
+      SELECT COUNT(*) AS total
+      FROM projects
+      WHERE ${whereSql}
+    `,
+    params,
+  );
+  const total = Math.max(0, Number(totalRow?.total ?? 0));
+  const page = Math.min(input.page, Math.max(1, Math.ceil(total / input.pageSize)));
+  const offset = (page - 1) * input.pageSize;
+  const pageParams = [...params, input.pageSize, offset];
   const result = await db.query<{
     id: string;
     name: string;
@@ -4195,40 +4260,51 @@ async function listProjectsForWorkspace(
         created_at,
         updated_at
       FROM projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND NOT EXISTS (
-          SELECT 1
-          FROM creator_canvas_projects ccp
-          WHERE ccp.organization_id = projects.organization_id
-            AND ccp.project_id = projects.id
-            AND ccp.deleted_at IS NULL
-        )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM scripts s
-          WHERE s.organization_id = projects.organization_id
-            AND s.project_id = projects.id
-            AND s.title IS NOT NULL
-            AND s.deleted_at IS NULL
-        )
+      WHERE ${whereSql}
       ORDER BY created_at DESC, id DESC
+      LIMIT $${pageParams.length - 1}
+      OFFSET $${pageParams.length}
     `,
-    [input.organizationId, input.workspaceId],
+    pageParams,
   );
 
-  return result.rows.map((project) => ({
-    id: project.id,
-    name: project.name,
-    coverImageUrl: project.cover_image_url,
-    coverStorageObjectId: project.cover_storage_object_id,
-    aspectRatio: project.aspect_ratio,
-    resolution: project.resolution,
-    phase: project.phase,
-    createdByUserId: project.created_by_user_id,
-    createdAt: new Date(project.created_at),
-    updatedAt: new Date(project.updated_at),
-  }));
+  return {
+    projects: result.rows.map((project) => ({
+      id: project.id,
+      name: project.name,
+      coverImageUrl: project.cover_image_url,
+      coverStorageObjectId: project.cover_storage_object_id,
+      aspectRatio: project.aspect_ratio,
+      resolution: project.resolution,
+      phase: project.phase,
+      createdByUserId: project.created_by_user_id,
+      createdAt: new Date(project.created_at),
+      updatedAt: new Date(project.updated_at),
+    })),
+    page,
+    pageSize: input.pageSize,
+    total,
+  };
+}
+
+function normalizeCreatorProjectPage(value: unknown) {
+  const page = Math.floor(Number(value ?? 1));
+  return Number.isFinite(page) && page > 0 ? page : 1;
+}
+
+function normalizeCreatorProjectPageSize(value: unknown) {
+  const pageSize = Math.floor(Number(value ?? DEFAULT_CREATOR_PROJECT_PAGE_SIZE));
+  if (!Number.isFinite(pageSize) || pageSize <= 0) {
+    return DEFAULT_CREATOR_PROJECT_PAGE_SIZE;
+  }
+  return Math.min(MAX_CREATOR_PROJECT_PAGE_SIZE, pageSize);
+}
+
+function normalizeCreatorProjectKeyword(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase()
+    .slice(0, 100);
 }
 
 async function listProjectMembersForWorkspace(
@@ -4552,6 +4628,12 @@ async function updateProjectAssetRecord(
     name?: string | null;
     description?: string | null;
     isMain?: boolean | null;
+    previewUrl?: string | null;
+    sourceUrl?: string | null;
+    downloadUrl?: string | null;
+    storageObjectId?: string | null;
+    storageObjectKey?: string | null;
+    mimeType?: string | null;
     now: Date;
   },
 ) {
@@ -4559,9 +4641,11 @@ async function updateProjectAssetRecord(
     await db.query<{
       id: string;
       metadata_json: Record<string, unknown> | null;
+      storage_object_id: string | null;
+      storage_object_key: string | null;
     }>(
       `
-        SELECT id, metadata_json
+        SELECT id, metadata_json, storage_object_id, storage_object_key
         FROM asset_versions
         WHERE organization_id = $1
           AND asset_id = $2
@@ -4589,15 +4673,47 @@ async function updateProjectAssetRecord(
   if (input.isMain !== undefined && input.isMain !== null) {
     metadata.isMain = Boolean(input.isMain);
   }
+  if (input.previewUrl !== undefined || input.sourceUrl !== undefined || input.downloadUrl !== undefined) {
+    const previewUrl = String(input.previewUrl ?? "").trim();
+    const sourceUrl = String(input.sourceUrl ?? previewUrl).trim() || previewUrl;
+    const downloadUrl = String(input.downloadUrl ?? sourceUrl).trim() || sourceUrl;
+    if (previewUrl) {
+      metadata.previewUrl = previewUrl;
+      metadata.fixedImageUrl = previewUrl;
+    }
+    if (sourceUrl) {
+      metadata.sourceUrl = sourceUrl;
+    }
+    if (downloadUrl) {
+      metadata.downloadUrl = downloadUrl;
+    }
+    if (input.mimeType) {
+      metadata.mimeType = input.mimeType;
+    }
+  }
+  if (input.storageObjectId !== undefined) {
+    metadata.fixedImageStorageObjectId = input.storageObjectId ?? null;
+  }
+  if (input.storageObjectKey !== undefined) {
+    metadata.storageObjectKey = input.storageObjectKey ?? null;
+  }
 
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3
+      SET metadata_json = $3,
+          storage_object_id = $4,
+          storage_object_key = $5
       WHERE organization_id = $1
         AND id = $2
     `,
-    [input.organizationId, latestVersion.id, metadata],
+    [
+      input.organizationId,
+      latestVersion.id,
+      metadata,
+      input.storageObjectId === undefined ? latestVersion.storage_object_id : input.storageObjectId,
+      input.storageObjectKey === undefined ? latestVersion.storage_object_key : input.storageObjectKey,
+    ],
   );
   await db.query(
     `
@@ -4943,40 +5059,95 @@ async function buildProjectStats(
   input: {
     organizationId: string;
     projectId: string;
-    detail: Awaited<ReturnType<typeof buildProjectDetail>>;
     now: Date;
   },
 ) {
-  const membersResult = await db.query<{ count: number | string }>(
+  const result = await db.query<{
+    member_count: number | string;
+    episode_count: number | string;
+    shot_count: number | string;
+    asset_count: number | string;
+    export_count: number | string;
+    generated_image_count: number | string;
+    generated_video_count: number | string;
+    last_activity_at: Date | string | null;
+  }>(
     `
-      SELECT COUNT(*) AS count
-      FROM memberships m
-      JOIN projects p
-        ON p.organization_id = m.organization_id
-       AND p.workspace_id = m.workspace_id
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM memberships m
+          WHERE m.organization_id = p.organization_id
+            AND m.workspace_id = p.workspace_id
+        ) AS member_count,
+        (
+          SELECT COUNT(*)
+          FROM episodes e
+          WHERE e.organization_id = p.organization_id
+            AND e.project_id = p.id
+        ) AS episode_count,
+        (
+          SELECT COUNT(*)
+          FROM shots s
+          WHERE s.organization_id = p.organization_id
+            AND s.project_id = p.id
+        ) AS shot_count,
+        (
+          SELECT COUNT(*)
+          FROM assets a
+          WHERE a.organization_id = p.organization_id
+            AND a.project_id = p.id
+        ) AS asset_count,
+        (
+          SELECT COUNT(*)
+          FROM export_records er
+          WHERE er.organization_id = p.organization_id
+            AND er.project_id = p.id
+        ) AS export_count,
+        (
+          SELECT COUNT(*)
+          FROM shots s
+          WHERE s.organization_id = p.organization_id
+            AND s.project_id = p.id
+            AND s.image_status = 'ready'
+        ) AS generated_image_count,
+        (
+          SELECT COUNT(*)
+          FROM shots s
+          WHERE s.organization_id = p.organization_id
+            AND s.project_id = p.id
+            AND s.video_status = 'ready'
+        ) AS generated_video_count,
+        GREATEST(
+          p.updated_at,
+          COALESCE(
+            (
+              SELECT MAX(er.created_at)
+              FROM export_records er
+              WHERE er.organization_id = p.organization_id
+                AND er.project_id = p.id
+            ),
+            p.updated_at
+          )
+        ) AS last_activity_at
+      FROM projects p
       WHERE p.organization_id = $1
         AND p.id = $2
+      LIMIT 1
     `,
     [input.organizationId, input.projectId],
   );
+  const row = result.rows[0] ?? null;
 
   const stats = {
-    memberCount: Number(membersResult.rows[0]?.count ?? 0),
-    episodeCount: input.detail.episodes.length,
-    shotCount: input.detail.shots.length,
-    assetCount:
-      input.detail.assetsByType.character.length +
-      input.detail.assetsByType.scene.length +
-      input.detail.assetsByType.prop.length +
-      input.detail.assetsByType.other.image.length +
-      input.detail.assetsByType.other.video.length,
-    exportCount: input.detail.exportHistory.length,
-    generatedImageCount: input.detail.shots.filter((shot) => shot.imageStatus === "ready").length,
-    generatedVideoCount: input.detail.shots.filter((shot) => shot.videoStatus === "ready").length,
-    lastActivityAt:
-      input.detail.project?.updatedAt ??
-      input.detail.exportHistory[0]?.createdAt ??
-      input.now,
+    memberCount: Number(row?.member_count ?? 0),
+    episodeCount: Number(row?.episode_count ?? 0),
+    shotCount: Number(row?.shot_count ?? 0),
+    assetCount: Number(row?.asset_count ?? 0),
+    exportCount: Number(row?.export_count ?? 0),
+    generatedImageCount: Number(row?.generated_image_count ?? 0),
+    generatedVideoCount: Number(row?.generated_video_count ?? 0),
+    lastActivityAt: row?.last_activity_at ? new Date(row.last_activity_at) : input.now,
   };
 
   return stats;
@@ -5901,6 +6072,7 @@ function createEmptyAssetsByType() {
     scene: [] as ListedAsset[],
     prop: [] as ListedAsset[],
     other: {
+      audio: [] as ListedAsset[],
       image: [] as ListedAsset[],
       video: [] as ListedAsset[],
     },
@@ -5926,9 +6098,17 @@ function groupAssetsByUiType(assets: ListedAsset[]) {
     } else if (asset.assetType === "prop_reference") {
       grouped.prop.push(asset);
     } else if (asset.assetType === "shot_video") {
-      grouped.other.video.push(asset);
+      if (isAudioListedAsset(asset)) {
+        grouped.other.audio.push(asset);
+      } else {
+        grouped.other.video.push(asset);
+      }
     } else {
-      grouped.other.image.push(asset);
+      if (isAudioListedAsset(asset)) {
+        grouped.other.audio.push(asset);
+      } else {
+        grouped.other.image.push(asset);
+      }
     }
   }
   return grouped;
@@ -5939,8 +6119,24 @@ function buildAssetSummary(assetsByType: ReturnType<typeof createEmptyAssetsByTy
     character: summarizeAssets(assetsByType.character),
     scene: summarizeAssets(assetsByType.scene),
     prop: summarizeAssets(assetsByType.prop),
-    other: summarizeAssets([...assetsByType.other.image, ...assetsByType.other.video]),
+    other: summarizeAssets([...assetsByType.other.audio, ...assetsByType.other.image, ...assetsByType.other.video]),
   };
+}
+
+function isAudioListedAsset(asset: ListedAsset) {
+  const metadata = asset.latestVersion?.metadata ?? {};
+  const mimeType = String(metadata?.mimeType ?? "").trim().toLowerCase();
+  if (mimeType.startsWith("audio/")) {
+    return true;
+  }
+  const candidates = [
+    asset.previewUrl,
+    asset.latestVersion?.previewUrl,
+    asset.latestVersion?.storageObjectKey,
+    metadata?.sourceUrl,
+    metadata?.previewUrl,
+  ];
+  return candidates.some((candidate) => /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(String(candidate ?? "")));
 }
 
 function summarizeAssets(assets: ListedAsset[]) {

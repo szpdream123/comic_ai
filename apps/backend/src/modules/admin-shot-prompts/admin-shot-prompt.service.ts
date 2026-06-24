@@ -366,7 +366,7 @@ const defaultNegativePrompt = "避免文字水印、logo、乱码字幕、人物
 const defaultShotPromptTemplates = [
   template({
     name: "抖音爆款短剧分镜",
-    code: "douyin_viral_short_drama",
+    code: "long_story_precise_breakdown",
     stage: "outline",
     tags: ["抖音短剧", "强钩子", "反转", "4-15秒"],
     variables: ["{{story_text}}"],

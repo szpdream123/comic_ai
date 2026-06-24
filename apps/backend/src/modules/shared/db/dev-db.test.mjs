@@ -255,6 +255,28 @@ test("ensureFoundationSchema repairs and enables Seedance model configs on exist
   await db.close();
 });
 
+test("ensureFoundationSchema repairs legacy databases missing user model request logs", async () => {
+  const db = await createEmptyTestDb();
+
+  await applyMigrationsBefore("0041_user_model_request_logs.sql", db);
+
+  await ensureFoundationSchema(db);
+
+  const tables = await db.query(`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'user_model_request_logs'
+  `);
+
+  assert.deepEqual(
+    tables.rows.map((row) => row.table_name),
+    ["user_model_request_logs"],
+  );
+
+  await db.close();
+});
+
 async function applyMigrationsBefore(stopName, db) {
   const migrationDir = resolve(process.cwd(), "packages", "db", "migrations");
   const files = (await readdir(migrationDir))

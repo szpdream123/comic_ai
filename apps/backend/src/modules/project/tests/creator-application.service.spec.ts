@@ -75,6 +75,71 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("paginates workspace projects at 18 items per page", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-project-pagination-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      for (let index = 1; index <= 20; index += 1) {
+        await creator.createProject({
+          user,
+          body: {
+            name: `分页项目 ${index}`,
+            scriptInput: `Episode 1: project ${index}.`,
+            aspectRatio: "9:16",
+            resolution: "1080p",
+          },
+          idempotencyKey: `creator-application-project-pagination-${index}`,
+          now: new Date(`2026-06-14T08:${String(index).padStart(2, "0")}:00.000Z`),
+        });
+      }
+
+      const firstPage = await creator.listProjects({
+        user,
+        page: 1,
+        pageSize: 18,
+        now: new Date("2026-06-14T09:00:00.000Z"),
+      });
+      const secondPage = await creator.listProjects({
+        user,
+        page: 2,
+        pageSize: 18,
+        now: new Date("2026-06-14T09:01:00.000Z"),
+      });
+
+      assert.equal(firstPage.status, 200);
+      assert.equal(secondPage.status, 200);
+      assert.equal((firstPage.body as any).projects.length, 18);
+      assert.equal((secondPage.body as any).projects.length, 2);
+      assert.deepEqual((firstPage.body as any).pagination, {
+        page: 1,
+        pageSize: 18,
+        total: 20,
+        totalPages: 2,
+      });
+      assert.deepEqual((secondPage.body as any).pagination, {
+        page: 2,
+        pageSize: 18,
+        total: 20,
+        totalPages: 2,
+      });
+      assert.equal((firstPage.body as any).projects[0].name, "分页项目 20");
+      assert.equal((secondPage.body as any).projects[0].name, "分页项目 2");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("runs the creator flow through formal handlers and writes calibration audit plus export records", async () => {
     const db = await createMigratedTestDb();
 
@@ -264,6 +329,104 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("loads project stats without hydrating signed detail assets", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-stats-lightweight-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore),
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Stats Lightweight",
+          scriptInput: "Episode 1: Stats should not sign every detail asset.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-stats-lightweight-create",
+        now: new Date("2026-05-18T10:20:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const actor = {
+        actorId: userId,
+        organizationId,
+        workspaceId,
+        role: "creator" as const,
+        capabilities: [],
+      };
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        projectId,
+        purpose: "asset_import",
+        fileName: "stats-scene.png",
+        contentType: "image/png",
+        sizeBytes: 128,
+        checksum: "stats-scene-checksum",
+        multipart: false,
+        idempotencyKey: "creator-application-stats-lightweight-upload",
+        now: new Date("2026-05-18T10:21:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 128,
+        checksum: "stats-scene-checksum",
+        eTag: "stats-scene-etag",
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: session.token,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-18T10:22:00.000Z"),
+        runtime: createStorageRuntime(localObjectStore),
+        signedUrlExpiresInSeconds: 900,
+      });
+      const imported = await creator.importAsset({
+        user,
+        body: {
+          kind: "scene",
+          name: "Stats Scene",
+          uploadSessionId: prepared.uploadSessionId,
+          storageObjectId: prepared.storageObjectId,
+          mimeType: "image/png",
+        },
+        now: new Date("2026-05-18T10:23:00.000Z"),
+      });
+      const statsCreator = createCreatorApplication({
+        db,
+        workspaceId,
+        storageRuntime: createStorageRuntime(localObjectStore, {
+          failSignedReads: true,
+        }),
+      });
+
+      const stats = await statsCreator.getProjectStats({
+        user,
+        projectId,
+        now: new Date("2026-05-18T10:24:00.000Z"),
+      });
+
+      assert.equal(imported.status, 200);
+      assert.equal(stats.status, 200);
+      assert.equal((stats.body as any).stats.assetCount, 1);
+      assert.equal((stats.body as any).stats.episodeCount, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("commits AI storyboard preview into episode assets, storyboards, and drafts", async () => {
     const db = await createMigratedTestDb();
 
@@ -307,7 +470,15 @@ describe("creator application service", { concurrency: false }, () => {
         "金属材质，表面有划痕和污渍。",
       ].join("\n");
 
-      const fullStoryboardVideoPrompt = "动态视频提示词";
+      const fullStoryboardVideoPrompt = [
+        "BEGIN_FULL_DYNAMIC_VIDEO_PROMPT",
+        "【场景分析】场景：（城门口/黄昏，火红晚霞，暖色光线）",
+        "【镜头1】0.0-3.0秒 转场：淡入 镜头：中近景/平视/固定镜头",
+        "画面描述：任小野站在小草身旁，抬头看向天边。",
+        "主体动作：任小野护住小草，随后转身走向城门。",
+        "音效：环境音（风声、人群声）",
+        "END_FULL_DYNAMIC_VIDEO_PROMPT",
+      ].join("\n");
       const committed = await creator.commitAiStoryboardPreview({
         user,
         projectId,
@@ -385,10 +556,10 @@ describe("creator application service", { concurrency: false }, () => {
               WHERE project_id = $1
                 AND target_type = 'storyboard'
                 AND mode = 'video'
-                AND prompt = '动态视频提示词'
+                AND prompt = $2
             ) AS video_draft_count
         `,
-        [projectId],
+        [projectId, fullStoryboardVideoPrompt],
       );
       const assetLabels = await db.query<{
         asset_type: string;
@@ -445,6 +616,8 @@ describe("creator application service", { concurrency: false }, () => {
       assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /灰黑色的血渗入大地/);
       assert.match(assetLabels.rows.find((row) => row.asset_type === "scene_reference")?.description ?? "", /黑山密林场景概念图/);
       assert.equal(shotRows.rows[0]?.description ?? "", fullStoryboardVideoPrompt);
+      assert.match(shotRows.rows[0]?.description ?? "", /BEGIN_FULL_DYNAMIC_VIDEO_PROMPT/);
+      assert.match(shotRows.rows[0]?.description ?? "", /END_FULL_DYNAMIC_VIDEO_PROMPT/);
     } finally {
       await db.close();
     }
@@ -2918,11 +3091,16 @@ async function seedSession(
 }
 
 class SignedUrlOnlyAdapter implements StorageAdapter {
+  constructor(private readonly options: { failSignedReads?: boolean } = {}) {}
+
   async createSignedReadUrl(input: {
     bucket: string;
     objectKey: string;
     expiresAt: Date;
   }) {
+    if (this.options.failSignedReads) {
+      throw new Error("signed_read_url_should_not_be_used");
+    }
     return {
       url: `signed://${input.bucket}/${input.objectKey}`,
       expiresAt: input.expiresAt,
@@ -2979,13 +3157,16 @@ class LocalObjectStoreStub {
   }
 }
 
-function createStorageRuntime(localObjectStore: LocalObjectStoreStub): UploadSessionRuntime {
+function createStorageRuntime(
+  localObjectStore: LocalObjectStoreStub,
+  options: { failSignedReads?: boolean } = {},
+): UploadSessionRuntime {
   return {
     mode: "dev",
     provider: "dev",
     bucket: "creator-dev",
     region: "ap-shanghai",
-    adapter: new SignedUrlOnlyAdapter(),
+    adapter: new SignedUrlOnlyAdapter(options),
     stsDurationSeconds: 900,
     localUploadUrlPath: "/api/storage/upload-sessions",
     localObjectStore,

@@ -32,9 +32,9 @@ describe("team account credentials", () => {
   });
 
   it("derives phone user initial passwords from the last six phone digits", async () => {
-    const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone("+8618571521874"));
+    const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone("18571521874"));
 
-    assert.equal(defaultPasswordFromPhone("+8618571521874"), "521874");
+    assert.equal(defaultPasswordFromPhone("18571521874"), "521874");
     assert.match(passwordHash, /^scrypt:v1:/);
     assert.notEqual(passwordHash, "521874");
     assert.equal(

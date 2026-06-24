@@ -27,6 +27,8 @@ export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_pr
 export interface BatchImagePromptPresetOption {
   id: string;
   label: string;
+  prompt_content?: string;
+  promptContent?: string;
 }
 
 export interface BatchImagePromptPresetCategories {
@@ -36,9 +38,17 @@ export interface BatchImagePromptPresetCategories {
 }
 
 export const defaultBatchImagePromptPresetCategories: BatchImagePromptPresetCategories = {
-  scene: [],
-  character: [],
-  prop: [],
+  scene: [
+    { id: "scene-vr", label: "[系统]VR场景图" },
+    { id: "scene-overlook", label: "[系统]场景-俯视图" },
+    { id: "scene-wide", label: "[系统]场景-广角图" },
+  ],
+  character: [
+    { id: "character-triple", label: "[系统]角色-三视图" },
+  ],
+  prop: [
+    { id: "prop-triple", label: "[系统]道具-三视图" },
+  ],
 };
 
 const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
@@ -1586,10 +1596,15 @@ function normalizeBatchImagePromptPresetOption(value: unknown): BatchImagePrompt
   }
   const id = String((value as Record<string, unknown>).id ?? "").trim();
   const label = String((value as Record<string, unknown>).label ?? "").trim();
+  const promptContent = String(
+    (value as Record<string, unknown>).prompt_content
+      ?? (value as Record<string, unknown>).promptContent
+      ?? "",
+  ).trim();
   if (!id || !label || id === "none") {
     return null;
   }
-  return { id, label };
+  return promptContent ? { id, label, prompt_content: promptContent, promptContent } : { id, label };
 }
 
 export async function readBatchImagePromptPresetCategoriesFromDb(

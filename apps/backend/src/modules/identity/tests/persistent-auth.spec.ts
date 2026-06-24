@@ -35,7 +35,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
       );
 
       assert.equal(challenge.plainCode, "123456");
-      assert.equal(storedChallenge.rows[0]?.phone_e164, "+8613800138000");
+      assert.equal(storedChallenge.rows[0]?.phone_e164, "13800138000");
       assert.equal(storedChallenge.rows[0]?.code_hash_version, 1);
       assert.notEqual(storedChallenge.rows[0]?.code_hash, "123456");
 
@@ -147,7 +147,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
       await db.query(
         `
           INSERT INTO users (id, phone_e164, status)
-          VALUES ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'disabled')
+          VALUES ('00000000-0000-4000-8000-000000000001', '13800138000', 'disabled')
         `,
       );
       const challenge = await createPersistentLoginChallenge(db, {
@@ -177,7 +177,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
       await db.query(
         `
           INSERT INTO users (id, phone_e164, status)
-          VALUES ('00000000-0000-4000-8000-000000000002', '+8618571521874', 'active')
+          VALUES ('00000000-0000-4000-8000-000000000002', '18571521874', 'active')
         `,
       );
 
@@ -187,7 +187,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
         now: new Date("2026-06-11T10:00:00.000Z"),
       });
       const user = await db.query<{ password_hash: string | null }>(
-        "SELECT password_hash FROM users WHERE phone_e164 = '+8618571521874'",
+        "SELECT password_hash FROM users WHERE phone_e164 = '18571521874'",
       );
       const sessions = await db.query("SELECT id FROM auth_sessions");
 
@@ -195,6 +195,31 @@ describe("persistent phone auth", { concurrency: false }, () => {
       assert.match(user.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
       assert.notEqual(user.rows[0]?.password_hash, "521874");
       assert.equal(sessions.rows.length, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("records last login time for SMS login", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const challenge = await createPersistentLoginChallenge(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+        code: "123456",
+      });
+      const verified = await verifyPersistentLoginChallenge(db, {
+        challengeId: challenge.challengeId,
+        phone: "13800138000",
+        code: "123456",
+        now: new Date("2026-06-11T10:05:00.000Z"),
+      });
+      const user = await db.query<{ last_login_at: Date | string | null }>(
+        "SELECT last_login_at FROM users WHERE phone_e164 = '13800138000'",
+      );
+
+      assert.equal(verified.kind, "verified");
+      assert.equal(new Date(user.rows[0]?.last_login_at ?? "").toISOString(), "2026-06-11T10:05:00.000Z");
     } finally {
       await db.close();
     }
@@ -208,7 +233,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
           INSERT INTO users (id, phone_e164, status, password_hash)
           VALUES (
             '00000000-0000-4000-8000-000000000003',
-            '+8618571521874',
+            '18571521874',
             'active',
             'scrypt:v1:invalid:hash'
           )
@@ -216,7 +241,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
       );
 
       await db.query(
-        "UPDATE users SET password_hash = NULL WHERE phone_e164 = '+8618571521874'",
+        "UPDATE users SET password_hash = NULL WHERE phone_e164 = '18571521874'",
       );
 
       const verified = await verifyPersistentPasswordLogin(db, {
@@ -294,7 +319,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
       assert.equal(challenge.kind, "sent");
       assert.equal(records.rows.length, 1);
       assert.equal(records.rows[0]?.status, "sent");
-      assert.equal(records.rows[0]?.phone_e164, "+8613800138000");
+      assert.equal(records.rows[0]?.phone_e164, "13800138000");
       assert.notEqual(records.rows[0]?.ip_address_hash, "203.0.113.10");
       assert.notEqual(records.rows[0]?.user_agent_hash, "UnitTest/1.0");
       assert.equal(records.rows[0]?.provider_request_id, "dev-request-1");
@@ -385,6 +410,42 @@ describe("persistent phone auth", { concurrency: false }, () => {
 
       assert.deepEqual(limited, {
         kind: "daily_sms_limit_exceeded",
+        retryAfterSeconds: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("limits each IP to six successful SMS sends per Shanghai day", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const smsProvider = {
+        providerName: "dev" as const,
+        async sendVerificationCode() {
+          return { kind: "sent" as const, providerRequestId: "dev" };
+        },
+      };
+
+      for (let index = 0; index < 6; index += 1) {
+        const result = await requestPersistentLoginCode(db, {
+          phone: `13800138${String(100 + index)}`,
+          now: new Date(`2026-06-04T10:0${index}:00.000+08:00`),
+          ipAddress: "203.0.113.10",
+          smsProvider,
+        });
+        assert.equal(result.kind, "sent");
+      }
+
+      const limited = await requestPersistentLoginCode(db, {
+        phone: "13800138106",
+        now: new Date("2026-06-04T10:06:00.000+08:00"),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      assert.deepEqual(limited, {
+        kind: "ip_sms_limit_exceeded",
         retryAfterSeconds: 0,
       });
     } finally {

@@ -23,12 +23,20 @@ async function fetchJson(url, options = {}) {
     }
   }
   const controller = new AbortController();
+  const externalSignal = options.signal;
+  const abortFromExternalSignal = () => controller.abort();
+  if (externalSignal?.aborted) {
+    controller.abort();
+  } else {
+    externalSignal?.addEventListener?.("abort", abortFromExternalSignal, { once: true });
+  }
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const {
     timeoutMs: _timeoutMs,
     unwrapEnvelope: _unwrapEnvelope,
     dedupeKey: _dedupeKey,
     dedupeTtlMs: _dedupeTtlMs,
+    signal: _signal,
     ...fetchOptions
   } = options;
 
@@ -42,11 +50,15 @@ async function fetchJson(url, options = {}) {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        if (externalSignal?.aborted) {
+          throw error;
+        }
         throw new Error("request_timeout");
       }
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      externalSignal?.removeEventListener?.("abort", abortFromExternalSignal);
     }
 
     const text = await response.text();
@@ -179,19 +191,25 @@ async function* postJsonSse(url, body, options = {}) {
   }
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const event = parseSseMessage(part);
-      if (event) {
-        yield event;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const event = parseSseMessage(part);
+        if (event) {
+          yield event;
+        }
+      }
+    }
+  } finally {
+    if (options.signal?.aborted) {
+      await reader.cancel().catch(() => {});
     }
   }
   buffer += decoder.decode();
@@ -216,7 +234,12 @@ function parseSseMessage(raw) {
     return { event: eventName, data: null };
   }
   try {
-    return { event: eventName, data: JSON.parse(dataText) };
+    const data = JSON.parse(dataText);
+    const inferredEventName =
+      data && typeof data === "object" && typeof data.type === "string" && data.type.trim()
+        ? data.type.trim()
+        : eventName;
+    return { event: inferredEventName, data };
   } catch {
     return { event: eventName, data: dataText };
   }
@@ -660,8 +683,19 @@ export const creatorApi = {
     });
   },
 
-  getProjects() {
-    return fetchJson("/api/creator/projects", { dedupeKey: "GET /api/creator/projects" });
+  getProjects(input = {}) {
+    const params = new URLSearchParams();
+    const page = Number(input.page ?? 1);
+    params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
+    const pageSize = Number(input.pageSize ?? 18);
+    params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 18));
+    const keyword = String(input.keyword ?? "").trim();
+    if (keyword) {
+      params.set("keyword", keyword);
+    }
+    const query = params.toString();
+    const path = `/api/creator/projects?${query}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getCanvasProjects() {
@@ -1022,12 +1056,13 @@ export const creatorApi = {
     });
   },
 
-  createAiStoryboardPreview(projectId, input) {
+  createAiStoryboardPreview(projectId, input, options = {}) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input ?? {}),
       timeoutMs: 180000,
+      signal: options.signal,
     });
   },
 
@@ -1270,12 +1305,30 @@ export const creatorApi = {
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-tasks${suffix}`);
   },
 
-  listGenerationConfig(episodeId) {
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-config`);
+  listGenerationConfig(episodeId, options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/generation-config${query}`,
+      options.fresh === true ? { cache: "no-store" } : {},
+    );
   },
 
-  listGlobalGenerationConfig() {
-    return fetchJson("/api/generation-config");
+  listBatchImageModelOptions(episodeId, options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/batch-image-model-options${query}`,
+      options.fresh === true ? { cache: "no-store" } : {},
+    );
+  },
+
+  listGlobalGenerationConfig(options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(`/api/generation-config${query}`, options.fresh === true ? { cache: "no-store" } : {});
+  },
+
+  listGlobalBatchImageModelOptions(options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(`/api/batch-image-model-options${query}`, options.fresh === true ? { cache: "no-store" } : {});
   },
 
   createImageTask(episodeId, input, options = {}) {

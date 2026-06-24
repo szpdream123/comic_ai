@@ -1050,6 +1050,73 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("keeps storyboard prompt package default flags when editing without resubmitting them", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
+
+    try {
+      const packageCode = `test_storyboard_default_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
+      const createResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Default Storyboard Prompt",
+          code: packageCode,
+          package_type: "genre",
+          tags: ["test", "default"],
+          prompt_content: "This default storyboard package has enough text to validate that edit requests preserve stored default flags.",
+          status: "enabled",
+          sort_order: 11,
+        }),
+      });
+      assert.equal(createResponse.status, 200);
+      const createPayload = await createResponse.json();
+
+      const makeDefaultResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          ...createPayload.data,
+          is_default: true,
+        }),
+      });
+      assert.equal(makeDefaultResponse.status, 200);
+
+      const editResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Edited Default Storyboard Prompt",
+          code: packageCode,
+          package_type: "genre",
+          prompt_content: "Edited default storyboard package content is still long enough, and this request intentionally omits default flags.",
+          status: "enabled",
+          sort_order: 11,
+        }),
+      });
+      assert.equal(editResponse.status, 200);
+
+      const persisted = await db.query<{ is_default: boolean; is_global_default: boolean; name: string }>(
+        "SELECT is_default, is_global_default, name FROM storyboard_prompt_packages WHERE id = $1",
+        [createPayload.data.id],
+      );
+      assert.equal(persisted.rows[0]?.name, "Edited Default Storyboard Prompt");
+      assert.equal(persisted.rows[0]?.is_default, true);
+      assert.equal(persisted.rows[0]?.is_global_default, false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists classified shot prompt templates in the admin database", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
@@ -1060,7 +1127,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
-      assert.ok(listPayload.data.some((item: { code: string; stage: string; remark: string }) => item.code === "douyin_viral_short_drama" && item.stage === "outline" && item.remark.includes("强钩子")));
+      assert.ok(listPayload.data.some((item: { code: string; stage: string; remark: string }) => item.code === "long_story_precise_breakdown" && item.stage === "outline" && item.remark.includes("强钩子")));
 
       const templateCode = `test_shot_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/shot-prompt/templates`, {
@@ -1125,8 +1192,18 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
+      assert.equal(Number(listPayload.meta?.total || 0) >= listPayload.data.length, true);
       assert.ok(listPayload.data.some((item: { name: string; code: string }) => item.name === "人像摄影" && item.code === "portrait_photography"));
       assert.ok(listPayload.data.some((item: { name: string }) => item.name === "二次元"));
+
+      const batchListResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles?category=batch&page_size=5`, {
+        headers: { cookie },
+      });
+      assert.equal(batchListResponse.status, 200);
+      const batchListPayload = await batchListResponse.json();
+      assert.equal(batchListPayload.meta?.total, 9);
+      assert.equal(batchListPayload.data.length, 5);
+      assert.ok(batchListPayload.data.every((item: { category: string }) => item.category === "batch"));
 
       const styleCode = `test_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
@@ -1220,15 +1297,23 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       assert.equal(initialResponse.status, 200);
       assert.deepEqual(initialPayload.data, {
-        scene: [],
-        character: [],
-        prop: [],
+        scene: [
+          { id: "scene-vr", label: "[系统]VR场景图" },
+          { id: "scene-overlook", label: "[系统]场景-俯视图" },
+          { id: "scene-wide", label: "[系统]场景-广角图" },
+        ],
+        character: [
+          { id: "character-triple", label: "[系统]角色-三视图" },
+        ],
+        prop: [
+          { id: "prop-triple", label: "[系统]道具-三视图" },
+        ],
       });
 
       const nextValue = {
-        scene: [{ id: "scene-future-city", label: "未来城市场景" }],
-        character: [{ id: "character-hero", label: "主角角色预设" }],
-        prop: [{ id: "prop-sword", label: "飞剑道具预设" }],
+        scene: [{ id: "scene-future-city", label: "未来城市场景", prompt_content: "未来城市环境提示词正文" }],
+        character: [{ id: "character-hero", label: "主角角色预设", prompt_content: "主角角色三视图提示词正文" }],
+        prop: [{ id: "prop-sword", label: "飞剑道具预设", prompt_content: "飞剑道具三视图提示词正文" }],
       };
       const updateResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
         method: "PATCH",
@@ -1881,7 +1966,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [{ displayName: "分镜组长", accountType: "team_permission_account", subaccountCount: 1 }],
       );
       assert.equal(teamAdmin.accountType, "team_permission_account");
-      assert.equal(teamAdmin.phone, "+86138****0002");
+      assert.equal(teamAdmin.phone, "13800200002");
       assert.equal(teamAdmin.email, "gr***@example.test");
       assert.equal(teamAdmin.teamRole, "group_admin");
       assert.equal(teamAdmin.availableCredits, 2100);
@@ -2032,11 +2117,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
 
       assert.equal(usersResponse.status, 200);
-      assert.equal(owner.phone, "+86138****0001");
+      assert.equal(owner.phone, "13800200001");
       assert.equal(owner.email, "ow***@example.test");
       assert.equal(revealResponse.status, 200);
       assert.deepEqual(revealPayload.data.contact, {
-        phone: "+8613800200001",
+        phone: "13800200001",
         email: "owner@example.test",
       });
       assert.deepEqual(audit.rows, [
@@ -2456,6 +2541,124 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         { event_type: "admin.user.profile_updated", reason: "客服协助修改资料", work_order_no: null },
         { event_type: "admin.user.status_changed", reason: "风险处理临时禁用", work_order_no: null },
       ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets admins inspect model request logs for a specific user", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    await seedAdminUserListFixture(db);
+
+    try {
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id,
+            organization_id,
+            workspace_id,
+            provider_name,
+            provider_operation,
+            request_key,
+            request_hash,
+            payload_ref,
+            payload_hash,
+            payload_redacted_json,
+            status,
+            external_submission_started_at,
+            response_redacted_json,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            'a1000000-0000-4000-8000-000000000001',
+            '91000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000000001',
+            'deepseek',
+            'llm.chat.completions',
+            'admin-model-log-1',
+            'req-hash-1',
+            'text-gateway://admin-model-log-1',
+            'payload-hash-1',
+            '{"model":"deepseek-chat"}'::jsonb,
+            'succeeded',
+            '2026-06-05T09:00:00.000Z',
+            '{"usageSource":"provider"}'::jsonb,
+            '93000000-0000-4000-8000-000000000001',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO user_model_request_logs (
+            id,
+            provider_request_id,
+            organization_id,
+            workspace_id,
+            user_id,
+            provider_name,
+            provider_operation,
+            model_id,
+            provider_model,
+            request_key,
+            request_hash,
+            payload_hash,
+            payload_summary,
+            request_body_json,
+            request_text,
+            response_text,
+            response_usage_json,
+            response_finish_reasons_json,
+            status,
+            started_at,
+            completed_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            'a2000000-0000-4000-8000-000000000001',
+            'a1000000-0000-4000-8000-000000000001',
+            '91000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000000001',
+            '93000000-0000-4000-8000-000000000001',
+            'deepseek',
+            'llm.chat.completions',
+            'deepseek-chat',
+            'deepseek-chat',
+            'admin-model-log-1',
+            'req-hash-1',
+            'payload-hash-1',
+            'ai storyboard preview text generation',
+            '{"model":"deepseek-chat","max_tokens":384000}'::jsonb,
+            '[user]\n角色模板 任小野',
+            '{"characters":[{"name":"任小野"}]}',
+            '{"prompt_tokens":101,"completion_tokens":55,"total_tokens":156}'::jsonb,
+            '["stop"]'::jsonb,
+            'succeeded',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z',
+            '2026-06-05T09:00:00.000Z',
+            '2026-06-05T09:00:10.000Z'
+          )
+        `,
+      );
+
+      const response = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?pageSize=20`, {
+        headers: { cookie },
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.length, 1);
+      assert.equal(payload.data[0].modelId, "deepseek-chat");
+      assert.match(payload.data[0].requestText, /角色模板 任小野/);
+      assert.match(payload.data[0].responseText, /任小野/);
+      assert.equal(payload.data[0].status, "succeeded");
+      assert.equal(payload.data[0].responseUsage.total_tokens, 156);
     } finally {
       await server.close();
     }
@@ -5052,6 +5255,55 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.ok(loginEvent);
       assert.equal(typeof loginEvent.metadata, "object");
       assert.ok("ipAddress" in loginEvent.metadata);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves sms records to admins with audit permission", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      await db.query(
+        `
+          INSERT INTO sms_send_records (
+            id,
+            phone_e164,
+            verification_code,
+          sms_content,
+          provider,
+          status,
+          ip_address,
+          user_agent_hash,
+          created_at
+        ) VALUES (
+            $1,
+            '+8613800138000',
+            '123456',
+            '【登录验证】验证码 123456，5 分钟内有效。',
+            'dev',
+            'sent',
+            '203.0.113.10',
+            'hash-ua',
+            now()
+          )
+        `,
+        [randomUUID()],
+      );
+
+      const forbidden = await fetch(`${server.origin}/api/admin/sms-records`);
+      const allowed = await fetch(`${server.origin}/api/admin/sms-records?range=all`, {
+        headers: { cookie },
+      });
+      const payload = await allowed.json();
+
+      assert.equal(forbidden.status, 401);
+      assert.equal(allowed.status, 200);
+      assert.equal(Array.isArray(payload.data), true);
+      assert.equal(payload.data[0]?.verificationCode, "123456");
+      assert.equal(payload.data[0]?.smsContent, "【登录验证】验证码 123456，5 分钟内有效。");
+      assert.equal(payload.data[0]?.ipAddress, "203.0.113.10");
     } finally {
       await server.close();
     }

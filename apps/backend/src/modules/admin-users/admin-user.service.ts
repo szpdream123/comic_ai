@@ -7,6 +7,7 @@ import {
   reserveCredits,
   settleReservationAllocation,
 } from "../credit-billing/credit-ledger.service.ts";
+import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -18,6 +19,7 @@ export interface AdminUserListItem {
   displayName: string;
   phone: string | null;
   email: string | null;
+  lastLoginAt: string | null;
   status: string;
   organizationId: string | null;
   organizationName: string | null;
@@ -47,11 +49,38 @@ export interface AdminTeamPlanLimitSummary {
   remainingSeats: number;
 }
 
+export interface AdminUserModelRequestLogItem {
+  id: string;
+  providerRequestId: string;
+  organizationId: string;
+  workspaceId: string | null;
+  providerName: string;
+  providerOperation: string;
+  modelId: string;
+  providerModel: string;
+  requestKey: string;
+  requestHash: string;
+  payloadHash: string;
+  payloadSummary: string | null;
+  requestBody: Record<string, unknown>;
+  requestText: string | null;
+  responseText: string | null;
+  responseUsage: Record<string, unknown> | null;
+  responseFinishReasons: string[];
+  status: string;
+  failureCode: string | null;
+  projectId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+}
+
 interface AdminUserRow {
   user_id: string;
   display_name: string | null;
   phone_e164: string | null;
   email: string | null;
+  last_login_at: Date | string | null;
   user_status: string;
   organization_id: string | null;
   organization_name: string | null;
@@ -68,6 +97,32 @@ interface AdminUserRow {
   member_credit_used: number | string | null;
   workspace_reserved_credits: number | string | null;
   subaccount_count: number | string | null;
+}
+
+interface AdminUserModelRequestLogRow {
+  id: string;
+  provider_request_id: string;
+  organization_id: string;
+  workspace_id: string | null;
+  provider_name: string;
+  provider_operation: string;
+  model_id: string;
+  provider_model: string;
+  request_key: string;
+  request_hash: string;
+  payload_hash: string;
+  payload_summary: string | null;
+  request_body_json: Record<string, unknown> | null;
+  request_text: string | null;
+  response_text: string | null;
+  response_usage_json: Record<string, unknown> | null;
+  response_finish_reasons_json: unknown;
+  status: string;
+  failure_code: string | null;
+  project_id: string | null;
+  started_at: Date | string;
+  completed_at: Date | string | null;
+  created_at: Date | string;
 }
 
 export function createAdminUserService(deps: { db: SqlDatabase }) {
@@ -89,69 +144,76 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         OR COALESCE(u.display_name, '') ILIKE $${params.length}
         OR COALESCE(u.phone_e164, '') ILIKE $${params.length}
         OR COALESCE(u.email, '') ILIKE $${params.length}
-        OR COALESCE(o.name, '') ILIKE $${params.length}
-        OR COALESCE(tp.display_name, '') ILIKE $${params.length}
+        OR EXISTS (
+          SELECT 1
+          FROM memberships membership_search
+          LEFT JOIN organizations organization_search
+            ON organization_search.id = membership_search.organization_id
+          LEFT JOIN team_member_profiles team_profile_search
+            ON team_profile_search.membership_id = membership_search.id
+          WHERE membership_search.user_id = u.id
+            AND (
+              COALESCE(organization_search.name, '') ILIKE $${params.length}
+              OR COALESCE(team_profile_search.display_name, '') ILIKE $${params.length}
+            )
+        )
       )`);
     }
     const whereSql = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
     const total = await deps.db.query<{ count: number | string }>(
       `
-        SELECT COUNT(DISTINCT u.id) AS count
+        SELECT COUNT(*) AS count
         FROM users u
-        LEFT JOIN memberships m ON m.user_id = u.id
-        LEFT JOIN organizations o ON o.id = m.organization_id
-        LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
         ${whereSql}
       `,
       params,
     );
     const result = await deps.db.query<AdminUserRow>(
       `
-        WITH matched_users AS (
-          SELECT DISTINCT u.id, u.created_at
-          FROM users u
-          LEFT JOIN memberships m ON m.user_id = u.id
-          LEFT JOIN organizations o ON o.id = m.organization_id
-          LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-          ${whereSql}
-        ),
-        paged_users AS (
-          SELECT u.*
-          FROM users u
-          JOIN matched_users matched ON matched.id = u.id
-          ORDER BY u.created_at DESC, u.id ASC
-          LIMIT $${params.length + 1}
-          OFFSET $${params.length + 2}
-        )
         SELECT
           u.id AS user_id,
           u.display_name,
           u.phone_e164,
           u.email,
+          u.last_login_at,
           u.status AS user_status,
-          account.organization_id,
-          account.organization_name,
-          account.workspace_id,
-          account.membership_id,
-          account.membership_role,
-          account.team_role,
-          account.team_group_id,
-          account.team_group_name,
-          account.organization_credit_balance,
-          account.organization_reserved_balance,
-          account.organization_frozen_balance,
-          account.member_credit_balance,
-          account.member_credit_used,
-          account.workspace_reserved_credits,
-          account.subaccount_count
-        FROM paged_users u
+          chosen.organization_id,
+          chosen.organization_name,
+          chosen.workspace_id,
+          chosen.membership_id,
+          chosen.membership_role,
+          chosen.team_role,
+          chosen.team_group_id,
+          chosen.team_group_name,
+          chosen.organization_credit_balance,
+          chosen.organization_reserved_balance,
+          chosen.organization_frozen_balance,
+          chosen.member_credit_balance,
+          chosen.member_credit_used,
+          COALESCE((
+            SELECT SUM(r.amount_reserved)
+            FROM credit_reservations r
+            WHERE r.organization_id = chosen.organization_id
+              AND (chosen.workspace_id IS NULL OR r.workspace_id = chosen.workspace_id)
+              AND r.status = 'active'
+          ), 0) AS workspace_reserved_credits,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM team_member_profiles child
+            WHERE child.organization_id = chosen.organization_id
+              AND child.workspace_id = chosen.workspace_id
+              AND child.member_group_id = chosen.team_group_id
+              AND child.membership_id <> chosen.membership_id
+              AND chosen.team_role IN ('admin', 'group_admin')
+          ), 0) AS subaccount_count
+        FROM users u
         LEFT JOIN LATERAL (
           SELECT
-            o.id AS organization_id,
-            o.name AS organization_name,
-            w.id AS workspace_id,
             m.id AS membership_id,
+            m.organization_id,
+            o.name AS organization_name,
+            m.workspace_id,
             m.role AS membership_role,
             tp.business_role AS team_role,
             tg.id AS team_group_id,
@@ -160,43 +222,28 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             o.credit_reserved_cached AS organization_reserved_balance,
             o.credit_frozen_cached AS organization_frozen_balance,
             tp.credit_balance_cached AS member_credit_balance,
-            tp.credit_used_cached AS member_credit_used,
-            COALESCE((
-              SELECT SUM(r.amount_reserved)
-              FROM credit_reservations r
-              WHERE r.organization_id = o.id
-                AND (w.id IS NULL OR r.workspace_id = w.id)
-                AND r.status = 'active'
-            ), 0) AS workspace_reserved_credits,
-            COALESCE((
-              SELECT COUNT(*)
-              FROM team_member_profiles child
-              WHERE child.organization_id = tp.organization_id
-                AND child.workspace_id = tp.workspace_id
-                AND child.member_group_id = tp.member_group_id
-                AND child.membership_id <> tp.membership_id
-                AND tp.business_role IN ('admin', 'group_admin')
-            ), 0) AS subaccount_count
+            tp.credit_used_cached AS member_credit_used
           FROM memberships m
           LEFT JOIN organizations o ON o.id = m.organization_id
-          LEFT JOIN workspaces w ON w.id = m.workspace_id
           LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
           LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
           WHERE m.user_id = u.id
           ORDER BY
-            (m.status = 'active') DESC,
+            CASE WHEN m.status = 'active' THEN 0 ELSE 1 END,
             CASE
-              WHEN m.role = 'owner_admin' AND tp.id IS NULL THEN 0
+              WHEN m.role = 'owner_admin' THEN 0
               WHEN tp.business_role IN ('admin', 'group_admin') THEN 1
-              WHEN m.role = 'owner_admin' THEN 2
-              WHEN m.role = 'sub_account' OR tp.id IS NOT NULL THEN 3
-              ELSE 4
+              WHEN m.role = 'sub_account' THEN 2
+              ELSE 3
             END,
-            m.created_at ASC,
+            m.created_at DESC,
             m.id ASC
           LIMIT 1
-        ) account ON TRUE
+        ) chosen ON TRUE
+        ${whereSql}
         ORDER BY u.created_at DESC, u.id ASC
+        LIMIT $${params.length + 1}
+        OFFSET $${params.length + 2}
       `,
       [...params, pageSize, offset],
     );
@@ -228,6 +275,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           u.display_name,
           u.phone_e164,
           u.email,
+          u.last_login_at,
           u.status AS user_status,
           o.id AS organization_id,
           o.name AS organization_name,
@@ -508,10 +556,11 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const organization = await queryOne<{
       credit_balance_cached: number | string;
       credit_reserved_cached: number | string;
+      credit_frozen_cached: number | string;
     }>(
       deps.db,
       `
-        SELECT credit_balance_cached, credit_reserved_cached
+        SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
         FROM organizations
         WHERE id = $1
       `,
@@ -537,6 +586,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
               0,
           ),
           reservedCredits: Number(organization?.credit_reserved_cached ?? 0),
+          frozenCredits: Number(organization?.credit_frozen_cached ?? 0),
         },
       },
     };
@@ -637,7 +687,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       metadata: {
         actorAdminAccountId: input.actorAdminAccountId,
         maskedContact: {
-          phone: maskPhone(user.phone_e164),
+          phone: user.phone_e164 ? maskCnPhone(user.phone_e164) : null,
           email: maskEmail(user.email),
         },
       },
@@ -649,7 +699,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         data: {
           userId: user.id,
           contact: {
-            phone: user.phone_e164,
+            phone: user.phone_e164 ? normalizeCnPhone(user.phone_e164) : null,
             email: user.email,
           },
         },
@@ -809,9 +859,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       });
     }
 
-    const organization = await queryOne<{ credit_balance_cached: number | string; credit_reserved_cached: number | string }>(
+    const organization = await queryOne<{ credit_balance_cached: number | string; credit_reserved_cached: number | string; credit_frozen_cached: number | string }>(
       deps.db,
-      "SELECT credit_balance_cached, credit_reserved_cached FROM organizations WHERE id = $1",
+      "SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached FROM organizations WHERE id = $1",
       [target.organizationId],
     );
     const memberProfile = target.teamProfileId
@@ -829,6 +879,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           amount,
           availableCredits: Number(memberProfile?.credit_balance_cached ?? organization?.credit_balance_cached ?? 0),
           reservedCredits: Number(organization?.credit_reserved_cached ?? 0),
+          frozenCredits: Number(organization?.credit_frozen_cached ?? 0),
         },
       },
     };
@@ -845,7 +896,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
   }) {
     const reason = input.reason.trim();
     if (!reason) return error(400, "reason_required", "请填写操作原因");
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    const target = await findUserCreditTarget(deps.db, {
+      userId: input.userId,
+    });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
 
@@ -1020,6 +1073,61 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
+  async function listUserModelRequestLogs(input: {
+    userId: string;
+    pageSize?: number;
+  }) {
+    const user = await queryOne<{ id: string }>(
+      deps.db,
+      "SELECT id FROM users WHERE id = $1",
+      [input.userId],
+    );
+    if (!user) return error(404, "admin_user_not_found", "用户不存在");
+
+    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 20)));
+    const result = await deps.db.query<AdminUserModelRequestLogRow>(
+      `
+        SELECT
+          id,
+          provider_request_id,
+          organization_id,
+          workspace_id,
+          provider_name,
+          provider_operation,
+          model_id,
+          provider_model,
+          request_key,
+          request_hash,
+          payload_hash,
+          payload_summary,
+          request_body_json,
+          request_text,
+          response_text,
+          response_usage_json,
+          response_finish_reasons_json,
+          status,
+          failure_code,
+          project_id,
+          started_at,
+          completed_at,
+          created_at
+        FROM user_model_request_logs
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `,
+      [input.userId, pageSize],
+    );
+
+    return {
+      data: result.rows.map(modelRequestLogFromRow),
+      meta: {
+        total: result.rows.length,
+        pageSize,
+      },
+    };
+  }
+
   async function getTeamPlanLimit(input: { organizationId: string }) {
     const summary = await buildTeamPlanLimitSummary(deps.db, input.organizationId);
     if (!summary) {
@@ -1109,6 +1217,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     deductUserCredits,
     restoreFrozenUserCredits,
     listUserCreditLedger,
+    listUserModelRequestLogs,
     getTeamPlanLimit,
     updateTeamPlanLimit,
   };
@@ -1120,7 +1229,6 @@ interface UserCreditTargetRow {
   organization_id: string;
   workspace_id: string | null;
   membership_id: string;
-  membership_role: string;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -1131,7 +1239,6 @@ interface UserCreditTarget {
   organizationId: string;
   workspaceId: string | null;
   membershipId: string;
-  membershipRole: string;
   teamProfileId: string | null;
   createdByUserId: string | null;
 }
@@ -1258,7 +1365,6 @@ async function findUserCreditTarget(
     params.push(input.workspaceId);
     filters.push(`m.workspace_id = $${params.length}`);
   }
-  const preferredWorkspaceId = input.workspaceId?.trim();
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
@@ -1268,7 +1374,6 @@ async function findUserCreditTarget(
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
-        m.role AS membership_role,
         tp.id AS team_profile_id,
         tp.created_by_user_id
       FROM users u
@@ -1276,12 +1381,11 @@ async function findUserCreditTarget(
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE ${filters.join(" AND ")}
       ORDER BY
-        CASE WHEN $${params.length + 1}::uuid IS NOT NULL AND m.workspace_id = $${params.length + 1}::uuid THEN 0 ELSE 1 END,
         CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
-    [...params, preferredWorkspaceId || null],
+    params,
   );
 
   if (!row) {
@@ -1294,7 +1398,6 @@ async function findUserCreditTarget(
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
-    membershipRole: row.membership_role,
     teamProfileId: row.team_profile_id,
     createdByUserId: row.created_by_user_id,
   };
@@ -1329,16 +1432,20 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
         AND ledger_workflow.created_by_user_id = $2::uuid
     )
   )`;
-  if (isMemberWalletTarget(target)) {
+  if (target.teamProfileId) {
     return {
       sql: targetFilter,
       params: [target.userId, target.membershipId],
     };
   }
   return {
-    sql: `(${targetFilter} OR source_type = ANY(ARRAY['payment_order', 'membership_gift']))`,
+    sql: `(${targetFilter} OR source_type = 'payment_order')`,
     params: [target.userId, target.membershipId],
   };
+}
+
+function isMemberWalletTarget(target: UserCreditTarget) {
+  return Boolean(target.teamProfileId);
 }
 
 async function buildUserCreditSummary(
@@ -1366,7 +1473,7 @@ async function buildUserCreditSummary(
     `,
     [target.organizationId],
   );
-  const member = isMemberWalletTarget(target)
+  const member = target.teamProfileId
     ? await queryOne<{
         credit_balance_cached: number | string;
         credit_used_cached: number | string;
@@ -1480,22 +1587,21 @@ async function buildUserCreditSummary(
   };
 }
 
-function isMemberWalletTarget(target: UserCreditTarget) {
-  return Boolean(target.teamProfileId && target.membershipRole !== "owner_admin");
-}
-
 function userFromRow(row: AdminUserRow): AdminUserListItem {
   const accountType = resolveAccountType(row);
   const memberCredits = row.member_credit_balance;
-  const availableCredits = Number(memberCredits ?? row.organization_credit_balance ?? 0);
-  const frozenCredits = accountType === "owner_account"
+  const availableCredits = Number(
+    memberCredits ?? row.organization_credit_balance ?? 0,
+  );
+  const frozenCredits = accountType === "owner_account" || accountType === "user"
     ? Number(row.organization_frozen_balance ?? 0)
     : 0;
   return {
     userId: row.user_id,
     displayName: row.display_name ?? "未命名用户",
-    phone: maskPhone(row.phone_e164),
+    phone: row.phone_e164 ? normalizeCnPhone(row.phone_e164) : null,
     email: maskEmail(row.email),
+    lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
     status: row.user_status,
     organizationId: row.organization_id,
     organizationName: row.organization_name,
@@ -1530,13 +1636,6 @@ function resolveAccountType(row: AdminUserRow): AdminUserListItem["accountType"]
   return "user";
 }
 
-function maskPhone(phone: string | null): string | null {
-  if (!phone) {
-    return null;
-  }
-  return phone.replace(/(\+?\d{2,4})\d{4}(\d{4})$/, "$1****$2");
-}
-
 function maskEmail(email: string | null): string | null {
   if (!email) {
     return null;
@@ -1563,6 +1662,40 @@ function ledgerFromRow(row: LedgerRow) {
     sourceId: row.source_id,
     reason: row.reason,
     metadata: normalizeJson(row.metadata_json),
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function modelRequestLogFromRow(
+  row: AdminUserModelRequestLogRow,
+): AdminUserModelRequestLogItem {
+  return {
+    id: row.id,
+    providerRequestId: row.provider_request_id,
+    organizationId: row.organization_id,
+    workspaceId: row.workspace_id,
+    providerName: row.provider_name,
+    providerOperation: row.provider_operation,
+    modelId: row.model_id,
+    providerModel: row.provider_model,
+    requestKey: row.request_key,
+    requestHash: row.request_hash,
+    payloadHash: row.payload_hash,
+    payloadSummary: row.payload_summary,
+    requestBody: row.request_body_json ?? {},
+    requestText: row.request_text,
+    responseText: row.response_text,
+    responseUsage: row.response_usage_json ?? null,
+    responseFinishReasons: Array.isArray(row.response_finish_reasons_json)
+      ? row.response_finish_reasons_json
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+      : [],
+    status: row.status,
+    failureCode: row.failure_code,
+    projectId: row.project_id,
+    startedAt: new Date(row.started_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
   };
 }

@@ -5,6 +5,18 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 
+export const DEEPSEEK_STORYBOARD_MAX_TOKENS = 384000;
+const LIVE_ECHO_CHUNK_SIZE = 32;
+
+type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
+
+type AiStoryboardPreviewRawMarkdown = {
+  scene?: string;
+  character?: string;
+  prop?: string;
+  shot?: string;
+};
+
 export type AiStoryboardPreviewStreamEvent =
   | { type: "script_prompt"; text: string }
   | { type: "script_start" }
@@ -14,7 +26,7 @@ export type AiStoryboardPreviewStreamEvent =
   | { type: "asset_start"; stage: AssetPromptStage; title: string }
   | { type: "asset_delta"; stage: AssetPromptStage; title: string; text: string }
   | { type: "asset_done"; stage: AssetPromptStage; title: string; text: string }
-  | { type: "complete"; preview: ReturnType<typeof normalizePreview> };
+  | { type: "complete"; preview: ReturnType<typeof normalizePreview> & { rawMarkdown?: AiStoryboardPreviewRawMarkdown } };
 
 type AssetPromptStage = "scene" | "character" | "prop" | "shot";
 
@@ -25,6 +37,8 @@ export interface TextChatGatewayLike {
     projectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<string>;
   streamJson?(input: {
     model: string;
@@ -32,6 +46,8 @@ export interface TextChatGatewayLike {
     projectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+    signal?: AbortSignal;
   }): AsyncIterable<string>;
 }
 
@@ -52,6 +68,7 @@ export interface AiStoryboardPreviewInput {
     propPrompt?: string;
     shotPrompt?: string;
   };
+  signal?: AbortSignal;
 }
 
 export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewayLike }) {
@@ -80,6 +97,8 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
       responseFormat: "text",
+      maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+      signal: input.signal,
     })) {
       scriptRaw += delta;
       yield { type: "script_delta", text: delta };
@@ -95,12 +114,20 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     const propRaw = yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input);
     const shotRaw = yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input), input);
 
-    yield { type: "complete", preview: normalizePreview(scriptText, {
-      scenes: parseArrayOrObject(sceneRaw, "scenes"),
-      characters: parseArrayOrObject(characterRaw, "characters"),
-      props: parseArrayOrObject(propRaw, "props"),
-      ...parseStoryboardPromptResult(shotRaw),
-    }) };
+    yield { type: "complete", preview: {
+      ...normalizePreview(scriptText, {
+        scenes: parseArrayOrObject(sceneRaw, "scenes"),
+        characters: parseArrayOrObject(characterRaw, "characters"),
+        props: parseArrayOrObject(propRaw, "props"),
+        ...parseStoryboardPromptResult(shotRaw),
+      }),
+      rawMarkdown: {
+        scene: sceneRaw,
+        character: characterRaw,
+        prop: propRaw,
+        shot: shotRaw,
+      },
+    } };
   }
 
   async function* runAssetPromptStage(
@@ -118,7 +145,9 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       prompt,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
-      responseFormat: "json_object",
+      responseFormat: "text",
+      maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+      signal: input.signal,
     })) {
       raw += delta;
       yield { type: "asset_delta", stage, title, text: delta };
@@ -141,6 +170,8 @@ export function createTextModelChatGateway(deps: {
     projectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+    signal?: AbortSignal;
   }) {
     const payloadHash = sha256(input.prompt);
     const requestKey = `ai-storyboard:${input.projectId ?? "none"}:${randomUUID()}`;
@@ -148,6 +179,7 @@ export function createTextModelChatGateway(deps: {
       model: input.model,
       stream: true,
       temperature: 0.2,
+      max_tokens: input.maxTokens ?? DEEPSEEK_STORYBOARD_MAX_TOKENS,
       messages: [
         {
           role: "user",
@@ -168,6 +200,7 @@ export function createTextModelChatGateway(deps: {
         payloadHash,
         payloadSummary: "ai storyboard preview text generation",
         providerOperation: textModelGatewayOperationNames.chatCompletions,
+        signal: input.signal,
       },
     );
   }
@@ -203,6 +236,8 @@ async function* streamJsonText(input: {
   projectId?: string | null;
   createdByUserId?: string | null;
   responseFormat?: "json_object" | "text";
+  maxTokens?: number;
+  signal?: AbortSignal;
 }) {
   if (input.gateway.streamJson) {
     for await (const delta of input.gateway.streamJson({
@@ -211,6 +246,8 @@ async function* streamJsonText(input: {
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
       responseFormat: input.responseFormat,
+      maxTokens: input.maxTokens,
+      signal: input.signal,
     })) {
       yield* splitTextForLiveEcho(delta);
     }
@@ -222,103 +259,53 @@ async function* streamJsonText(input: {
     projectId: input.projectId,
     createdByUserId: input.createdByUserId,
     responseFormat: input.responseFormat,
+    maxTokens: input.maxTokens,
+    signal: input.signal,
   }));
 }
 
 function* splitTextForLiveEcho(text: string) {
-  for (const char of text) {
-    yield char;
+  const normalized = String(text ?? "");
+  if (!normalized) {
+    return;
+  }
+  for (let index = 0; index < normalized.length; index += LIVE_ECHO_CHUNK_SIZE) {
+    yield normalized.slice(index, index + LIVE_ECHO_CHUNK_SIZE);
   }
 }
 
 function buildScriptPrompt(input: AiStoryboardPreviewInput) {
   return [
-    "请把小说原文改写为可继续生成分镜的纯文本剧本。",
-    "只输出剧本文字，不要 JSON，不要 Markdown，不要解释。",
-    "剧本要保留完整剧情推进、对白、旁白、动作和情绪变化，方便下一步生成场景、人物、道具和分镜词。",
-    "以下【改写要求】必须作为上方任务说明的一部分执行，再读取【小说原文】进行改写。",
-    "",
-    "[改写要求]",
-    "",
-    "题材看点：",
     input.packages.genrePrompt || "",
-    "",
-    "情绪看点：",
     input.packages.emotionPrompt || "",
-    "",
-    "通用禁忌：",
     input.packages.tabooPrompt || "",
-    "",
-    "[小说原文]",
     input.scriptText,
-  ].join("\n");
+  ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
 function buildScenePrompt(scriptText: string, input: AiStoryboardPreviewInput) {
-  return [
-    "请根据【场景默认提示词】和【剧本】生成场景提示词结果。",
-    "只输出 JSON，不要 Markdown，不要解释。",
-    "",
-    "[场景默认提示词]",
-    renderPromptTemplate(input.templates?.scenePrompt || "", scriptText),
-    "",
-    "【剧本】",
-    scriptText,
-    "",
-    "输出字段：scenes[].sceneId, sceneName, sceneDescription, sceneImagePrompt",
-  ].join("\n");
+  return buildAssetStagePrompt("scene", input.templates?.scenePrompt || "", scriptText);
 }
 
 function buildCharacterPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
-  return [
-    "请根据【角色默认提示词】和【剧本】生成角色提示词结果。",
-    "只输出 JSON，不要 Markdown，不要解释。",
-    "",
-    "[角色默认提示词]",
-    renderPromptTemplate(input.templates?.characterPrompt || "", scriptText),
-    "",
-    "【剧本】",
-    scriptText,
-    "",
-    "输出字段：characters[].characterId, characterName, characterDescription, costume, characterImagePrompt",
-  ].join("\n");
+  return buildAssetStagePrompt("character", input.templates?.characterPrompt || "", scriptText);
 }
 
 function buildPropPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
-  return [
-    "请根据【道具默认提示词】和【剧本】生成道具提示词结果。",
-    "只输出 JSON，不要 Markdown，不要解释。",
-    "",
-    "[道具默认提示词]",
-    renderPromptTemplate(input.templates?.propPrompt || "", scriptText),
-    "",
-    "【剧本】",
-    scriptText,
-    "",
-    "输出字段：props[].propId, propName, propDescription, propImagePrompt, firstAppearance, ownerOrUser",
-  ].join("\n");
+  return buildAssetStagePrompt("prop", input.templates?.propPrompt || "", scriptText);
 }
 
 function buildShotPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
-  return [
-    "请根据【分镜默认提示词】和【剧本】生成分镜提示词结果。",
-    "只输出 JSON，不要 Markdown，不要解释。",
-    "",
-    "[分镜默认提示词]",
-    renderPromptTemplate(input.templates?.shotPrompt || "", scriptText),
-    "",
-    "【剧本】",
-    scriptText,
-    "",
-    "输出字段：script_title, total_segments, segments[].segment_id, segments[].scene_analysis, segments[].segment_transition, segments[].shots[], segments[].asset_table",
-    "segments[].shots[] 字段：shot_id, time_range, transition, shot_type, camera_angle, camera_movement, description, core_action, opponent_design, character_logic, subject_action, dialogue_or_os, sound_effects",
-    "time_range 必须是字符串类型，格式固定为小数点后一位并带“秒”，例如：\"0.0-3.5秒\"，不要输出数字或 \"0-4\" 这种省略格式。",
-    "segments[].asset_table 字段：视频场景对照表, 视频角色对照表, 视频道具对照表",
-  ].join("\n");
+  return buildAssetStagePrompt("shot", input.templates?.shotPrompt || "", scriptText);
+}
+
+function buildAssetStagePrompt(stage: AssetPromptStage, template: string, scriptText: string) {
+  const rendered = renderPromptTemplate(template, scriptText).trim();
+  return rendered || `【剧本】\n${scriptText}`;
 }
 
 function normalizePreview(scriptText: string, promptResult: Record<string, unknown>) {
-  const scenes = arrayOfRecords(promptResult.scenes).map(normalizeSceneRecord);
+  const scenes = resolvePreviewScenes(promptResult).map(normalizeSceneRecord);
   const characters = arrayOfRecords(promptResult.characters).map(normalizeCharacterRecord);
   const props = arrayOfRecords(promptResult.props).map(normalizePropRecord);
   const segmentStoryboards = normalizeSegmentStoryboardRecords(promptResult);
@@ -469,6 +456,35 @@ function normalizePreview(scriptText: string, promptResult: Record<string, unkno
       storyboards,
     },
   };
+}
+
+function resolvePreviewScenes(promptResult: Record<string, unknown>) {
+  const directScenes = arrayOfRecords(promptResult.scenes);
+  if (directScenes.length > 0) {
+    return directScenes;
+  }
+  return inferSceneRecordsFromSegments(promptResult);
+}
+
+function inferSceneRecordsFromSegments(promptResult: Record<string, unknown>) {
+  const rows: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  arrayOfRecords(promptResult.segments).forEach((segment, segmentIndex) => {
+    const sceneName = resolveSegmentSceneName(segment, segmentIndex);
+    const sceneDescription = buildSceneDisplayDescription(objectRecord(segment.scene_analysis));
+    const sceneImagePrompt = buildStoryboardAssetTableSection(objectRecord(segment.asset_table));
+    const normalizedName = text(sceneName).trim();
+    if (!normalizedName || seen.has(normalizedName)) {
+      return;
+    }
+    seen.add(normalizedName);
+    rows.push({
+      sceneName: normalizedName,
+      sceneDescription,
+      sceneImagePrompt: text(sceneImagePrompt).trim() || sceneDescription,
+    });
+  });
+  return rows;
 }
 
 function buildShotDirection(storyboard: Record<string, unknown>) {
@@ -661,17 +677,7 @@ function buildChapterStoryboardRows(promptResult: Record<string, unknown>) {
 }
 
 function buildChapterPlotText(segment: Record<string, unknown>, segmentIndex: number) {
-  const sceneAnalysis = recordLines(segment.scene_analysis, [
-    ["场景", ["scene_name", "sceneName"]],
-    ["承接", ["承接", "continuity", "continuity_from_previous"]],
-    ["过渡", ["过渡", "transition"]],
-    ["情绪意图", ["情绪意图", "emotion_intent", "emotionIntent"]],
-    ["人物表演底层逻辑总纲", ["人物表演底层逻辑总纲", "performance_logic", "performanceLogic"]],
-  ]);
-  return compactLines([
-    `场景分析：${sceneAnalysis || `第${segmentIndex + 1}段`}`,
-    buildTransitionLine(segment.segment_transition),
-  ]).join("\n");
+  return buildChapterSceneAnalysisBlock(segment, segmentIndex);
 }
 
 function buildChapterDialogueText(shots: Record<string, unknown>[]) {
@@ -686,47 +692,96 @@ function buildChapterDialogueText(shots: Record<string, unknown>[]) {
 }
 
 function buildChapterImagePromptText(segment: Record<string, unknown>) {
-  const assetTable = objectRecord(segment.asset_table);
-  return compactLines([
-    `视频场景对照表: ${firstText(assetTable, ["视频场景对照表", "场景", "scene", "scenes"])}`,
-    `视频角色对照表: ${firstText(assetTable, ["视频角色对照表", "角色", "character", "characters"])}`,
-    `视频道具对照表: ${firstText(assetTable, ["视频道具对照表", "道具", "prop", "props"])}`,
-  ]).join("\n");
+  return buildStoryboardAssetTableSection(objectRecord(segment.asset_table));
 }
 
 function buildChapterVideoPromptText(segment: Record<string, unknown>, segmentIndex: number) {
   const shots = arrayOfRecords(segment.shots);
   return compactLines([
-    `场景分析：${recordLines(segment.scene_analysis, [
-      ["场景", ["scene_name", "sceneName"]],
-      ["情绪意图", ["情绪意图", "emotion_intent", "emotionIntent"]],
-      ["人物表演底层逻辑总纲", ["人物表演底层逻辑总纲", "performance_logic", "performanceLogic"]],
-    ]) || `第${segmentIndex + 1}段`}`,
-    `分镜承接：${recordLines(segment.segment_transition, [
-      ["前一分镜末尾画面", ["前一分镜末尾画面", "previous_last_frame", "previousLastFrame"]],
-      ["本分镜开场画面", ["本分镜开场画面", "current_opening_frame", "currentOpeningFrame"]],
-      ["承接逻辑", ["承接逻辑", "continuity_logic", "continuityLogic"]],
-    ])}`,
-    "镜头列表：",
+    buildChapterSceneAnalysisBlock(segment, segmentIndex),
+    "【镜头列表】",
     ...shots.map((shot, index) => buildChapterShotText(shot, index)),
-    "资产对照表:",
-    `  视频场景对照表: ${firstText(objectRecord(segment.asset_table), ["视频场景对照表", "场景", "scene", "scenes"])}`,
-    `  视频角色对照表: ${firstText(objectRecord(segment.asset_table), ["视频角色对照表", "角色", "character", "characters"])}`,
-    `  视频道具对照表: ${firstText(objectRecord(segment.asset_table), ["视频道具对照表", "道具", "prop", "props"])}`,
+    "【资产对照表】",
+    buildStoryboardAssetTableSection(objectRecord(segment.asset_table)),
   ]).join("\n");
 }
 
 function buildChapterShotText(shot: Record<string, unknown>, index: number) {
   const label = resolveShotLabel(shot, index);
   return compactLines([
-    `  【镜头${label}】${formatSegmentTimeRange(firstText(shot, ["time_range", "timeRange", "time"]))} 转场: ${firstText(shot, ["transition"])} 镜头:${buildChapterShotCameraText(shot)}`,
-    `  镜头${label}(分镜剧情)：${firstText(shot, ["description", "plot", "story"])}`,
-    `  核心动作: ${firstText(shot, ["core_action", "coreAction"])}`,
-    `  对手戏设计: ${firstText(shot, ["opponent_design", "opponentDesign", "interactionDesign"])}`,
-    `  人物底层逻辑: ${firstText(shot, ["character_logic", "characterLogic"])}`,
-    `  主体动作: ${firstText(shot, ["subject_action", "subjectAction"]) || firstText(shot, ["dialogue_or_os", "dialogueOrOs", "dialogue"]) || "(无台词，内心OS)"}`,
-    `  音效: ${firstText(shot, ["sound_effects", "soundEffect", "sound_effect"])}`,
+    `【镜头${label}】${formatSegmentTimeRange(firstText(shot, ["time_range", "timeRange", "time"]))} 转场: ${firstText(shot, ["transition"]) || "无"} 镜头类型: ${buildChapterShotCameraText(shot) || "未注明"} 画面描述:`,
+    firstText(shot, ["description", "plot", "story"]) || "无",
+    `核心动作: ${firstText(shot, ["core_action", "coreAction"]) || "无"}`,
+    `对手戏设计: ${firstText(shot, ["opponent_design", "opponentDesign", "interactionDesign"]) || "无"}`,
+    `人物底层逻辑: ${firstText(shot, ["character_logic", "characterLogic"]) || "无"}`,
+    "主体动作与台词:",
+    buildShotActionDialogueText({
+      subjectAction: firstText(shot, ["subject_action", "subjectAction"]),
+      dialogue: firstText(shot, ["dialogue_or_os", "dialogueOrOs", "dialogue", "narration"]),
+    }),
+    `音效: ${buildSoundEffectLine({
+      soundEffect: firstText(shot, ["sound_effects", "soundEffect", "sound_effect"]),
+      bgm: firstText(shot, ["bgm", "music", "backgroundMusic", "background_music"]),
+    })}`,
   ]).join("\n");
+}
+
+function buildChapterSceneAnalysisBlock(segment: Record<string, unknown>, segmentIndex: number) {
+  const sceneAnalysis = objectRecord(segment.scene_analysis);
+  return compactLines([
+    `【分镜${resolveSegmentLabel(segment, segmentIndex)}】`,
+    "【场景分析】",
+    `场景名称：${resolveSegmentSceneName(segment, segmentIndex)}`,
+    `承接：${resolveSegmentContinuityText(segment, segmentIndex)}`,
+    `过渡：${resolveSegmentTransitionType(segment)}`,
+    `情绪意图：${firstText(sceneAnalysis, ["情绪意图", "emotion_intent", "emotionIntent"]) || "无"}`,
+    `人物表演底层逻辑总纲：${firstText(sceneAnalysis, ["人物表演底层逻辑总纲", "performance_logic", "performanceLogic"]) || "无"}`,
+  ]).join("\n");
+}
+
+function resolveSegmentLabel(segment: Record<string, unknown>, segmentIndex: number) {
+  return text(segment.segment_id ?? segment.segmentId ?? segmentIndex + 1).trim() || `${segmentIndex + 1}`;
+}
+
+function resolveSegmentSceneName(segment: Record<string, unknown>, segmentIndex: number) {
+  return firstText(objectRecord(segment.scene_analysis), ["scene_name", "sceneName", "场景名称"])
+    || `第${segmentIndex + 1}分镜`;
+}
+
+function resolveSegmentContinuityText(segment: Record<string, unknown>, segmentIndex: number) {
+  const sceneAnalysis = objectRecord(segment.scene_analysis);
+  const direct = firstText(sceneAnalysis, ["承接", "continuity", "continuity_from_previous"]);
+  if (direct) {
+    return direct;
+  }
+  const transition = objectRecord(segment.segment_transition);
+  const transitionLines = compactLines([
+    firstText(transition, ["承接", "continuity", "continuity_from_previous"]),
+    firstText(transition, ["承接逻辑", "continuity_logic", "continuityLogic"]),
+    buildPreviousCurrentFrameText(transition),
+  ]);
+  if (transitionLines.length) {
+    return transitionLines.join("；");
+  }
+  return segmentIndex === 0 ? "无" : "延续上一分镜动作与情绪";
+}
+
+function buildPreviousCurrentFrameText(transition: Record<string, unknown>) {
+  const previous = firstText(transition, ["前一分镜末尾画面", "previous_last_frame", "previousLastFrame"]);
+  const current = firstText(transition, ["本分镜开场画面", "current_opening_frame", "currentOpeningFrame"]);
+  if (!previous && !current) {
+    return "";
+  }
+  if (previous && current) {
+    return `由“${previous}”过渡到“${current}”`;
+  }
+  return previous ? `承接上一分镜画面：${previous}` : `本分镜开场画面：${current}`;
+}
+
+function resolveSegmentTransitionType(segment: Record<string, unknown>) {
+  return firstText(objectRecord(segment.scene_analysis), ["过渡", "transition"])
+    || firstText(objectRecord(segment.segment_transition), ["过渡", "transition", "transition_type", "transitionType"])
+    || "硬切";
 }
 
 function formatSegmentTimeRange(value: string) {
@@ -807,12 +862,15 @@ function normalizeStoryboardRecord(storyboard: Record<string, unknown>) {
   const durationSec = readDurationSec(storyboard.durationSec ?? storyboard.duration_sec ?? storyboard.duration, timeRange);
   const perShotTimeRange = normalizePerShotTimeRange(timeRange, durationSec);
   const videoPrompt = buildVideoPromptFromStoryboard({
+    shotNo: text(storyboard.shotNo ?? storyboard.shot_no ?? storyboard.index ?? storyboard.no ?? storyboard["\u955c\u53f7"]).trim() || "1",
+    shotLabel: text(storyboard.shotNo ?? storyboard.shot_no ?? storyboard.index ?? storyboard.no ?? storyboard["\u955c\u53f7"]).trim() || "1",
     baseVideoPrompt: sanitizePerShotVideoPrompt(baseVideoPrompt),
     timeRange: perShotTimeRange,
     transition,
     shotSize,
     cameraMovement,
     scene: firstText(storyboard, ["scene", "sceneName", "scene_name"]),
+    continuity: firstText(storyboard, ["continuity", "continuity_from_previous", "承接"]),
     action: firstText(storyboard, ["action"]),
     emotion: firstText(storyboard, ["emotion"]),
     visualFocus: firstText(storyboard, ["visual_focus", "visualFocus"]),
@@ -823,6 +881,7 @@ function normalizeStoryboardRecord(storyboard: Record<string, unknown>) {
     interactionDesign,
     characterLogic,
     subjectAction,
+    dialogue,
     soundEffect,
     bgm,
   });
@@ -875,22 +934,27 @@ function buildAssetDisplayDescription(record: Record<string, unknown>, keys: str
 }
 
 function buildVideoPromptFromStoryboard(parts: Record<string, string>) {
-  const labeledParts = [
-    ["时间", parts.timeRange],
-    ["转场", parts.transition],
-    ["镜头", [parts.shotSize, parts.cameraMovement].filter(Boolean).join("/")],
-    ["场景", parts.scene],
-    ["画面描述", parts.visualDescription || parts.description || parts.visualFocus || parts.prompt],
-    ["核心动作", parts.coreAction || parts.action],
-    ["对手戏设计", parts.interactionDesign],
-    ["人物底层逻辑", parts.characterLogic || parts.emotion],
-    ["主体动作", parts.subjectAction],
-    ["音效", parts.soundEffect],
-    ["配乐", parts.bgm],
-  ]
-    .filter(([, value]) => value)
-    .map(([label, value]) => `${label}: ${value}`);
-  return [parts.baseVideoPrompt, ...labeledParts].filter(Boolean).join("；");
+  return compactLines([
+    `【分镜${parts.shotNo || "1"}】`,
+    "【场景分析】",
+    `场景名称：${parts.scene || "未注明"}`,
+    `承接：${parts.continuity || "无"}`,
+    `过渡：${parts.transition || "无"}`,
+    `情绪意图：${parts.emotion || "无"}`,
+    `人物表演底层逻辑总纲：${parts.characterLogic || parts.emotion || "无"}`,
+    "【镜头列表】",
+    `【镜头${parts.shotLabel || parts.shotNo || "1"}】${parts.timeRange || ""} 转场: ${parts.transition || "无"} 镜头类型: ${[parts.shotSize, parts.cameraMovement].filter(Boolean).join("/") || "未注明"} 画面描述:`,
+    parts.visualDescription || parts.description || parts.visualFocus || parts.prompt || parts.baseVideoPrompt || "无",
+    `核心动作: ${parts.coreAction || parts.action || "无"}`,
+    `对手戏设计: ${parts.interactionDesign || "无"}`,
+    `人物底层逻辑: ${parts.characterLogic || parts.emotion || "无"}`,
+    "主体动作与台词:",
+    buildShotActionDialogueText({
+      subjectAction: parts.subjectAction,
+      dialogue: parts.dialogue,
+    }),
+    `音效: ${buildSoundEffectLine({ soundEffect: parts.soundEffect, bgm: parts.bgm })}`,
+  ]).join("\n");
 }
 
 function sanitizePerShotVideoPrompt(prompt: string) {
@@ -1013,17 +1077,17 @@ function buildStoryboardAssetReferenceText(
   ]);
 
   const lines = [
-    formatAssetReferenceLine("场景对照表", sceneRecords, {
+    formatAssetReferenceLine("视频场景对照表", sceneRecords, {
       nameKeys: ["sceneName", "name"],
       descriptionKeys: ["rawSceneDescription", "description", "sceneDescription"],
       styleKeys: ["sceneImagePrompt", "imagePrompt", "style", "prompt"],
     }),
-    formatAssetReferenceLine("角色对照表", characterRecords, {
+    formatAssetReferenceLine("视频角色对照表", characterRecords, {
       nameKeys: ["characterName", "name"],
       descriptionKeys: ["rawCharacterDescription", "description", "characterDescription"],
       styleKeys: ["costume", "characterImagePrompt", "imagePrompt", "style"],
     }),
-    formatAssetReferenceLine("道具对照表", propRecords, {
+    formatAssetReferenceLine("视频道具对照表", propRecords, {
       nameKeys: ["propName", "name"],
       descriptionKeys: ["rawPropDescription", "description", "propDescription"],
       styleKeys: ["propStyle", "style", "propImagePrompt", "imagePrompt"],
@@ -1031,7 +1095,7 @@ function buildStoryboardAssetReferenceText(
   ].filter(Boolean);
 
   return lines.length
-    ? ["资产对照表（视频中涉及的角色、场景与物品如下（保持一致性））：", ...lines].join("\n")
+    ? ["【资产对照表】", ...lines].join("\n")
     : "";
 }
 
@@ -1039,7 +1103,7 @@ function appendAssetReferenceText(prompt: string, assetReferenceText: string) {
   if (!prompt.trim()) {
     return assetReferenceText;
   }
-  if (prompt.includes("资产对照表（视频中涉及的角色、场景与物品如下（保持一致性））：")) {
+  if (prompt.includes("【资产对照表】")) {
     return prompt;
   }
   return `${prompt.trim()}\n\n${assetReferenceText}`;
@@ -1058,12 +1122,95 @@ function formatAssetReferenceLine(
     .map((record) => {
       const name = firstText(record, keys.nameKeys);
       if (!name) return "";
-      const description = firstText(record, keys.descriptionKeys) || name;
-      const style = firstText(record, keys.styleKeys) || description;
-      return `${name}=（${description}）【@${name}/${style}】`;
+      return `${name}=【@${name}】`;
     })
     .filter(Boolean);
   return entries.length ? `${label}: ${entries.join("；")}` : "";
+}
+
+function buildStoryboardAssetTableSection(assetTable: Record<string, unknown>) {
+  return compactLines([
+    buildStoryboardAssetTableLine("视频场景对照表", assetTable["视频场景对照表"] ?? assetTable["场景"] ?? assetTable.scene ?? assetTable.scenes),
+    buildStoryboardAssetTableLine("视频角色对照表", assetTable["视频角色对照表"] ?? assetTable["角色"] ?? assetTable.character ?? assetTable.characters),
+    buildStoryboardAssetTableLine("视频道具对照表", assetTable["视频道具对照表"] ?? assetTable["道具"] ?? assetTable.prop ?? assetTable.props),
+  ]).join("\n");
+}
+
+function buildStoryboardAssetTableLine(label: string, value: unknown) {
+  const names = extractAssetReferenceNames(value);
+  return names.length ? `${label}: ${names.map((name) => `${name}=【@${name}】`).join("；")}` : "";
+}
+
+function extractAssetReferenceNames(value: unknown): string[] {
+  const names: string[] = [];
+  const visit = (candidate: unknown) => {
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) {
+        visit(item);
+      }
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      const record = candidate as Record<string, unknown>;
+      const directName = firstText(record, ["sceneName", "characterName", "propName", "name", "label", "title"]);
+      if (directName) {
+        names.push(directName);
+        return;
+      }
+      for (const nested of Object.values(record)) {
+        visit(nested);
+      }
+      return;
+    }
+    const raw = text(candidate).trim();
+    if (!raw) {
+      return;
+    }
+    for (const part of raw.split(/[；;\r\n]+/).map((item) => item.trim()).filter(Boolean)) {
+      const left = part.includes("=") ? part.split("=")[0] : part;
+      const normalized = left
+        .replace(/^视频(?:场景|角色|道具)对照表[:：]\s*/u, "")
+        .replace(/【@[^】]+】/g, "")
+        .replace(/（[^）]*）/g, "")
+        .replace(/^@/, "")
+        .trim();
+      if (normalized) {
+        names.push(normalized);
+      }
+    }
+  };
+  visit(value);
+  return uniqueText(names);
+}
+
+function buildShotActionDialogueText(parts: { subjectAction: string; dialogue: string }) {
+  const lines = compactLines([
+    parts.subjectAction,
+    parts.dialogue || "",
+    parts.dialogue ? "" : "无台词，仅动作",
+  ]);
+  return lines.length ? lines.join("\n") : "无台词，仅动作";
+}
+
+function buildSoundEffectLine(parts: { soundEffect: string; bgm: string }) {
+  const sound = compactLines([
+    parts.soundEffect,
+    parts.bgm ? `配乐: ${parts.bgm}` : "",
+  ]).join("；");
+  return sound || "无";
+}
+
+function uniqueText(values: string[]) {
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const value of values.map((item) => text(item).trim()).filter(Boolean)) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    items.push(value);
+  }
+  return items;
 }
 
 function resolveAssetsByRefs(values: unknown[], index: Map<string, Record<string, unknown>>) {
@@ -1137,46 +1284,95 @@ function normalizeAssetKey(value: unknown) {
 
 function parseJsonObject(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  const jsonText = fenced?.[1] ?? trimmed;
-  const parsed = JSON.parse(jsonText);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("ai_storyboard_invalid_json_object");
+  const fenced = extractMarkdownCodeBlock(trimmed, ["json"]) ?? extractMarkdownCodeBlock(trimmed);
+  const jsonText = fenced?.[1] ?? extractFirstJsonObject(trimmed) ?? trimmed;
+  const candidates = [jsonText, repairJsonLikeText(jsonText)].filter((value, index, values) => value && values.indexOf(value) === index);
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("ai_storyboard_invalid_json_object");
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      lastError = error;
+    }
   }
-  return parsed as Record<string, unknown>;
+  throw lastError instanceof Error ? lastError : new Error("ai_storyboard_invalid_json_object");
 }
 
 function parseArrayOrObject(raw: string, key: string, aliases: string[] = []): Record<string, unknown>[] {
-  const parsed = parseJsonObject(raw);
-  const keyed = [key, ...aliases].map((candidate) => parsed[candidate]).find(Array.isArray);
-  if (Array.isArray(keyed)) {
-    return arrayOfRecords(keyed);
+  const markdownResult = parseMarkdownPromptResult(raw);
+  const markdownRows = [key, ...aliases]
+    .map((candidate) => markdownResult?.[candidate])
+    .find(Array.isArray);
+  if (Array.isArray(markdownRows) && markdownRows.length) {
+    return arrayOfRecords(markdownRows);
   }
-  if (Array.isArray(parsed.data)) {
-    return arrayOfRecords(parsed.data);
+  try {
+    const parsed = parseJsonObject(raw);
+    const keyed = [key, ...aliases].map((candidate) => parsed[candidate]).find(Array.isArray);
+    if (Array.isArray(keyed)) {
+      return arrayOfRecords(keyed);
+    }
+    if (Array.isArray(parsed.data)) {
+      return arrayOfRecords(parsed.data);
+    }
+    return arrayOfRecords([parsed]);
+  } catch {
+    const recovered = recoverAssetRecordsFromTruncatedJson(raw, key, aliases);
+    if (recovered.length) {
+      return recovered;
+    }
+    return [];
   }
-  return arrayOfRecords([parsed]);
 }
 
 function parseStoryboardPromptResult(raw: string): Record<string, unknown> {
-  const parsed = parseJsonObject(raw);
-  if (Array.isArray(parsed.segments)) {
-    return parsed;
+  const markdownResult = parseMarkdownPromptResult(raw);
+  if (markdownResult) {
+    return markdownResult;
   }
-  const keyed = [parsed.storyboards, parsed.shots].find(Array.isArray);
-  if (Array.isArray(keyed)) {
-    return { storyboards: arrayOfRecords(keyed) };
+  try {
+    const parsed = parseJsonObject(raw);
+    if (Array.isArray(parsed.segments)) {
+      return parsed;
+    }
+    const keyed = [parsed.storyboards, parsed.shots].find(Array.isArray);
+    if (Array.isArray(keyed)) {
+      return { storyboards: arrayOfRecords(keyed) };
+    }
+    if (Array.isArray(parsed.data)) {
+      return { storyboards: arrayOfRecords(parsed.data) };
+    }
+    return { storyboards: arrayOfRecords([parsed]) };
+  } catch {
+    const recoveredSegmentRows = recoverStoryboardRowsFromTruncatedSegments(raw);
+    if (recoveredSegmentRows.length) {
+      return { storyboards: recoveredSegmentRows };
+    }
+    const recoveredStoryboards = recoverStoryboardsFromTruncatedJson(raw);
+    if (recoveredStoryboards.length) {
+      return { storyboards: recoveredStoryboards };
+    }
+    const readableText = extractReadablePromptText(raw).trim();
+    return {
+      storyboards: readableText
+        ? [{ plot: readableText, videoPrompt: readableText }]
+        : [],
+    };
   }
-  if (Array.isArray(parsed.data)) {
-    return { storyboards: arrayOfRecords(parsed.data) };
-  }
-  return { storyboards: arrayOfRecords([parsed]) };
 }
 
 function resolveGeneratedScriptText(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";
+  }
+  const markdownBlock = extractMarkdownCodeBlock(trimmed, ["markdown", "md", "text"]);
+  if (markdownBlock?.[1]?.trim()) {
+    return markdownBlock[1].trim();
   }
   try {
     const parsed = parseJsonObject(trimmed);
@@ -1204,6 +1400,398 @@ function resolveGeneratedScriptText(raw: string) {
   return trimmed;
 }
 
+function parseMarkdownPromptResult(raw: string): Record<string, unknown> | null {
+  const sections = parseMarkdownTableSections(raw);
+  if (sections) {
+    const result: Record<string, unknown> = {};
+    const scenes = parseMarkdownSectionRecords(sections.scenes, "scenes");
+    const characters = parseMarkdownSectionRecords(sections.characters, "characters");
+    const props = parseMarkdownSectionRecords(sections.props, "props");
+    const storyboards = parseMarkdownSectionRecords(sections.storyboards, "storyboards");
+    if (scenes.length) {
+      result.scenes = scenes;
+    }
+    if (characters.length) {
+      result.characters = characters;
+    }
+    if (props.length) {
+      result.props = props;
+    }
+    if (storyboards.length) {
+      result.storyboards = storyboards;
+    }
+    if (Object.keys(result).length) {
+      return result;
+    }
+  }
+  const storyboardRows = parseStoryboardMarkdownRecords(raw);
+  return storyboardRows.length ? { storyboards: storyboardRows } : null;
+}
+
+function parseMarkdownTableSections(raw: string) {
+  const markdownBody = extractMarkdownBody(raw);
+  if (!markdownBody || !/[\[【](?:剧本)?(?:角色|场景|道具|分镜)列表[\]】]/.test(markdownBody)) {
+    return null;
+  }
+  const sectionKeyByLabel: Record<string, MarkdownTableKey> = {
+    "角色": "characters",
+    "场景": "scenes",
+    "道具": "props",
+    "分镜": "storyboards",
+  };
+  const sections: Partial<Record<MarkdownTableKey, string>> = {};
+  let currentKey: MarkdownTableKey | "" = "";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    if (!currentKey) {
+      buffer = [];
+      return;
+    }
+    const content = buffer.join("\n").trim();
+    if (content) {
+      sections[currentKey] = content;
+    }
+    buffer = [];
+  };
+
+  for (const rawLine of markdownBody.split("\n")) {
+    const line = String(rawLine ?? "").trim();
+    const heading = line
+      .replace(/^\*+/, "")
+      .replace(/\*+$/, "")
+      .trim()
+      .match(/^[\[【](?:剧本)?(角色|场景|道具|分镜)列表[\]】]$/);
+    if (heading) {
+      flush();
+      currentKey = sectionKeyByLabel[heading[1]] ?? "";
+      continue;
+    }
+    if (!currentKey) {
+      continue;
+    }
+    buffer.push(rawLine);
+  }
+  flush();
+
+  return Object.keys(sections).length ? sections : null;
+}
+
+function parseMarkdownSectionRecords(section: string | undefined, tableKey: MarkdownTableKey) {
+  if (!section) {
+    return [];
+  }
+  const table = parseMarkdownTable(section);
+  if (!table || !Array.isArray(table.rows) || table.rows.length === 0) {
+    return [];
+  }
+  if (tableKey === "characters") {
+    return table.rows
+      .map((cells) => ({
+        characterName: text(cells[0]).trim(),
+        characterDescription: text(cells[1]).trim(),
+        characterImagePrompt: text(cells[2]).trim(),
+      }))
+      .filter((row) => row.characterName || row.characterDescription || row.characterImagePrompt);
+  }
+  if (tableKey === "scenes") {
+    return table.rows
+      .map((cells) => ({
+        sceneName: text(cells[0]).trim(),
+        sceneDescription: text(cells[1]).trim(),
+        sceneImagePrompt: text(cells[2]).trim(),
+      }))
+      .filter((row) => row.sceneName || row.sceneDescription || row.sceneImagePrompt);
+  }
+  if (tableKey === "props") {
+    return table.rows
+      .map((cells) => ({
+        propName: text(cells[0]).trim(),
+        propDescription: text(cells[1]).trim(),
+        propImagePrompt: text(cells[2]).trim(),
+      }))
+      .filter((row) => row.propName || row.propDescription || row.propImagePrompt);
+  }
+  return table.rows
+    .map((cells, index) => {
+      const shotCells = cells.length >= 5 ? cells.slice(1) : cells;
+      return {
+        shotNo: text(cells.length >= 5 ? cells[0] : index + 1).trim(),
+        plot: text(shotCells[0]).trim(),
+        dialogue: text(shotCells[1]).trim(),
+        imagePrompt: text(shotCells[2]).trim(),
+        videoPrompt: text(shotCells[3]).trim(),
+      };
+    })
+    .filter((row) => row.plot || row.dialogue || row.imagePrompt || row.videoPrompt);
+}
+
+function parseMarkdownTable(raw: string) {
+  const lines = String(raw ?? "")
+    .split("\n")
+    .map((line) => String(line ?? "").trim())
+    .filter((line) => line.includes("|"));
+  if (lines.length < 2) {
+    return null;
+  }
+  let header: string[] | null = null;
+  const rows: string[][] = [];
+  for (const line of lines) {
+    const cells = line
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+    if (cells.length < 2) {
+      continue;
+    }
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell) || !cell)) {
+      continue;
+    }
+    if (!header) {
+      header = cells;
+      continue;
+    }
+    rows.push(cells);
+  }
+  return header && rows.length ? { header, rows } : null;
+}
+
+function parseStoryboardMarkdownRecords(raw: string) {
+  const markdownBody = extractMarkdownBody(raw);
+  if (!markdownBody || !/\*\*(动作|对白|画面)\*\*/.test(markdownBody)) {
+    return [];
+  }
+  const rows: Array<{ plot: string; dialogue: string; visual: string; transition: string }> = [];
+  let current = createStoryboardMarkdownDraft();
+  let activeSection = "";
+  let buffer: string[] = [];
+
+  const flushBuffer = () => {
+    const content = compactMarkdownSection(buffer);
+    buffer = [];
+    if (!content || !activeSection) {
+      return;
+    }
+    current[activeSection] = current[activeSection]
+      ? `${current[activeSection]}\n${content}`
+      : content;
+  };
+
+  for (const line of markdownBody.split("\n")) {
+    const header = parseStoryboardMarkdownHeader(line);
+    if (header) {
+      flushBuffer();
+      if (header.section === "plot" && hasStoryboardMarkdownContent(current)) {
+        rows.push(current);
+        current = createStoryboardMarkdownDraft();
+      }
+      activeSection = header.section;
+      if (header.transition && !current.transition) {
+        current.transition = header.transition;
+      }
+      if (header.inlineText) {
+        buffer.push(header.inlineText);
+      }
+      continue;
+    }
+    if (!activeSection) {
+      continue;
+    }
+    buffer.push(line);
+  }
+  flushBuffer();
+
+  if (hasStoryboardMarkdownContent(current)) {
+    rows.push(current);
+  }
+
+  return rows
+    .filter(hasStoryboardMarkdownContent)
+    .map((row, index) => ({
+      shotNo: index + 1,
+      plot: row.plot,
+      dialogue: row.dialogue,
+      imagePrompt: row.visual || row.plot,
+      visualDescription: row.visual,
+      subjectAction: row.plot,
+      coreAction: firstMarkdownLine(row.plot),
+      transition: row.transition,
+    }));
+}
+
+function extractMarkdownBody(raw: string) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const markdownBlock = extractMarkdownCodeBlock(trimmed, ["markdown", "md", "text"]);
+  if (markdownBlock?.[1]?.trim()) {
+    return markdownBlock[1].replace(/\r\n?/g, "\n").trim();
+  }
+  return trimmed.replace(/\r\n?/g, "\n").trim();
+}
+
+function createStoryboardMarkdownDraft() {
+  return {
+    plot: "",
+    dialogue: "",
+    visual: "",
+    transition: "",
+  };
+}
+
+function parseStoryboardMarkdownHeader(line: string) {
+  const match = String(line ?? "").match(/^\s*\*\*(动作|对白|画面)\*\*(?:\s*[（(]([^）)]*)[）)])?\s*[:：]?\s*(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const label = match[1];
+  const modifier = String(match[2] ?? "").trim();
+  const inlineText = String(match[3] ?? "").trim();
+  return {
+    section: label === "动作" ? "plot" : label === "对白" ? "dialogue" : "visual",
+    transition: /转/.test(modifier) ? modifier : "",
+    inlineText,
+  };
+}
+
+function hasStoryboardMarkdownContent(row: { plot: string; dialogue: string; visual: string; transition: string }) {
+  return Boolean(row.plot || row.dialogue || row.visual);
+}
+
+function compactMarkdownSection(lines: string[]) {
+  return lines
+    .map((line) => String(line ?? "").trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[*-]\s*/, "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function firstMarkdownLine(value: string) {
+  return String(value ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean) ?? "";
+}
+
+function extractMarkdownCodeBlock(raw: string, languages: string[] = []) {
+  const pattern = /```([a-zA-Z0-9_-]+)?\s*([\s\S]*?)```/g;
+  const normalizedLanguages = languages.map((item) => item.toLowerCase());
+  let match: RegExpExecArray | null;
+  let fallback: readonly [string, string] | null = null;
+  while ((match = pattern.exec(raw))) {
+    const language = String(match[1] ?? "").trim().toLowerCase();
+    const body = String(match[2] ?? "");
+    if (!fallback) {
+      fallback = [language, body] as const;
+    }
+    if (!normalizedLanguages.length || normalizedLanguages.includes(language)) {
+      return [language, body] as const;
+    }
+  }
+  return fallback;
+}
+
+function extractFirstJsonObject(raw: string) {
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    return null;
+  }
+  return raw.slice(firstBrace, lastBrace + 1);
+}
+
+function repairJsonLikeText(raw: string) {
+  return raw
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/([{,]\s*)([A-Za-z_$\u00C0-\uFFFF][A-Za-z0-9_$\-\u00C0-\uFFFF]*)(\s*:)/gu, '$1"$2"$3');
+}
+
+function recoverAssetRecordsFromTruncatedJson(raw: string, key: string, aliases: string[] = []) {
+  const repaired = repairJsonLikeText(raw);
+  const candidateKeys = [key, ...aliases].filter(Boolean);
+  const hasTargetArray = candidateKeys.some((candidate) => new RegExp(`"${candidate}"\\s*:\\s*\\[`, "i").test(repaired));
+  if (!hasTargetArray) {
+    return [];
+  }
+  const fieldsByKey: Record<string, string[]> = {
+    scenes: ["sceneId", "sceneName", "sceneDescription", "sceneImagePrompt"],
+    characters: ["characterId", "characterName", "characterDescription", "costume", "characterImagePrompt"],
+    props: ["propId", "propName", "propDescription", "propImagePrompt", "firstAppearance", "ownerOrUser"],
+  };
+  const fields = fieldsByKey[key];
+  if (!fields?.length) {
+    return [];
+  }
+  const record = Object.fromEntries(
+    fields
+      .map((field) => [field, extractLooseJsonStringField(repaired, field)] as const)
+      .filter(([, value]) => value.trim()),
+  );
+  return Object.keys(record).length ? [record] : [];
+}
+
+function recoverStoryboardRowsFromTruncatedSegments(raw: string): Record<string, unknown>[] {
+  const recoveredSegments = recoverSegmentsFromTruncatedJson(raw);
+  return recoveredSegments.map((segment, index) => ({
+    plot: buildChapterPlotText(segment, index),
+    dialogue: buildChapterDialogueText(arrayOfRecords(segment.shots)),
+    imagePrompt: buildChapterImagePromptText(segment),
+    videoPrompt: buildChapterVideoPromptText(segment, index),
+  }));
+}
+
+function recoverSegmentsFromTruncatedJson(raw: string): Record<string, unknown>[] {
+  const segmentId = text(raw.match(/"segment_id"\s*:\s*(\d+)/)?.[1]).trim();
+  const sceneName = decodeJsonStringFragment(text(raw.match(/"scene_name"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1]));
+  const shotPattern = /\{"shot_id":"((?:\\.|[^"\\])*)","time_range":"((?:\\.|[^"\\])*)","transition":"((?:\\.|[^"\\])*)","shot_type":"((?:\\.|[^"\\])*)"(?:,"camera_angle":"((?:\\.|[^"\\])*)")?(?:,"camera_movement":"((?:\\.|[^"\\])*)")?(?:,"description":"((?:\\.|[^"\\])*)")?(?:,"core_action":"((?:\\.|[^"\\])*)")?(?:,"dialogue_or_os":"((?:\\.|[^"\\])*)")?(?:,"sound_effects":"((?:\\.|[^"\\])*)")?/g;
+  const shots: Record<string, unknown>[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = shotPattern.exec(raw))) {
+    shots.push({
+      shot_id: decodeJsonStringFragment(match[1] ?? ""),
+      time_range: decodeJsonStringFragment(match[2] ?? ""),
+      transition: decodeJsonStringFragment(match[3] ?? ""),
+      shot_type: decodeJsonStringFragment(match[4] ?? ""),
+      camera_angle: decodeJsonStringFragment(match[5] ?? ""),
+      camera_movement: decodeJsonStringFragment(match[6] ?? ""),
+      description: decodeJsonStringFragment(match[7] ?? ""),
+      core_action: decodeJsonStringFragment(match[8] ?? ""),
+      dialogue_or_os: decodeJsonStringFragment(match[9] ?? ""),
+      sound_effects: decodeJsonStringFragment(match[10] ?? ""),
+    });
+  }
+  if (!shots.length) {
+    return [];
+  }
+  return [{
+    segment_id: Number(segmentId || 1),
+    scene_analysis: sceneName ? { scene_name: sceneName } : {},
+    shots,
+  }];
+}
+
+function recoverStoryboardsFromTruncatedJson(raw: string): Record<string, unknown>[] {
+  if (!/"storyboards"\s*:\s*\[/.test(raw)) {
+    return [];
+  }
+  const plot = extractLooseJsonStringField(raw, "plot");
+  const dialogue = extractLooseJsonStringField(raw, "dialogue");
+  const imagePrompt = extractLooseJsonStringField(raw, "imagePrompt");
+  const videoPrompt = extractLooseJsonStringField(raw, "videoPrompt");
+  if (![plot, dialogue, imagePrompt, videoPrompt].some(Boolean)) {
+    return [];
+  }
+  return [{
+    plot,
+    dialogue,
+    imagePrompt,
+    videoPrompt: videoPrompt || [plot, dialogue, imagePrompt].filter(Boolean).join("\n"),
+  }];
+}
+
 function renderPromptTemplate(template: string, scriptText: string) {
   const variables: Record<string, string> = {
     novel_chunk: scriptText,
@@ -1215,7 +1803,9 @@ function renderPromptTemplate(template: string, scriptText: string) {
     screenplay: scriptText,
   };
   const replacedVariables = template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key: string) => variables[key] ?? match);
-  return replacedVariables.replace(/【剧本】/g, `【剧本】\n${scriptText}`);
+  return replacedVariables
+    .replace(/【剧本】/g, `【剧本】\n${scriptText}`)
+    .replace(/\[剧本\]/g, `[剧本]\n${scriptText}`);
 }
 
 function extractReadablePromptText(rawJson: string) {
@@ -1235,8 +1825,18 @@ function decodeJsonStringFragment(value: string) {
   try {
     return JSON.parse(`"${value}"`);
   } catch {
-    return value.replace(/\\"/g, "\"").replace(/\\n/g, "\n");
+    return value
+      .replace(/\\"/g, "\"")
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\\\/g, "\\");
   }
+}
+
+function extractLooseJsonStringField(raw: string, key: string) {
+  const match = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "i"));
+  return decodeJsonStringFragment(match?.[1] ?? "");
 }
 
 function arrayOfRecords(value: unknown): Record<string, unknown>[] {

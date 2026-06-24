@@ -18,7 +18,7 @@ describe("SMS providers", () => {
     assert.ok(provider instanceof DevSmsProvider);
     assert.deepEqual(
       await provider.sendVerificationCode({
-        phoneE164: "+8613800138000",
+        phoneE164: "13800138000",
         code: "123456",
         expiresInMinutes: 5,
       }),
@@ -45,7 +45,7 @@ describe("SMS providers", () => {
     });
 
     const result = await provider.sendVerificationCode({
-      phoneE164: "+8613800138000",
+      phoneE164: "13800138000",
       code: "654321",
       expiresInMinutes: 5,
     });
@@ -83,7 +83,7 @@ describe("SMS providers", () => {
 
     assert.deepEqual(
       await provider.sendVerificationCode({
-        phoneE164: "+8613800138000",
+        phoneE164: "13800138000",
         code: "654321",
         expiresInMinutes: 5,
       }),

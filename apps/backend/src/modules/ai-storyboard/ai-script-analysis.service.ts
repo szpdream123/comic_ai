@@ -1,4 +1,7 @@
-import type { TextChatGatewayLike } from "./ai-storyboard-preview.service.ts";
+import {
+  DEEPSEEK_STORYBOARD_MAX_TOKENS,
+  type TextChatGatewayLike,
+} from "./ai-storyboard-preview.service.ts";
 
 export type AiScriptAnalysisStreamEvent =
   | { type: "script_prompt"; text: string }
@@ -16,6 +19,7 @@ export interface AiScriptAnalysisInput {
     emotionPrompt?: string;
     tabooPrompt?: string;
   };
+  signal?: AbortSignal;
 }
 
 export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLike }) {
@@ -32,6 +36,8 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
           responseFormat: "text",
+          maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+          signal: input.signal,
         })
       : completeAsStream(deps.gateway, {
           model: "deepseek-chat",
@@ -39,6 +45,8 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
           responseFormat: "text",
+          maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+          signal: input.signal,
         });
 
     for await (const chunk of stream) {
@@ -48,7 +56,7 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
       }
     }
 
-    const scriptText = rawText.trim();
+    const scriptText = resolveScriptText(rawText);
     if (!scriptText) {
       throw new Error("ai_script_analysis_empty");
     }
@@ -68,20 +76,53 @@ async function* completeAsStream(
 
 function buildScriptAnalysisPrompt(input: AiScriptAnalysisInput) {
   return [
-    "请把用户提供的文本改写为可直接保存的剧本文字。",
-    "只输出剧本正文，不要 JSON，不要 Markdown，不要解释，不要生成角色、场景、道具或分镜清单。",
-    "如果原文包含多集，请保留或补全“第1集/第2集”这类集数标题，方便系统按集保存。",
-    "",
-    "【题材包】",
     input.packages.genrePrompt || "",
-    "",
-    "【情绪包】",
     input.packages.emotionPrompt || "",
-    "",
-    "【通用禁忌包】",
     input.packages.tabooPrompt || "",
-    "",
-    "【原始文案】",
     input.scriptText,
-  ].join("\n");
+  ].map((part) => part.trim()).filter(Boolean).join("\n\n");
+}
+
+function resolveScriptText(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const fencedJson = trimmed.match(/```json\s*([\s\S]*?)```/i);
+  try {
+    const parsed = JSON.parse(fencedJson?.[1] ?? trimmed);
+    const direct = String(
+      parsed?.scriptText ??
+      parsed?.script ??
+      parsed?.content ??
+      parsed?.storyText ??
+      parsed?.story_text ??
+      "",
+    ).trim();
+    if (direct) {
+      return direct;
+    }
+    const beats = Array.isArray(parsed?.scriptBeats)
+      ? parsed.scriptBeats
+      : Array.isArray(parsed?.beats)
+        ? parsed.beats
+        : [];
+    const beatText = beats
+      .map((beat) => [
+        beat?.plot,
+        beat?.scriptContent,
+        beat?.content,
+        beat?.dialogue,
+        beat?.voiceover,
+      ].map((item) => String(item ?? "").trim()).filter(Boolean).join("\n"))
+      .filter(Boolean)
+      .join("\n\n");
+    if (beatText.trim()) {
+      return beatText.trim();
+    }
+  } catch {
+    // Keep markdown/plain-text fallback for compatibility.
+  }
+  const fencedMarkdown = trimmed.match(/```(?:markdown|md|text)?\s*([\s\S]*?)```/i);
+  return fencedMarkdown?.[1]?.trim() || trimmed;
 }

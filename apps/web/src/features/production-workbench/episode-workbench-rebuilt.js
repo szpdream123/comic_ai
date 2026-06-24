@@ -1,6 +1,6 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
-import { renderAssetImportModal } from "./project-detail.js";
+import { renderAssetImportModal } from "./project-detail.js?single-episode-credits=1";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 
@@ -19,6 +19,7 @@ const ASSET_TABS = [
   { id: "scene", label: "场景" },
   { id: "prop", label: "道具" },
 ];
+const EPISODE_ASSET_TAB_IDS = new Set(ASSET_TABS.map((tab) => tab.id));
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
@@ -39,22 +40,6 @@ const BATCH_VIDEO_MODEL_OPTIONS = [
   { id: "hailuo-2-0", label: "海螺 2.0" },
   { id: "seedance-2-0-vip", label: "SeeDance 2.0 VIP" },
 ];
-
-const BATCH_RATIO_OPTIONS = [
-  "auto",
-  "9:16",
-  "16:9",
-  "1:1",
-  "4:3",
-  "3:4",
-  "3:2",
-  "2:3",
-  "5:4",
-  "4:5",
-  "21:9",
-];
-
-const BATCH_SIZE_OPTIONS = ["1K", "2K"];
 
 const VOICE_OPTIONS_BY_TAB = {
   custom: [
@@ -119,6 +104,7 @@ export function renderEpisodeWorkbench({
   isStoryboardDescriptionModalOpen = false,
   storyboardDescriptionDraft = "",
   selectedModelId = "gpt-image-2-cn",
+  imageMode = "single-image",
   prompt = "",
   busy = false,
   canGenerateImages = true,
@@ -156,6 +142,8 @@ export function renderEpisodeWorkbench({
   assetImportPage = 1,
   assetImportPageSize = 10,
   assetImportPageSizeMenuOpen = false,
+  storyboardPage = 1,
+  storyboardPageSize = 10,
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
   importedAssets = null,
@@ -192,6 +180,7 @@ export function renderEpisodeWorkbench({
     scene: mergeAssetGroup(assetLibrary.scene ?? []),
     prop: mergeAssetGroup(assetLibrary.prop ?? []),
   };
+  const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const normalizedStoryboards = storyboards.length
     ? normalizeStoryboardIndices(storyboards)
     : [];
@@ -199,7 +188,18 @@ export function renderEpisodeWorkbench({
     normalizedStoryboards.find((item) => item.id === selectedStoryboard?.id) ??
     normalizedStoryboards[0] ??
     null;
-  const activeAssets = assetGroups[activeAssetTab] ?? [];
+  const normalizedStoryboardPageSize = normalizeStoryboardPageSize(storyboardPageSize);
+  const storyboardSelectedIndex = currentStoryboard
+    ? Math.max(0, normalizedStoryboards.findIndex((item) => item.id === currentStoryboard.id))
+    : -1;
+  const storyboardTotalPages = Math.max(1, Math.ceil(normalizedStoryboards.length / normalizedStoryboardPageSize));
+  const normalizedStoryboardPage = clampStoryboardPage(
+    storyboardSelectedIndex >= 0
+      ? Math.floor(storyboardSelectedIndex / normalizedStoryboardPageSize) + 1
+      : storyboardPage,
+    storyboardTotalPages,
+  );
+  const activeAssets = assetGroups[normalizedActiveAssetTab] ?? [];
   const selectedAsset =
     activeAssets.find((item) => item.id === selectedEpisodeAssetId) ??
     activeAssets[0] ??
@@ -234,6 +234,7 @@ export function renderEpisodeWorkbench({
     effectiveMediaMode === "video" ? "video" : "image",
     imageGenerationResult,
   );
+  const hasAssetConversationEntries = assetConversationEntries.length > 0;
   const storyboardMediaKind = effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video" : "image";
   const storyboardConversationEntries = resolveStoryboardConversationEntries(
     storyboardConversationHistory,
@@ -242,7 +243,7 @@ export function renderEpisodeWorkbench({
     storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
   );
   const assetStageTitle = selectedAsset
-    ? `${resolveAssetLabel(activeAssetTab)}${selectedAsset?.name ?? ""}`
+    ? `${resolveAssetLabel(normalizedActiveAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
   const exportButtonLabel = scopeMode === "assets" ? "下一步：分镜制作" : "导出";
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
@@ -274,15 +275,26 @@ export function renderEpisodeWorkbench({
             scopeMode === "assets"
               ? renderAssetWorkspace(
                   assetGroups,
-                  activeAssetTab,
+                  normalizedActiveAssetTab,
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                 )
-              : renderStoryboardWorkspace(normalizedStoryboards, currentStoryboard, boardMode, selectedStoryboardIds, assetGroups)
+              : renderStoryboardWorkspace(
+                  normalizedStoryboards,
+                  currentStoryboard,
+                  boardMode,
+                  selectedStoryboardIds,
+                  assetGroups,
+                  {
+                    page: normalizedStoryboardPage,
+                    pageSize: normalizedStoryboardPageSize,
+                    totalPages: storyboardTotalPages,
+                  },
+                )
           }
         </section>
 
-        <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
+        <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? `asset-scope ${hasAssetConversationEntries ? "has-generated-stage" : "empty-composer"}` : "storyboard-scope"}">
           <div class="episode-replica-stage-head">
             <div class="episode-replica-stage-tabs">
               ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
@@ -303,21 +315,15 @@ export function renderEpisodeWorkbench({
                     videoGenerationResult,
                     storyboardConversationEntries,
                   )
-                : assetConversationEntries.length > 0
+                : hasAssetConversationEntries
                   ? renderAssetGeneratedStage(
                       selectedAsset,
-                      activeAssetTab,
+                      normalizedActiveAssetTab,
                       imageGenerationResult,
                       effectiveMediaMode,
                       assetConversationEntries,
                     )
-                  : renderAssetStage({
-                      asset: selectedAsset,
-                      activeAssetTab,
-                      mediaMode: effectiveMediaMode,
-                      quickReferenceItems: assetQuickReferenceItems,
-                      selectionContext: assetSelectionContext,
-                    })
+                  : ""
             }
           </div>
           ${renderPromptDock({
@@ -441,6 +447,7 @@ export function renderEpisodeWorkbench({
             category: episodeAssetLibraryCategory,
             folder: episodeAssetLibraryFolder,
             query: episodeAssetLibraryQuery,
+            selection: assetImportSelection,
           })
         : ""}
     </section>
@@ -484,6 +491,7 @@ function renderAssetWorkspace(
   selectedEpisodeCardId,
   selectedEpisodeAssetIds,
 ) {
+  const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const groups = {
     character: assetGroups.character ?? [],
     scene: assetGroups.scene ?? [],
@@ -498,18 +506,18 @@ function renderAssetWorkspace(
             <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
           </div>
           <div class="episode-replica-asset-tabs">
-            ${ASSET_TABS.map((tab) => `<button class="${tab.id === activeAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
+            ${ASSET_TABS.map((tab) => `<button class="${tab.id === normalizedActiveAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
           </div>
           <div class="episode-replica-asset-actions right">
-            <button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(activeAssetTab)}">团队资产库</button>
-            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(activeAssetTab)}">项目资产库</button>
+            <button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">团队资产库</button>
+            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">项目资产库</button>
           </div>
         </div>
       </div>
       <div class="episode-replica-asset-sections">
         ${visibleTabs.map((tab) => `
           <section
-            class="episode-replica-asset-section ${escapeAttr(tab.id)}-mode ${tab.id === activeAssetTab ? "is-active" : ""}"
+            class="episode-replica-asset-section ${escapeAttr(tab.id)}-mode ${tab.id === normalizedActiveAssetTab ? "is-active" : ""}"
             data-asset-section="${escapeAttr(tab.id)}"
           >
             <div class="episode-replica-asset-grid ${escapeAttr(tab.id)}-mode">
@@ -519,7 +527,7 @@ function renderAssetWorkspace(
                     asset,
                     tab.id,
                     asset.id === selectedEpisodeCardId ||
-                      (!selectedEpisodeCardId && tab.id === activeAssetTab && index === 0),
+                      (!selectedEpisodeCardId && tab.id === normalizedActiveAssetTab && index === 0),
                     selectedEpisodeAssetIds.includes(asset.id),
                   ),
                 ).join("")
@@ -532,11 +540,17 @@ function renderAssetWorkspace(
   `;
 }
 
+function normalizeEpisodeAssetTab(value) {
+  const normalized = String(value ?? "").trim();
+  return EPISODE_ASSET_TAB_IDS.has(normalized) ? normalized : "character";
+}
+
 function renderEpisodeAssetLibraryModal({
   scope = "official",
   category = "character",
   folder = "",
   query = "",
+  selection = [],
 } = {}) {
   const normalizedScope = scope === "team" ? "team" : "official";
   const normalizedCategory = ["character", "scene", "prop"].includes(category) ? category : "character";
@@ -549,14 +563,14 @@ function renderEpisodeAssetLibraryModal({
     "2D漫-东方修仙",
   ];
   const selectedFolder = folder || folders[0];
-  const assets = normalizedScope === "official"
-    ? getLibraryAssetsForImport({
-        assetKind: normalizedCategory,
-        folder: selectedFolder,
-        searchQuery: query,
-      })
-    : [];
-  const title = selectedFolder || "官方资产库";
+  const assets = getLibraryAssetsForImport({
+    assetKind: normalizedCategory,
+    folder: selectedFolder,
+    searchQuery: query,
+  });
+  const selectedIds = new Set(selection ?? []);
+  const selectedCount = assets.filter((asset) => selectedIds.has(asset.id)).length;
+  const title = selectedFolder || (normalizedScope === "team" ? "团队资产库" : "官方资产库");
   const assetCount = assets.length;
 
   return `
@@ -584,40 +598,38 @@ function renderEpisodeAssetLibraryModal({
             ` : ""}
           </nav>
         </header>
-        ${
-          normalizedScope === "team"
-            ? renderEpisodeTeamLibraryLocked()
-            : `
-              <div class="episode-library-board">
-                <aside class="episode-library-folder-list" aria-label="文件夹">
-                  ${folders.map((item) => `
-                    <button class="${item === selectedFolder ? "is-active" : ""}" type="button" data-action="set-episode-asset-library-folder" data-library-folder="${escapeAttr(item)}">
-                      <span aria-hidden="true"></span>${escapeHtml(item)}
-                    </button>
-                  `).join("")}
-                </aside>
-                <section class="episode-library-browser" aria-label="官方资产库">
-                  <div class="episode-library-browser-head">
-                    <div>
-                      <h2>${escapeHtml(title)}</h2>
-                      <p>${escapeHtml(resolveAssetLabel(normalizedCategory))}<span>${assetCount} 个资产</span></p>
-                    </div>
-                    <label class="episode-library-search">
-                      <input type="search" placeholder="搜索角色、场景、道具" value="${escapeAttr(query)}" data-action="search-episode-asset-library" />
-                    </label>
-                  </div>
-                  <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
-                    ${assets.length ? assets.map((asset, index) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, index === 0)).join("") : `
-                      <div class="episode-library-empty">
-                        <strong>暂无匹配资产</strong>
-                        <span>换个分类、文件夹或关键词再试。</span>
-                      </div>
-                    `}
-                  </div>
-                </section>
+        <div class="episode-library-board">
+          <aside class="episode-library-folder-list" aria-label="文件夹">
+            ${folders.map((item) => `
+              <button class="${item === selectedFolder ? "is-active" : ""}" type="button" data-action="set-episode-asset-library-folder" data-library-folder="${escapeAttr(item)}">
+                <span aria-hidden="true"></span>${escapeHtml(item)}
+              </button>
+            `).join("")}
+          </aside>
+          <section class="episode-library-browser" aria-label="${normalizedScope === "team" ? "团队资产库" : "官方资产库"}">
+            <div class="episode-library-browser-head">
+              <div>
+                <h2>${escapeHtml(title)}</h2>
+                <p>${escapeHtml(resolveAssetLabel(normalizedCategory))}<span>${assetCount} 个资产</span></p>
               </div>
-            `
-        }
+              <label class="episode-library-search">
+                <input type="search" placeholder="搜索角色、场景、道具" value="${escapeAttr(query)}" data-action="search-episode-asset-library" />
+              </label>
+            </div>
+            <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
+              ${assets.length ? assets.map((asset) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, selectedIds.has(asset.id))).join("") : `
+                <div class="episode-library-empty">
+                  <strong>暂无匹配资产</strong>
+                  <span>换个分类、文件夹或关键词再试。</span>
+                </div>
+              `}
+            </div>
+          </section>
+        </div>
+        <footer class="episode-library-modal-footer">
+          <span>已选择 ${selectedCount} 项${escapeHtml(resolveAssetLabel(normalizedCategory))}</span>
+          <button type="button" data-action="confirm-episode-asset-library-import" ${disabled(selectedCount === 0)}>确定</button>
+        </footer>
       </div>
     </section>
   `;
@@ -630,13 +642,14 @@ function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
 function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
   const preview = asset.previewUrl ?? asset.preview ?? "";
   return `
-    <article class="episode-library-asset-card ${selected ? "is-selected" : ""}">
+    <button class="episode-library-asset-card ${selected ? "is-selected" : ""}" type="button" data-action="toggle-episode-asset-library-asset" data-asset-id="${escapeAttr(asset.id)}" aria-pressed="${selected ? "true" : "false"}">
+      <span class="episode-library-asset-check" aria-hidden="true"></span>
       ${preview ? `<img src="${escapeAttr(preview)}" alt="${escapeAttr(asset.name ?? "资产")}" loading="lazy" />` : `<div class="episode-library-asset-placeholder" aria-hidden="true"></div>`}
       <div>
         <strong>${escapeHtml(asset.name ?? "未命名资产")}</strong>
         <small>${escapeHtml(asset.folder ?? resolveAssetLabel(category))}</small>
       </div>
-    </article>
+    </button>
   `;
 }
 
@@ -684,6 +697,13 @@ function renderAssetCard(asset, assetKind, active, checked) {
         <textarea class="episode-replica-asset-desc-input" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" maxlength="${EPISODE_ASSET_DESCRIPTION_LIMIT}" placeholder="可以编辑，点击框外后自动保存">${escapeHtml(desc)}</textarea>
       </label>
       <span class="count">${[...desc].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}</span>
+      <aside class="episode-replica-asset-full-popover" aria-hidden="true">
+        <div class="episode-replica-asset-full-popover-head">
+          <strong>${escapeHtml(asset?.name ?? "测试素材")}</strong>
+          <span>${escapeHtml(descLabel)}</span>
+        </div>
+        <p>${escapeHtml(desc || "暂无描述")}</p>
+      </aside>
     </article>
   `;
 }
@@ -715,8 +735,20 @@ function renderStoryBoardPreview(selectedStoryboard) {
   `;
 }
 
-function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, selectedStoryboardIds = [], assetGroups = {}) {
+function renderStoryboardWorkspace(
+  storyboards,
+  selectedStoryboard,
+  boardMode,
+  selectedStoryboardIds = [],
+  assetGroups = {},
+  pagination = {},
+) {
   const totalCount = storyboards.length;
+  const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? Math.ceil(totalCount / pageSize) ?? 1));
+  const currentPage = clampStoryboardPage(pagination.page, totalPages);
+  const start = (currentPage - 1) * pageSize;
+  const visibleStoryboards = storyboards.slice(start, start + pageSize);
   return `
     <div class="episode-replica-storyboard-toolbar">
       <div class="episode-replica-storyboard-board-tabs">
@@ -732,11 +764,11 @@ function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, s
       ${
         boardMode === "story"
           ? renderStoryBoardPreview(selectedStoryboard)
-            : storyboards.length
-            ? storyboards.map((storyboard, index) =>
+            : visibleStoryboards.length
+            ? visibleStoryboards.map((storyboard, index) =>
                 renderStoryboardCard(
                   storyboard,
-                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && index === 0),
+                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && currentPage === 1 && index === 0),
                   selectedStoryboardIds.includes(storyboard.id),
                   assetGroups,
                 ),
@@ -744,7 +776,7 @@ function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode, s
             : renderStoryboardEmptyState()
       }
     </div>
-    ${renderStoryboardPagination(totalCount)}
+    ${renderStoryboardPagination(totalCount, currentPage, totalPages, pageSize)}
   `;
 }
 
@@ -756,18 +788,30 @@ function renderStoryboardEmptyState() {
   `;
 }
 
-function renderStoryboardPagination(totalCount = 0) {
+function renderStoryboardPagination(totalCount = 0, currentPage = 1, totalPages = 1, pageSize = 10) {
   return `
     <div class="episode-replica-storyboard-pagination">
       <strong>共 ${escapeHtml(String(totalCount))} 条</strong>
-      <button class="episode-replica-storyboard-page-size" type="button">10条/页</button>
+      <button class="episode-replica-storyboard-page-size" type="button">${escapeHtml(String(pageSize))}条/页</button>
       <span class="episode-replica-storyboard-pagination-arrows">
-        <button type="button" disabled aria-label="上一页">‹</button>
-        <em class="page-index">1</em>
-        <button type="button" disabled aria-label="下一页">›</button>
+        <button type="button" data-action="change-storyboard-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)} aria-label="上一页">‹</button>
+        <em class="page-index">${escapeHtml(String(currentPage))}</em>
+        <button type="button" data-action="change-storyboard-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)} aria-label="下一页">›</button>
       </span>
     </div>
   `;
+}
+
+function normalizeStoryboardPageSize(value) {
+  return Number(value) === 10 ? 10 : 10;
+}
+
+function clampStoryboardPage(value, totalPages) {
+  const page = Number(value);
+  if (!Number.isFinite(page)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
 function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
@@ -1078,17 +1122,19 @@ function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, medi
 }
 
 function renderAssetConversationEntry(generationResult, assetKind = "character") {
-  const promptPreview = truncateDisplayText(generationResult?.promptPreview ?? "", 140);
+  const fullPromptPreview = String(generationResult?.promptPreview ?? "").trim();
+  const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const userMeta = buildAssetGenerationUserMeta(generationResult);
   const quickReferenceItems = generationResult?.quickReferenceItems ?? [];
   const failureMessage = resolveGenerationResultFailureMessage(generationResult);
+  const hasFixedImages = Array.isArray(generationResult?.fixedImages) && generationResult.fixedImages.length > 0;
   return `
     <section class="episode-replica-asset-conversation-entry">
       <div class="episode-replica-message-thread">
-        ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems) : ""}
+        ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems, fullPromptPreview) : ""}
       </div>
-      ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
-      ${renderFixedImageResults(generationResult, assetKind)}
+      ${failureMessage && !hasFixedImages ? renderFailedFixedImageResult(generationResult, assetKind, failureMessage) : ""}
+      ${hasFixedImages ? renderFixedImageResults(generationResult, assetKind) : ""}
     </section>
   `;
 }
@@ -1170,26 +1216,32 @@ function renderQuickAsset(asset, active) {
   const name = asset.name ?? "素材";
   const kind = asset.kind || inferKind(name);
   const preview = resolveReferencePreview(asset);
+  const previewUrl = preview ? resolveApiUrl(preview) : "";
   return `
-    <button
-      class="episode-replica-quick-asset ${active ? "active" : ""}"
-      type="button"
+    <article
+      class="episode-replica-quick-asset ${previewUrl ? "has-preview" : "empty-preview"} ${active ? "active" : ""}"
       draggable="true"
-      data-action="set-episode-asset"
       data-drag-asset="episode-quick-asset"
       data-asset-id="${escapeAttr(asset.id ?? "")}"
       data-asset-kind="${escapeAttr(kind)}"
-      title="${escapeAttr(name)}"
     >
-      <span class="thumb">
+      <button
+        class="thumb episode-replica-quick-asset-trigger"
+        type="button"
+        data-action="set-episode-asset"
+        data-asset-id="${escapeAttr(asset.id ?? "")}"
+        data-asset-kind="${escapeAttr(kind)}"
+        title="${escapeAttr(name)}"
+        aria-label="选择素材 ${escapeAttr(name)}"
+      >
         ${
-          preview
-            ? `<img class="episode-replica-quick-thumb-image" src="${escapeAttr(preview)}" alt="" />`
-            : renderQuickPlaceholder(kind, name)
+          previewUrl
+            ? `<img class="episode-replica-quick-thumb-image" src="${escapeAttr(previewUrl)}" alt="" loading="lazy" />`
+            : '<span class="episode-replica-quick-empty-thumb" aria-hidden="true"></span>'
         }
-        <span class="episode-replica-quick-name">${escapeHtml(name)}</span>
-      </span>
-    </button>
+      </button>
+      <div class="episode-replica-quick-name" title="${escapeAttr(name)}">${escapeHtml(name)}</div>
+    </article>
   `;
 }
 
@@ -1273,11 +1325,14 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     selectedStoryboard?.generationState?.quickReferenceItems ??
     [];
   const attachmentItems = generationResult?.attachmentItems ?? [];
-  const promptPreview = truncateDisplayText(
+  const fullPromptPreview = String(
     generationResult?.promptPreview ??
       selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
       selectedStoryboard?.description ??
       "",
+  ).trim();
+  const promptPreview = truncateDisplayText(
+    fullPromptPreview,
     140,
   );
   const taskId =
@@ -1290,6 +1345,7 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     <div class="episode-replica-generated-stage visible">
       ${renderResultMessageThread({
         promptPreview,
+        fullPromptPreview,
         quickReferenceItems,
         attachmentItems,
         generatedAudioItems:
@@ -1554,6 +1610,7 @@ function renderGenerationProgressTrack(progressState) {
 
 function renderResultMessageThread({
   promptPreview = "",
+  fullPromptPreview = "",
   quickReferenceItems = [],
   attachmentItems = [],
   generatedAudioItems = [],
@@ -1568,6 +1625,7 @@ function renderResultMessageThread({
         promptPreview
           ? renderEnhancedUserMessage({
               promptPreview,
+              fullPromptPreview,
               quickReferenceItems,
               attachmentItems,
               generatedAudioItems,
@@ -1589,6 +1647,7 @@ function renderResultMessageThread({
 
 function renderEnhancedUserMessage({
   promptPreview = "",
+  fullPromptPreview = "",
   quickReferenceItems = [],
   attachmentItems = [],
   generatedAudioItems = [],
@@ -1606,10 +1665,11 @@ function renderEnhancedUserMessage({
   const compactVisualItems = visualItems.slice(0, 3);
   const compactAudioItems = audioItems.slice(0, 1);
   const taskMeta = [taskId ? `任务id:${taskId}` : null, modelLabel || null].filter(Boolean).join("/");
+  const fullPrompt = String(fullPromptPreview || promptPreview || "").trim();
   return `
     <div class="episode-replica-message-row user">
       <article class="episode-replica-user-message">
-        <div class="episode-replica-user-message-copy clamp-3">${escapeHtml(promptPreview)}</div>
+        ${renderUserMessageCopyWithPopover(promptPreview, fullPrompt)}
         ${
           compactAudioItems.length || compactVisualItems.length || taskMeta || createdAt
             ? `<div class="episode-replica-user-message-footer">
@@ -1637,6 +1697,22 @@ function renderEnhancedUserMessage({
   `;
 }
 
+function renderUserMessageCopyWithPopover(promptPreview = "", fullPromptPreview = "") {
+  const fullPrompt = String(fullPromptPreview || promptPreview || "").trim();
+  return `
+    <div class="episode-replica-user-message-copy-wrap" tabindex="0">
+      <div class="episode-replica-user-message-copy clamp-3">${escapeHtml(promptPreview)}</div>
+      <aside class="episode-replica-user-message-full-popover" role="tooltip" aria-hidden="true">
+        <div class="episode-replica-user-message-full-popover-head">
+          <strong>用户提示词</strong>
+          <span>${[...fullPrompt].length} 字</span>
+        </div>
+        <p>${escapeHtml(fullPrompt || "暂无内容")}</p>
+      </aside>
+    </div>
+  `;
+}
+
 function renderCompactUserReferenceItem(item) {
   const previewUrl = resolveReferencePreview(item);
   const isAudio = String(item?.type ?? item?.kind ?? "") === "audio";
@@ -1653,12 +1729,12 @@ function renderCompactUserReferenceItem(item) {
   `;
 }
 
-function renderLegacyUserMessage(promptPreview, metaText = "", quickReferenceItems = []) {
+function renderLegacyUserMessage(promptPreview, metaText = "", quickReferenceItems = [], fullPromptPreview = "") {
   return `
     <div class="episode-replica-message-row user">
       <article class="episode-replica-user-message legacy">
         <span class="episode-replica-message-badge">用户</span>
-        <div class="episode-replica-user-message-copy">${escapeHtml(promptPreview)}</div>
+        ${renderUserMessageCopyWithPopover(promptPreview, fullPromptPreview || promptPreview)}
         ${
           quickReferenceItems.length
             ? `<div class="episode-replica-user-message-refs">${quickReferenceItems.map((item) => renderUserReferenceItem(item)).join("")}</div>`
@@ -1763,6 +1839,36 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
         <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">${escapeHtml(resolveAssetSetLabel(assetKind))}</button>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="download" data-task-id="${escapeAttr(String(taskId))}">下载</button>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}">删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderFailedFixedImageResult(generationResult, assetKind = "character", failureMessage = "") {
+  const taskId = resolveGenerationTaskId(generationResult);
+  const reason = truncateDisplayText(failureMessage || "生成失败，请重新生成。", 48);
+  const fullReason = String(failureMessage || "生成失败，请重新生成。").trim();
+  return `
+    <div class="episode-replica-fixed-results failure-result" role="group" aria-label="生成失败结果">
+      <article class="episode-replica-fixed-image-card failure-card">
+        <span class="episode-replica-fixed-image-badge failure">失败</span>
+        <div class="episode-replica-failure-preview" aria-hidden="true">
+          <span class="episode-replica-failure-mark"></span>
+        </div>
+      </article>
+      <div class="episode-replica-fixed-actions failure-actions">
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新生成</button>
+        <span class="episode-replica-error-reason-wrap">
+          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`错误原因：${fullReason}`)}">错误原因:${escapeHtml(reason)}</button>
+          <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true">
+            <div class="episode-replica-error-reason-popover-head">
+              <strong>错误原因</strong>
+              <span>${[...fullReason].length} 字</span>
+            </div>
+            <p>${escapeHtml(fullReason)}</p>
+          </aside>
+        </span>
+        <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">删除</button>
       </div>
     </div>
   `;
@@ -1962,7 +2068,7 @@ export function renderPromptDock({
         ${
           isFirstLastFrameVideoMode || isReferenceFreeImageMode
             ? ""
-            : `<button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image" data-dropzone="generation-image" data-frame-target="first">
+            : `<button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image" data-dropzone="generation-image" data-frame-target="first" aria-label="添加或拖入参考图片">
                 <span>+</span><strong>图片</strong>
               </button>`
         }
@@ -2997,7 +3103,12 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const selectedStyleId = modal.selectedStyleId ?? styleCards[0]?.id ?? "";
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
-  const presetCategories = normalizeBatchPresetCategories(modal.batchPromptPresetCategories);
+  const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
+  const ratioOptions = buildBatchImageOptionItems(selectedImageModel?.supportedRatios, ["16:9", "9:16", "1:1"]);
+  const clarityOptions = buildBatchImageOptionItems(
+    [...(selectedImageModel?.supportedQuality ?? []), ...(selectedImageModel?.supportedResolutions ?? [])],
+    ["2K"],
+  );
   return `
     <div class="episode-batch-image-panel">
       ${renderEpisodeBatchSelectField("imageModelId", "图片模型", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions))}
@@ -3024,11 +3135,8 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
       <section class="episode-batch-config-panel">
         <div class="episode-batch-section-title">其他配置</div>
         <div class="episode-batch-config-grid">
-          ${renderEpisodeBatchSelectField("scenePresetId", "场景", resolveBatchPresetLabel(modal.scenePresetId, "scene", presetCategories), modal.openField === "scenePresetId", buildBatchPresetSelectOptions("scene", presetCategories))}
-          ${renderEpisodeBatchSelectField("rolePresetId", "角色预设", resolveBatchPresetLabel(modal.rolePresetId, "character", presetCategories), modal.openField === "rolePresetId", buildBatchPresetSelectOptions("character", presetCategories))}
-          ${renderEpisodeBatchSelectField("propPresetId", "道具预设", resolveBatchPresetLabel(modal.propPresetId, "prop", presetCategories), modal.openField === "propPresetId", buildBatchPresetSelectOptions("prop", presetCategories))}
-          ${renderEpisodeBatchSelectField("aspectRatio", "比例", modal.aspectRatio ?? "16:9", modal.openField === "aspectRatio", BATCH_RATIO_OPTIONS.map((option) => ({ value: option, label: option })))}
-          ${renderEpisodeBatchSelectField("size", "大小", modal.size ?? "2K", modal.openField === "size", BATCH_SIZE_OPTIONS.map((option) => ({ value: option, label: option })))}
+          ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions)}
+          ${renderEpisodeBatchInfoCard("清晰度", modal.imageClarity ?? "2K", modal.openField === "imageClarity", "imageClarity", clarityOptions)}
         </div>
       </section>
       <footer class="episode-batch-footer">
@@ -3049,7 +3157,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
       <div class="episode-batch-video-config-grid">
         ${renderEpisodeBatchInfoCard("视频模型", resolveBatchVideoModelLabel(modal.videoModelId), modal.openField === "videoModelId", "videoModelId", options)}
         ${renderEpisodeBatchInfoCard("预设", "无预设", false)}
-        ${renderEpisodeBatchInfoCard("比例", modal.aspectRatio ?? "16:9", modal.openField === "aspectRatio", "aspectRatio", BATCH_RATIO_OPTIONS.map((option) => ({ value: option, label: option })))}
+        ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9")}
         ${renderEpisodeBatchInfoCard("分辨率", modal.videoResolution ?? "720P", modal.openField === "videoResolution", "videoResolution", [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }])}
       </div>
       <div class="episode-batch-selection-grid compact">
@@ -3130,7 +3238,7 @@ function renderEpisodeBatchInfoCard(label, value, open = false, field = "", opti
 
 function normalizeBatchImageModelOptions(options) {
   if (!Array.isArray(options) || !options.length) {
-    return [{ value: "tnb-pro", label: "nano banana 2（链路G）", group: "Nano banana" }];
+    return [{ value: "tnb-pro", label: "nano banana 2（链路G）", group: "Nano banana", supportedRatios: [], supportedQuality: [], supportedResolutions: [] }];
   }
   return options
     .map((option) => {
@@ -3140,9 +3248,22 @@ function normalizeBatchImageModelOptions(options) {
       if (!value || !label) {
         return null;
       }
-      return { value, label, group };
+      return {
+        value,
+        label,
+        group,
+        supportedRatios: normalizeOptionValues(option?.supportedRatios),
+        supportedQuality: normalizeOptionValues(option?.supportedQuality),
+        supportedResolutions: normalizeOptionValues(option?.supportedResolutions),
+      };
     })
     .filter(Boolean);
+}
+
+function buildBatchImageOptionItems(values, fallback) {
+  const normalized = normalizeOptionValues(values);
+  const source = [...new Set(normalized.length ? normalized : fallback)];
+  return source.map((value) => ({ value, label: value }));
 }
 
 function groupBatchImageModelOptions(imageModelOptions = []) {
@@ -3178,10 +3299,11 @@ function normalizeBatchPresetOptionList(value) {
     .map((item) => {
       const id = String(item?.id ?? "").trim();
       const label = String(item?.label ?? "").trim();
+      const promptContent = String(item?.prompt_content ?? item?.promptContent ?? "").trim();
       if (!id || !label || id === "none") {
         return null;
       }
-      return { id, label };
+      return promptContent ? { id, label, prompt_content: promptContent, promptContent } : { id, label };
     })
     .filter(Boolean);
   return options;
