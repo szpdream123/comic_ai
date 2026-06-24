@@ -87,9 +87,9 @@ const ASSET_LIBRARY_CONFIG = {
     generateCopy: "输入提示词通过生图模型生成场景图像",
     importCopy: "手动上传出镜场景的参考素材",
     art: "diner",
-    importedCardClass: "landscape",
+    importedCardClass: "portrait",
     emptyTitle: "场景资源库暂时还是空的",
-    emptyCopy: "导入场景后会在右侧以横版卡片展示，并按最新时间排序。",
+    emptyCopy: "导入场景后会以卡片形式展示，并按最新时间排序。",
     importHint: "建议上传横版完整场景图，便于后续生成保持空间关系一致",
     importNote: "可上传街道、室内、自然环境等高质量参考图，系统会自动生成场景名称。",
     importLinkLabel: "查看场景素材建议",
@@ -105,7 +105,7 @@ const ASSET_LIBRARY_CONFIG = {
     generateCopy: "输入提示词通过生图模型生成道具图像",
     importCopy: "手动上传出镜道具的参考素材",
     art: "glasses",
-    importedCardClass: "square",
+    importedCardClass: "portrait",
     emptyTitle: "道具资源库暂时还是空的",
     emptyCopy: "导入道具后会以卡片形式显示在这里，方便后续分镜直接调用。",
     importHint: "建议上传主体清晰、背景干净的道具素材，识别效果会更稳定",
@@ -156,15 +156,318 @@ function resolveLatestConversationPreview(historyMap = {}, assetId) {
 }
 
 function resolveImportedAssetPreview(asset) {
+  const generationImages = Array.isArray(asset?.generationResult?.fixedImages)
+    ? asset.generationResult.fixedImages
+    : [];
+  const latestGeneratedImage = generationImages.at(-1) ?? null;
   return resolvePreferredPreviewUrl(
     asset?.preview,
     asset?.previewUrl,
     asset?.fixedImageUrl,
+    latestGeneratedImage?.previewUrl,
+    latestGeneratedImage?.url,
+    latestGeneratedImage?.src,
     asset?.latestVersion?.metadata?.fixedImageUrl,
     asset?.latestVersion?.previewUrl,
     asset?.latestVersion?.metadata?.previewUrl,
     asset?.sourceUrl,
   );
+}
+
+function normalizeImportedAssetGenerationStatus(status) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  return normalized === "succeeded" ? "completed" : normalized;
+}
+
+function isImportedAssetGenerationTerminalStatus(status) {
+  return new Set(["completed", "failed", "canceled", "manual_review_required", "result_unknown"])
+    .has(normalizeImportedAssetGenerationStatus(status));
+}
+
+function resolveImportedAssetGenerationSnapshot(asset, localAsset = null) {
+  const remoteGenerationResult =
+    asset?.generationResult ??
+    asset?.latestVersion?.metadata?.generationResult ??
+    null;
+  const localGenerationResult =
+    localAsset?.generationResult ??
+    localAsset?.latestVersion?.metadata?.generationResult ??
+    null;
+  const remoteGenerationTaskId = String(
+    asset?.generationTaskId ??
+      asset?.latestVersion?.metadata?.generationTaskId ??
+      remoteGenerationResult?.taskId ??
+      remoteGenerationResult?.generationTaskId ??
+      remoteGenerationResult?.platform?.tasks?.[0]?.taskId ??
+      "",
+  ).trim();
+  const localGenerationTaskId = String(
+    localAsset?.generationTaskId ??
+      localAsset?.taskId ??
+      localGenerationResult?.taskId ??
+      localGenerationResult?.generationTaskId ??
+      localGenerationResult?.platform?.tasks?.[0]?.taskId ??
+      "",
+  ).trim();
+  const remoteGenerationStatus = normalizeImportedAssetGenerationStatus(
+    asset?.generationStatus ??
+      asset?.latestVersion?.metadata?.generationStatus ??
+      remoteGenerationResult?.status ??
+      remoteGenerationResult?.workflowStatus ??
+      remoteGenerationResult?.platform?.workflowStatus,
+  );
+  const localGenerationStatus = normalizeImportedAssetGenerationStatus(
+    localAsset?.generationStatus ??
+      localGenerationResult?.status ??
+      localGenerationResult?.workflowStatus ??
+      localGenerationResult?.platform?.workflowStatus,
+  );
+  const preferLocalTerminalSnapshot =
+    isImportedAssetGenerationTerminalStatus(localGenerationStatus) &&
+    !isImportedAssetGenerationTerminalStatus(remoteGenerationStatus);
+  const generationTaskId = preferLocalTerminalSnapshot
+    ? localGenerationTaskId || remoteGenerationTaskId
+    : remoteGenerationTaskId || localGenerationTaskId;
+  const generationStatus = preferLocalTerminalSnapshot
+    ? localGenerationStatus
+    : remoteGenerationStatus || localGenerationStatus || (generationTaskId ? "running" : "");
+  const baseGenerationResult = preferLocalTerminalSnapshot
+    ? localGenerationResult ?? remoteGenerationResult
+    : remoteGenerationResult ?? localGenerationResult;
+  const generationResult =
+    baseGenerationResult && typeof baseGenerationResult === "object" && !Array.isArray(baseGenerationResult)
+      ? {
+          ...baseGenerationResult,
+          ...(generationStatus ? { status: generationStatus } : {}),
+          ...(generationTaskId ? { taskId: generationTaskId } : {}),
+        }
+      : generationStatus || generationTaskId
+        ? {
+            ...(generationStatus ? { status: generationStatus } : {}),
+            ...(generationTaskId ? { taskId: generationTaskId } : {}),
+          }
+        : null;
+  return {
+    generationResult,
+    generationStatus,
+    generationTaskId,
+  };
+}
+
+function resolveImportedAssetGenerationResult(asset, ui) {
+  const assetId = String(asset?.id ?? asset?.assetId ?? "").trim();
+  if (asset?.generationResult) {
+    return asset.generationResult;
+  }
+  if (asset?.latestVersion?.metadata?.generationResult) {
+    return asset.latestVersion.metadata.generationResult;
+  }
+  if (asset?.generationStatus) {
+    return {
+      status: asset.generationStatus,
+      taskId: asset?.generationTaskId ?? null,
+    };
+  }
+  return (assetId && ui?.episodeBatchResults?.[assetId]) || null;
+}
+
+function resolveImportedAssetGenerationStatus(asset, ui) {
+  const result = resolveImportedAssetGenerationResult(asset, ui);
+  return String(
+    result?.status ??
+      result?.workflowStatus ??
+      result?.platform?.workflowStatus ??
+      asset?.generationStatus ??
+      "",
+  ).trim().toLowerCase();
+}
+
+function renderImportedAssetGenerationBadge(status) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  if (["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(normalized)) {
+    return '<span class="asset-generation-badge running"><i aria-hidden="true"></i>生成中</span>';
+  }
+  if (["completed", "succeeded"].includes(normalized)) {
+    return '<span class="asset-generation-badge done">已完成</span>';
+  }
+  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(normalized)) {
+    return '<span class="asset-generation-badge failed">生成失败</span>';
+  }
+  return "";
+}
+
+function renderImportedAssetGenerationHint(asset, ui) {
+  const result = resolveImportedAssetGenerationResult(asset, ui);
+  const status = resolveImportedAssetGenerationStatus(asset, ui);
+  const taskId = String(result?.taskId ?? result?.platform?.tasks?.[0]?.taskId ?? asset?.generationTaskId ?? "").trim();
+  if (!status && !taskId) {
+    return "";
+  }
+  const label = ["completed", "succeeded"].includes(status)
+    ? "任务已完成"
+    : ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)
+      ? "任务未完成"
+      : "任务生成中";
+  return `<small class="asset-generation-hint">${escapeHtml(label)}</small>`;
+}
+
+function resolveAssetGeneratorTaskSummary(asset) {
+  const result = asset?.generationResult ?? null;
+  const status = String(
+    result?.status ??
+      result?.workflowStatus ??
+      result?.platform?.workflowStatus ??
+      asset?.generationStatus ??
+      "",
+  ).trim().toLowerCase();
+  const taskId = String(
+    result?.taskId ??
+      result?.platform?.tasks?.[0]?.taskId ??
+      asset?.generationTaskId ??
+      "",
+  ).trim();
+  const previewUrl = resolvePreferredPreviewUrl(
+    asset?.fixedImageUrl,
+    asset?.previewUrl,
+    asset?.preview,
+    result?.fixedImages?.[0]?.previewUrl,
+    result?.fixedImages?.[0]?.url,
+    result?.fixedImages?.[0]?.src,
+    result?.version?.previewUrl,
+    result?.version?.metadata?.previewUrl,
+    result?.result?.imageUrl,
+  );
+  const statusLabel = ["completed", "succeeded"].includes(status)
+    ? "已完成"
+    : ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)
+      ? "生成失败"
+      : status
+        ? "生成中"
+        : "";
+  return {
+    status,
+    statusLabel,
+    taskId,
+    previewUrl,
+  };
+}
+
+function isAssetGeneratorFailureStatus(status) {
+  return ["failed", "canceled", "manual_review_required", "result_unknown"].includes(String(status ?? "").trim().toLowerCase());
+}
+
+function resolveAssetGeneratorTaskFailureMessage(asset) {
+  const task = asset?.generationResult ?? asset ?? null;
+  const apiKeyEnv = String(task?.failure?.apiKeyEnv ?? task?.details?.apiKeyEnv ?? "").trim();
+  const displayMessage = String(task?.failure?.displayMessage ?? "").trim();
+  if (displayMessage) {
+    return apiKeyEnv ? `${displayMessage} 缺失项：${apiKeyEnv}` : displayMessage;
+  }
+  const failureCode = String(task?.failureCode ?? task?.failure?.failureCode ?? "").trim();
+  const finalizeMessage = (
+    {
+      provider_output_persist_failed: "已保存到平台存储，正在等待后台补写资产记录",
+      provider_output_upload_failed: "视频已生成，但保存到平台存储失败，积分已返还",
+      provider_output_download_failed: "供应商产物下载失败，积分已返还，可在链接未过期时由后台重试保存",
+    }[failureCode] ?? ""
+  );
+  if (finalizeMessage) {
+    return finalizeMessage;
+  }
+  const providerMessage = String(task?.failure?.providerMessage ?? "").trim();
+  if (providerMessage) {
+    return providerMessage;
+  }
+  const providerErrorCode = String(task?.failure?.providerErrorCode ?? "").trim();
+  if (providerErrorCode) {
+    return providerErrorCode;
+  }
+  return failureCode || "任务失败，请稍后重试";
+}
+
+function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeholderArt = "", options = {}) {
+  const summary = resolveAssetGeneratorTaskSummary(asset);
+  const previewUrl = resolvePreferredPreviewUrl(summary.previewUrl, fallbackPreviewUrl);
+  const failed = isAssetGeneratorFailureStatus(summary.status);
+  const failureMessage = failed ? resolveAssetGeneratorTaskFailureMessage(asset) : "";
+  const statusBadge = summary.status ? renderImportedAssetGenerationBadge(summary.status) : "";
+  const statusText = summary.statusLabel || "未创建任务";
+  const helperText = previewUrl
+    ? "已返回预览图"
+    : failed
+      ? "本次任务未返回可用图片"
+      : summary.taskId
+        ? `任务 ID · ${summary.taskId}`
+        : summary.status
+          ? "模型正在返回图片"
+          : "当前还没有生成任务";
+  const previewStateClass = previewUrl
+    ? "has-image"
+    : summary.status && !failed
+      ? "is-generating"
+      : "is-empty";
+  const actionLabel = options.isSubmitting ? "重新生成中" : "重新生成";
+  return `
+    <section class="asset-generator-task-overview" aria-label="任务概览">
+      <header class="asset-generator-task-head">
+        <div>
+          <span>任务概览</span>
+          <strong>${escapeHtml(statusText)}</strong>
+        </div>
+        ${statusBadge}
+      </header>
+      <div class="asset-generator-task-preview ${previewStateClass}">
+        ${
+          previewUrl
+            ? `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" />`
+            : summary.status && !failed
+              ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
+              : `<img src="${escapeHtml(placeholderArt)}" alt="${escapeHtml(failed ? "任务失败" : "任务等待中")}" />`
+        }
+      </div>
+      <dl class="asset-generator-task-meta">
+        <div>
+          <dt>任务状态</dt>
+          <dd>${escapeHtml(statusText)}</dd>
+        </div>
+        <div>
+          <dt>任务编号</dt>
+          <dd>${escapeHtml(summary.taskId || "等待创建")}</dd>
+        </div>
+        <div>
+          <dt>返回结果</dt>
+          <dd>${escapeHtml(helperText)}</dd>
+        </div>
+        ${
+          failed && failureMessage
+            ? `
+        <div>
+          <dt>失败原因</dt>
+          <dd class="is-failure">${escapeHtml(failureMessage)}</dd>
+        </div>
+        `
+            : ""
+        }
+      </dl>
+      ${
+        failed
+          ? `
+      <div class="asset-generator-task-actions">
+        <button
+          class="asset-generator-task-action"
+          type="button"
+          data-action="regenerate-asset-generator"
+          ${options.isSubmitting ? "disabled" : ""}
+        >${escapeHtml(actionLabel)}</button>
+      </div>
+      `
+          : ""
+      }
+    </section>
+  `;
 }
 
 function normalizeProjectOtherAssetMediaType(value, fallback = "audio") {
@@ -213,6 +516,46 @@ function resolveImportedAssetAudioUrl(asset) {
   return "";
 }
 
+function resolveImportedAssetAudioCoverUrl(asset) {
+  const audioUrl = resolveImportedAssetAudioUrl(asset);
+  const imageMimeType = String(
+    asset?.fixedImageMimeType ??
+      asset?.coverMimeType ??
+      asset?.latestVersion?.metadata?.fixedImageMimeType ??
+      asset?.latestVersion?.metadata?.coverMimeType ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  const candidates = [
+    asset?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.sourceUrl,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value || value === audioUrl) {
+      continue;
+    }
+    if (/^data:audio\//i.test(value) || /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(value)) {
+      continue;
+    }
+    if (
+      !imageMimeType.startsWith("image/") &&
+      !/^data:image\//i.test(value) &&
+      !/\.(?:png|jpe?g|webp|gif|avif|svg)(?:[?#]|$)/i.test(value)
+    ) {
+      continue;
+    }
+    return value;
+  }
+  return "";
+}
+
 function isAudioLibraryAssetRecord(asset) {
   return Boolean(
     resolveImportedAssetAudioUrl(asset) ||
@@ -248,7 +591,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
         </section>
       </section>
@@ -327,7 +670,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -1496,12 +1839,6 @@ function resolveEpisodeAssetPreviewUrl(asset) {
 }
 
 function renderProjectInteriorShell({ state, ui, detailState }) {
-  const selectedProject = getSelectedProjectCard(ui);
-  const projectName = selectedProject?.name || detailState.project.name || "未命名项目";
-  const statusLabel = normalizeProjectStatus(
-    selectedProject?.status || detailState.project.statusLabel || "未开始",
-  );
-  const statusTone = getStatusTone(statusLabel);
   const aspectRatio = detailState.project.aspectRatio || "16:9";
   const hasAssets = Boolean(state.assetCandidates);
   const episodeCount = detailState.episodes?.length ?? 0;
@@ -1510,30 +1847,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
 
   return `
     <section class="project-interior" aria-label="项目内部工作台">
-      <header class="project-interior-topbar">
-        <div class="project-switcher">
-          <button class="project-back-button" type="button" data-action="set-nav-tab" data-tab="project" aria-label="返回项目列表">返回</button>
-          <strong>${escapeHtml(projectName)}</strong>
-          <button
-            class="project-status-select"
-            type="button"
-            data-action="toggle-project-interior-status-menu"
-            aria-expanded="${ui.projectInteriorStatusMenuOpen ? "true" : "false"}"
-            aria-label="项目状态"
-          >
-            <span class="status-dot ${statusTone}" aria-hidden="true"></span>
-            ${escapeHtml(statusLabel)}
-            <span aria-hidden="true">${ui.projectInteriorStatusMenuOpen ? "⌃" : "⌄"}</span>
-          </button>
-          ${ui.projectInteriorStatusMenuOpen ? renderProjectInteriorStatusMenu(statusLabel) : ""}
-        </div>
-      </header>
-
-      <aside class="project-side-rail" aria-label="项目内导航">
-        ${INTERIOR_NAV_ITEMS.map((item) =>
-          renderInteriorNavItem(item, activeInteriorSection === item.id),
-        ).join("")}
-      </aside>
+      ${renderProjectWorkbenchNav(activeInteriorSection, detailState)}
 
       <main class="project-interior-main">
         ${
@@ -1554,7 +1868,6 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
         }
         ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
       </main>
-      <button class="interior-help-button" type="button" aria-label="智能助手">✦</button>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
       ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui) : ""}
@@ -1572,55 +1885,50 @@ function renderProjectEpisodesInterior({ state, ui }) {
 }
 
 function renderProjectStatsInterior(ui) {
-  const stats = ui.projectStats ?? null;
-  const exportHistory = ui.exportHistory ?? [];
+  const stats = normalizeProjectStats(ui.projectStats);
   return `
     <section class="project-info-panel" aria-label="统计">
-      <header class="project-info-header">
-        <h1>统计</h1>
-        <p>聚合当前项目的剧集、分镜、资产与导出记录。</p>
-      </header>
-      <div class="project-stats-grid">
-        ${renderProjectStatMetric("成员", stats?.memberCount ?? 0)}
-        ${renderProjectStatMetric("剧集", stats?.episodeCount ?? 0)}
-        ${renderProjectStatMetric("分镜", stats?.shotCount ?? 0)}
-        ${renderProjectStatMetric("资产", stats?.assetCount ?? 0)}
-        ${renderProjectStatMetric("导出", stats?.exportCount ?? 0)}
-        ${renderProjectStatMetric("图片生成", stats?.generatedImageCount ?? 0)}
-        ${renderProjectStatMetric("视频生成", stats?.generatedVideoCount ?? 0)}
+      <div class="project-stats-command">
+        <div>
+          <span>当前项目</span>
+          <strong>产能统计</strong>
+        </div>
+        <p>聚合角色资产、剧集结构与生成产出。</p>
       </div>
-      <section class="project-export-history-panel">
-        <div class="project-info-header compact">
-          <h2>导出历史</h2>
-          <p>显示当前项目最近的真实导出记录。</p>
-        </div>
-        <div class="project-export-history-list">
-          ${
-            exportHistory.length
-              ? exportHistory
-                  .map(
-                    (record) => `
-                      <article class="project-info-card export-card">
-                        <strong>${escapeHtml(record.workflowId ?? record.id ?? "导出记录")}</strong>
-                        <span>状态：${escapeHtml(record.manifestStatus ?? "unknown")}</span>
-                        <span>时间：${escapeHtml(formatEpisodeHubDate(record.createdAt ?? Date.now()))}</span>
-                      </article>
-                    `,
-                  )
-                  .join("")
-              : '<article class="project-info-card empty"><strong>暂无导出记录</strong><span>当项目发生导出后，会在这里展示真实历史。</span></article>'
-          }
-        </div>
-      </section>
+      <div class="project-stats-grid">
+        ${renderProjectStatMetric("成员", stats.memberCount, "协作席位")}
+        ${renderProjectStatMetric("剧集", stats.episodeCount, "分集结构")}
+        ${renderProjectStatMetric("分镜", stats.shotCount, "镜头规划")}
+        ${renderProjectStatMetric("资产", stats.assetCount, "角色 场景 道具")}
+        ${renderProjectStatMetric("图片生成", stats.generatedImageCount, "已生成画面")}
+        ${renderProjectStatMetric("视频生成", stats.generatedVideoCount, "已生成视频")}
+      </div>
     </section>
   `;
 }
 
-function renderProjectStatMetric(label, value) {
+function normalizeProjectStats(apiStats = {}) {
+  return {
+    memberCount: coerceNonNegativeInteger(apiStats?.memberCount),
+    episodeCount: coerceNonNegativeInteger(apiStats?.episodeCount),
+    shotCount: coerceNonNegativeInteger(apiStats?.shotCount),
+    assetCount: coerceNonNegativeInteger(apiStats?.assetCount),
+    generatedImageCount: coerceNonNegativeInteger(apiStats?.generatedImageCount),
+    generatedVideoCount: coerceNonNegativeInteger(apiStats?.generatedVideoCount),
+  };
+}
+
+function coerceNonNegativeInteger(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
+}
+
+function renderProjectStatMetric(label, value, caption = "") {
   return `
     <article class="project-info-card stat-card">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(String(value))}</strong>
+      ${caption ? `<small>${escapeHtml(caption)}</small>` : ""}
     </article>
   `;
 }
@@ -1632,29 +1940,21 @@ function normalizeProjectInteriorSection(section) {
 
 function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, hasAssets, episodeCount }) {
   const episodes = getEpisodeHubEntries(state, ui);
+  const overviewEpisodes = episodes.slice(0, 12);
   const hasEpisodes = episodes.length > 0;
-  const primaryEpisodeTitle = episodes[0]?.title || detailState.episodes?.[0]?.title || "剧一";
+  const primaryEpisodeTitle = overviewEpisodes[0]?.title || detailState.episodes?.[0]?.title || "剧一";
+  const selectedProject = getSelectedProjectCard(ui);
+  const projectName = normalizeProjectOverviewCurrentProjectName(
+    selectedProject?.name ??
+      detailState.project?.name ??
+      state.project?.name ??
+      "",
+  );
+  const statusLabel = detailState.project?.statusLabel || state.project?.statusLabel || state.project?.phase || "创作中";
   return `
     <section class="project-settings-panel">
-      <header class="settings-header">
-        <button class="settings-title-button" type="button">设置 <span aria-hidden="true">⌄</span></button>
-        <div class="settings-chips">
-          <span>2D/3D 动漫</span>
-          <span class="ratio-chip"><i aria-hidden="true"></i>${escapeHtml(aspectRatio)}</span>
-          <span>无风格，无题材</span>
-          <button type="button" data-action="open-script-modal">上传剧本/分镜单</button>
-        </div>
-      </header>
-
+      ${renderProjectOverviewBrief({ projectName, statusLabel, aspectRatio, episodeCount })}
       <section id="asset-prep-section" class="interior-section asset-prep-section" aria-label="资产准备">
-        <div class="interior-section-title">
-          <h2>资产准备</h2>
-          <button class="asset-ai-button" type="button" data-action="open-script-modal">
-            <span class="free-ribbon">首次免费</span>
-            ✦ AI 智能提取资产
-          </button>
-          <button class="sr-only-action" type="button" data-action="confirm-all-assets" ${disabled(!state.assetCandidates || ui.busy)}>确认全部资产</button>
-        </div>
         <div class="asset-prep-grid">
           ${renderInteriorAssetCard("角色", "character", "violet", detailState.assets.characters, detailState.assets.previews?.character)}
           ${renderInteriorAssetCard("场景", "scene", "teal", detailState.assets.scenes, detailState.assets.previews?.scene)}
@@ -1677,7 +1977,7 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
         </div>
         ${
           hasEpisodes
-            ? renderOverviewEpisodePanel({ episodes, ui })
+            ? renderOverviewEpisodePanel({ episodes: overviewEpisodes, ui })
             : `
                 <div class="episode-empty-canvas">
                   <div class="episode-canvas-glow"></div>
@@ -1696,6 +1996,39 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
   `;
 }
 
+function renderProjectOverviewBrief({ projectName, statusLabel, aspectRatio, episodeCount }) {
+  return `
+    <section class="project-overview-brief" aria-label="项目总览信息">
+      <div class="project-overview-brief__title">
+        <strong>工作台</strong>
+      </div>
+      <div class="project-overview-brief__chips">
+        ${renderProjectOverviewBriefChip("当前项目", projectName, "project")}
+        ${renderProjectOverviewBriefChip("状态", statusLabel || "创作中", "status")}
+        ${aspectRatio ? renderProjectOverviewBriefChip("画幅", aspectRatio, "ratio") : ""}
+        ${renderProjectOverviewBriefChip("剧集", `${episodeCount} 集`, "episode")}
+      </div>
+    </section>
+  `;
+}
+
+function normalizeProjectOverviewCurrentProjectName(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.toLowerCase() === "try" ? "" : normalized;
+}
+
+function renderProjectOverviewBriefChip(label, value, tone = "") {
+  return `
+    <article class="project-overview-brief-chip ${tone ? `tone-${escapeAttr(tone)}` : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </article>
+  `;
+}
+
 function renderOverviewEpisodePanel({ episodes = [], ui }) {
   return `
     <div class="episode-overview-canvas" aria-label="总览剧集列表">
@@ -1709,13 +2042,6 @@ function renderOverviewEpisodePanel({ episodes = [], ui }) {
 function renderEpisodeCreationHub(ui) {
   return `
     <section class="episode-hub-shell empty" aria-label="剧集菜单">
-      <header class="episode-hub-header">
-        <div class="episode-hub-tabs">
-          <strong>剧集 (0)</strong>
-          <button class="episode-history-tab" type="button" data-action="open-episode-export-history">导出历史</button>
-        </div>
-      </header>
-
       <div class="episode-hub-cards">
         <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
           <div class="episode-launch-copy">
@@ -1752,13 +2078,6 @@ function renderEpisodeHub({ episodes = [], ui }) {
 
   return `
     <section class="episode-hub-shell populated" aria-label="剧集菜单">
-      <header class="episode-hub-header">
-        <div class="episode-hub-tabs">
-          <strong>剧集 (${episodes.length})</strong>
-          <button class="episode-history-tab" type="button" data-action="open-episode-export-history">导出历史</button>
-        </div>
-      </header>
-
       <div class="episode-hub-grid">
         <div class="episode-hub-launches">
           <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
@@ -2759,7 +3078,7 @@ function renderSingleEpisodeLookSelect({ option, activeType, packages = [], sele
         aria-expanded="${isOpen ? "true" : "false"}"
       >
         <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
-        <b aria-hidden="true">${isOpen ? "⌃" : "⌄"}</b>
+        <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon(isOpen ? "up" : "down")}</span>
       </button>
       ${isOpen ? renderSingleEpisodeLookDropdown({ option, items, selectedIds }) : ""}
     </section>
@@ -3038,33 +3357,23 @@ function renderInteriorNavItem(item, active = false) {
       data-action="set-project-interior-section"
       data-section="${escapeHtml(item.id)}"
     >
-      <span aria-hidden="true">${item.icon}</span>
-      <strong>${escapeHtml(item.label)}</strong>
+      <span class="interior-nav-item__icon" aria-hidden="true">${item.icon}</span>
+      <span class="interior-nav-item__copy">
+        <strong>${escapeHtml(item.label)}</strong>
+      </span>
     </button>
   `;
 }
 
-function renderProjectInteriorStatusMenu(currentStatus) {
+function renderProjectWorkbenchNav(activeInteriorSection, detailState) {
   return `
-    <div class="project-interior-status-menu" role="menu" aria-label="修改项目制作状态">
-      <p>修改项目制作状态</p>
-      ${["制作中", "一稿交付", "完结"]
-        .map((status) => {
-          const isActive = normalizeProjectStatus(status) === currentStatus;
-          return `
-            <button
-              class="project-interior-status-option ${isActive ? "active" : ""}"
-              type="button"
-              data-action="set-project-interior-status"
-              data-status="${escapeHtml(status)}"
-            >
-              <span class="status-dot ${getStatusTone(status)}" aria-hidden="true"></span>
-              ${escapeHtml(status)}
-            </button>
-          `;
-        })
-        .join("")}
-    </div>
+    <section class="project-workbench-nav-shell" aria-label="项目工作台导航">
+      <nav class="project-workbench-nav" aria-label="项目内导航">
+        ${INTERIOR_NAV_ITEMS.map((item) =>
+          renderInteriorNavItem(item, activeInteriorSection === item.id),
+        ).join("")}
+      </nav>
+    </section>
   `;
 }
 
@@ -3087,16 +3396,18 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
   return `
     <section class="project-asset-library" aria-label="资产">
       <header class="asset-library-head">
-        <h1>资产</h1>
         <div class="asset-library-tabs" role="tablist" aria-label="资产类型">
           ${ASSET_TABS.map((item) => renderProjectAssetTab(item, item.id === tab.id)).join("")}
         </div>
         <div class="asset-library-tools">
-          <button class="asset-sort-button" type="button" data-action="toggle-asset-sort-order">${ui.assetSortOrder === "desc" ? "时间倒序" : "时间正序"} <span aria-hidden="true">⌄</span></button>
+          <button class="asset-sort-button" type="button" data-action="toggle-asset-sort-order">
+            <span class="asset-toolbar-button__label">${ui.assetSortOrder === "desc" ? "时间倒序" : "时间正序"}</span>
+            <span class="asset-toolbar-button__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
+          </button>
           ${
             isOther
               ? ""
-              : `<button class="asset-filter-button" type="button" data-action="toggle-asset-filter-mode">${escapeHtml(filterLabel)} <span aria-hidden="true">⌄</span></button><label class="asset-main-check"><input id="asset-only-main-input" type="checkbox" ${ui.assetOnlyMain ? "checked" : ""} />主体</label>`
+              : `<button class="asset-filter-button" type="button" data-action="toggle-asset-filter-mode"><span class="asset-toolbar-button__label">${escapeHtml(filterLabel)}</span><span class="asset-toolbar-button__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span></button><label class="asset-main-check"><input id="asset-only-main-input" type="checkbox" ${ui.assetOnlyMain ? "checked" : ""} />主体</label>`
           }
           <label class="asset-search-field">
             <span aria-hidden="true">⌕</span>
@@ -3198,18 +3509,34 @@ function renderAssetLibraryCollection(tab, importedAssets, ui) {
   if (!importedAssets.length) {
     return renderAssetEmptyLibrary(tab);
   }
+  const pagination = paginateProjectAssetLibrary(importedAssets, ui);
+  const isListMode = ui.assetViewMode === "list";
 
   return `
-    <section class="asset-library-collection">
-      <div class="asset-library-actions-column">
-        ${renderAssetCreationCards(tab)}
-      </div>
-      <div class="asset-library-content-grid ${ui.assetViewMode === "list" ? "list-mode" : "grid-mode"}">
-        ${
-          importedAssets.length
-            ? importedAssets.map((asset) => renderImportedAssetCard(asset, ui)).join("")
-            : '<article class="asset-library-empty-card"><strong>还没有已导入资产</strong><span>可以先从左侧导入，完成后会在这里按卡片形式展示。</span></article>'
-        }
+    <section class="asset-library-collection ${isListMode ? "list-layout" : "grid-layout"}">
+      ${
+        isListMode
+          ? `<div class="asset-library-actions-column">
+              ${renderAssetCreationCards(tab)}
+            </div>`
+          : ""
+      }
+      <div class="asset-library-content-panel">
+        <div class="asset-library-content-grid ${isListMode ? "list-mode" : "grid-mode"}">
+          ${
+            isListMode
+              ? ""
+              : `<div class="asset-library-actions-column">
+                  ${renderAssetCreationCards(tab)}
+                </div>`
+          }
+          ${
+            pagination.pageItems.length
+              ? pagination.pageItems.map((asset) => renderImportedAssetCard(asset, ui)).join("")
+              : '<article class="asset-library-empty-card"><strong>还没有已导入资产</strong><span>可以先从左侧导入，完成后会在这里按卡片形式展示。</span></article>'
+          }
+        </div>
+        ${renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
       </div>
     </section>
   `;
@@ -3232,23 +3559,99 @@ function renderAssetEmptyLibrary(tab) {
 
 function renderOtherAssetLibrary(mediaType, importedAssets, ui) {
   const label = resolveProjectOtherAssetMediaLabel(mediaType);
+  const pagination = paginateProjectAssetLibrary(importedAssets, ui);
   return `
     <section class="other-asset-library">
       <button class="seedance-import-card" type="button" data-action="open-asset-import-modal" data-asset-kind="other">
         <span aria-hidden="true">✦</span>
         导入${label}素材
       </button>
-      ${
-        importedAssets.length
-          ? importedAssets.map((asset) => renderOtherImportedAssetCard(asset, mediaType, ui)).join("")
-          : `
-            <div class="seedance-library-empty">
-              <strong>${label}资源库</strong>
-              <p>暂无${label}，立即上传一个${label}文件吧。</p>
-            </div>
-          `
-      }
+      <div class="asset-library-content-panel">
+        <div class="asset-library-content-grid ${ui.assetViewMode === "list" ? "list-mode" : "grid-mode"} other-grid-mode">
+          ${
+            pagination.pageItems.length
+              ? pagination.pageItems.map((asset) => renderOtherImportedAssetCard(asset, mediaType, ui)).join("")
+              : `
+                <div class="seedance-library-empty">
+                  <strong>${label}资源库</strong>
+                  <p>暂无${label}，立即上传一个${label}文件吧。</p>
+                </div>
+              `
+          }
+        </div>
+        ${renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
+      </div>
     </section>
+  `;
+}
+
+const PROJECT_ASSET_LIBRARY_PAGE_SIZE = 27;
+
+function paginateProjectAssetLibrary(items = [], ui = {}) {
+  const total = Array.isArray(items) ? items.length : 0;
+  const pageSize = PROJECT_ASSET_LIBRARY_PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(Math.max(1, Number(ui.assetLibraryPage ?? 1) || 1), totalPages);
+  const start = (currentPage - 1) * pageSize;
+  const end = start + pageSize;
+  return {
+    total,
+    pageSize,
+    totalPages,
+    currentPage,
+    pageItems: (Array.isArray(items) ? items : []).slice(start, end),
+  };
+}
+
+function renderAssetLibraryPagination(totalItems, currentPage, totalPages, pageSize) {
+  if (totalItems <= 0) {
+    return "";
+  }
+  const pages = buildProjectPageItems(currentPage, totalPages);
+  return `
+    <footer class="asset-library-pagination" aria-label="素材分页">
+      <div class="asset-library-pagination-summary">
+        <span>共 ${totalItems} 个素材，每页 ${pageSize} 个</span>
+        <span>${currentPage} / ${totalPages}</span>
+      </div>
+      <div class="asset-library-pagination-controls">
+        <button
+          class="asset-library-page-button"
+          type="button"
+          data-action="change-asset-library-page"
+          data-page="${currentPage - 1}"
+          ${currentPage <= 1 ? "disabled" : ""}
+          aria-label="上一页"
+        >
+          ‹
+        </button>
+        ${pages.map((page) =>
+          page === "ellipsis"
+            ? '<span class="asset-library-page-ellipsis">…</span>'
+            : `
+              <button
+                class="asset-library-page-button ${page === currentPage ? "active" : ""}"
+                type="button"
+                data-action="change-asset-library-page"
+                data-page="${page}"
+                ${page === currentPage ? 'aria-current="page"' : ""}
+              >
+                ${page}
+              </button>
+            `
+        ).join("")}
+        <button
+          class="asset-library-page-button"
+          type="button"
+          data-action="change-asset-library-page"
+          data-page="${currentPage + 1}"
+          ${currentPage >= totalPages ? "disabled" : ""}
+          aria-label="下一页"
+        >
+          ›
+        </button>
+      </div>
+    </footer>
   `;
 }
 
@@ -3257,19 +3660,40 @@ function renderImportedAssetCard(asset, ui) {
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, asset.kind, "image", asset.id);
+  const generationStatus = resolveImportedAssetGenerationStatus(asset, ui);
+  const generationBadge = renderImportedAssetGenerationBadge(generationStatus);
+  const generationHint = renderImportedAssetGenerationHint(asset, ui);
+  const isGenerated = asset.source === "generated" || asset.assetSource === "generated" || Boolean(generationStatus);
+  const isGenerating = ["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(generationStatus);
+  const isFailedGeneration = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(generationStatus);
+  const showResolvedPreview = Boolean(preview) && !isGenerating && !isFailedGeneration;
+  const generationTaskId = String(asset?.generationTaskId ?? asset?.generationResult?.taskId ?? asset?.generationResult?.platform?.tasks?.[0]?.taskId ?? "").trim();
+  const generatedPreviewNode = isGenerating
+    ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
+    : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>';
   return `
     <article
-      class="imported-asset-card ${escapeHtml(ASSET_LIBRARY_CONFIG[asset.kind]?.importedCardClass ?? "portrait")} ${isHighlighted ? "just-imported" : ""}"
+      class="imported-asset-card ${escapeHtml(ASSET_LIBRARY_CONFIG[asset.kind]?.importedCardClass ?? "portrait")} ${isHighlighted ? "just-imported" : ""} ${isGenerated ? "generated-task-card" : ""}"
+      ${isGenerated ? 'data-action="open-generated-asset-card"' : ""}
       data-imported-asset-id="${escapeHtml(asset.id)}"
+      data-asset-id="${escapeHtml(asset.id)}"
+      data-asset-kind="${escapeHtml(asset.kind ?? "")}"
       tabindex="-1"
     >
-      <div class="imported-asset-preview">
-        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+      <div class="imported-asset-preview ${isGenerating ? "is-generating" : ""}">
+        ${
+          showResolvedPreview
+            ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />`
+            : generatedPreviewNode
+        }
+        ${generationBadge}
       </div>
       <div class="imported-asset-meta asset-card-meta-row">
         <div class="asset-card-copy">
           <strong>${escapeHtml(asset.name)}</strong>
           <span>${escapeHtml(asset.description || (asset.source === "generated" ? "已生成资产" : "已导入资产"))}</span>
+          ${generationHint}
+          ${generationTaskId ? `<small class="asset-generation-task-id">任务编号 · ${escapeHtml(generationTaskId)}</small>` : ""}
         </div>
         <button
           class="asset-card-menu-button"
@@ -3287,9 +3711,11 @@ function renderImportedAssetCard(asset, ui) {
 }
 
 function renderOtherImportedAssetCard(asset, mediaType, ui) {
-  const preview = resolveImportedAssetPreview(asset);
   const audioUrl = resolveImportedAssetAudioUrl(asset);
-  const visualPreview = audioUrl && preview === audioUrl ? "" : preview;
+  const visualPreview =
+    mediaType === "audio" ? resolveImportedAssetAudioCoverUrl(asset) : resolveImportedAssetPreview(asset);
+  const isAudioPlaying =
+    mediaType === "audio" && String(ui.projectAssetPreviewPlayingId ?? "").trim() === String(asset.id ?? "").trim();
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, "other", mediaType, asset.id);
@@ -3300,7 +3726,7 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
         data-imported-asset-id="${escapeHtml(asset.id)}"
         tabindex="-1"
       >
-        <div class="other-imported-preview audio-preview">
+        <div class="other-imported-preview audio-preview ${visualPreview ? "has-cover" : ""}">
           ${visualPreview ? `<img src="${escapeHtml(resolveApiUrl(visualPreview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="project-audio-avatar" aria-hidden="true"></span>'}
           <div class="project-audio-card-actions">
             <button
@@ -3309,9 +3735,12 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
               data-action="preview-project-audio-asset"
               data-asset-id="${escapeAttr(asset.id)}"
               data-audio-url="${escapeAttr(resolveApiUrl(audioUrl))}"
-              aria-label="播放音频"
-            >▷</button>
-            <span class="project-audio-edit-chip">编辑配音</span>
+              aria-label="${isAudioPlaying ? "停止播放" : "播放音频"}"
+            >${
+              isAudioPlaying
+                ? '<span class="project-audio-icon project-audio-icon-pause" aria-hidden="true"><span></span><span></span></span>'
+                : '<span class="project-audio-icon project-audio-icon-play" aria-hidden="true">▷</span>'
+            }</button>
           </div>
         </div>
         <div class="asset-card-meta-row">
@@ -3412,6 +3841,7 @@ export function renderAssetImportModal(ui) {
 
 function renderAudioAssetImportModal(ui) {
   const draft = ui.audioAssetImportDraft ?? {};
+  const isEditing = Boolean(String(draft.assetId ?? "").trim());
   const name = String(draft.name ?? "").slice(0, 20);
   const audioFileName = String(draft.audioFileName ?? "").trim();
   const audioUploading = draft.audioUploading === true;
@@ -3448,10 +3878,11 @@ function renderAudioAssetImportModal(ui) {
           </label>
 
           <div class="audio-import-field">
-            <span>主播音频 <em>*</em></span>
+            <span>配音文件 <em>*</em></span>
             <button class="audio-import-upload-button ${audioPreviewUrl ? "has-audio" : ""}" type="button" data-action="trigger-audio-import-audio-file" ${disabled(audioUploading)}>
-              <i aria-hidden="true">⇪</i>
-              <strong>${audioUploading ? "上传中..." : "上传音乐"}</strong>
+              <i aria-hidden="true">${audioUploading ? "↻" : "⇪"}</i>
+              <strong>${audioUploading ? "上传中..." : audioPreviewUrl ? "重新上传配音" : "上传配音"}</strong>
+              <span>${audioPreviewUrl ? "已选择配音文件，可重新上传" : "支持 MP3、WAV 等常见音频格式"}</span>
             </button>
             <input class="audio-import-hidden-input" type="file" accept="audio/*" data-action="select-audio-import-audio-file" />
             ${
@@ -3486,7 +3917,7 @@ function renderAudioAssetImportModal(ui) {
             <input class="audio-import-hidden-input" type="file" accept="image/*" data-action="select-audio-import-example-image" />
           </div>
 
-          <button class="audio-import-save-button ${canSave ? "is-ready" : "is-blocked"}" type="button" data-action="confirm-audio-asset-import">保存</button>
+          <button class="audio-import-save-button ${canSave ? "is-ready" : "is-blocked"}" type="button" data-action="confirm-audio-asset-import">${isEditing ? "保存修改" : "保存"}</button>
         </div>
       </div>
     </section>
@@ -3911,17 +4342,19 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "audio") {
           ...(detailAssets.other?.audio ?? []),
           ...((detailAssets.other?.video ?? []).filter((asset) => isAudioLibraryAssetRecord(asset))),
         ];
-        return mapDetailAssets(audioAssets, "other");
+        return mapDetailAssets(audioAssets, "other", ui, mediaType);
       }
       if (mediaType === "video") {
         return mapDetailAssets(
           (detailAssets.other?.video ?? []).filter((asset) => !isAudioLibraryAssetRecord(asset)),
           "other",
+          ui,
+          mediaType,
         );
       }
-      return mapDetailAssets(detailAssets.other?.image ?? [], "other");
+      return mapDetailAssets(detailAssets.other?.image ?? [], "other", ui, mediaType);
     }
-    return mapDetailAssets(detailAssets[assetKind] ?? [], assetKind);
+    return mapDetailAssets(detailAssets[assetKind] ?? [], assetKind, ui, mediaType);
   }
   if (assetKind === "other") {
     return ui.importedAssets?.other?.[mediaType] ?? [];
@@ -3929,26 +4362,65 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "audio") {
   return ui.importedAssets?.[assetKind] ?? [];
 }
 
-function mapDetailAssets(assets, kind) {
-  return assets.map((asset) => ({
-    id: asset.id,
-    name: asset.label ?? asset.assetKey ?? "未命名资产",
-    preview: resolvePreferredPreviewUrl(
+function mapDetailAssets(assets, kind, ui = {}, mediaType = "image") {
+  const importedBucket = kind === "other"
+    ? ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(mediaType, "audio")] ?? []
+    : ui.importedAssets?.[kind] ?? [];
+  const importedById = new Map(
+    importedBucket
+      .map((asset) => [String(asset?.id ?? asset?.assetId ?? "").trim(), asset])
+      .filter(([id]) => id),
+  );
+  return assets.map((asset) => {
+    const assetId = String(asset?.id ?? asset?.assetId ?? "").trim();
+    const localAsset = importedById.get(assetId) ?? null;
+    const { generationResult, generationStatus, generationTaskId } = resolveImportedAssetGenerationSnapshot(
+      asset,
+      localAsset,
+    );
+    const preview = resolvePreferredPreviewUrl(
+      generationResult?.version?.previewUrl,
+      generationResult?.version?.metadata?.previewUrl,
+      generationResult?.version?.metadata?.fixedImageUrl,
+      generationResult?.result?.imageUrl,
+      generationResult?.result?.previewUrl,
+      generationResult?.fixedImages?.[0]?.previewUrl,
+      generationResult?.fixedImages?.[0]?.url,
+      generationResult?.fixedImages?.[0]?.src,
       asset.previewUrl,
       asset.latestVersion?.metadata?.fixedImageUrl,
       asset.latestVersion?.previewUrl,
       asset.latestVersion?.metadata?.previewUrl,
-    ),
-    description: asset.latestVersion?.metadata?.description ?? asset.assetKey ?? "",
-    kind,
-    isMain: Boolean(asset.latestVersion?.metadata?.isMain),
-    source: asset.latestVersion?.metadata?.source ?? "import",
-    updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? asset.createdAt ?? null,
-    mimeType: asset.latestVersion?.metadata?.mimeType ?? asset.latestVersion?.mimeType ?? "",
-    sourceUrl: asset.latestVersion?.metadata?.sourceUrl ?? asset.previewUrl ?? "",
-    audioUrl: resolveImportedAssetAudioUrl(asset),
-    latestVersion: asset.latestVersion ?? null,
-  }));
+      localAsset?.preview,
+      localAsset?.previewUrl,
+      localAsset?.fixedImageUrl,
+    );
+    return {
+      id: asset.id,
+      name: asset.label ?? asset.assetKey ?? localAsset?.name ?? "未命名资产",
+      preview,
+      previewUrl: preview,
+      fixedImageUrl: resolvePreferredPreviewUrl(
+        asset.latestVersion?.metadata?.fixedImageUrl,
+        asset.previewUrl,
+        localAsset?.fixedImageUrl,
+        localAsset?.previewUrl,
+      ),
+      description: asset.latestVersion?.metadata?.description ?? localAsset?.description ?? asset.assetKey ?? "",
+      kind,
+      isMain: Boolean(asset.latestVersion?.metadata?.isMain ?? localAsset?.isMain),
+      source: asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import",
+      assetSource: asset.latestVersion?.metadata?.source ?? localAsset?.assetSource ?? "import",
+      updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? localAsset?.updatedAt ?? asset.createdAt ?? null,
+      mimeType: asset.latestVersion?.metadata?.mimeType ?? asset.latestVersion?.mimeType ?? localAsset?.mimeType ?? "",
+      sourceUrl: asset.latestVersion?.metadata?.sourceUrl ?? asset.previewUrl ?? localAsset?.sourceUrl ?? "",
+      audioUrl: resolveImportedAssetAudioUrl(asset) || localAsset?.audioUrl || "",
+      latestVersion: asset.latestVersion ?? localAsset?.latestVersion ?? null,
+      generationStatus,
+      generationTaskId,
+      generationResult,
+    };
+  });
 }
 
 function filterAndSortImportedAssets(assets, ui) {
@@ -4142,6 +4614,203 @@ function getAssetImportPresets(kind) {
   return presetMap[kind] ?? presetMap.character;
 }
 
+function resolveAssetGeneratorImageModels(ui = {}) {
+  const configuredModels = Array.isArray(ui.episodeGenerationConfig?.models)
+    ? ui.episodeGenerationConfig.models
+    : [];
+  const imageModels = configuredModels
+    .filter((model) => {
+      if (model?.disabled === true) {
+        return false;
+      }
+      const mediaType = String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
+      if (mediaType === "image") {
+        return true;
+      }
+      const supportedModes = Array.isArray(model?.supportedModes) ? model.supportedModes : [];
+      return supportedModes.some((mode) => /image|text_to_image|image_generate|multi_reference/i.test(String(mode ?? "")));
+    })
+    .map((model) => ({
+      raw: model,
+      code: String(model?.modelCode ?? model?.id ?? "").trim(),
+      label: String(model?.modelLabel ?? model?.label ?? model?.name ?? model?.modelCode ?? "").trim(),
+    }))
+    .filter((model) => model.code);
+  if (imageModels.length) {
+    return imageModels;
+  }
+  const fallbackCode = String(ui.assetGeneratorModelCode ?? ui.assetGeneratorModel ?? "").trim();
+  return fallbackCode
+    ? [{ raw: null, code: fallbackCode, label: fallbackCode }]
+    : [];
+}
+
+function resolveAssetGeneratorModelConfig(ui = {}) {
+  const models = resolveAssetGeneratorImageModels(ui);
+  const defaultCode = String(ui.episodeGenerationConfig?.defaultImageModelCode ?? "").trim();
+  const requestedCode = String(ui.assetGeneratorModelCode ?? "").trim();
+  const selected =
+    models.find((model) => model.code === requestedCode) ??
+    models.find((model) => model.code === defaultCode) ??
+    models[0] ??
+    null;
+  const raw = selected?.raw ?? {};
+  const defaultParams = raw?.defaultParams && typeof raw.defaultParams === "object" ? raw.defaultParams : {};
+  const aspectRatioOptions = dedupeAssetGeneratorOptionPairs([
+    ...assetGeneratorOptionPairsFromSource(raw?.supportedRatios),
+    ...assetGeneratorOptionPairsFromSource(raw?.ratios),
+    ...assetGeneratorParameterOptionPairs(raw, ["aspectRatio", "imageAspectRatio", "ratio"]),
+  ]);
+  const resolutionOptions = dedupeAssetGeneratorOptionPairs([
+    ...assetGeneratorOptionPairsFromSource(raw?.supportedQuality),
+    ...assetGeneratorOptionPairsFromSource(raw?.supportedResolutions),
+    ...assetGeneratorOptionPairsFromSource(raw?.qualities),
+    ...assetGeneratorOptionPairsFromSource(raw?.resolutions),
+    ...assetGeneratorParameterOptionPairs(raw, ["quality", "resolution", "imageResolution"]),
+  ]);
+  const resolution = resolveAssetGeneratorSelectedOption({
+    candidates: [ui.assetGeneratorResolution, defaultParams.quality, defaultParams.resolution],
+    options: resolutionOptions,
+    fallback: "2K",
+  });
+  const aspectRatio = resolveAssetGeneratorSelectedOption({
+    candidates: [ui.assetGeneratorAspectRatio, defaultParams.aspectRatio],
+    options: aspectRatioOptions,
+    fallback: "16:9",
+  });
+  const countVisible = assetGeneratorParameterVisibility(raw, "count");
+  return {
+    models,
+    selected,
+    modelCode: selected?.code ?? "",
+    modelLabel: selected?.label || String(ui.assetGeneratorModel ?? "").trim() || "未加载模型",
+    resolution,
+    resolutionOptions: resolutionOptions.length ? resolutionOptions : [[resolution, resolution || "默认"]],
+    aspectRatio,
+    aspectRatioOptions: aspectRatioOptions.length ? aspectRatioOptions : [[aspectRatio, aspectRatio || "默认"]],
+    count: Number(defaultParams.count ?? ui.assetGeneratorCount ?? 1) || 1,
+    countVisible,
+    credits: resolveAssetGeneratorModelCredits(raw),
+    creditBalance: resolveDisplayedCreditBalance(ui, {}),
+  };
+}
+
+function assetGeneratorParameterVisibility(model = {}, key = "") {
+  const schemas = [
+    model?.parameterSchema,
+    model?.parametersSchema,
+    model?.parameter_schema,
+  ].filter((schema) => schema && typeof schema === "object" && !Array.isArray(schema));
+  for (const schema of schemas) {
+    const parameter = schema?.[key];
+    if (parameter && typeof parameter === "object" && !Array.isArray(parameter)) {
+      return parameter.visible !== false;
+    }
+  }
+  return true;
+}
+
+function assetGeneratorParameterOptionPairs(model = {}, keys = []) {
+  const schemas = [
+    model?.parameterSchema,
+    model?.parametersSchema,
+    model?.parameter_schema,
+  ].filter((schema) => schema && typeof schema === "object" && !Array.isArray(schema));
+  return schemas.flatMap((schema) =>
+    keys.flatMap((key) => assetGeneratorOptionPairsFromSource(schema?.[key])),
+  );
+}
+
+function assetGeneratorOptionPairsFromSource(source) {
+  if (source === undefined || source === null || source === "") {
+    return [];
+  }
+  const rawOptions = Array.isArray(source)
+    ? source
+    : Array.isArray(source?.options)
+      ? source.options
+      : Array.isArray(source?.enum)
+        ? source.enum
+        : [source];
+  return rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const value = String(item.value ?? item.providerValue ?? item.id ?? item.code ?? item.label ?? item.name ?? "").trim();
+        const label = String(item.label ?? item.name ?? item.title ?? value).trim();
+        return value ? [value, label || value] : null;
+      }
+      const value = String(item ?? "").trim();
+      return value ? [value, value] : null;
+    })
+    .filter(Boolean);
+}
+
+function dedupeAssetGeneratorOptionPairs(pairs = []) {
+  const seen = new Set();
+  return pairs.filter(([value]) => {
+    const key = String(value ?? "").trim();
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolveAssetGeneratorSelectedOption({ candidates = [], options = [], fallback = "" } = {}) {
+  const optionValues = new Set(options.map(([value]) => String(value ?? "").trim()).filter(Boolean));
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    if (!optionValues.size || optionValues.has(value)) {
+      return value;
+    }
+  }
+  return String(options[0]?.[0] ?? fallback ?? "").trim();
+}
+
+function resolveAssetGeneratorModelCredits(model = {}) {
+  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
+    ? model.pricing
+    : {};
+  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
+    ? model.pricingJson
+    : {};
+  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
+    ? model.pricing_json
+    : {};
+  const candidates = [
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    pricingJson.baseCredits,
+    pricingJson.credits,
+    pricingJson.cost,
+    pricingJson.price,
+    pricingSnakeJson.baseCredits,
+    pricingSnakeJson.credits,
+    pricingSnakeJson.cost,
+    pricingSnakeJson.price,
+    model?.displayBaseCost,
+    model?.baseCredits,
+    model?.credits,
+    model?.creditCost,
+    model?.cost,
+    model?.price,
+    model?.priceCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return Math.round(value);
+    }
+  }
+  return null;
+}
+
 function renderAssetGeneratorModal(ui) {
   const assetKind = ui.assetGeneratorModal ?? "character";
   const tab = ASSET_TABS.find((item) => item.id === assetKind) ?? ASSET_TABS[0];
@@ -4159,18 +4828,13 @@ function renderAssetGeneratorModal(ui) {
     editingAsset?.latestVersion?.previewUrl,
     editingAsset?.latestVersion?.metadata?.previewUrl,
   );
+  const generatorConfig = resolveAssetGeneratorModelConfig(ui);
+  const hasModelOptions = generatorConfig.models.length > 0;
+  const creditText = generatorConfig.credits == null ? "积分待配置" : `✦ ${generatorConfig.credits} 积分`;
   if (!isEditing) {
-    const previewAssets = editingAsset
-      ? [editingAsset]
-      : [{
-          id: `${assetKind}-preview-default`,
-          name,
-          preview:
-            "data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='228' viewBox='0 0 300 228'%3E%3Crect width='300' height='228' rx='18' fill='%2332353f'/%3E%3Crect x='16' y='16' width='268' height='140' rx='14' fill='url(%23g)'/%3E%3Crect x='16' y='172' width='144' height='16' rx='8' fill='%23434655'/%3E%3Crect x='16' y='196' width='98' height='12' rx='6' fill='%23393c48'/%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop stop-color='%23525461'/%3E%3Cstop offset='1' stop-color='%23272831'/%3E%3C/linearGradient%3E%3C/defs%3E%3C/svg%3E",
-        }];
     return `
       <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
-        <div class="asset-generator-modal">
+        <div class="asset-generator-modal asset-generator-modal-create">
           <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
           <aside class="asset-generator-form">
             <h2>生成${escapeHtml(label)}</h2>
@@ -4178,33 +4842,49 @@ function renderAssetGeneratorModal(ui) {
               <span>${escapeHtml(label)}名称 <b>*</b></span>
               <div class="asset-generator-name-row">
                 <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入${escapeHtml(label)}名称" />
-                <button class="asset-generator-ghost-button" type="button">添加${escapeHtml(ASSET_LIBRARY_CONFIG[assetKind]?.addDescriptionLabel ?? "描述")}</button>
               </div>
               <em class="asset-generator-name-count">${[...name].length}/50</em>
             </label>
-            ${assetKind === "character" ? renderCharacterGeneratorFields(ui) : ""}
-            ${assetKind === "scene" ? renderSceneGeneratorFields() : ""}
-            ${assetKind === "prop" ? renderPropGeneratorFields() : ""}
+            <section class="asset-generator-model-card" aria-label="生成模型配置">
+              <div class="asset-generator-model-head">
+                <span>模型配置</span>
+                <strong>${escapeHtml(creditText)}</strong>
+              </div>
+              <label class="asset-generator-model-select">
+                <span>生图模型</span>
+                ${renderAssetGeneratorMenuSelect({
+                  id: "asset-generator-model-select",
+                  menuKey: "model",
+                  label: "生图模型",
+                  selectedValue: generatorConfig.modelCode,
+                  selectedLabel: generatorConfig.modelLabel,
+                  options: hasModelOptions
+                    ? generatorConfig.models.map((model) => [model.code, model.label || model.code])
+                    : [["", "未加载后台模型配置"]],
+                  openMenu: ui.assetGeneratorOpenMenu,
+                  action: "select-asset-generator-model",
+                  disabled: !hasModelOptions,
+                })}
+              </label>
+              <dl class="asset-generator-model-specs">
+                <div class="is-select"><dt>清晰度</dt><dd>${renderAssetGeneratorSpecSelect("asset-generator-resolution-select", "清晰度", generatorConfig.resolutionOptions, generatorConfig.resolution, ui.assetGeneratorOpenMenu)}</dd></div>
+                <div class="is-select"><dt>比例</dt><dd>${renderAssetGeneratorSpecSelect("asset-generator-aspect-ratio-select", "比例", generatorConfig.aspectRatioOptions, generatorConfig.aspectRatio, ui.assetGeneratorOpenMenu)}</dd></div>
+                ${generatorConfig.countVisible ? `<div><dt>张数</dt><dd>${escapeHtml(String(generatorConfig.count))}</dd></div>` : ""}
+              </dl>
+            </section>
             <label class="asset-generator-prompt">
               <span>输入提示词</span>
               <div class="asset-generator-prompt-shell">
-                <button type="button" aria-label="上传参考图">✦</button>
+                ${renderAssetGeneratorReferenceUpload(previewUrl)}
                 <textarea id="asset-generator-prompt-input" placeholder="请输入描述提示词，点击或上传添加参考图。">${escapeHtml(description)}</textarea>
                 <small class="asset-generator-prompt-count">${[...description].length}/460</small>
                 <footer>
-                  <span>${escapeHtml(ui.assetGeneratorModel ?? "即梦4.0")}</span>
-                  <span>${escapeHtml(ui.assetGeneratorResolution ?? "2K")}</span>
-                  <span>生成${escapeHtml(String(ui.assetGeneratorCount ?? 1))}张</span>
-                  <span>✦ 2 积分</span>
-                  <button type="button" data-action="submit-asset-generator">生成</button>
+                  <button type="button" data-action="submit-asset-generator" ${ui.assetGeneratorSubmitting ? "disabled" : ""}>${ui.assetGeneratorSubmitting ? "生成中" : "生成"}</button>
                 </footer>
               </div>
             </label>
           </aside>
-          <section class="asset-generator-preview">
-            ${renderAssetGeneratorPreviewColumn("定稿图片", previewAssets.slice(0, 1))}
-            ${renderAssetGeneratorPreviewColumn("全部素材", previewAssets)}
-          </section>
+          <section class="asset-generator-preview"></section>
         </div>
       </section>
     `;
@@ -4218,10 +4898,23 @@ function renderAssetGeneratorModal(ui) {
       <text x="480" y="558" text-anchor="middle" fill="rgba(255,255,255,0.52)" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="34" font-weight="700">点击上传图片</text>
     </svg>
   `)}`;
+  const taskSummary = resolveAssetGeneratorTaskSummary(editingAsset);
+  const showTaskOverview =
+    Boolean(editingAsset) &&
+    (editingAsset?.source === "generated" ||
+      editingAsset?.assetSource === "generated" ||
+      Boolean(taskSummary.status) ||
+      Boolean(taskSummary.taskId) ||
+      Boolean(taskSummary.previewUrl));
+  const taskOverview = showTaskOverview
+    ? renderAssetGeneratorTaskOverview(editingAsset, previewUrl, placeholderArt, {
+      isSubmitting: ui.assetGeneratorSubmitting === true,
+    })
+    : "";
 
   return `
     <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="编辑${escapeHtml(label)}">
-      <div class="asset-generator-modal asset-generator-modal-edit">
+      <div class="asset-generator-modal asset-generator-modal-edit ${showTaskOverview ? "has-task-overview" : ""}">
         <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
         <aside class="asset-generator-form">
           <h2>编辑${escapeHtml(label)}</h2>
@@ -4238,12 +4931,12 @@ function renderAssetGeneratorModal(ui) {
             <em class="asset-generator-prompt-count">${[...description].length}/460</em>
           </label>
           <div class="asset-generator-image-field">
-            <span>缩略图</span>
+            <span>参考图</span>
             <label class="asset-generator-image-picker ${previewUrl ? "has-preview" : "is-empty"}" for="asset-generator-image-input">
               <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl || placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" />
               <div class="asset-generator-image-overlay">
                 <strong>${previewUrl ? "点击更换" : "点击上传"}</strong>
-                <span>${previewUrl ? "替换当前图片" : "占位图片，点击上传"}</span>
+                <span>${previewUrl ? "替换当前参考图" : "上传一张新的参考图"}</span>
               </div>
             </label>
             <input id="asset-generator-image-input" class="asset-generator-image-input" type="file" accept="image/*" data-action="upload-asset-generator-image" />
@@ -4252,6 +4945,7 @@ function renderAssetGeneratorModal(ui) {
             <button type="button" data-action="submit-asset-generator">${isEditing ? "保存" : "生成"}</button>
           </div>
         </aside>
+        ${taskOverview}
       </div>
     </section>
   `;
@@ -4268,6 +4962,94 @@ function renderAssetGeneratorPreviewColumn(title, assets) {
   `;
 }
 
+function renderAssetGeneratorSpecSelect(id, label, options = [], selectedValue = "", openMenu = "") {
+  const normalizedOptions = dedupeAssetGeneratorOptionPairs(options);
+  const selected = String(selectedValue ?? "").trim();
+  const optionList = normalizedOptions.length ? normalizedOptions : [[selected, selected || "默认"]];
+  const selectedOption = optionList.find(([value]) => String(value ?? "").trim() === selected) ?? optionList[0] ?? ["", "默认"];
+  const menuKey = id.includes("aspect") ? "aspectRatio" : "resolution";
+  const action = id.includes("aspect") ? "select-asset-generator-aspect-ratio" : "select-asset-generator-resolution";
+  return renderAssetGeneratorMenuSelect({
+    id,
+    menuKey,
+    label,
+    selectedValue: selected,
+    selectedLabel: selectedOption[1] || selectedOption[0] || "默认",
+    options: optionList,
+    openMenu,
+    action,
+  });
+}
+
+function renderAssetGeneratorMenuSelect({
+  id,
+  menuKey,
+  label,
+  selectedValue = "",
+  selectedLabel = "",
+  options = [],
+  openMenu = "",
+  action,
+  disabled = false,
+} = {}) {
+  const normalizedOptions = dedupeAssetGeneratorOptionPairs(options);
+  const isOpen = openMenu === menuKey;
+  const selected = String(selectedValue ?? "").trim();
+  return `
+    <div class="asset-generator-menu-select ${isOpen ? "is-open" : ""}">
+      <button
+        id="${escapeAttr(id)}"
+        class="asset-generator-menu-trigger"
+        type="button"
+        data-action="toggle-asset-generator-menu"
+        data-menu-key="${escapeAttr(menuKey)}"
+        aria-label="${escapeAttr(label)}"
+        aria-haspopup="listbox"
+        aria-expanded="${isOpen ? "true" : "false"}"
+        ${disabled ? "disabled" : ""}
+      >
+        <span>${escapeHtml(selectedLabel || selected || "默认")}</span>
+        <span class="asset-generator-menu-chevron" aria-hidden="true">${renderUiChevronIcon("down")}</span>
+      </button>
+      ${isOpen && !disabled ? `
+        <div class="asset-generator-menu-popover" role="listbox" aria-label="${escapeAttr(label)}">
+          ${normalizedOptions
+        .map(([value, optionLabel]) => {
+          const normalizedValue = String(value ?? "").trim();
+          return `
+            <button
+              class="${normalizedValue === selected ? "is-selected" : ""}"
+              type="button"
+              role="option"
+              aria-selected="${normalizedValue === selected ? "true" : "false"}"
+              data-action="${escapeAttr(action)}"
+              data-value="${escapeAttr(normalizedValue)}"
+            >
+              ${escapeHtml(optionLabel || normalizedValue || "默认")}
+            </button>
+          `;
+        })
+        .join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderAssetGeneratorReferenceUpload(previewUrl = "") {
+  const hasPreview = Boolean(previewUrl);
+  return `
+    <div class="asset-generator-reference-upload ${hasPreview ? "has-preview" : ""}">
+      <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" aria-label="${hasPreview ? "更换参考图" : "上传参考图"}">
+        ${hasPreview
+          ? `<img src="${escapeHtml(previewUrl)}" alt="参考图预览" />`
+          : `<span aria-hidden="true">+</span><strong>图片</strong>`}
+      </button>
+      <input id="asset-generator-reference-input" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" hidden />
+    </div>
+  `;
+}
+
 function renderAssetGeneratorPreviewCard(asset) {
   return `
     <article class="asset-generator-preview-card">
@@ -4275,117 +5057,6 @@ function renderAssetGeneratorPreviewCard(asset) {
         <img src="${escapeHtml(resolveApiUrl(asset.preview || asset.previewUrl || ""))}" alt="${escapeHtml(asset.name || "素材预览")}" />
       </div>
     </article>
-  `;
-}
-
-function renderCharacterGeneratorFields(ui) {
-  const styleOptions = [
-    ["none", "无风格"],
-    ["thick-paint", "2D厚涂"],
-    ["two-d", "2D日漫"],
-    ["three-d", "3D国风"],
-    ["three-d-anime", "3D动漫"],
-    ["two-d-version", "2DQ版"],
-    ["three-d-version", "3DQ版"],
-  ];
-  const materialOptions = [
-    ["none", "无题材"],
-    ["fantasy-doomsday", "末世玄幻"],
-    ["eastern-cultivation", "东方修仙"],
-    ["eastern-fantasy", "东方玄幻"],
-    ["ancient-east", "东方古代"],
-    ["palace-east", "东方宫廷"],
-    ["western-fantasy", "西方玄幻"],
-    ["western-palace", "西方宫廷"],
-    ["modern-city", "现代都市"],
-    ["urban-fantasy", "都市玄幻"],
-    ["urban-martial", "都市高武"],
-    ["doomsday-cultivation", "末世修仙"],
-    ["republic-fantasy", "民国玄幻"],
-    ["suspense", "悬疑惊悚"],
-    ["future", "星际未来"],
-    ["urban-weird", "都市灵异"],
-    ["republic-weird", "民国灵异"],
-    ["village", "乡村年代"],
-  ];
-  const imageTypes = [
-    ["main", "主视图"],
-    ["closeup", "特写"],
-    ["main-closeup", "特写+主视图"],
-    ["triple", "三视图"],
-    ["main-triple", "特写+三视图"],
-    ["custom", "自定义视图"],
-  ];
-
-  return `
-    <div class="asset-generator-card">
-      <span>角色类型 <i class="asset-inline-tip">i</i></span>
-      <div class="segmented-row">
-        <button class="${ui.assetGeneratorCharacterType !== "creature" ? "active" : ""}" type="button">人形角色</button>
-        <button class="${ui.assetGeneratorCharacterType === "creature" ? "active" : ""}" type="button">非人形角色</button>
-      </div>
-      <label class="asset-generator-select-field">创作风格
-        <div class="asset-generator-select-display">${escapeHtml(ui.assetGeneratorStyleValue ?? "无风格, 末世玄幻")} <span aria-hidden="true">⌃</span></div>
-      </label>
-      <div class="asset-generator-picker-card">
-        <div class="asset-generator-picker-tabs">
-          <button class="active" type="button">官方</button>
-          <button type="button">自定义</button>
-        </div>
-        <div class="asset-generator-chip-group">
-          ${styleOptions
-            .map(
-              ([id, text]) => `<button class="asset-generator-chip ${ui.assetGeneratorStyleOption === id ? "active" : ""}" type="button">${text}</button>`,
-            )
-            .join("")}
-        </div>
-        <h4>题材</h4>
-        <div class="asset-generator-picker-tabs">
-          <button class="active" type="button">官方</button>
-          <button type="button">自定义</button>
-        </div>
-        <div class="asset-generator-chip-group">
-          ${materialOptions
-            .map(
-              ([id, text]) => `<button class="asset-generator-chip ${ui.assetGeneratorMaterialOption === id ? "active" : ""}" type="button">${text}</button>`,
-            )
-            .join("")}
-        </div>
-      </div>
-      <label class="asset-generator-select-field">生图类型
-        <div class="asset-generator-select-display">主视图 <span aria-hidden="true">⌃</span></div>
-      </label>
-      <div class="asset-generator-view-grid">
-        ${imageTypes
-          .map(
-            ([id, text]) => `<button class="asset-generator-view-card ${ui.assetGeneratorImageType === id ? "active" : ""}" type="button">${text}</button>`,
-          )
-          .join("")}
-      </div>
-    </div>
-  `;
-}
-
-function renderSceneGeneratorFields() {
-  return `
-    <div class="asset-generator-card">
-      <div class="asset-generator-tabs">
-        <button class="active" type="button">图片生成</button>
-        <button type="button">空间多视角</button>
-        <button type="button">多维相机调节</button>
-      </div>
-      <label>创作风格 ⌄ <select><option>无风格 · 无题材</option></select></label>
-      <span>场景模式</span>
-      <div class="segmented-row"><button class="active" type="button">● 生成模式</button><button type="button">● 360° 视界模式 <i>NEW</i></button></div>
-    </div>
-  `;
-}
-
-function renderPropGeneratorFields() {
-  return `
-    <div class="asset-generator-card">
-      <label>创作风格 ⌄ <select><option>无风格 · 无题材</option></select></label>
-    </div>
   `;
 }
 
@@ -4514,30 +5185,6 @@ function getSelectedProjectCard(ui) {
     return null;
   }
   return ui.projectLibrary?.find((project) => project.id === selectedId) ?? null;
-}
-
-function normalizeProjectStatus(status) {
-  if (status === "asset_review" || status === "shot_generation") {
-    return "制作中";
-  }
-  if (status === "export") {
-    return "一稿交付";
-  }
-  return String(status || "未开始");
-}
-
-function getStatusTone(status) {
-  const normalized = normalizeProjectStatus(status);
-  if (normalized === "制作中") {
-    return "blue";
-  }
-  if (normalized === "一稿交付") {
-    return "mint";
-  }
-  if (normalized === "完结") {
-    return "green";
-  }
-  return "muted";
 }
 
 function renderCommunityPage({ ui, session }) {
@@ -5233,7 +5880,7 @@ function renderToolsPanel(ui = {}, state = {}) {
             <span>${sidebarMode === "assets" ? "项目素材" : "画布元素"}</span>
             <i aria-hidden="true">${renderCanvasIcon("sort")}</i>
           </button>
-          <button class="canvas-filter-select" type="button">${sidebarMode === "assets" ? "可拖入" : "全部"}⌄</button>
+          <button class="canvas-filter-select" type="button"><span>${sidebarMode === "assets" ? "可拖入" : "全部"}</span><span class="canvas-filter-select__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span></button>
           <button class="canvas-search" type="button" aria-label="搜索">${renderCanvasIcon("search")}</button>
         </div>
         <div class="canvas-element-list" aria-label="画布节点列表">
@@ -5308,7 +5955,7 @@ function renderCanvasProjectGallery(ui = {}) {
         <div class="canvas-project-gallery-controls">
           <button class="canvas-project-filter" type="button">
             <span>项目状态</span>
-            <i aria-hidden="true">⌄</i>
+            <span class="canvas-project-filter__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
           </button>
           <label class="canvas-project-search">
             ${renderCanvasIcon("search")}
@@ -6287,7 +6934,7 @@ function renderLiblibTextEditor(node) {
         placeholder="写下你想讲的故事、场景或角色设定。例如：一个来自未来的机器人，在城市屋顶看星星。"
       >${escapeHtml(node?.data?.text ?? "")}</textarea>
       <footer class="canvas-editor-controls">
-        <button class="canvas-model-chip" type="button">GVLM 3.1⌄</button>
+        <button class="canvas-model-chip" type="button"><span>GVLM 3.1</span><span class="canvas-model-chip__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span></button>
         <span class="canvas-editor-spacer"></span>
         <button type="button" aria-label="翻译">${renderCanvasIcon("translate")}</button>
         <button type="button" aria-label="积分">✦ 1</button>
@@ -6596,6 +7243,16 @@ function renderCanvasIcon(icon) {
   `;
 }
 
+function renderUiChevronIcon(direction = "down") {
+  const normalizedDirection = direction === "up" ? "up" : "down";
+
+  return `
+    <svg class="ui-chevron-icon ${normalizedDirection === "up" ? "is-up" : ""}" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      <path d="m7 10 5 5 5-5" />
+    </svg>
+  `;
+}
+
 function renderStatusbarActionIcon(icon) {
   const icons = {
     handbook: `
@@ -6631,8 +7288,9 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null, frozenCredits = 0 } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const hasFrozenCredits = Number(frozenCredits) > 0;
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -6659,6 +7317,7 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("wallet")}</span>
           <span>钱包</span>
           <b>${escapeHtml(String(creditBalance))}</b>
+          ${hasFrozenCredits ? `<em class="statusbar-credit-frozen">冻结</em>` : ""}
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>

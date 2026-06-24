@@ -55,6 +55,101 @@ function resolveVideoVersionThumbnail(version) {
   return resolved ? resolveApiUrl(resolved) : "";
 }
 
+function resolveAudioAssetSourceUrl(asset) {
+  if (!asset || typeof asset !== "object") {
+    return "";
+  }
+
+  const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
+  const candidates = [
+    asset?.audioUrl,
+    asset?.latestVersion?.metadata?.audioUrl,
+    asset?.latestVersion?.audioUrl,
+    asset?.sourceUrl,
+    asset?.latestVersion?.metadata?.sourceUrl,
+    asset?.previewUrl,
+    asset?.latestVersion?.previewUrl,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    if (
+      mimeType.startsWith("audio/") ||
+      /^data:audio\//i.test(value) ||
+      /\.(mp3|wav|m4a|aac|ogg|flac)(?:[?#]|$)/i.test(value)
+    ) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function resolveAudioAssetCoverUrl(asset) {
+  if (!asset || typeof asset !== "object") {
+    return "";
+  }
+
+  const audioUrl = resolveAudioAssetSourceUrl(asset);
+  const imageMimeType = String(
+    asset?.fixedImageMimeType ??
+      asset?.coverMimeType ??
+      asset?.latestVersion?.metadata?.fixedImageMimeType ??
+      asset?.latestVersion?.metadata?.coverMimeType ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  const candidates = [
+    asset?.fixedImageUrl,
+    asset?.coverImageUrl,
+    asset?.latestVersion?.metadata?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.coverImageUrl,
+    asset?.latestVersion?.metadata?.previewImageUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+    asset?.previewUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.sourceUrl,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value || value === audioUrl) {
+      continue;
+    }
+    if (/^data:audio\//i.test(value) || /\.(mp3|wav|m4a|aac|ogg|flac)(?:[?#]|$)/i.test(value)) {
+      continue;
+    }
+    if (
+      !imageMimeType.startsWith("image/") &&
+      !/^data:image\//i.test(value) &&
+      !/\.(?:png|jpe?g|webp|gif|avif|svg)(?:[?#]|$)/i.test(value)
+    ) {
+      continue;
+    }
+    return resolveApiUrl(value);
+  }
+
+  return "";
+}
+
+function collectAudioAssetCoverPreviews(detailAssets) {
+  const audioAssets = [
+    ...(detailAssets?.other?.audio ?? []),
+    ...((detailAssets?.other?.video ?? []).filter((asset) => {
+      const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
+      return mimeType.startsWith("audio/") || Boolean(resolveAudioAssetSourceUrl(asset));
+    })),
+  ];
+
+  return audioAssets
+    .map((asset) => resolveAudioAssetCoverUrl(asset))
+    .filter((value, index, list) => value && list.indexOf(value) === index);
+}
+
 
 export const projectDetailFixture = {
   project: {
@@ -315,6 +410,7 @@ function isNumericStoryboardTitle(value) {
 export function getProjectDetailState(state) {
   const detail = state?.projectDetail;
   const sourceProject = detail?.project ?? state?.project;
+  const audioCoverPreviews = collectAudioAssetCoverPreviews(detail?.assetsByType);
   const project = sourceProject
     ? {
         id: sourceProject.id,
@@ -339,7 +435,7 @@ export function getProjectDetailState(state) {
           character: detail.assetSummary.character?.previews ?? [],
           scene: detail.assetSummary.scene?.previews ?? [],
           prop: detail.assetSummary.prop?.previews ?? [],
-          other: detail.assetSummary.other?.previews ?? [],
+          other: audioCoverPreviews.length ? audioCoverPreviews : (detail.assetSummary.other?.previews ?? []),
         },
       }
     : assetCandidates

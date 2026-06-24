@@ -21,6 +21,7 @@ const ASSET_TABS = [
 ];
 const EPISODE_ASSET_TAB_IDS = new Set(ASSET_TABS.map((tab) => tab.id));
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
+const EPISODE_VOICE_PAGE_SIZE = 10;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
 
@@ -40,26 +41,6 @@ const BATCH_VIDEO_MODEL_OPTIONS = [
   { id: "hailuo-2-0", label: "海螺 2.0" },
   { id: "seedance-2-0-vip", label: "SeeDance 2.0 VIP" },
 ];
-
-const VOICE_OPTIONS_BY_TAB = {
-  custom: [
-    { id: "custom-1", name: "军官音色" },
-    { id: "custom-2", name: "应先生" },
-    { id: "custom-3", name: "李右" },
-    { id: "custom-4", name: "白野(我)" },
-  ],
-  system: [
-    { id: "system-1", name: "女/稚嫩" },
-    { id: "system-2", name: "女/天真" },
-    { id: "system-3", name: "女/欢橘" },
-    { id: "system-4", name: "女/甜美" },
-    { id: "system-5", name: "女/温柔" },
-    { id: "system-6", name: "男/普通01" },
-    { id: "system-7", name: "男/不拘" },
-    { id: "system-8", name: "男/阳光" },
-    { id: "system-9", name: "女/嚣张" },
-  ],
-};
 
 function buildBatchStylePreview(background, accent, art = "portrait") {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
@@ -419,7 +400,7 @@ export function renderEpisodeWorkbench({
         confirmAction: "confirm-delete-generation-result",
       })}
       ${renderEpisodeAssetCreateModal(episodeAssetCreateModal)}
-      ${renderEpisodeVoiceModal(episodeVoiceModal)}
+      ${renderEpisodeVoiceModal(episodeVoiceModal, projectDetail, importedAssets)}
       ${renderAssetInspectorModal(assetInspector)}
       ${assetImportModal
         ? renderAssetImportModal({
@@ -2766,53 +2747,199 @@ function renderEpisodeAssetCreateModal(modal) {
   `;
 }
 
-function renderEpisodeVoiceModal(modal) {
+function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = null) {
   if (!modal) return "";
-  const tabs = [
-    { id: "custom", label: "自定义" },
-    { id: "system", label: "系统" },
-  ];
-  const activeTab = modal.tab === "system" ? "system" : "custom";
-  const options = VOICE_OPTIONS_BY_TAB[activeTab];
+  const voiceAssets = resolveEpisodeVoiceAssets(projectDetail, importedAssets);
+  const selectedVoiceId = String(modal.voiceId ?? "").trim();
+  const selectedVoiceName = String(modal.voiceName ?? "").trim();
+  const previewVoiceId = String(modal.previewVoiceId ?? "").trim();
+  const totalPages = Math.max(1, Math.ceil(voiceAssets.length / EPISODE_VOICE_PAGE_SIZE));
+  const preferredVoiceIndex = voiceAssets.findIndex((voice) => (
+    (selectedVoiceId && selectedVoiceId === voice.id) ||
+    (!selectedVoiceId && selectedVoiceName && selectedVoiceName === voice.name)
+  ));
+  const fallbackPage = preferredVoiceIndex >= 0 ? Math.floor(preferredVoiceIndex / EPISODE_VOICE_PAGE_SIZE) + 1 : 1;
+  const currentPage = clampEpisodeVoicePage(modal.page ?? fallbackPage, totalPages);
+  const pageStart = (currentPage - 1) * EPISODE_VOICE_PAGE_SIZE;
+  const pageItems = voiceAssets.slice(pageStart, pageStart + EPISODE_VOICE_PAGE_SIZE);
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-voice-modal"></button>
       <div class="episode-voice-modal episode-voice-picker-modal">
         <button class="episode-asset-create-close" type="button" data-action="close-episode-voice-modal">×</button>
         <h3>选择配音</h3>
-        <div class="episode-voice-tabs">
-          ${tabs.map((tab) => `<button class="${activeTab === tab.id ? "active" : ""}" type="button" data-action="set-episode-voice-tab" data-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
-        </div>
-        <div class="episode-voice-grid">
-          ${options.map((voice) => `
+        <div class="episode-voice-modal-body">
+          <div class="episode-voice-grid">
+            ${pageItems.length
+            ? pageItems.map((voice) => `
             <article
-              class="episode-voice-card ${modal.voiceName === voice.name ? "active" : ""}"
+              class="episode-voice-card ${selectedVoiceId === voice.id || selectedVoiceName === voice.name ? "active" : ""}"
               data-action="select-episode-voice"
               data-voice-id="${escapeAttr(voice.id)}"
               data-voice-name="${escapeAttr(voice.name)}"
-              data-voice-source="${escapeAttr(activeTab)}"
+              data-voice-source="custom"
               role="button"
               tabindex="0"
-              aria-pressed="${modal.voiceName === voice.name ? "true" : "false"}"
+              aria-pressed="${selectedVoiceId === voice.id || selectedVoiceName === voice.name ? "true" : "false"}"
             >
               <span class="episode-voice-card-radio" aria-hidden="true"></span>
-              <span class="episode-voice-avatar"><i></i></span>
+              <span class="episode-voice-avatar ${voice.coverUrl ? "has-cover" : ""}" aria-hidden="true">
+                ${voice.coverUrl ? `<img src="${escapeAttr(resolveEpisodeBrowserUrl(voice.coverUrl))}" alt="" loading="lazy" />` : "<i></i>"}
+              </span>
               <strong>${escapeHtml(voice.name)}</strong>
               <div class="episode-voice-card-foot">
-                <span class="episode-voice-card-state">${modal.voiceName === voice.name ? "已选中" : ""}</span>
+                <span class="episode-voice-card-state">${selectedVoiceId === voice.id || selectedVoiceName === voice.name ? "已选中" : ""}</span>
                 <button
                   type="button"
-                  class="episode-voice-preview-trigger ${modal.previewVoiceName === voice.name ? "active" : ""}"
+                  class="episode-voice-preview-trigger ${previewVoiceId === voice.id ? "active" : ""}"
                   data-action="preview-episode-voice"
+                  data-voice-id="${escapeAttr(voice.id)}"
                   data-voice-name="${escapeAttr(voice.name)}"
-                >${modal.previewVoiceName === voice.name ? "停止试听" : "试听"}</button>
+                  data-voice-audio-url="${escapeAttr(voice.audioUrl)}"
+                >${previewVoiceId === voice.id ? "停止试听" : "试听"}</button>
               </div>
             </article>
-          `).join("")}
+          `).join("")
+            : `<div class="episode-voice-empty-state">当前剧集资产库暂无音频素材。</div>`}
+          </div>
+          ${voiceAssets.length ? renderEpisodeVoicePagination(voiceAssets.length, currentPage, totalPages) : ""}
         </div>
       </div>
     </section>
   `;
+}
+
+function renderEpisodeVoicePagination(totalCount = 0, currentPage = 1, totalPages = 1) {
+  return `
+    <div class="episode-voice-pagination">
+      <span class="episode-voice-pagination-summary">共 ${totalCount} 个素材，每页 ${EPISODE_VOICE_PAGE_SIZE} 个</span>
+      <div class="episode-voice-pagination-controls">
+        <button
+          type="button"
+          data-action="change-episode-voice-page"
+          data-page="${currentPage - 1}"
+          ${disabled(currentPage <= 1)}
+        >上一页</button>
+        <span class="episode-voice-pagination-status">${currentPage} / ${totalPages}</span>
+        <button
+          type="button"
+          data-action="change-episode-voice-page"
+          data-page="${currentPage + 1}"
+          ${disabled(currentPage >= totalPages)}
+        >下一页</button>
+      </div>
+    </div>
+  `;
+}
+
+function resolveEpisodeVoiceAssets(projectDetail = null, importedAssets = null) {
+  const detailAssets = projectDetail?.assetsByType;
+  const assets = [];
+  if (detailAssets && typeof detailAssets === "object") {
+    assets.push(...(detailAssets.other?.audio ?? []));
+    assets.push(...((detailAssets.other?.video ?? []).filter((asset) => isEpisodeVoiceAudioAsset(asset))));
+  } else if (importedAssets && typeof importedAssets === "object") {
+    assets.push(...(importedAssets.other?.audio ?? []));
+  }
+  return assets.map((asset) => normalizeEpisodeVoiceAsset(asset)).filter(Boolean);
+}
+
+function normalizeEpisodeVoiceAsset(asset) {
+  const id = String(asset?.id ?? asset?.assetId ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    name: String(asset?.label ?? asset?.name ?? asset?.title ?? asset?.assetKey ?? "未命名音频").trim() || "未命名音频",
+    audioUrl: resolveEpisodeVoiceAudioUrl(asset),
+    coverUrl: resolveEpisodeVoiceCoverUrl(asset),
+  };
+}
+
+function isEpisodeVoiceAudioAsset(asset) {
+  return Boolean(
+    resolveEpisodeVoiceAudioUrl(asset) ||
+      String(asset?.mimeType ?? asset?.latestVersion?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "")
+        .trim()
+        .toLowerCase()
+        .startsWith("audio/"),
+  );
+}
+
+function resolveEpisodeVoiceAudioUrl(asset) {
+  const candidates = [
+    asset?.audioUrl,
+    asset?.sourceUrl,
+    asset?.latestVersion?.metadata?.sourceUrl,
+    asset?.latestVersion?.previewUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+    asset?.preview,
+    asset?.previewUrl,
+  ];
+  const mimeType = String(asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? "").trim().toLowerCase();
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    if (
+      mimeType.startsWith("audio/") ||
+      /^data:audio\//i.test(value) ||
+      /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(value)
+    ) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function resolveEpisodeVoiceCoverUrl(asset) {
+  const audioUrl = resolveEpisodeVoiceAudioUrl(asset);
+  const candidates = [
+    asset?.exampleImageUrl,
+    asset?.exampleImagePreview,
+    asset?.exampleImageSourceUrl,
+    asset?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.fixedImageUrl,
+    asset?.latestVersion?.metadata?.exampleImageUrl,
+    asset?.latestVersion?.metadata?.exampleImagePreview,
+    asset?.latestVersion?.metadata?.exampleImageSourceUrl,
+    asset?.latestVersion?.metadata?.previewUrl,
+    asset?.preview,
+    asset?.previewUrl,
+    asset?.sourceUrl,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (!value || value === audioUrl) {
+      continue;
+    }
+    if (/^data:audio\//i.test(value) || /\.(mp3|wav|m4a|aac)(?:[?#]|$)/i.test(value)) {
+      continue;
+    }
+    return value;
+  }
+  return "";
+}
+
+function resolveEpisodeBrowserUrl(url) {
+  const value = String(url ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/^(?:https?:|data:)/i.test(value)) {
+    return value;
+  }
+  return resolveApiUrl(value);
+}
+
+function clampEpisodeVoicePage(value, totalPages = 1) {
+  const page = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(page) || page < 1) {
+    return 1;
+  }
+  return Math.min(page, Math.max(1, totalPages));
 }
 
 function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel = null) {

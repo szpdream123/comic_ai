@@ -243,4 +243,49 @@ describe("volcengine ark image provider adapter", () => {
     assert.equal(result.status, "succeeded");
     assert.equal(result.artifacts?.[0]?.url, "https://cdn.example.com/retry.jpg");
   });
+
+  it("includes reference images from quickReferences and imageReference in Volcengine content payload", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+    const adapter = new VolcengineArkImageProviderAdapter({
+      apiKey: "ark-key",
+      model: "doubao-seedream-5-0-260128",
+      createTaskEndpoint: "https://ark.example.com/api/v3/images/generations",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = JSON.parse(String(init?.body ?? "{}"));
+        return new Response(
+          JSON.stringify({
+            data: [{ url: "https://cdn.example.com/reference-result.png" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-reference",
+      providerName: "volcengine",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-reference:task-reference",
+      payloadRef: "creator://payload-reference",
+      payloadHash: "hash-reference",
+      redactedPayload: {
+        prompt: "a comic character turnaround",
+        parameters: {
+          quality: "2K",
+          quickReferences: [
+            { url: "https://example.com/reference-a.png" },
+            { previewUrl: "https://example.com/reference-b.png" },
+          ],
+          imageReference: { sourceUrl: "https://example.com/reference-c.png" },
+        },
+      },
+    });
+
+    assert.deepEqual(capturedBody?.content, [
+      { type: "text", text: "a comic character turnaround" },
+      { type: "image_url", image_url: { url: "https://example.com/reference-a.png" } },
+      { type: "image_url", image_url: { url: "https://example.com/reference-b.png" } },
+      { type: "image_url", image_url: { url: "https://example.com/reference-c.png" } },
+    ]);
+  });
 });

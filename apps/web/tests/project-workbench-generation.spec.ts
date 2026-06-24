@@ -4741,6 +4741,138 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, />编辑<\/span>/);
   });
 
+  it("keeps selected episode voice state when reopening the modal for a real episode asset", async () => {
+    const storyboards = addStoryboard([]);
+    const assetId = "10000000-0000-4000-8000-000000000111";
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          assetsByType: {
+            character: [
+              {
+                id: assetId,
+                label: "废土主角",
+                voiceId: "audio-1",
+                voiceName: "女/稚嫩",
+                previewUrl: "/uploads/hero.png",
+              },
+            ],
+            scene: [],
+            prop: [],
+            other: {
+              audio: [
+                {
+                  id: "audio-1",
+                  name: "女/稚嫩",
+                  sourceUrl: "/uploads/voice.mp3",
+                  exampleImageSourceUrl: "/uploads/voice-cover.png",
+                },
+              ],
+              image: [],
+              video: [],
+            },
+          },
+          episodes: [{ id: "episode-real-1", title: "真实剧集" }],
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateEpisodeAsset() {
+          return { ok: true };
+        },
+        async getEpisodeWorkbench() {
+          return {
+            project: { projectId: "project-1" },
+            episode: { projectId: "project-1" },
+            assetsByType: {
+              character: [
+                {
+                  id: assetId,
+                  label: "废土主角",
+                  voiceId: "audio-1",
+                  voiceName: "女/稚嫩",
+                  previewUrl: "/uploads/hero.png",
+                },
+              ],
+              scene: [],
+              prop: [],
+            },
+          };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          selectedEpisodeId: "episode-real-1",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          selectedStoryboardId: storyboards[0]?.id ?? null,
+          episodeStoryboardMap: {
+            "episode-real-1": storyboards,
+          },
+          importedAssets: {
+            character: [
+              {
+                id: assetId,
+                assetId,
+                kind: "character",
+                name: "废土主角",
+                preview: "/uploads/hero.png",
+                voiceId: "",
+                voiceName: "",
+                voiceSource: "custom",
+              },
+            ],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          episodeVoiceModal: {
+            scope: "asset",
+            assetId,
+            assetName: "废土主角",
+            assetKind: "character",
+            voiceId: "audio-1",
+            voiceName: "女/稚嫩",
+            previewVoiceId: "",
+            previewVoiceName: "",
+            page: 1,
+          },
+        }),
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-episode-voice",
+        voiceId: "audio-1",
+        voiceName: "女/稚嫩",
+        voiceSource: "custom",
+      },
+    });
+
+    assert.equal(workbench.ui.episodeVoiceModal, null);
+    assert.equal(workbench.ui.importedAssets.character[0].voiceName, "女/稚嫩");
+    assert.match(renderProductionWorkbench(workbench), /<strong>女\/稚嫩<\/strong>/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "open-episode-voice-modal",
+        assetId,
+        assetName: "废土主角",
+        assetKind: "character",
+      },
+    });
+
+    const reopenedHtml = renderProductionWorkbench(workbench);
+    assert.match(reopenedHtml, /class="episode-voice-card active"/);
+    assert.match(reopenedHtml, /已选中/);
+  });
+
   it("shows only image mode in asset scope and hides video and lip-sync tabs", () => {
     const state = {
       project: {
@@ -4868,6 +5000,34 @@ describe("asset generator and imported asset modals", () => {
     };
   }
 
+  function buildProjectState() {
+    return {
+      project: {
+        id: "project-1",
+        name: "try",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      assetReview: { readyForGeneration: false },
+      assetCandidates: {
+        characters: [{ assetKey: "hero", label: "hero", required: true, confirmed: false }],
+        scenes: [{ assetKey: "city", label: "city", required: true, confirmed: false }],
+        props: [{ assetKey: "sword", label: "sword", required: false, confirmed: false }],
+      },
+      calibration: null,
+      shots: [
+        {
+          id: "shot-1",
+          title: "Shot 001",
+          currentImageAssetVersionId: null,
+          currentVideoAssetVersionId: null,
+        },
+      ],
+      exportPreview: null,
+    };
+  }
+
   function buildModalUi(overrides = {}) {
     const state = buildModalState();
     const storyboards = createStoryboardList(state);
@@ -4898,6 +5058,30 @@ describe("asset generator and imported asset modals", () => {
     };
   }
 
+  function buildProjectUi(overrides = {}) {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+
+    return {
+      activeNavTab: "project",
+      storyboards,
+      selectedStoryboard: storyboards[0],
+      selectedModelId: "vidu-q3-pro",
+      prompt: "",
+      busy: false,
+      projectPanelMode: "library",
+      projectLibrary: [],
+      validationMessage: "",
+      toast: "",
+      isScriptModalOpen: false,
+      isCreateModalOpen: false,
+      scriptTab: "script-upload",
+      uploadNotice: "",
+      defaultScript: "Episode 1",
+      ...overrides,
+    };
+  }
+
   it("renders the character generator modal with chips and preview groups", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
@@ -4905,7 +5089,7 @@ describe("asset generator and imported asset modals", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: buildModalUi({
         assetGeneratorModal: "character",
-        assetGeneratorName: "废土角色(1)",
+        assetGeneratorName: "",
         importedAssets: {
           character: [
             {
@@ -4924,12 +5108,512 @@ describe("asset generator and imported asset modals", () => {
 
     assert.match(html, /character-preview/);
     assert.match(html, /id="asset-generator-name-input"/);
+    assert.match(html, /placeholder="请输入角色名称"/);
+    assert.match(html, /value=""/);
     assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
     assert.match(html, /character-preview/);
+  });
+
+  it("renders scene generator copy with configured model credits", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+        assetGeneratorResolution: "1K",
+        assetGeneratorAspectRatio: "9:16",
+        assetGeneratorOpenMenu: "aspectRatio",
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["text_to_image"],
+              supportedRatios: ["9:16", "16:9"],
+              supportedQuality: ["1K", "2K"],
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.match(html, />生成场景</);
+    assert.match(html, /模型配置/);
+    assert.match(html, /GPT Image 2/);
+    assert.match(html, /✦ 50 积分/);
+    assert.doesNotMatch(html, /asset-generator-ghost-button/);
+    assert.doesNotMatch(html, /<dt>模型<\/dt>/);
+    assert.doesNotMatch(html, /<dt>积分<\/dt>/);
+    assert.doesNotMatch(html, /<dt>账户<\/dt>/);
+    assert.doesNotMatch(html, /余额 512/);
+    assert.doesNotMatch(html, /空间多视角/);
+    assert.doesNotMatch(html, /场景模式/);
+    assert.match(html, /id="asset-generator-aspect-ratio-select"/);
+    assert.match(html, /asset-generator-menu-popover/);
+    assert.match(html, /data-action="select-asset-generator-aspect-ratio"/);
+    assert.match(html, /data-value="9:16"/);
+    assert.match(html, /data-value="16:9"/);
+    assert.match(html, /data-action="pick-asset-generator-reference-image"/);
+    assert.match(html, /id="asset-generator-reference-input"/);
+  });
+
+  it("hides asset generator count when the model marks count as not visible", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        projectAssetTab: "prop",
+        assetGeneratorModal: "prop",
+        assetGeneratorName: "",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["text_to_image"],
+              supportedRatios: ["9:16", "16:9"],
+              supportedQuality: ["1K", "2K"],
+              defaultParams: { count: 1 },
+              parameterSchema: {
+                count: { type: "integer", visible: false },
+              },
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.doesNotMatch(html, /<dt>张数<\/dt>/);
+  });
+
+  it("opens asset generator modal without a default asset name", async () => {
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "character",
+        assetGeneratorName: "废土角色(1)",
+      }),
+      api: {
+        async listGenerationConfig() {
+          return {
+            creditBalance: 512,
+            defaultImageModelCode: "gpt-image-2-cn",
+            models: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorModal, "character");
+    assert.equal(workbench.ui.assetGeneratorMode, "generate");
+    assert.equal(workbench.ui.assetGeneratorName, "");
+  });
+
+  it("submits asset generator prompt through real episode image task", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-real-1", title: "真实剧集" }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedEpisodeId: "episode-real-1",
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "废土车队营地",
+        assetGeneratorPrompt: "蓝色夜雾中的废土车队营地，篝火居中，远处破败城市。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+        assetGeneratorResolution: "1K",
+        assetGeneratorAspectRatio: "9:16",
+        assetGeneratorPreviewUrl: "https://example.com/reference-scene.png",
+        assetGeneratorPreviewFile: {
+          mimeType: "image/png",
+          previewUrl: "https://example.com/reference-scene.png",
+        },
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["text_to_image"],
+              supportedRatios: ["9:16", "16:9"],
+              supportedQuality: ["1K", "2K"],
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+      api: {
+        async listGenerationConfig(episodeId) {
+          calls.push(["listGenerationConfig", episodeId]);
+          return workbench.ui.episodeGenerationConfig;
+        },
+        async createEpisodeAsset(episodeId, payload) {
+          calls.push(["createEpisodeAsset", episodeId, payload]);
+          return { asset: { assetId: "scene-asset-real-1" } };
+        },
+        async createImageTask(episodeId, payload) {
+          calls.push(["createImageTask", episodeId, payload]);
+          return {
+            taskId: "scene-image-task-1",
+            status: "succeeded",
+            workflowStatus: "succeeded",
+            creditBalance: 462,
+            result: {
+              imageUrl: "https://example.com/generated-scene.png",
+              assetVersionId: "scene-version-1",
+              storageObjectId: "scene-storage-1",
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    const createAssetCall = calls.find((call) => call[0] === "createEpisodeAsset");
+    const createTaskCall = calls.find((call) => call[0] === "createImageTask");
+    assert.equal(createAssetCall?.[1], "episode-real-1");
+    assert.deepEqual(createAssetCall?.[2], {
+      assetType: "scene",
+      name: "废土车队营地",
+      description: "蓝色夜雾中的废土车队营地，篝火居中，远处破败城市。",
+    });
+    assert.equal(createTaskCall?.[1], "episode-real-1");
+    assert.equal(createTaskCall?.[2].targetType, "asset");
+    assert.equal(createTaskCall?.[2].targetId, "scene-asset-real-1");
+    assert.equal(createTaskCall?.[2].assetType, "scene");
+    assert.equal(createTaskCall?.[2].model, "gpt-image-2-cn");
+    assert.equal(createTaskCall?.[2].prompt, "蓝色夜雾中的废土车队营地，篝火居中，远处破败城市。");
+    assert.equal(createTaskCall?.[2].parameters.quality, "1K");
+    assert.equal(createTaskCall?.[2].parameters.resolution, "1K");
+    assert.equal(createTaskCall?.[2].parameters.aspectRatio, "9:16");
+    assert.deepEqual(createTaskCall?.[2].parameters.imageReference, {
+      kind: "image",
+      url: "https://example.com/reference-scene.png",
+      mimeType: "image/png",
+    });
+    assert.deepEqual(createTaskCall?.[2].parameters.quickReferences, [
+      {
+        kind: "image",
+        url: "https://example.com/reference-scene.png",
+        mimeType: "image/png",
+      },
+    ]);
+    assert.equal(workbench.ui.assetGeneratorModal, null);
+    assert.equal(workbench.ui.selectedEpisodeAssetId, "scene-asset-real-1");
+    assert.equal(workbench.ui.creditBalance, 462);
+    assert.equal(workbench.ui.episodeBatchResults["scene-asset-real-1"].status, "completed");
+    assert.equal(workbench.ui.episodeBatchResults["scene-asset-real-1"].taskId, "scene-image-task-1");
+    assert.equal(
+      workbench.ui.importedAssets.scene.find((asset) => asset.id === "scene-asset-real-1")?.generationStatus,
+      "completed",
+    );
+    assert.equal(
+      workbench.ui.importedAssets.scene.find((asset) => asset.id === "scene-asset-real-1")?.fixedImageUrl,
+      "https://example.com/generated-scene.png",
+    );
+  });
+
+  it("omits asset generator count from task payload when the model hides count", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-real-1", title: "真实剧集" }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedEpisodeId: "episode-real-1",
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        projectAssetTab: "prop",
+        assetGeneratorModal: "prop",
+        assetGeneratorName: "废土道具(1)",
+        assetGeneratorPrompt: "废土风格的金属油灯，带磨损和补丁痕迹。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+        assetGeneratorCount: 4,
+        assetGeneratorResolution: "1K",
+        assetGeneratorAspectRatio: "9:16",
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["text_to_image"],
+              supportedRatios: ["9:16", "16:9"],
+              supportedQuality: ["1K", "2K"],
+              parameterSchema: {
+                count: { type: "integer", visible: false },
+                quality: { type: "enum", visible: true, options: ["1K", "2K"] },
+                aspectRatio: { type: "enum", visible: true, options: ["9:16", "16:9"] },
+              },
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+      api: {
+        async listGenerationConfig(episodeId) {
+          calls.push(["listGenerationConfig", episodeId]);
+          return workbench.ui.episodeGenerationConfig;
+        },
+        async createEpisodeAsset(episodeId, payload) {
+          calls.push(["createEpisodeAsset", episodeId, payload]);
+          return { asset: { assetId: "prop-asset-real-1" } };
+        },
+        async createImageTask(episodeId, payload) {
+          calls.push(["createImageTask", episodeId, payload]);
+          return {
+            taskId: "prop-image-task-1",
+            status: "succeeded",
+            workflowStatus: "succeeded",
+            creditBalance: 462,
+            result: {
+              imageUrl: "https://example.com/generated-prop.png",
+              assetVersionId: "prop-version-1",
+              storageObjectId: "prop-storage-1",
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    const createTaskCall = calls.find((call) => call[0] === "createImageTask");
+    assert.ok(createTaskCall);
+    assert.equal(Object.prototype.hasOwnProperty.call(createTaskCall?.[2].parameters || {}, "count"), false);
+    assert.equal(createTaskCall?.[2].parameters.quality, "1K");
+    assert.equal(createTaskCall?.[2].parameters.aspectRatio, "9:16");
+  });
+
+  it("passes project id and inserts the generated project asset card", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: { id: "project-asset-1", projectId: "project-asset-1", name: "try" },
+        projectDetail: {
+          project: { id: "project-asset-1", projectId: "project-asset-1", name: "try" },
+          episodes: [],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedProjectCardId: "project-asset-1",
+        selectedEpisodeId: null,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "废土场景(1)",
+        assetGeneratorPrompt: "废土车队营地，蓝色夜雾，篝火居中。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+      }),
+      api: {
+        async generateAsset(payload) {
+          calls.push(["generateAsset", payload]);
+          return {
+            asset: {
+              id: "project-scene-generated-1",
+              assetKey: "scene-generated-key",
+              createdAt: "2026-06-24T00:00:00.000Z",
+            },
+            version: {
+              id: "project-scene-version-1",
+              previewUrl: "https://example.com/project-generated-scene.png",
+              createdAt: "2026-06-24T00:00:00.000Z",
+              metadata: {
+                source: "generated",
+                label: "废土场景(1)",
+                description: "废土车队营地，蓝色夜雾，篝火居中。",
+                previewUrl: "https://example.com/project-generated-scene.png",
+              },
+            },
+          };
+        },
+        async getProjectDetail(projectId) {
+          calls.push(["getProjectDetail", projectId]);
+          return {
+            project: { id: projectId, projectId, name: "try" },
+            episodes: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+            shots: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    const generateCall = calls.find((call) => call[0] === "generateAsset");
+    assert.equal(generateCall?.[1].projectId, "project-asset-1");
+    assert.equal(generateCall?.[1].kind, "scene");
+    assert.equal(generateCall?.[1].prompt, "废土车队营地，蓝色夜雾，篝火居中。");
+    const generatedAsset = workbench.ui.importedAssets.scene.find((asset) => asset.id === "project-scene-generated-1");
+    assert.equal(generatedAsset?.name, "废土场景(1)");
+    assert.equal(generatedAsset?.generationStatus, "completed");
+    assert.equal(generatedAsset?.fixedImageUrl, "https://example.com/project-generated-scene.png");
+  });
+
+  it("uses project asset generation in workspace mode even if a stale episode id is present", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: { id: "project-asset-2", projectId: "project-asset-2", name: "try" },
+        projectDetail: {
+          project: { id: "project-asset-2", projectId: "project-asset-2", name: "try" },
+          episodes: [{ id: "episode-stale-1", title: "旧剧集" }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedProjectCardId: "project-asset-2",
+        selectedEpisodeId: "episode-stale-1",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "废土场景(2)",
+        assetGeneratorPrompt: "残破高架桥下的临时营地，湿冷晨雾。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+      }),
+      api: {
+        async createEpisodeAsset() {
+          calls.push(["createEpisodeAsset"]);
+          return { asset: { assetId: "should-not-run" } };
+        },
+        async createImageTask() {
+          calls.push(["createImageTask"]);
+          return { taskId: "should-not-run" };
+        },
+        async generateAsset(payload) {
+          calls.push(["generateAsset", payload]);
+          return {
+            asset: {
+              id: "project-scene-generated-2",
+              assetKey: "scene-generated-key-2",
+              createdAt: "2026-06-24T00:00:00.000Z",
+            },
+            version: {
+              id: "project-scene-version-2",
+              previewUrl: "https://example.com/project-generated-scene-2.png",
+              createdAt: "2026-06-24T00:00:00.000Z",
+              metadata: {
+                source: "generated",
+                label: "废土场景(2)",
+                description: "残破高架桥下的临时营地，湿冷晨雾。",
+                previewUrl: "https://example.com/project-generated-scene-2.png",
+              },
+            },
+          };
+        },
+        async getProjectDetail(projectId) {
+          calls.push(["getProjectDetail", projectId]);
+          return {
+            project: { id: projectId, projectId, name: "try" },
+            episodes: [{ id: "episode-stale-1", title: "旧剧集" }],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+            shots: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    assert.equal(calls.some((call) => call[0] === "createEpisodeAsset"), false);
+    assert.equal(calls.some((call) => call[0] === "createImageTask"), false);
+    const generateCall = calls.find((call) => call[0] === "generateAsset");
+    assert.equal(generateCall?.[1].projectId, "project-asset-2");
+    const generatedAsset = workbench.ui.importedAssets.scene.find((asset) => asset.id === "project-scene-generated-2");
+    assert.equal(generatedAsset?.generationStatus, "completed");
   });
 
   it("renders the asset generator modal in edit mode", () => {
@@ -4950,8 +5634,726 @@ describe("asset generator and imported asset modals", () => {
       }),
     });
     assert.match(html, /asset-generator-name-input/);
-    assert.match(html, /asset-generator-preview-group/);
     assert.match(html, /edit-character-preview/);
+  });
+
+  it("renders task overview for generated assets in edit mode", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "scene-1",
+          kind: "scene",
+          name: "废土营地",
+          source: "generated",
+          generationStatus: "running",
+          generationTaskId: "scene-task-1",
+        },
+        assetGeneratorName: "废土营地",
+      }),
+    });
+
+    assert.match(html, /任务概览/);
+    assert.match(html, /生成中/);
+    assert.match(html, /scene-task-1/);
+  });
+
+  it("renders returned generation image inside the task overview", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "scene-2",
+          kind: "scene",
+          name: "废土高架桥",
+          source: "generated",
+          generationStatus: "completed",
+          generationTaskId: "scene-task-2",
+          generationResult: {
+            status: "completed",
+            version: {
+              previewUrl: "https://example.com/generated-scene-2.png",
+            },
+          },
+        },
+        assetGeneratorName: "废土高架桥",
+      }),
+    });
+
+    assert.match(html, /任务概览/);
+    assert.match(html, /generated-scene-2\.png/);
+    assert.match(html, /已完成/);
+  });
+
+  it("renders the failed reason and regenerate action inside the task overview", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "scene-failed-1",
+          kind: "scene",
+          name: "废土天桥",
+          source: "generated",
+          generationStatus: "failed",
+          generationTaskId: "scene-task-failed-1",
+          generationResult: {
+            status: "failed",
+            failure: {
+              displayMessage: "模型服务超时，请稍后重试。",
+            },
+          },
+        },
+        assetGeneratorName: "废土天桥",
+      }),
+    });
+
+    assert.match(html, /任务概览/);
+    assert.match(html, /生成失败/);
+    assert.match(html, /失败原因/);
+    assert.match(html, /模型服务超时，请稍后重试。/);
+    assert.match(html, /data-action="regenerate-asset-generator"/);
+    assert.match(html, />重新生成</);
+  });
+
+  it("restarts failed project asset generation from the task overview", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: { id: "project-retry-1", projectId: "project-retry-1", name: "try" },
+        projectDetail: {
+          project: { id: "project-retry-1", projectId: "project-retry-1", name: "try" },
+          episodes: [],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedProjectCardId: "project-retry-1",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorName: "废土天桥",
+        assetGeneratorPrompt: "被风沙侵蚀的废土天桥，低饱和晨雾。",
+        assetGeneratorModelCode: "ui-default-model",
+        assetGeneratorEditingAsset: {
+          id: "scene-failed-1",
+          kind: "scene",
+          name: "废土天桥",
+          description: "被风沙侵蚀的废土天桥，低饱和晨雾。",
+          source: "generated",
+          generationStatus: "failed",
+          generationTaskId: "scene-task-failed-1",
+          generationResult: {
+            status: "failed",
+            prompt: "历史任务提示词",
+            model: "historic-scene-model",
+            parameters: {
+              quality: "1K",
+              resolution: "1K",
+              aspectRatio: "9:16",
+              references: [
+                {
+                  kind: "image",
+                  url: "https://example.com/historic-reference.png",
+                  mimeType: "image/png",
+                },
+              ],
+            },
+            failure: {
+              displayMessage: "模型服务超时，请稍后重试。",
+            },
+          },
+        },
+        importedAssets: {
+          character: [],
+          scene: [
+            {
+              id: "scene-failed-1",
+              kind: "scene",
+              name: "废土天桥",
+              description: "被风沙侵蚀的废土天桥，低饱和晨雾。",
+              source: "generated",
+              generationStatus: "failed",
+              generationTaskId: "scene-task-failed-1",
+              generationResult: {
+                status: "failed",
+                prompt: "历史任务提示词",
+                model: "historic-scene-model",
+                parameters: {
+                  quality: "1K",
+                  resolution: "1K",
+                  aspectRatio: "9:16",
+                  references: [
+                    {
+                      kind: "image",
+                      url: "https://example.com/historic-reference.png",
+                      mimeType: "image/png",
+                    },
+                  ],
+                },
+                failure: {
+                  displayMessage: "模型服务超时，请稍后重试。",
+                },
+              },
+            },
+          ],
+          prop: [],
+          other: { audio: [], image: [], video: [] },
+        },
+      }),
+      api: {
+        async generateAsset(payload) {
+          calls.push(["generateAsset", payload]);
+          return {
+            asset: {
+              id: "scene-regenerated-1",
+              assetKey: "scene-regenerated-key-1",
+              createdAt: "2026-06-24T00:00:00.000Z",
+            },
+            generationTaskId: "scene-regenerated-task-1",
+            status: "running",
+            workflowStatus: "running",
+          };
+        },
+        async getProjectDetail(projectId) {
+          calls.push(["getProjectDetail", projectId]);
+          return {
+            project: { id: projectId, projectId, name: "try" },
+            episodes: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+            shots: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-asset-generator" },
+    });
+
+    const generateCall = calls.find((call) => call[0] === "generateAsset");
+    assert.equal(generateCall?.[1].projectId, "project-retry-1");
+    assert.equal(generateCall?.[1].kind, "scene");
+    assert.equal(generateCall?.[1].name, "废土天桥");
+    assert.equal(generateCall?.[1].prompt, "历史任务提示词");
+    assert.equal(generateCall?.[1].model, "historic-scene-model");
+    assert.equal(generateCall?.[1].parameters.quality, "1K");
+    assert.equal(generateCall?.[1].parameters.resolution, "1K");
+    assert.equal(generateCall?.[1].parameters.aspectRatio, "9:16");
+    assert.deepEqual(generateCall?.[1].parameters.references, [
+      {
+        kind: "image",
+        url: "https://example.com/historic-reference.png",
+        mimeType: "image/png",
+      },
+    ]);
+    assert.equal(workbench.ui.assetGeneratorModal, "scene");
+    assert.equal(workbench.ui.assetGeneratorMode, "edit");
+    assert.equal(workbench.ui.assetGeneratorSubmitting, false);
+    assert.equal(workbench.ui.assetGeneratorEditingAsset?.generationStatus, "running");
+    assert.equal(workbench.ui.assetGeneratorEditingAsset?.generationTaskId, "scene-regenerated-task-1");
+    assert.equal(workbench.ui.toast, "资产重新生成已提交。");
+  });
+
+  it("prefers the current uploaded asset generator reference over replayed task references when regenerating", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: { id: "project-retry-2", projectId: "project-retry-2", name: "try" },
+        projectDetail: {
+          project: { id: "project-retry-2", projectId: "project-retry-2", name: "try" },
+          episodes: [],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        selectedProjectCardId: "project-retry-2",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorName: "废土天桥",
+        assetGeneratorPrompt: "被风沙侵蚀的废土天桥，低饱和晨雾。",
+        assetGeneratorModelCode: "ui-default-model",
+        assetGeneratorPreviewUrl: "https://example.com/new-reference.png",
+        assetGeneratorPreviewFile: {
+          mimeType: "image/png",
+          previewUrl: "https://example.com/new-reference.png",
+        },
+        assetGeneratorEditingAsset: {
+          id: "scene-failed-2",
+          kind: "scene",
+          name: "废土天桥",
+          description: "被风沙侵蚀的废土天桥，低饱和晨雾。",
+          source: "generated",
+          generationStatus: "failed",
+          generationTaskId: "scene-task-failed-2",
+          generationResult: {
+            status: "failed",
+            prompt: "历史任务提示词",
+            model: "historic-scene-model",
+            parameters: {
+              quality: "1K",
+              resolution: "1K",
+              aspectRatio: "9:16",
+              references: [
+                {
+                  kind: "image",
+                  url: "https://example.com/historic-reference.png",
+                  mimeType: "image/png",
+                },
+              ],
+              referenceImages: [
+                {
+                  url: "https://example.com/historic-reference.png",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      api: {
+        async generateAsset(payload) {
+          calls.push(["generateAsset", payload]);
+          return {
+            asset: {
+              id: "scene-regenerated-2",
+              assetKey: "scene-regenerated-key-2",
+              createdAt: "2026-06-24T00:00:00.000Z",
+            },
+            generationTaskId: "scene-regenerated-task-2",
+            status: "running",
+            workflowStatus: "running",
+          };
+        },
+        async getProjectDetail(projectId) {
+          calls.push(["getProjectDetail", projectId]);
+          return {
+            project: { id: projectId, projectId, name: "try" },
+            episodes: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+            shots: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-asset-generator" },
+    });
+
+    const generateCall = calls.find((call) => call[0] === "generateAsset");
+    assert.equal(generateCall?.[1].prompt, "历史任务提示词");
+    assert.equal(generateCall?.[1].model, "historic-scene-model");
+    assert.deepEqual(generateCall?.[1].parameters.references, [
+      {
+        kind: "image",
+        url: "https://example.com/new-reference.png",
+        mimeType: "image/png",
+      },
+    ]);
+    assert.deepEqual(generateCall?.[1].parameters.quickReferences, [
+      {
+        kind: "image",
+        url: "https://example.com/new-reference.png",
+        mimeType: "image/png",
+      },
+    ]);
+    assert.deepEqual(generateCall?.[1].parameters.referenceImages, [
+      {
+        kind: "image",
+        url: "https://example.com/new-reference.png",
+        mimeType: "image/png",
+      },
+    ]);
+    assert.deepEqual(generateCall?.[1].parameters.imageReference, {
+      kind: "image",
+      url: "https://example.com/new-reference.png",
+      mimeType: "image/png",
+    });
+  });
+
+  it("polls generated project assets on the asset page and stops after leaving the page", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    const clearedTimers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return `project-asset-timer-${timers.length}`;
+      },
+      clearTimeout(timerId) {
+        clearedTimers.push(timerId);
+      },
+    };
+    try {
+      const taskRequests = [];
+      let pollCount = 0;
+      const state = buildProjectState();
+      state.projectDetail = {
+        project: { id: "project-1", projectId: "project-1", name: "资产项目" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [], audio: [] } },
+        shots: [],
+      };
+      const workbench = {
+        state,
+        session: { user: { phone: "+86 13800138000" } },
+        ui: buildProjectUi({
+          activeNavTab: "project",
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "character",
+          importedAssets: {
+            character: [
+              {
+                id: "character-generated-1",
+                kind: "character",
+                name: "废土角色",
+                description: "灰白短发，站姿稳定。",
+                generationStatus: "running",
+                generationTaskId: "project-asset-task-1",
+                source: "generated",
+                updatedAt: "2026-06-24T10:00:00.000Z",
+              },
+            ],
+            scene: [],
+            prop: [],
+            other: { audio: [], image: [], video: [] },
+          },
+        }),
+        api: {
+          async getGenerationTask(taskId) {
+            taskRequests.push(taskId);
+            pollCount += 1;
+            if (pollCount === 1) {
+              return {
+                taskId,
+                status: "running",
+                workflowStatus: "running",
+                result: {},
+              };
+            }
+            return {
+              taskId,
+              status: "succeeded",
+              workflowStatus: "succeeded",
+              result: {
+                imageUrl: "https://example.com/project-generated-character.png",
+                storageObjectId: "storage-project-character-1",
+              },
+            };
+          },
+        },
+        root: {
+          innerHTML: "",
+          addEventListener() {},
+          querySelector() {
+            return null;
+          },
+          querySelectorAll() {
+            return [];
+          },
+        },
+      };
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-project-interior-section", section: "assets" },
+      });
+
+      assert.equal(timers.length >= 1, true);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskRequests, ["project-asset-task-1"]);
+      assert.equal(
+        workbench.ui.importedAssets.character.find((asset) => asset.id === "character-generated-1")?.generationStatus,
+        "running",
+      );
+      assert.equal(timers.length >= 2, true);
+      assert.equal(timers[1].delayMs, 30000);
+
+      const timerCountAfterPolling = timers.length;
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-project-interior-section", section: "overview" },
+      });
+
+      assert.equal(workbench.ui.projectInteriorSection, "overview");
+      assert.equal(timers.length, timerCountAfterPolling);
+      assert.equal(clearedTimers.length >= 1, true);
+      assert.equal(
+        workbench.ui.importedAssets.character.find((asset) => asset.id === "character-generated-1")?.generationStatus,
+        "running",
+      );
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("stops polling failed generated project assets even when the edit modal stays open", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    const clearedTimers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return `project-asset-failed-timer-${timers.length}`;
+      },
+      clearTimeout(timerId) {
+        clearedTimers.push(timerId);
+      },
+    };
+    try {
+      const taskRequests = [];
+      const state = buildProjectState();
+      state.projectDetail = {
+        project: { id: "project-1", projectId: "project-1", name: "资产项目" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [], audio: [] } },
+        shots: [],
+      };
+      const editingAsset = {
+        id: "scene-generated-1",
+        kind: "scene",
+        name: "废土城市场景",
+        description: "黄昏下的城市废墟。",
+        generationStatus: "running",
+        generationTaskId: "project-asset-failed-task-1",
+        source: "generated",
+        updatedAt: "2026-06-24T10:00:00.000Z",
+      };
+      const workbench = {
+        state,
+        session: { user: { phone: "+86 13800138000" } },
+        ui: buildProjectUi({
+          activeNavTab: "project",
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "scene",
+          assetGeneratorModal: "scene",
+          assetGeneratorMode: "edit",
+          assetGeneratorEditingAsset: { ...editingAsset },
+          importedAssets: {
+            character: [],
+            scene: [{ ...editingAsset }],
+            prop: [],
+            other: { audio: [], image: [], video: [] },
+          },
+        }),
+        api: {
+          async getGenerationTask(taskId) {
+            taskRequests.push(taskId);
+            return {
+              taskId,
+              status: "failed",
+              workflowStatus: "failed",
+              result: {
+                errorMessage: "generation failed",
+              },
+            };
+          },
+          async updateProjectAsset() {
+            return null;
+          },
+        },
+        root: {
+          innerHTML: "",
+          addEventListener() {},
+          querySelector() {
+            return null;
+          },
+          querySelectorAll() {
+            return [];
+          },
+        },
+      };
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-project-interior-section", section: "assets" },
+      });
+
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskRequests, ["project-asset-failed-task-1"]);
+      assert.equal(
+        workbench.ui.importedAssets.scene.find((asset) => asset.id === "scene-generated-1")?.generationStatus,
+        "failed",
+      );
+      assert.equal(workbench.ui.assetGeneratorEditingAsset?.generationStatus, "failed");
+      assert.equal(workbench.projectAssetGenerationPollTimer, null);
+      assert.equal(workbench.projectAssetGenerationPollScopeKey, null);
+      assert.equal(timers.length, 1);
+      assert.equal(clearedTimers.length, 0);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("keeps failed imported project assets failed after project detail refresh", () => {
+    const state = buildProjectState();
+    state.projectDetail = {
+      project: { id: "project-1", projectId: "project-1", name: "资产项目" },
+      episodes: [],
+      assetsByType: {
+        character: [],
+        scene: [
+          {
+            id: "scene-generated-1",
+            label: "废土城市场景",
+            previewUrl: "https://example.com/scene-running.png",
+            generationStatus: "running",
+            generationTaskId: "project-asset-failed-task-1",
+            latestVersion: {
+              metadata: {
+                generationStatus: "running",
+              },
+            },
+          },
+        ],
+        prop: [],
+        other: { image: [], video: [], audio: [] },
+      },
+      shots: [],
+    };
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        importedAssets: {
+          character: [],
+          scene: [
+            {
+              id: "scene-generated-1",
+              kind: "scene",
+              name: "废土城市场景",
+              description: "黄昏下的城市废墟。",
+              generationStatus: "failed",
+              generationTaskId: "project-asset-failed-task-1",
+              source: "generated",
+              updatedAt: "2026-06-24T10:00:00.000Z",
+            },
+          ],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      }),
+    });
+
+    assert.match(html, /生成失败/);
+    assert.doesNotMatch(html, /project-asset-failed-task-1.*生成中/);
+  });
+
+  it("keeps completed imported project assets completed after project detail refresh", () => {
+    const state = buildProjectState();
+    state.projectDetail = {
+      project: { id: "project-1", projectId: "project-1", name: "资产项目" },
+      episodes: [],
+      assetsByType: {
+        character: [
+          {
+            id: "character-generated-2",
+            label: "废土角色终态",
+            previewUrl: "https://example.com/character-running.png",
+            generationStatus: "running",
+            generationTaskId: "project-asset-completed-task-1",
+            latestVersion: {
+              metadata: {
+                generationStatus: "running",
+              },
+            },
+          },
+        ],
+        scene: [],
+        prop: [],
+        other: { image: [], video: [], audio: [] },
+      },
+      shots: [],
+    };
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "character",
+        importedAssets: {
+          character: [
+            {
+              id: "character-generated-2",
+              kind: "character",
+              name: "废土角色终态",
+              description: "轮询已经完成，本地状态应优先展示。",
+              generationStatus: "completed",
+              generationTaskId: "project-asset-completed-task-1",
+              generationResult: {
+                status: "completed",
+                taskId: "project-asset-completed-task-1",
+                version: {
+                  previewUrl: "https://example.com/character-completed.png",
+                },
+              },
+              source: "generated",
+              updatedAt: "2026-06-24T10:00:00.000Z",
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      }),
+    });
+
+    assert.match(html, /已完成/);
+    assert.doesNotMatch(html, /project-asset-completed-task-1.*生成中/);
+    assert.match(html, /character-completed\.png/);
   });
 
   it("renders imported asset rename and delete confirmation modals", () => {
@@ -10069,7 +11471,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult.fixedImages[0]?.storageObjectId, "10000000-0000-4000-8000-000000000123");
   });
 
-  it("immediately polls the selected asset queued image task, then polls every 25 seconds", async () => {
+  it("immediately polls the selected asset queued image task, then polls every 30 seconds", async () => {
     const calls = [];
     const pollCalls = [];
     const timers = [];
@@ -10196,7 +11598,7 @@ describe("production workbench project tab", () => {
       assert.deepEqual(pollCalls, ["asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "running");
       assert.equal(timers.length, 2);
-      assert.equal(timers[1].delayMs, 25000);
+      assert.equal(timers[1].delayMs, 30000);
 
       await timers[1].callback();
 
@@ -14505,6 +15907,22 @@ describe("production workbench project tab", () => {
     assert.match(canvasBlock, /height:\s*100%/);
     assert.match(canvasBlock, /align-self:\s*stretch/);
     assert.doesNotMatch(canvasBlock, /padding-top:\s*4\.95rem/);
+  });
+
+  it("pins the project workspace brand bar to the far-left page edge on desktop", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const workspaceBlock = css.match(/\.workbench-main\.workspace-mode\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const workspaceStatusbarBlock =
+      css.match(/\.workbench-main\.workspace-mode \.global-statusbar\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+
+    assert.match(workspaceBlock, /padding:\s*5\.8rem 0 0 calc\(var\(--workbench-rail-width\) \+ 0\.45rem\)/);
+    assert.match(workspaceStatusbarBlock, /position:\s*absolute/);
+    assert.match(workspaceStatusbarBlock, /top:\s*0\.9rem/);
+    assert.match(workspaceStatusbarBlock, /left:\s*0\.45rem/);
+    assert.match(workspaceStatusbarBlock, /right:\s*0\.55rem/);
   });
 
   it("renders canvas templates and asset mode for Liblib-like workflow building", () => {
@@ -20228,6 +21646,256 @@ describe("production workbench project tab", () => {
     assert.match(html, /00:04/);
   });
 
+  it("renders episode voice modal from project detail audio assets without system placeholders", () => {
+    const storyboards = addStoryboard([]);
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: {
+              audio: [
+                {
+                  id: "audio-1",
+                  name: "旁白",
+                  mimeType: "audio/mpeg",
+                  previewUrl: "/uploads/voice-cover.png",
+                  sourceUrl: "/uploads/voice.mp3",
+                },
+              ],
+              image: [],
+              video: [],
+            },
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+          importedAssets: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          episodeVoiceModal: {
+            scope: "asset",
+            assetId: "character-1",
+            assetName: "角色一",
+            assetKind: "character",
+            voiceId: "audio-1",
+            voiceName: "旁白",
+            previewVoiceId: "audio-1",
+            previewVoiceName: "旁白",
+          },
+          projectDetail: {
+            assetsByType: {
+              character: [],
+              scene: [],
+              prop: [],
+              other: {
+                audio: [
+                  {
+                    id: "audio-1",
+                    name: "旁白",
+                    mimeType: "audio/mpeg",
+                    previewUrl: "/uploads/voice-cover.png",
+                    sourceUrl: "/uploads/voice.mp3",
+                  },
+                ],
+                image: [],
+                video: [],
+              },
+            },
+          },
+        }),
+      },
+    });
+
+    assert.doesNotMatch(html, /<h3>选择配音<\/h3>[\s\S]*系统/);
+    assert.match(html, /旁白/);
+    assert.match(html, /src="\/uploads\/voice-cover\.png"/);
+    assert.match(html, /data-action="preview-episode-voice"/);
+    assert.match(html, /data-voice-audio-url="\/uploads\/voice\.mp3"/);
+  });
+
+  it("renders episode voice modal cover previews from example images and paginates at 10 items per page", () => {
+    const storyboards = addStoryboard([]);
+    const audioItems = Array.from({ length: 12 }, (_, index) => ({
+      id: `audio-${index + 1}`,
+      name: `音色-${String(index + 1).padStart(2, "0")}`,
+      mimeType: "audio/mpeg",
+      sourceUrl: `/uploads/voice-${index + 1}.mp3`,
+      exampleImageSourceUrl: `/uploads/voice-cover-${index + 1}.png`,
+    }));
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: {
+              audio: audioItems,
+              image: [],
+              video: [],
+            },
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+          importedAssets: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          episodeVoiceModal: {
+            scope: "asset",
+            assetId: "character-1",
+            assetName: "角色一",
+            assetKind: "character",
+            voiceId: "audio-11",
+            voiceName: "音色-11",
+            previewVoiceId: "",
+            previewVoiceName: "",
+          },
+          projectDetail: {
+            assetsByType: {
+              character: [],
+              scene: [],
+              prop: [],
+              other: {
+                audio: audioItems,
+                image: [],
+                video: [],
+              },
+            },
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /data-action="change-episode-voice-page" data-page="1"/);
+    assert.match(html, /1 \/ 2|2 \/ 2/);
+    assert.match(html, /共 12 个素材，每页 10 个/);
+    assert.match(html, /src="\/uploads\/voice-cover-11\.png"/);
+    assert.match(html, /音色-11/);
+    assert.doesNotMatch(html, /音色-01/);
+  });
+
+  it("changes episode voice modal pages through the workbench action handler", async () => {
+    const storyboards = addStoryboard([]);
+    const audioItems = Array.from({ length: 12 }, (_, index) => ({
+      id: `audio-${index + 1}`,
+      name: `音色-${String(index + 1).padStart(2, "0")}`,
+      mimeType: "audio/mpeg",
+      sourceUrl: `/uploads/voice-${index + 1}.mp3`,
+      exampleImageSourceUrl: `/uploads/voice-cover-${index + 1}.png`,
+    }));
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: {
+              audio: audioItems,
+              image: [],
+              video: [],
+            },
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          selectedStoryboardId: storyboards[0]?.id ?? null,
+          episodeStoryboardMap: {
+            "episode-new": storyboards,
+          },
+          importedAssets: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          episodeVoiceModal: {
+            scope: "asset",
+            assetId: "character-1",
+            assetName: "角色一",
+            assetKind: "character",
+            voiceId: "audio-1",
+            voiceName: "音色-01",
+            previewVoiceId: "",
+            previewVoiceName: "",
+            page: 1,
+          },
+          projectDetail: {
+            assetsByType: {
+              character: [],
+              scene: [],
+              prop: [],
+              other: {
+                audio: audioItems,
+                image: [],
+                video: [],
+              },
+            },
+          },
+        }),
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "change-episode-voice-page", page: "2" },
+    });
+
+    assert.equal(workbench.ui.episodeVoiceModal?.page, 2);
+    assert.match(workbench.root.innerHTML, /音色-11/);
+    assert.match(workbench.root.innerHTML, /src="\/uploads\/voice-cover-11\.png"/);
+    assert.doesNotMatch(workbench.root.innerHTML, /音色-01/);
+  });
+
   it("renders storyboard mention-matched asset thumbnails from text descriptions", () => {
     const storyboards = [
       {
@@ -20865,6 +22533,70 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.importedAssets.character[0].id, "episode-character-1");
     assert.equal(workbench.ui.importedAssets.scene[0].id, "episode-scene-1");
     assert.equal(workbench.ui.importedAssets.prop[0].id, "episode-prop-1");
+  });
+
+  it("does not hydrate blank episode asset panes from project detail assets", () => {
+    const baseState = buildProjectState();
+    const projectDetail = {
+      project: baseState.project,
+      episodes: [],
+      shots: [],
+      assetsByType: {
+        character: [
+          {
+            id: "project-character-1",
+            label: "项目角色不应自动出现在新剧集",
+            latestVersion: {
+              metadata: { description: "项目角色描述" },
+            },
+          },
+        ],
+        scene: [
+          {
+            id: "project-scene-1",
+            label: "项目场景不应自动出现在新剧集",
+            latestVersion: {
+              metadata: { description: "项目场景描述" },
+            },
+          },
+        ],
+        prop: [
+          {
+            id: "project-prop-1",
+            label: "项目道具不应自动出现在新剧集",
+            latestVersion: {
+              metadata: { description: "项目道具描述" },
+            },
+          },
+        ],
+        other: { image: [], video: [], audio: [] },
+      },
+    };
+    const workbench = {
+      state: {
+        ...baseState,
+        projectDetail,
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+        projectDetail,
+      }),
+    };
+
+    applyProjectDetail(workbench, workbench.ui.projectDetail);
+
+    assert.deepEqual(workbench.ui.importedAssets.character, []);
+    assert.deepEqual(workbench.ui.importedAssets.scene, []);
+    assert.deepEqual(workbench.ui.importedAssets.prop, []);
+    assert.equal(workbench.ui.projectDetail.assetsByType.character[0]?.id, "project-character-1");
+    assert.equal(workbench.state.projectDetail.assetsByType.character[0]?.id, "project-character-1");
   });
 
   it("renders episode asset cards from workbench context when imported assets are temporarily empty", () => {
@@ -23036,6 +24768,91 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /asset-library-empty-card/);
   });
 
+  it("wraps project asset cards and paginates them at 27 items per page", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const characterAssets = Array.from({ length: 29 }, (_, index) => ({
+      id: `character-page-${index + 1}`,
+      kind: "character",
+      name: `角色-${String(index + 1).padStart(2, "0")}`,
+      description: `描述-${index + 1}`,
+      preview: `data:image/svg+xml;charset=UTF-8,character-${index + 1}`,
+      source: "local",
+    }));
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "character",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          importedAssets: {
+            character: characterAssets,
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /共 29 个素材，每页 27 个/);
+    assert.match(html, /角色-01/);
+    assert.match(html, /角色-27/);
+    assert.doesNotMatch(html, /角色-28/);
+    assert.doesNotMatch(html, /角色-29/);
+    assert.match(html, /asset-library-pagination/);
+  });
+
+  it("shows placeholders for generating and failed generated asset cards", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "character",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          importedAssets: {
+            character: [
+              {
+                id: "generated-character-running",
+                kind: "character",
+                name: "生成中的角色",
+                source: "generated",
+                generationStatus: "running",
+                preview: "https://example.com/should-not-show-running.png",
+              },
+              {
+                id: "generated-character-failed",
+                kind: "character",
+                name: "生成失败的角色",
+                source: "generated",
+                generationStatus: "failed",
+                preview: "https://example.com/should-not-show-failed.png",
+              },
+            ],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /图片生成中/);
+    assert.match(html, /生成失败/);
+    assert.doesNotMatch(html, /should-not-show-running\.png/);
+    assert.doesNotMatch(html, /should-not-show-failed\.png/);
+  });
+
   it("resolves imported asset preview images against the backend origin after refresh", () => {
     const previousWindow = globalThis.window;
     globalThis.window = {
@@ -23469,6 +25286,100 @@ describe("production workbench project tab", () => {
     assert.deepEqual(calls, []);
     assert.equal(workbench.ui.toast, "已存在该资源图片");
     assert.equal(workbench.ui.assetImportModal, "scene");
+  });
+
+  it("passes the active project id when importing assets from the project workspace", async () => {
+    const calls = [];
+    const state = {
+      ...buildProjectState(),
+      project: {
+        id: "project-42",
+        projectId: "project-42",
+        name: "当前项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      projectDetail: {
+        project: {
+          id: "project-42",
+          projectId: "project-42",
+          name: "当前项目",
+          phase: "asset_review",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        episodes: [],
+        shots: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [], audio: [] } },
+      },
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "scene",
+        selectedProjectCardId: "project-42",
+        assetImportModal: "scene",
+        assetImportModalTab: "local",
+        assetImportSelection: ["draft-scene-1"],
+        assetImportDrafts: [
+          {
+            id: "draft-scene-1",
+            name: "废土街角",
+            preview: "data:image/png;base64,scene-preview",
+            sourceUrl: "data:image/png;base64,scene-preview",
+            storageObjectKey: "data:image/png;base64,scene-preview",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+      state,
+      api: {
+        async importAsset(payload) {
+          calls.push(payload);
+          return { asset: { id: "scene-imported-1" } };
+        },
+        async getProjectDetail(projectId) {
+          return {
+            project: { id: projectId, projectId, name: "当前项目", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [],
+            shots: [],
+            assetsByType: {
+              character: [],
+              scene: [
+                {
+                  id: "scene-imported-1",
+                  label: "废土街角",
+                  assetKey: "scene-asset-1",
+                  previewUrl: "https://example.com/scene-imported.png",
+                  latestVersion: {
+                    previewUrl: "https://example.com/scene-imported.png",
+                    metadata: { description: "导入场景", source: "import", mimeType: "image/png" },
+                  },
+                },
+              ],
+              prop: [],
+              other: { image: [], video: [], audio: [] },
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-asset-import" },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].projectId, "project-42");
+    assert.equal(calls[0].kind, "scene");
   });
 
   it("renders the episode overview with both creation entry points in the overview", () => {
@@ -27903,6 +29814,79 @@ describe("asset import modal", () => {
     assert.doesNotMatch(html, /episode-asset-library-pagination/);
   });
 
+  it("pins the project asset library footer below a scrollable asset grid", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    const modalBlock = [...css.matchAll(/\.episode-asset-library-modal\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const bodyBlock = [...css.matchAll(/\.episode-asset-library-body\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const gridBlock = [...css.matchAll(/\.episode-asset-library-grid\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const footerBlock = [...css.matchAll(/\.episode-asset-library-footer\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+
+    assert.match(modalBlock, /grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
+    assert.match(modalBlock, /min-height:\s*min\(46rem,\s*calc\(100vh - 3rem\)\)/);
+    assert.match(bodyBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto/);
+    assert.match(bodyBlock, /overflow:\s*hidden/);
+    assert.match(gridBlock, /overflow-y:\s*auto/);
+    assert.match(footerBlock, /margin-top:\s*auto/);
+    assert.match(footerBlock, /border-top:\s*1px solid/);
+    assert.match(footerBlock, /flex-shrink:\s*0/);
+  });
+
+  it("wraps project asset library cards in a responsive grid with pagination footer", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    const shellBlock = [...css.matchAll(/\.project-asset-library\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const stageBlock = [...css.matchAll(/\.asset-library-stage\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const panelBlock = [...css.matchAll(/\.asset-library-content-panel\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const gridBlock = [...css.matchAll(/\.asset-library-content-grid\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const cardBlock = [...css.matchAll(/\.imported-asset-card,\s*\.other-imported-card\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const gridActionsBlock = [...css.matchAll(/\.asset-library-content-grid\.grid-mode\s*>\s*\.asset-library-actions-column\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const gridActionsNestedBlock = [...css.matchAll(/\.asset-library-content-grid\.grid-mode\s*>\s*\.asset-library-actions-column\s*\.asset-action-grid\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const otherBlock = [...css.matchAll(/\.other-asset-library\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const paginationBlock = [...css.matchAll(/\.asset-library-pagination\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+
+    assert.match(shellBlock, /grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
+    assert.match(shellBlock, /height:\s*100%/);
+    assert.match(stageBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+    assert.match(stageBlock, /overflow:\s*hidden/);
+    assert.match(panelBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto/);
+    assert.match(gridBlock, /display:\s*grid/);
+    assert.match(gridBlock, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(10\.35rem,\s*1fr\)\)/);
+    assert.match(gridBlock, /overflow-y:\s*auto/);
+    assert.doesNotMatch(gridBlock, /flex-wrap:\s*nowrap/);
+    assert.match(cardBlock, /min-height:\s*14\.9rem/);
+    assert.match(gridActionsBlock, /grid-column:\s*span 1/);
+    assert.match(gridActionsNestedBlock, /display:\s*grid/);
+    assert.doesNotMatch(gridActionsNestedBlock, /display:\s*contents/);
+    assert.match(otherBlock, /grid-template-columns:\s*15rem minmax\(0,\s*1fr\)/);
+    assert.match(otherBlock, /height:\s*100%/);
+    assert.match(paginationBlock, /justify-content:\s*space-between/);
+    assert.match(paginationBlock, /border-top:\s*1px solid/);
+  });
+
+  it("keeps the asset generator create modal compact without an empty preview column", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    const createModalBlock = [...css.matchAll(/\.asset-generator-modal-create\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const createPreviewBlock = [...css.matchAll(/\.asset-generator-modal-create\s+\.asset-generator-preview\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const createPromptBlock = [...css.matchAll(/\.asset-generator-modal-create\s+\.asset-generator-prompt\s*>\s*div\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+
+    assert.match(createModalBlock, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+    assert.match(createModalBlock, /width:\s*min\(41rem,\s*calc\(100vw - 6rem\)\)/);
+    assert.match(createModalBlock, /min-height:\s*0/);
+    assert.match(createPreviewBlock, /display:\s*none/);
+    assert.match(createPromptBlock, /min-height:\s*15rem/);
+  });
+
   it("renders a real local upload intake and in-modal review state", () => {
     const state = {
       project: {
@@ -28065,7 +30049,9 @@ describe("asset import modal", () => {
       },
     });
 
-    assert.match(propFilledHtml, /imported-asset-card square/);
+    assert.match(propFilledHtml, /imported-asset-card portrait/);
+    assert.doesNotMatch(propFilledHtml, /imported-asset-card square/);
+    assert.doesNotMatch(propFilledHtml, /landscape-mode/);
     assert.match(propFilledHtml, /prop-preview/);
   });
 
@@ -28117,8 +30103,8 @@ describe("asset import modal", () => {
     });
 
     assert.match(modalHtml, /配音员名称/);
-    assert.match(modalHtml, /主播音频/);
-    assert.match(modalHtml, /data-action="pick-audio-import-audio-file"/);
+    assert.match(modalHtml, /配音文件/);
+    assert.match(modalHtml, /data-action="trigger-audio-import-audio-file"/);
     assert.match(modalHtml, /配音员示例图/);
     assert.match(modalHtml, /data-action="confirm-audio-asset-import"/);
 
@@ -28153,6 +30139,12 @@ describe("asset import modal", () => {
                 id: "imported-other-1",
                 name: "应先生",
                 audioUrl: "data:audio/wav;base64,AAAA",
+                latestVersion: {
+                  metadata: {
+                    previewUrl: "/uploads/audio-cover-1.png",
+                    mimeType: "audio/mpeg",
+                  },
+                },
               },
             ],
             image: [],
@@ -28163,23 +30155,137 @@ describe("asset import modal", () => {
     });
 
     assert.match(importedHtml, /project-audio-play-button/);
-    assert.match(importedHtml, /编辑配音/);
     assert.match(importedHtml, /应先生/);
     assert.match(importedHtml, /data-action="preview-project-audio-asset"/);
+    assert.match(importedHtml, /audio-cover-1\.png/);
+    assert.doesNotMatch(importedHtml, /编辑配音/);
+  });
+
+  it("renders a stop button while an imported audio asset is playing", () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "音频项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = createStoryboardList(state);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "other",
+        projectOtherAssetMediaType: "audio",
+        projectAssetPreviewPlayingId: "imported-other-1",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [
+              {
+                id: "imported-other-1",
+                name: "应先生",
+                audioUrl: "data:audio/wav;base64,AAAA",
+              },
+            ],
+            image: [],
+            video: [],
+          },
+        },
+      },
+    });
+
+    assert.match(html, /aria-label="停止播放"/);
+    assert.match(html, /project-audio-icon-pause/);
+  });
+
+  it("renders audio import modal in edit mode with the same upload controls", () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "音频项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = createStoryboardList(state);
+    const modalHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "other",
+        projectOtherAssetMediaType: "audio",
+        validationMessage: "",
+        toast: "",
+        isScriptModalOpen: false,
+        isCreateModalOpen: false,
+        scriptTab: "script-upload",
+        uploadNotice: "",
+        defaultScript: "Episode 1",
+        assetImportModal: "other",
+        assetImportModalTab: "local",
+        audioAssetImportDraft: {
+          mode: "edit",
+          assetId: "audio-asset-1",
+          name: "应先生",
+          audioUpload: {
+            storageObjectId: "storage-audio-1",
+            storageObjectKey: "asset-import/other/audio-1.mp3",
+            publicUrl: "/uploads/audio-1.mp3",
+            mimeType: "audio/mpeg",
+          },
+          audioPreviewUrl: "/uploads/audio-1.mp3",
+          exampleImagePreview: "/uploads/audio-cover-1.png",
+          exampleImageSourceUrl: "/uploads/audio-cover-1.png",
+        },
+      },
+    });
+
+    assert.match(modalHtml, /配音文件/);
+    assert.match(modalHtml, /重新上传配音/);
+    assert.match(modalHtml, /保存修改/);
   });
 
   it("plays imported audio assets from the audio library card", async () => {
     const previousAudio = globalThis.Audio;
     let playedUrl = "";
+    let pauseCount = 0;
     globalThis.Audio = class MockAudio {
       constructor(url) {
         this.url = url;
         playedUrl = url;
+        this.currentTime = 0;
       }
       play() {
         return Promise.resolve();
       }
-      pause() {}
+      pause() {
+        pauseCount += 1;
+      }
     };
     const workbench = {
       state: {},
@@ -28228,6 +30334,18 @@ describe("asset import modal", () => {
       });
 
       assert.equal(playedUrl, "data:audio/wav;base64,AAAA");
+      assert.equal(workbench.ui.projectAssetPreviewPlayingId, "audio-1");
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "preview-project-audio-asset",
+          assetId: "audio-1",
+          audioUrl: "data:audio/wav;base64,AAAA",
+        },
+      });
+
+      assert.equal(workbench.ui.projectAssetPreviewPlayingId, null);
+      assert.equal(pauseCount, 1);
     } finally {
       globalThis.Audio = previousAudio;
     }
@@ -28330,6 +30448,288 @@ describe("asset import modal", () => {
     assert.equal(importedCalls[0].mimeType, "audio/mpeg");
     assert.equal(updatedCalls.length, 1);
     assert.equal(updatedCalls[0].assetId, "audio-asset-1");
+    assert.equal(updatedCalls[0].payload.previewUrl, "/uploads/audio-cover-1.png");
+    assert.equal(detailCalls.length, 1);
+    assert.equal(workbench.ui.assetImportModal, null);
+    assert.equal(workbench.ui.audioAssetImportDraft, null);
+  });
+
+  it("opens imported audio edit with the audio import modal instead of the generic editor", async () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "音频项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = createStoryboardList(state);
+    const workbench = {
+      state,
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "other",
+        projectOtherAssetMediaType: "audio",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [
+              {
+                id: "audio-asset-1",
+                name: "应先生",
+                audioUrl: "/uploads/audio-1.mp3",
+                previewUrl: "/uploads/audio-cover-1.png",
+                mimeType: "audio/mpeg",
+                latestVersion: {
+                  storageObjectId: "storage-audio-1",
+                  storageObjectKey: "asset-import/other/audio-1.mp3",
+                  metadata: {
+                    mimeType: "audio/mpeg",
+                  },
+                },
+              },
+            ],
+            image: [],
+            video: [],
+          },
+        },
+      },
+      api: {},
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "edit-imported-asset",
+        assetId: "audio-asset-1",
+        assetKind: "other",
+        mediaType: "audio",
+      },
+    });
+
+    assert.equal(workbench.ui.assetImportModal, "other");
+    assert.equal(workbench.ui.assetGeneratorModal ?? null, null);
+    assert.equal(workbench.ui.audioAssetImportDraft?.assetId, "audio-asset-1");
+    assert.equal(workbench.ui.audioAssetImportDraft?.name, "应先生");
+    assert.equal(workbench.ui.audioAssetImportDraft?.audioPreviewUrl, "/uploads/audio-1.mp3");
+  });
+
+  it("hydrates edit modal fields from project detail assets on the project asset page", async () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "资产项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      projectDetail: {
+        project: {
+          id: "project-1",
+          projectId: "project-1",
+          name: "资产项目",
+        },
+        assetsByType: {
+          character: [
+            {
+              id: "character-asset-1",
+              label: "任小野",
+              previewUrl: "/uploads/character-preview.png",
+              latestVersion: {
+                previewUrl: "/uploads/character-preview.png",
+                metadata: {
+                  description: "废土少女，灰白短发，旧布短衣，保持冷静警觉。",
+                  fixedImageUrl: "/uploads/character-preview.png",
+                },
+              },
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [],
+            image: [],
+            video: [],
+          },
+        },
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = createStoryboardList(state);
+    const workbench = {
+      state,
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "character",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [],
+            image: [],
+            video: [],
+          },
+        },
+      },
+      api: {},
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "edit-imported-asset",
+        assetId: "character-asset-1",
+        assetKind: "character",
+        mediaType: "image",
+      },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorModal, "character");
+    assert.equal(workbench.ui.assetGeneratorMode, "edit");
+    assert.equal(workbench.ui.assetGeneratorName, "任小野");
+    assert.equal(workbench.ui.assetGeneratorPrompt, "废土少女，灰白短发，旧布短衣，保持冷静警觉。");
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "/uploads/character-preview.png");
+    assert.equal(workbench.ui.assetGeneratorEditingAsset?.id, "character-asset-1");
+  });
+
+  it("updates imported audio assets when saving in edit mode", async () => {
+    const updatedCalls = [];
+    const detailCalls = [];
+    const state = {
+      project: {
+        id: "project-1",
+        name: "音频项目",
+        phase: "asset_review",
+        aspectRatio: "9:16",
+        resolution: "1080p",
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = createStoryboardList(state);
+    const workbench = {
+      state,
+      ui: {
+        activeNavTab: "project",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedModelId: "vidu-q3-pro",
+        prompt: "",
+        busy: false,
+        projectPanelMode: "workspace",
+        projectInteriorSection: "assets",
+        projectAssetTab: "other",
+        projectOtherAssetMediaType: "audio",
+        selectedProjectCardId: "project-1",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [
+              {
+                id: "audio-asset-1",
+                name: "旧名称",
+                audioUrl: "/uploads/audio-old.mp3",
+                previewUrl: "/uploads/audio-cover-old.png",
+                mimeType: "audio/mpeg",
+              },
+            ],
+            image: [],
+            video: [],
+          },
+        },
+        assetImportModal: "other",
+        assetImportModalTab: "local",
+        audioAssetImportDraft: {
+          mode: "edit",
+          assetId: "audio-asset-1",
+          name: "应先生",
+          audioUpload: {
+            storageObjectId: "storage-audio-1",
+            storageObjectKey: "asset-import/other/audio-1.mp3",
+            publicUrl: "/uploads/audio-1.mp3",
+            mimeType: "audio/mpeg",
+          },
+          audioPreviewUrl: "/uploads/audio-1.mp3",
+          exampleImagePreview: "/uploads/audio-cover-1.png",
+          exampleImageSourceUrl: "/uploads/audio-cover-1.png",
+        },
+      },
+      api: {
+        async updateProjectAsset(assetId, payload) {
+          updatedCalls.push({ assetId, payload });
+          return { asset: { id: assetId } };
+        },
+        async getProjectDetail(projectId) {
+          detailCalls.push(projectId);
+          return {
+            project: { id: projectId, name: "try", phase: "asset_review", aspectRatio: "9:16", resolution: "1080p" },
+            episodes: [],
+            shots: [],
+            assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-audio-asset-import" },
+    });
+
+    assert.equal(updatedCalls.length, 1);
+    assert.equal(updatedCalls[0].assetId, "audio-asset-1");
+    assert.equal(updatedCalls[0].payload.name, "应先生");
+    assert.equal(updatedCalls[0].payload.sourceUrl, "/uploads/audio-1.mp3");
     assert.equal(updatedCalls[0].payload.previewUrl, "/uploads/audio-cover-1.png");
     assert.equal(detailCalls.length, 1);
     assert.equal(workbench.ui.assetImportModal, null);

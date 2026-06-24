@@ -892,11 +892,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         resolution: bundle.project?.resolution ?? "1080p",
         seedBundle: bundle as ProjectBundle,
       });
+      const shots = await listShotsForProject(deps.db, {
+        organizationId: actor.organizationId,
+        projectId: input.projectId,
+      });
       await creatorApp.seedShotRecords(
-        await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
-          projectId: input.projectId,
-        }),
+        shots,
       );
 
       return {
@@ -908,6 +909,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           runtime: deps.storageRuntime,
           signedUrlExpiresInSeconds,
           now: input.now,
+          projectBundle: bundle as ProjectBundle,
+          shots,
         }),
       };
     },
@@ -1424,6 +1427,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         storageObjectId?: string | null;
         storageObjectKey?: string | null;
         mimeType?: string | null;
+        generationTaskId?: string | null;
+        generationStatus?: string | null;
+        generationResult?: Record<string, unknown> | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -1448,6 +1454,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         storageObjectId: input.body.storageObjectId ?? undefined,
         storageObjectKey: input.body.storageObjectKey ?? undefined,
         mimeType: input.body.mimeType ?? undefined,
+        generationTaskId: input.body.generationTaskId ?? undefined,
+        generationStatus: input.body.generationStatus ?? undefined,
+        generationResult: input.body.generationResult ?? undefined,
         now: input.now,
       });
       return updated
@@ -1518,6 +1527,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       user: AuthenticatedCreatorUser;
       body: {
         kind: "character" | "scene" | "prop" | "image" | "video";
+        projectId?: string | null;
         name?: string | null;
         prompt?: string | null;
         model?: string | null;
@@ -4634,6 +4644,9 @@ async function updateProjectAssetRecord(
     storageObjectId?: string | null;
     storageObjectKey?: string | null;
     mimeType?: string | null;
+    generationTaskId?: string | null;
+    generationStatus?: string | null;
+    generationResult?: Record<string, unknown> | null;
     now: Date;
   },
 ) {
@@ -4696,6 +4709,15 @@ async function updateProjectAssetRecord(
   }
   if (input.storageObjectKey !== undefined) {
     metadata.storageObjectKey = input.storageObjectKey ?? null;
+  }
+  if (input.generationTaskId !== undefined) {
+    metadata.generationTaskId = input.generationTaskId?.trim() || null;
+  }
+  if (input.generationStatus !== undefined) {
+    metadata.generationStatus = input.generationStatus?.trim() || null;
+  }
+  if (input.generationResult !== undefined) {
+    metadata.generationResult = input.generationResult ?? null;
   }
 
   await db.query(
@@ -5109,14 +5131,14 @@ async function buildProjectStats(
           FROM shots s
           WHERE s.organization_id = p.organization_id
             AND s.project_id = p.id
-            AND s.image_status = 'ready'
+            AND s.current_image_asset_version_id IS NOT NULL
         ) AS generated_image_count,
         (
           SELECT COUNT(*)
           FROM shots s
           WHERE s.organization_id = p.organization_id
             AND s.project_id = p.id
-            AND s.video_status = 'ready'
+            AND s.current_video_asset_version_id IS NOT NULL
         ) AS generated_video_count,
         GREATEST(
           p.updated_at,
@@ -5705,9 +5727,11 @@ async function buildProjectDetail(
     runtime?: UploadSessionRuntime;
     signedUrlExpiresInSeconds: number;
     now: Date;
+    projectBundle?: ProjectBundle | null;
+    shots?: ShotRecord[] | null;
   },
 ) {
-  const projectBundle = await loadProjectBundleFromSql(db, {
+  const projectBundle = input.projectBundle ?? await loadProjectBundleFromSql(db, {
     projectId: input.projectId,
     scriptId: null,
   });
@@ -5723,34 +5747,46 @@ async function buildProjectDetail(
     };
   }
 
-  const assets = await listAssetsForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const assetVersions = await listAssetVersionsForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const references = await listShotReferencesForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const shots = await listShotsForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const episodes = await listEpisodesForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const exportHistory = await listExportRecordsForProject(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
-  const scripts = await listScriptsForProjectDetail(db, {
-    organizationId: input.organizationId,
-    projectId: input.projectId,
-  });
+  const [
+    assets,
+    assetVersions,
+    references,
+    shots,
+    episodes,
+    exportHistory,
+    scripts,
+  ] = await Promise.all([
+    listAssetsForProject(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+    listAssetVersionsForProject(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+    listShotReferencesForProject(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+    input.shots
+      ? Promise.resolve(input.shots)
+      : listShotsForProject(db, {
+          organizationId: input.organizationId,
+          projectId: input.projectId,
+        }),
+    listEpisodesForProject(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+    listExportRecordsForProject(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+    listScriptsForProjectDetail(db, {
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+    }),
+  ]);
 
   const assetsByType = groupAssetsByUiType(assets);
   const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
@@ -6254,6 +6290,24 @@ function getAssetPreviewUrl(
   return null;
 }
 
+function buildDirectStoragePublicUrl(storageObjectKey: string | null) {
+  if (typeof storageObjectKey !== "string") {
+    return null;
+  }
+  const normalizedKey = storageObjectKey.trim();
+  if (!normalizedKey) {
+    return null;
+  }
+  if (/^(?:https?:)?\/\//i.test(normalizedKey) || normalizedKey.startsWith("data:")) {
+    return normalizedKey;
+  }
+  const publicBaseUrl =
+    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
+    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
+    "";
+  return publicBaseUrl ? `${publicBaseUrl}/${normalizedKey.replace(/^\/+/g, "")}` : null;
+}
+
 function parseMetadataJson(value: Record<string, unknown> | string | null | undefined) {
   if (!value) {
     return null;
@@ -6283,6 +6337,12 @@ async function resolveStorageBackedPreviewUrl(
     signedUrlExpiresInSeconds: number;
   },
 ) {
+  const directPreviewUrl =
+    getAssetPreviewUrl(input.storageObjectKey, input.metadata) ??
+    buildDirectStoragePublicUrl(input.storageObjectKey);
+  if (directPreviewUrl) {
+    return directPreviewUrl;
+  }
   if (input.storageObjectId) {
     try {
       const urls = await buildSignedObjectUrls(db, {

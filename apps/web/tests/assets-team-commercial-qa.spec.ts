@@ -404,6 +404,25 @@ describe("Worker C asset library surfaces", () => {
     assertIncludesText(html, "医生");
   });
 
+  it("renders asset library pagination like the project gallery", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "character",
+      libraryAssets: Array.from({ length: 21 }, (_, index) => ({
+        id: `asset-${index + 1}`,
+        category: "character",
+        name: `资产${index + 1}`,
+      })),
+      assetLibraryPage: 2,
+    });
+
+    assert.match(html, /asset-library-pagination/);
+    assert.match(html, /data-action="change-asset-library-page"/);
+    assertIncludesText(html, "共 21 个素材");
+    assertIncludesText(html, "2");
+  });
+
   it("renders local image uploads above the locked membership gate", () => {
     const html = renderLibraryTeam({
       route: "assets",

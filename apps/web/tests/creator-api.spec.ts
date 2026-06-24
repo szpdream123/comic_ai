@@ -1124,7 +1124,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   const { creatorApi } = await import("../src/shared/creator-api.js");
   const detail = await creatorApi.getProjectDetailV2("project/1");
   const workbench = await creatorApi.getEpisodeWorkbench("episode/1");
-  const config = await creatorApi.listGenerationConfig("episode/1");
+  const config = await creatorApi.listGenerationConfig("episode/1", { mediaType: "image" });
   const batchImageModels = await creatorApi.listBatchImageModelOptions("episode/1");
   const storyboards = await creatorApi.listStoryboards("episode/1", { page: 2, pageSize: 5 });
   const conversation = await creatorApi.getAssetConversationHistory("episode/1", "asset/1", "video");
@@ -1155,7 +1155,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   assert.deepEqual(calls.map((call) => call.url), [
     "/api/projects/project%2F1/detail",
     "/api/episodes/episode%2F1/workbench",
-    "/api/episodes/episode%2F1/generation-config",
+    "/api/episodes/episode%2F1/generation-config?mediaType=image",
     "/api/episodes/episode%2F1/batch-image-model-options",
     "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video",
