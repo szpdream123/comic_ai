@@ -1608,6 +1608,21 @@
   color: oklch(78% 0.18 300);
 }
 
+.statusbar-credit-frozen {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.2rem;
+  padding: 0 0.38rem;
+  border: 1px solid oklch(82% 0.14 78 / 0.42);
+  border-radius: 999px;
+  background: oklch(82% 0.14 78 / 0.13);
+  color: oklch(88% 0.11 82);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 820;
+  line-height: 1;
+}
+
 .statusbar-avatar {
   width: 2.95rem;
   height: 2.95rem;
@@ -1800,6 +1815,10 @@
   color: oklch(82% 0.14 78);
 }
 
+.credit-ledger-metric.frozen strong {
+  color: oklch(84% 0.13 78);
+}
+
 .credit-ledger-toolbar {
   display: flex;
   align-items: center;
@@ -1919,6 +1938,11 @@
   color: oklch(84% 0.12 210);
 }
 
+.credit-ledger-type.freeze {
+  background: oklch(74% 0.16 78 / 0.18);
+  color: oklch(88% 0.14 82);
+}
+
 .credit-ledger-table .positive {
   color: oklch(84% 0.16 145);
   font-weight: 850;
@@ -1926,6 +1950,12 @@
 
 .credit-ledger-table .negative {
   color: oklch(84% 0.14 38);
+  font-weight: 850;
+}
+
+.credit-ledger-table .reserve,
+.credit-ledger-table .frozen {
+  color: oklch(84% 0.13 78);
   font-weight: 850;
 }
 

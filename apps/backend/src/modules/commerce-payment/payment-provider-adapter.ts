@@ -208,11 +208,12 @@ export function createDefaultPaymentProviderRegistry(): PaymentProviderRegistry 
 export function createEnvPaymentProviderRegistry(
   env: Record<string, string | undefined> = process.env,
 ): PaymentProviderRegistry {
+  const useRealProviders = resolvePaymentProviderMode(env) === "real";
   return createStaticPaymentProviderRegistry({
-    wechat_pay: envFlag(env.WECHAT_PAY_ENABLED)
+    wechat_pay: useRealProviders && envFlag(env.WECHAT_PAY_ENABLED)
       ? createWechatPayAdapter(readWechatPayConfigFromEnv(env))
       : createLocalProviderAdapter("wechat_pay"),
-    alipay: envFlag(env.ALIPAY_ENABLED)
+    alipay: useRealProviders && envFlag(env.ALIPAY_ENABLED)
       ? createAlipayAdapter(readAlipayConfigFromEnv(env))
       : createLocalProviderAdapter("alipay"),
   });
@@ -935,6 +936,14 @@ function hashJson(value: unknown) {
 
 function envFlag(value: string | undefined) {
   return value?.trim().toLowerCase() === "true";
+}
+
+function resolvePaymentProviderMode(env: Record<string, string | undefined>) {
+  const explicitMode = env.PAYMENT_PROVIDER_MODE?.trim().toLowerCase();
+  if (explicitMode === "local" || explicitMode === "real") {
+    return explicitMode;
+  }
+  return env.NODE_ENV?.trim().toLowerCase() === "production" ? "real" : "local";
 }
 
 function rawBodyToString(rawBody: Buffer | string) {

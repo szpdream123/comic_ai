@@ -248,6 +248,49 @@ test("global statusbar puts the preferred current user balance in wallet", () =>
   assert.match(walletButton, />2036<\/b>/);
 });
 
+test("global statusbar and credit ledger show frozen credits without treating them as available", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: {
+      user: {
+        phone: "+86 13800138000",
+        availableCredits: 0,
+        displayCreditBalance: 18800,
+        frozenCredits: 18800,
+      },
+    },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+      creditLedgerOpen: true,
+      creditLedgerSummary: {
+        displayAvailableCredits: 0,
+        displayCreditBalance: 18800,
+        frozenCredits: 18800,
+        totalConsumedCredits: 120,
+      },
+    },
+  });
+
+  const walletButton = extractStatusbarButton(html, "wallet-action");
+
+  assert.match(walletButton, />积分<\/span>/);
+  assert.match(walletButton, />18800<\/b>/);
+  assert.match(walletButton, /冻结/);
+  assert.match(html, /可用积分/);
+  assert.match(html, /冻结积分/);
+  assert.match(html, /18,800/);
+});
+
 test("global overlays render pricing and wallet from the project workspace branch", () => {
   const html = renderProjectDetail({
     state: {
@@ -446,6 +489,53 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.doesNotMatch(html, /data-full-id=/);
   assert.doesNotMatch(html, /credit-ledger-description/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);
+});
+
+test("credit ledger drawer classifies frozen credits separately from consumption", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000", availableCredits: 0, displayCreditBalance: 21800 } },
+    ui: {
+      activeNavTab: "tools",
+      creditLedgerOpen: true,
+      creditLedgerRows: [{
+        id: "ledger-recharge",
+        entryType: "grant",
+        amount: 3000,
+        availableDelta: 3000,
+        sourceType: "payment_order",
+        createdAt: "2026-06-24T10:46:00.000Z",
+      }, {
+        id: "ledger-freeze",
+        entryType: "freeze",
+        amount: 18800,
+        availableDelta: -18800,
+        sourceType: "membership_expiry_freeze",
+        reason: "会员到期冻结积分",
+        createdAt: "2026-06-20T08:00:00.000Z",
+      }],
+      creditLedgerSummary: {
+        displayAvailableCredits: 21800,
+        frozenCredits: 0,
+        totalConsumedCredits: 0,
+      },
+      creditLedgerMeta: { total: 2 },
+    },
+  });
+
+  assert.match(html, /冻结/);
+  assert.match(html, /18,800/);
+  assert.match(html, /<span class="credit-ledger-type freeze">冻结<\/span>[\s\S]*?>18,800</);
+  assert.doesNotMatch(html, /-18,800/);
+  assert.doesNotMatch(html, /<span class="credit-ledger-type consume">消耗<\/span>[\s\S]*?-18,800/);
 });
 
 test("credit ledger drawer uses a narrower desktop width", () => {

@@ -369,7 +369,12 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
   assert.equal(workbench.ui.creditBalance, 620);
   assert.equal(workbench.session.user.availableCredits, 620);
   assert.equal(workbench.ui.membershipPaymentPolling, false);
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "积分已到账" });
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "积分已到账",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.match(workbench.root.innerHTML, /积分已到账/);
 });
@@ -504,7 +509,12 @@ test("paid direct credit recharge closes the payment modal before wallet refresh
   await actionPromise;
 
   assert.equal(workbench.ui.creditBalance, 620);
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "积分已到账" });
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "积分已到账",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.match(workbench.root.innerHTML, /积分已到账/);
   assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
@@ -652,6 +662,7 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
       orderId: "order-membership-1",
     },
   });
+  await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
 
   assert.deepEqual(calls, [
     ["getBillingOrder", "order-membership-1"],
@@ -663,14 +674,18 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
   ]);
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.teamMembers[0].userId, "member-1");
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
-  assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
-  assert.match(workbench.root.innerHTML, /会员权益已开通/);
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
   assert.equal(workbench.ui.pendingMembershipPlanId, "");
   assert.equal(workbench.ui.lastBillingOrder, null);
   assert.equal(workbench.ui.lastPaymentIntent, null);
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
+  assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
 });
 
 test("paid membership payment closes the payment modal without forcing a page refresh", async () => {
@@ -744,7 +759,12 @@ test("paid membership payment closes the payment modal without forcing a page re
   });
 
   assert.equal(workbench.ui.membershipStatus.status, "none");
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
   assert.equal(workbench.ui.pendingMembershipPlanId, "");
   assert.equal(workbench.ui.lastBillingOrder, null);
@@ -837,12 +857,11 @@ test("simulating a membership payment success runs callback then activates membe
       orderId: "order-membership-1",
     },
   });
+  await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
 
   assert.deepEqual(calls, [
     "paymentPollClearTimeout",
     ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
-    ["getBillingOrder", "order-membership-1"],
-    ["getPaymentIntent", "intent-membership-1"],
     "getMembershipPlans",
     "getMembershipStatus",
     "getTeamOverview",
@@ -851,7 +870,12 @@ test("simulating a membership payment success runs callback then activates membe
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.membershipPaymentPolling, false);
   assert.equal(workbench.membershipPaymentPollTimer, null);
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
   assert.equal(workbench.ui.pendingMembershipPlanId, "");
   assert.equal(workbench.ui.lastBillingOrder, null);
@@ -967,7 +991,103 @@ test("simulating membership payment success shows syncing success state before r
   assert.equal(workbench.ui.pendingMembershipPlanId, "");
   assert.equal(workbench.ui.lastBillingOrder, null);
   assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
+});
+
+test("simulated membership payment ignores a paid order for a different payment flow", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+    },
+    pendingMembershipPlanId: "plan-pro-month",
+    membershipPaymentPolling: true,
+  }, {
+    async simulatePaymentIntentSuccess(input) {
+      calls.push(["simulatePaymentIntentSuccess", input]);
+      return {
+        simulated: true,
+        order: {
+          id: "order-membership-other",
+          productType: "membership_plan",
+          status: "paid",
+        },
+      };
+    },
+    async getBillingOrder(orderId) {
+      calls.push(["getBillingOrder", orderId]);
+      return {
+        order: {
+          id: orderId,
+          productType: "membership_plan",
+          status: "paid",
+        },
+      };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      calls.push(["getPaymentIntent", paymentIntentId]);
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-membership-1",
+          status: "succeeded",
+        },
+      };
+    },
+    async getMembershipPlans() {
+      calls.push("getMembershipPlans");
+      return { data: { plans: [] } };
+    },
+    async getMembershipStatus() {
+      calls.push("getMembershipStatus");
+      return {
+        membership: {
+          status: "professional_active",
+          entitlements: { teamAssetLibrary: true },
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "simulate-membership-payment-success",
+      paymentIntentId: "intent-membership-1",
+      orderId: "order-membership-1",
+    },
+  });
+
+  assert.deepEqual(calls, [
+    ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
+    ["getBillingOrder", "order-membership-1"],
+    ["getPaymentIntent", "intent-membership-1"],
+    "getMembershipPlans",
+    "getMembershipStatus",
+  ]);
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
 });
 
 test("simulated paid membership closes the payment modal before entitlement refresh resolves", async () => {
@@ -1062,7 +1182,12 @@ test("simulated paid membership closes the payment modal before entitlement refr
   await actionPromise;
 
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
   assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.match(workbench.root.innerHTML, /会员权益已开通/);
   assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
@@ -1128,8 +1253,12 @@ test("paid membership payment shows the success toast on the tools canvas surfac
   });
 
   assert.match(workbench.root.innerHTML, /canvas-workspace/);
-  assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
-  assert.match(workbench.root.innerHTML, /会员权益已开通/);
+  assert.deepEqual(workbench.ui.toast, {
+    tone: "success",
+    message: "会员权益已开通",
+    __paymentResultToast: true,
+    __paymentResultToastShown: true,
+  });
 });
 
 test("opening and closing the wallet clears the membership payment success toast", async () => {
@@ -1159,6 +1288,25 @@ test("opening and closing the wallet clears the membership payment success toast
 
   assert.equal(workbench.ui.creditLedgerOpen, false);
   assert.equal(workbench.ui.toast, "");
+});
+
+test("shown payment success toast does not reappear when opening account settings", async () => {
+  const workbench = createWorkbench({
+    toast: {
+      tone: "success",
+      message: "会员权益已开通",
+      __paymentResultToast: true,
+      __paymentResultToastShown: true,
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-account-settings" },
+  });
+
+  assert.equal(workbench.ui.accountSettingsOpen, true);
+  assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast success/);
+  assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
 });
 
 test("membership payment countdown refreshes every second independently from payment polling", async () => {
@@ -1622,6 +1770,7 @@ test("opening pricing clears an unfinished payment flow and shows the plan list"
   const workbench = createWorkbench({
     isLibraryPricingModalOpen: false,
     pricingModalTab: "membership",
+    toast: { tone: "success", message: "会员权益已开通" },
     pendingMembershipPlanId: "plan-pro-month",
     pendingMembershipPaymentProvider: "wechat_pay",
     membershipPaymentQrCreatedAt: new Date().toISOString(),
@@ -1659,7 +1808,9 @@ test("opening pricing clears an unfinished payment flow and shows the plan list"
   assert.equal(workbench.ui.lastPaymentAction, null);
   assert.equal(workbench.ui.membershipPaymentPolling, false);
   assert.equal(workbench.ui.membershipPaymentPollFailureCount, 0);
+  assert.equal(workbench.ui.toast, "");
   assert.match(workbench.root.innerHTML, /data-modal="pricing"/);
+  assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
+import { createAuthSession } from "../../modules/identity/session.service.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
@@ -1802,6 +1803,40 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await seedAdminUserListFixture(db);
 
     try {
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES (
+            '92000000-0000-4000-8000-000000000099',
+            '91000000-0000-4000-8000-000000000001',
+            '创作空间二号',
+            'active'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES (
+            '94000000-0000-4000-8000-000000000099',
+            '91000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000000099',
+            '93000000-0000-4000-8000-000000000001',
+            'owner_admin',
+            'active'
+          )
+        `,
+      );
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_balance_cached = 0,
+              credit_frozen_cached = 18800,
+              credit_frozen_at = '2026-06-24T07:10:00.000Z',
+              credit_frozen_until = '2027-06-24T07:10:00.000Z'
+          WHERE id = '91000000-0000-4000-8000-000000000001'
+        `,
+      );
       const forbidden = await fetch(`${server.origin}/api/admin/users`);
       const forbiddenPayload = await forbidden.json();
       const usersResponse = await fetch(`${server.origin}/api/admin/users`, {
@@ -1816,6 +1851,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const teamAdmin = usersPayload.data.find(
         (user: { displayName: string }) => user.displayName === "分镜组长",
       );
+      const ownerRows = usersPayload.data.filter(
+        (user: { userId: string }) => user.userId === "93000000-0000-4000-8000-000000000001",
+      );
 
       const subaccountsResponse = await fetch(
         `${server.origin}/api/admin/users/${teamAdmin.userId}/subaccounts`,
@@ -1827,6 +1865,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(forbiddenPayload.error.code, "admin_unauthenticated");
       assert.equal(usersResponse.status, 200);
       assert.ok(usersPayload.data.length >= 3);
+      assert.equal(ownerRows.length, 1);
+      assert.equal(ownerRows[0].availableCredits, 0);
+      assert.equal(ownerRows[0].frozenCredits, 18800);
+      assert.equal(ownerRows[0].displayCreditBalance, 18800);
       assert.equal(teamPermissionAccountsResponse.status, 200);
       assert.deepEqual(
         teamPermissionAccountsPayload.data.map(
@@ -2146,6 +2188,142 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           work_order_no: null,
         },
       ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets admins force restore frozen wallet credits without membership renewal", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    await seedAdminUserListFixture(db);
+
+    try {
+      const usersBeforeResponse = await fetch(`${server.origin}/api/admin/users`, {
+        headers: { cookie },
+      });
+      const usersBeforePayload = await usersBeforeResponse.json();
+      const owner = usersBeforePayload.data.find(
+        (user: { accountType: string }) => user.accountType === "owner_account",
+      );
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_balance_cached = 0,
+              credit_frozen_cached = 18800,
+              credit_frozen_at = '2026-06-24T07:10:00.000Z',
+              credit_frozen_until = '2027-06-24T07:10:00.000Z'
+          WHERE id = $1
+        `,
+        [owner.organizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id,
+            organization_id,
+            entry_type,
+            amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
+            reason,
+            metadata_json,
+            created_at
+          )
+          VALUES (
+            '98000000-0000-4000-8000-000000000099',
+            $1,
+            'grant',
+            18800,
+            18800,
+            0,
+            0,
+            'payment_order',
+            '97000000-0000-4000-8000-000000000099',
+            'seed frozen credits',
+            '{"kind":"direct_recharge"}'::jsonb,
+            '2026-06-24T07:00:00.000Z'
+          )
+        `,
+        [owner.organizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO credit_lots (
+            id,
+            organization_id,
+            source_type,
+            source_id,
+            grant_ledger_entry_id,
+            total_amount,
+            available_amount,
+            reserved_amount,
+            consumed_amount,
+            expired_amount,
+            status,
+            frozen_at,
+            frozen_until,
+            metadata_json
+          )
+          VALUES (
+            '97000000-0000-4000-8000-000000000099',
+            $1,
+            'payment_order',
+            '97000000-0000-4000-8000-000000000099',
+            '98000000-0000-4000-8000-000000000099',
+            18800,
+            18800,
+            0,
+            0,
+            0,
+            'frozen',
+            '2026-06-24T07:10:00.000Z',
+            '2027-06-24T07:10:00.000Z',
+            '{"kind":"direct_recharge"}'::jsonb
+          )
+        `,
+        [owner.organizationId],
+      );
+
+      const restoreResponse = await fetch(
+        `${server.origin}/api/admin/users/${owner.userId}/credits/frozen/restore`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-credit-restore-frozen-owner",
+            cookie,
+          },
+          body: JSON.stringify({ reason: "客服工单核实后解冻" }),
+        },
+      );
+      const restorePayload = await restoreResponse.json();
+      const usersAfterResponse = await fetch(`${server.origin}/api/admin/users`, {
+        headers: { cookie },
+      });
+      const usersAfterPayload = await usersAfterResponse.json();
+      const ownerAfter = usersAfterPayload.data.find(
+        (user: { userId: string }) => user.userId === owner.userId,
+      );
+      const ledgerResponse = await fetch(`${server.origin}/api/admin/users/${owner.userId}/credits/ledger`, {
+        headers: { cookie },
+      });
+      const ledgerPayload = await ledgerResponse.json();
+
+      assert.equal(restoreResponse.status, 200, JSON.stringify(restorePayload));
+      assert.equal(restorePayload.data.restoredAmount, 18800);
+      assert.equal(restorePayload.data.availableCredits, 18800);
+      assert.equal(restorePayload.data.frozenCredits, 0);
+      assert.equal(ownerAfter.availableCredits, 18800);
+      assert.equal(ownerAfter.frozenCredits, 0);
+      assert.equal(ownerAfter.displayCreditBalance, 18800);
+      assert.equal(ledgerPayload.summary.displayAvailableCredits, 18800);
+      assert.equal(ledgerPayload.summary.frozenCredits, 0);
+      assert.equal(ledgerPayload.data[0]?.sourceType, "admin_frozen_credit_restore");
+      assert.equal(ledgerPayload.data[0]?.entryType, "restore");
     } finally {
       await server.close();
     }
@@ -3148,6 +3326,81 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets finance admins delete membership plans so the admin and frontend lists stop showing them", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      const userCookie = await login(db, server.origin, "13800138001");
+      const planBody = {
+        code: `professional_delete_${randomUUID().slice(0, 8)}`,
+        displayName: "Professional Delete Test",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 19900,
+        currency: "CNY",
+        giftCredits: 100,
+        seatLimit: 50,
+        entitlements: ["team_member_management"],
+        priorityRules: {},
+        displayMetadata: { sortOrder: 20 },
+        status: "active",
+        reason: "Create plan for deletion",
+      };
+      const createResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-membership-plan-delete-create",
+          cookie,
+        },
+        body: JSON.stringify(planBody),
+      });
+      const createPayload = await createResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/admin/membership/plans/${createPayload.plan.id}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-membership-plan-delete",
+          cookie,
+        },
+        body: JSON.stringify({ reason: "删除不再售卖的会员套餐" }),
+      });
+      const deletePayload = await deleteResponse.json();
+      const listResponse = await fetch(`${server.origin}/api/admin/membership/plans`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const archivedResponse = await fetch(`${server.origin}/api/admin/membership/plans?includeArchived=1`, {
+        headers: { cookie },
+      });
+      const archivedPayload = await archivedResponse.json();
+      const purchasableResponse = await fetch(`${server.origin}/api/membership/plans`, {
+        headers: { cookie: userCookie },
+      });
+      const purchasablePayload = await purchasableResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deletePayload.plan.status, "archived");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listPayload.data.plans.some((plan: { id: string }) => plan.id === createPayload.plan.id), false);
+      assert.equal(archivedResponse.status, 200);
+      assert.equal(archivedPayload.data.plans.some((plan: { id: string }) => plan.id === createPayload.plan.id), true);
+      assert.equal(purchasableResponse.status, 200);
+      assert.equal(
+        purchasablePayload.data.plans.some((plan: { id: string }) => plan.id === createPayload.plan.id),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets finance admins manage direct recharge packages through a dedicated admin route", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, {
@@ -3219,6 +3472,76 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
       assert.equal(
         listPayload.data.packages.some((item: { code: string }) => item.code === "legacy_bonus_10"),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets finance admins delete direct recharge packages so users can no longer buy them", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "finance_admin",
+    });
+
+    try {
+      const userCookie = await login(db, server.origin, "13800138001");
+      const packageBody = {
+        code: `direct_recharge_delete_${randomUUID().slice(0, 8)}`,
+        displayName: "500 积分直充删除测试",
+        subtitle: "仅增加积分，不延长会员有效期",
+        credits: 500,
+        amountMinor: 19900,
+        currency: "CNY",
+        sortOrder: 20,
+        status: "active",
+      };
+      const createResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "finance-direct-recharge-delete-create",
+          cookie,
+        },
+        body: JSON.stringify(packageBody),
+      });
+      const createPayload = await createResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages/${createPayload.package.id}`, {
+        method: "DELETE",
+        headers: {
+          "idempotency-key": "finance-direct-recharge-delete",
+          cookie,
+        },
+      });
+      const deletePayload = await deleteResponse.json();
+      const listResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const archivedResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages?includeArchived=1`, {
+        headers: { cookie },
+      });
+      const archivedPayload = await archivedResponse.json();
+      const userPackagesResponse = await fetch(`${server.origin}/api/billing/packages`, {
+        headers: { cookie: userCookie },
+      });
+      const userPackagesPayload = await userPackagesResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deletePayload.package.status, "archived");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listPayload.data.packages.some((item: { id: string }) => item.id === createPayload.package.id), false);
+      assert.equal(archivedResponse.status, 200);
+      assert.equal(
+        archivedPayload.data.packages.some((item: { id: string }) => item.id === createPayload.package.id),
+        true,
+      );
+      assert.equal(userPackagesResponse.status, 200);
+      assert.equal(
+        userPackagesPayload.packages.some((item: { id: string }) => item.id === createPayload.package.id),
         false,
       );
     } finally {
@@ -4974,6 +5297,58 @@ async function createLoggedInAdminServer(
     server,
     cookie: loginResponse.headers.get("set-cookie") ?? "",
   };
+}
+
+async function login(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  _origin: string,
+  phone: string,
+) {
+  const phoneE164 = phone.startsWith("+") ? phone : `+86${phone}`;
+  const now = new Date("2026-06-09T09:00:00.000Z");
+  const user = await db.query<{ id: string }>(
+    `
+      INSERT INTO users (id, phone_e164, display_name, status)
+      VALUES ($1, $2, 'Frontend Buyer', 'active')
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET status = 'active'
+      RETURNING id
+    `,
+    [randomUUID(), phoneE164],
+  );
+  const session = await createAuthSession({
+    userId: user.rows[0].id,
+    token: `admin-platform-user-${randomUUID()}`,
+    now,
+  });
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      session.session.id,
+      session.session.userId,
+      session.session.status,
+      session.session.sessionTokenHash,
+      session.session.sessionTokenHashVersion,
+      session.session.expiresAt,
+      session.session.lastSeenAt,
+      session.session.revokedAt,
+      now,
+    ],
+  );
+  return `auth_session=${session.token}`;
 }
 
 async function seedAdminUserListFixture(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {

@@ -326,6 +326,94 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("returns frozen wallet credits for expired members without making them spendable", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { TENCENT_SMS_ENABLED: "false" },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const userResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const initialSession = await userResponse.json();
+
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_balance_cached = 0,
+              credit_reserved_cached = 0,
+              credit_frozen_cached = 18800,
+              credit_frozen_at = '2026-06-24T07:10:00.000Z',
+              credit_frozen_until = '2027-06-24T07:10:00.000Z'
+          WHERE id = (
+            SELECT organization_id
+            FROM memberships
+            WHERE user_id = $1
+            LIMIT 1
+          )
+        `,
+        [initialSession.user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_profiles (
+            id,
+            organization_id,
+            workspace_id,
+            membership_id,
+            team_account,
+            display_name,
+            business_role,
+            credit_balance_cached,
+            created_by_user_id
+          )
+          SELECT
+            '00000000-0000-4000-8000-000000000204',
+            m.organization_id,
+            m.workspace_id,
+            m.id,
+            'expired_owner_team_wallet',
+            'Expired Owner Team Wallet',
+            'director',
+            2036,
+            m.user_id
+          FROM memberships m
+          WHERE m.user_id = $1
+          LIMIT 1
+          ON CONFLICT (organization_id, workspace_id, membership_id)
+          DO UPDATE SET credit_balance_cached = EXCLUDED.credit_balance_cached
+        `,
+        [initialSession.user.id],
+      );
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const state = await stateResponse.json();
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.availableCredits, 0);
+      assert.equal(session.user.creditBalance, 0);
+      assert.equal(session.user.frozenCredits, 18800);
+      assert.equal(session.user.displayCreditBalance, 18800);
+      assert.equal(session.user.creditFrozenAt, "2026-06-24T07:10:00.000Z");
+      assert.equal(stateResponse.status, 200);
+      assert.equal(state.availableCredits, 0);
+      assert.equal(state.creditBalance, 0);
+      assert.equal(state.frozenCredits, 18800);
+      assert.equal(state.displayCreditBalance, 18800);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("isolates new user wallet and team entitlements from the shared dev organization", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
@@ -7973,10 +8061,20 @@ async function login(origin: string, phone: string) {
     body: JSON.stringify({ phone }),
   });
   const requested = await requestResponse.json();
+  assert.equal(
+    requestResponse.status,
+    200,
+    `login code request failed for ${phone}: ${JSON.stringify(requested)}`,
+  );
   const debugResponse = await fetch(
     `${origin}/api/auth/dev/challenges/${requested.challengeId}`,
   );
   const debug = await debugResponse.json();
+  assert.equal(
+    debugResponse.status,
+    200,
+    `debug challenge lookup failed for ${phone}: ${JSON.stringify(debug)}`,
+  );
   const verifyResponse = await fetch(`${origin}/api/auth/code/verify`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -7987,7 +8085,12 @@ async function login(origin: string, phone: string) {
     }),
   });
 
-  assert.equal(verifyResponse.status, 200);
+  const verifyPayload = await verifyResponse.clone().json().catch(() => ({}));
+  assert.equal(
+    verifyResponse.status,
+    200,
+    `login verify failed for ${phone}: ${JSON.stringify(verifyPayload)}`,
+  );
   return verifyResponse.headers.get("set-cookie") ?? "";
 }
 

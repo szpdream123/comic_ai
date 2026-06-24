@@ -170,13 +170,14 @@ export function renderProjectDetail(context = {}) {
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
+  const frozenCredits = resolveFrozenCreditBalance(ui, session);
 
   if (activeNavTab === "community") {
     return `
       <section class="production-community-window">
         ${renderCommunityWindowHeader(session)}
         ${renderCommunityPage({ ui, session })}
-        ${renderWorkspaceStatusToast(ui.toast, "community-window-toast")}
+        ${renderCommunityWorkspaceStatusToast(ui)}
       </section>
     `;
   }
@@ -189,7 +190,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
         </section>
       </section>
@@ -266,7 +267,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -440,6 +441,7 @@ function renderCreditLedgerDrawer(ui = {}) {
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
+        ${renderCreditLedgerMetric("冻结积分", summary.frozenCredits ?? summary.organizationFrozenCredits ?? 0, "frozen")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       <div class="credit-ledger-toolbar">
@@ -489,7 +491,7 @@ function renderCreditLedgerRow(row = {}) {
     <tr>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
-      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
+      <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
 }
@@ -502,13 +504,41 @@ function normalizeCreditLedgerEntry(row = {}) {
     ? -Math.abs(amount)
     : amount;
   const signedDelta = Number.isFinite(availableDelta) && availableDelta !== 0 ? availableDelta : fallbackDelta;
+  const creditType = normalizeCreditLedgerType(type, signedDelta);
+  const displayAmount = creditType.displayAsAbsolute ? Math.abs(signedDelta || amount) : signedDelta;
+  return {
+    label: creditType.label,
+    tone: creditType.tone,
+    valueTone: creditType.valueTone,
+    displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
+    amount: signedDelta,
+    availableDelta: signedDelta,
+    createdAt: row.createdAt,
+  };
+}
+
+function normalizeCreditLedgerType(type, signedDelta) {
+  if (type === "consume") {
+    return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
+  }
+  if (type === "reservation" || type === "reserve") {
+    return { label: "预占", tone: "reserve", valueTone: "reserve", displayAsAbsolute: false };
+  }
+  if (type === "release") {
+    return { label: "返还", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
+  if (type === "freeze") {
+    return { label: "冻结", tone: "freeze", valueTone: "frozen", displayAsAbsolute: true };
+  }
+  if (type === "restore" || type === "unfreeze") {
+    return { label: "解冻", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
   const isConsume = signedDelta < 0;
   return {
     label: isConsume ? "消耗" : "充值",
     tone: isConsume ? "consume" : "grant",
-    amount: signedDelta,
-    availableDelta: signedDelta,
-    createdAt: row.createdAt,
+    valueTone: isConsume ? "negative" : "positive",
+    displayAsAbsolute: false,
   };
 }
 
@@ -759,14 +789,16 @@ function renderWorkspaceStatusToast(message, extraClassName = "") {
     return "";
   }
   const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
-  const title = tone === "error" ? "操作失败" : "操作成功";
+  const paymentResultToast = isPaymentResultToast(toast);
+  const title = paymentResultToast ? normalizedMessage : tone === "error" ? "操作失败" : "操作成功";
+  const body = paymentResultToast ? "" : `<span>${escapeHtml(normalizedMessage)}</span>`;
   const className = extraClassName
     ? `workbench-toast global-workbench-toast ${tone} ${extraClassName}`
     : `workbench-toast global-workbench-toast ${tone}`;
   return `
     <div id="workspace-status" class="${className}" role="status" aria-live="polite">
-      <strong>${title}</strong>
-      <span>${escapeHtml(normalizedMessage)}</span>
+      <strong>${escapeHtml(title)}</strong>
+      ${body}
     </div>
   `;
 }
@@ -775,11 +807,25 @@ function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
   if (ui.accountSettingsOpen) {
     return "";
   }
+  if (isPaymentResultToast(ui.toast)) {
+    return "";
+  }
   return renderWorkspaceStatusToast(ui.toast, extraClassName);
+}
+
+function renderCommunityWorkspaceStatusToast(ui = {}) {
+  const toast = normalizeWorkspaceToast(ui.toast);
+  if (isPaymentResultToast(toast) && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
+    return "";
+  }
+  return renderWorkspaceStatusToast(ui.toast, "community-window-toast");
 }
 
 function renderOverlayWorkspaceStatusToast(ui = {}) {
   const toast = normalizeWorkspaceToast(ui.toast);
+  if (isPaymentResultToast(toast) && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
+    return "";
+  }
   if (!ui.accountSettingsOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
@@ -807,11 +853,7 @@ function isPaymentResultToast(message) {
 }
 
 function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
-  return (
-    ui.activeNavTab === "tools" &&
-    ui.canvasProjectView === "detail" &&
-    isPaymentResultToast(message)
-  );
+  return isPaymentResultToast(message) && !Boolean(ui.toast?.__paymentResultToastShown);
 }
 
 function resolveWorkspaceToastTone(message) {
@@ -837,6 +879,10 @@ function resolveWorkspaceToastTone(message) {
 
 function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
+    session?.user?.displayCreditBalance,
+    session?.displayCreditBalance,
+    ui.displayCreditBalance,
+    ui.creditLedgerSummary?.displayCreditBalance,
     session?.user?.availableCredits,
     session?.user?.creditBalance,
     session?.user?.credits,
@@ -850,6 +896,23 @@ function resolveDisplayedCreditBalance(ui, session = {}) {
   for (const candidate of candidates) {
     const numeric = Number(candidate);
     if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+  return 0;
+}
+
+function resolveFrozenCreditBalance(ui = {}, session = {}) {
+  const candidates = [
+    session?.user?.frozenCredits,
+    session?.frozenCredits,
+    ui.frozenCredits,
+    ui.creditLedgerSummary?.frozenCredits,
+    ui.creditLedgerSummary?.organizationFrozenCredits,
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) {
       return numeric;
     }
   }
@@ -5666,8 +5729,9 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null, frozenCredits = 0 } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const hasFrozenCredits = Number(frozenCredits) > 0;
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -5694,6 +5758,7 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
           <span>积分</span>
           <b>${escapeHtml(String(creditBalance))}</b>
+          ${hasFrozenCredits ? `<em class="statusbar-credit-frozen">冻结</em>` : ""}
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>

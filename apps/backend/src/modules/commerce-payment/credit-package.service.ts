@@ -190,7 +190,89 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
     }
   }
 
+  async function deletePackage(input: DeleteCreditPackageInput): Promise<CreditPackageMutationResponse> {
+    const parsed = parseDeleteInput(input);
+    if ("error" in parsed) {
+      return parsed.error;
+    }
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
+      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    }
+
+    const store = new SqlIdempotencyRecordStore(deps.db);
+    const requestHash = hashCreditPackageDeleteRequest(parsed.value);
+
+    try {
+      await deps.db.query("BEGIN");
+
+      let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+        const started = await beginOrReplayCommand(store, {
+          organizationId: parsed.value.idempotencyOrganizationId,
+          operationName: operationNames.creditPackageDelete,
+          idempotencyKey: parsed.value.idempotencyKey,
+          requestHash,
+        });
+        if (started.kind === "replayed") {
+          const replayedPackage = packageFromIdempotencySnapshot(started.record.responseSnapshot)
+            ?? (started.record.responseResourceId ? await getPackage(started.record.responseResourceId) : undefined);
+          if (!replayedPackage) {
+            throw new IdempotencyProcessingError(started.record);
+          }
+          await deps.db.query("COMMIT");
+          return { status: 200, body: { package: replayedPackage } };
+        }
+        if (started.kind === "processing") {
+          throw new IdempotencyProcessingError(started.record);
+        }
+        idempotencyRecord = started.record;
+      }
+
+      const row = await queryOne<CreditPackageConfigRow>(
+        deps.db,
+        `
+          UPDATE credit_packages
+          SET status = 'archived',
+              updated_at = $2
+          WHERE id = $1
+            AND ($3::text IS NULL OR metadata_json->>'kind' = $3)
+          RETURNING *
+        `,
+        [parsed.value.id, parsed.value.now, parsed.value.metadataKind],
+      );
+      if (!row) {
+        await deps.db.query("ROLLBACK");
+        return error(404, "credit_package_not_found", "credit package not found");
+      }
+
+      const creditPackage = packageFromRow(row);
+      if (idempotencyRecord) {
+        await store.update({
+          ...idempotencyRecord,
+          responseResourceType: "credit_package",
+          responseResourceId: creditPackage.id,
+          responseSnapshot: { package: creditPackage },
+          status: "succeeded",
+          updatedAt: parsed.value.now,
+        });
+      }
+
+      await deps.db.query("COMMIT");
+      return { status: 200, body: { package: creditPackage } };
+    } catch (deleteError) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      if (deleteError instanceof IdempotencyConflictError) {
+        return error(409, deleteError.code, "Idempotency-Key has already been used with a different request");
+      }
+      if (deleteError instanceof IdempotencyProcessingError) {
+        return error(202, deleteError.code, "Idempotency-Key is already processing");
+      }
+      throw deleteError;
+    }
+  }
+
   return {
+    deletePackage,
     listPackages,
     savePackage,
   };
@@ -226,6 +308,14 @@ export interface SaveCreditPackageInput {
   now: Date;
 }
 
+export interface DeleteCreditPackageInput {
+  id: string;
+  metadataKind?: string | null;
+  idempotencyKey?: string | null;
+  idempotencyOrganizationId?: string | null;
+  now: Date;
+}
+
 export interface CreditPackageConfigView {
   id: string;
   code: string;
@@ -250,6 +340,10 @@ type CreditPackageSaveResponse =
   | { status: 200; body: { package: CreditPackageConfigView } }
   | { status: number; body: { error: { code: string; message: string } } };
 
+type CreditPackageMutationResponse =
+  | { status: 200; body: { package: CreditPackageConfigView } }
+  | { status: number; body: { error: { code: string; message: string } } };
+
 interface ParsedSaveInput {
   id: string | null;
   code: string;
@@ -266,6 +360,14 @@ interface ParsedSaveInput {
   validFrom: Date | null;
   validUntil: Date | null;
   actorAdminAccountId: string | null;
+  idempotencyKey: string | null;
+  idempotencyOrganizationId: string | null;
+  now: Date;
+}
+
+interface ParsedDeleteInput {
+  id: string;
+  metadataKind: string | null;
   idempotencyKey: string | null;
   idempotencyOrganizationId: string | null;
   now: Date;
@@ -357,12 +459,42 @@ function parseSaveInput(input: SaveCreditPackageInput):
   };
 }
 
+function parseDeleteInput(input: DeleteCreditPackageInput):
+  | { value: ParsedDeleteInput }
+  | { error: CreditPackageMutationResponse } {
+  const id = String(input.id ?? "").trim();
+  const metadataKind = normalizeNullableText(input.metadataKind);
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
+  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+
+  if (!id || !isUuid(id)) {
+    return { error: error(400, "invalid_credit_package_id", "credit package id is invalid") };
+  }
+
+  return {
+    value: {
+      id,
+      metadataKind,
+      idempotencyKey,
+      idempotencyOrganizationId,
+      now: input.now,
+    },
+  };
+}
+
 function packageFromIdempotencySnapshot(snapshot: Record<string, unknown> | undefined) {
   const creditPackage = snapshot?.package;
   if (!creditPackage || typeof creditPackage !== "object" || Array.isArray(creditPackage)) {
     return undefined;
   }
   return creditPackage as CreditPackageConfigView;
+}
+
+function hashCreditPackageDeleteRequest(input: ParsedDeleteInput) {
+  return hashJson({
+    id: input.id,
+    metadataKind: input.metadataKind,
+  });
 }
 
 function hashCreditPackageSaveRequest(input: ParsedSaveInput) {

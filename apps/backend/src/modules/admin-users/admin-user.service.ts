@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import { restoreOrganizationWalletCreditsInTransaction } from "../credit-billing/credit-lot.service.ts";
 import {
   grantCredits,
   reserveCredits,
@@ -29,6 +30,8 @@ export interface AdminUserListItem {
   teamGroupName: string | null;
   availableCredits: number;
   reservedCredits: number;
+  frozenCredits: number;
+  displayCreditBalance: number;
   usedCredits: number;
   subaccountCount: number;
 }
@@ -60,6 +63,7 @@ interface AdminUserRow {
   team_group_name: string | null;
   organization_credit_balance: number | string | null;
   organization_reserved_balance: number | string | null;
+  organization_frozen_balance: number | string | null;
   member_credit_balance: number | string | null;
   member_credit_used: number | string | null;
   workspace_reserved_credits: number | string | null;
@@ -93,7 +97,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
 
     const total = await deps.db.query<{ count: number | string }>(
       `
-        SELECT COUNT(*) AS count
+        SELECT COUNT(DISTINCT u.id) AS count
         FROM users u
         LEFT JOIN memberships m ON m.user_id = u.id
         LEFT JOIN organizations o ON o.id = m.organization_id
@@ -104,50 +108,95 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     );
     const result = await deps.db.query<AdminUserRow>(
       `
+        WITH matched_users AS (
+          SELECT DISTINCT u.id, u.created_at
+          FROM users u
+          LEFT JOIN memberships m ON m.user_id = u.id
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
+          ${whereSql}
+        ),
+        paged_users AS (
+          SELECT u.*
+          FROM users u
+          JOIN matched_users matched ON matched.id = u.id
+          ORDER BY u.created_at DESC, u.id ASC
+          LIMIT $${params.length + 1}
+          OFFSET $${params.length + 2}
+        )
         SELECT
           u.id AS user_id,
           u.display_name,
           u.phone_e164,
           u.email,
           u.status AS user_status,
-          o.id AS organization_id,
-          o.name AS organization_name,
-          w.id AS workspace_id,
-          m.id AS membership_id,
-          m.role AS membership_role,
-          tp.business_role AS team_role,
-          tg.id AS team_group_id,
-          tg.name AS team_group_name,
-          o.credit_balance_cached AS organization_credit_balance,
-          o.credit_reserved_cached AS organization_reserved_balance,
-          tp.credit_balance_cached AS member_credit_balance,
-          tp.credit_used_cached AS member_credit_used,
-          COALESCE((
-            SELECT SUM(r.amount_reserved)
-            FROM credit_reservations r
-            WHERE r.organization_id = o.id
-              AND (w.id IS NULL OR r.workspace_id = w.id)
-              AND r.status = 'active'
-          ), 0) AS workspace_reserved_credits,
-          COALESCE((
-            SELECT COUNT(*)
-            FROM team_member_profiles child
-            WHERE child.organization_id = tp.organization_id
-              AND child.workspace_id = tp.workspace_id
-              AND child.member_group_id = tp.member_group_id
-              AND child.membership_id <> tp.membership_id
-              AND tp.business_role IN ('admin', 'group_admin')
-          ), 0) AS subaccount_count
-        FROM users u
-        LEFT JOIN memberships m ON m.user_id = u.id
-        LEFT JOIN organizations o ON o.id = m.organization_id
-        LEFT JOIN workspaces w ON w.id = m.workspace_id
-        LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-        LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
-        ${whereSql}
+          account.organization_id,
+          account.organization_name,
+          account.workspace_id,
+          account.membership_id,
+          account.membership_role,
+          account.team_role,
+          account.team_group_id,
+          account.team_group_name,
+          account.organization_credit_balance,
+          account.organization_reserved_balance,
+          account.organization_frozen_balance,
+          account.member_credit_balance,
+          account.member_credit_used,
+          account.workspace_reserved_credits,
+          account.subaccount_count
+        FROM paged_users u
+        LEFT JOIN LATERAL (
+          SELECT
+            o.id AS organization_id,
+            o.name AS organization_name,
+            w.id AS workspace_id,
+            m.id AS membership_id,
+            m.role AS membership_role,
+            tp.business_role AS team_role,
+            tg.id AS team_group_id,
+            tg.name AS team_group_name,
+            o.credit_balance_cached AS organization_credit_balance,
+            o.credit_reserved_cached AS organization_reserved_balance,
+            o.credit_frozen_cached AS organization_frozen_balance,
+            tp.credit_balance_cached AS member_credit_balance,
+            tp.credit_used_cached AS member_credit_used,
+            COALESCE((
+              SELECT SUM(r.amount_reserved)
+              FROM credit_reservations r
+              WHERE r.organization_id = o.id
+                AND (w.id IS NULL OR r.workspace_id = w.id)
+                AND r.status = 'active'
+            ), 0) AS workspace_reserved_credits,
+            COALESCE((
+              SELECT COUNT(*)
+              FROM team_member_profiles child
+              WHERE child.organization_id = tp.organization_id
+                AND child.workspace_id = tp.workspace_id
+                AND child.member_group_id = tp.member_group_id
+                AND child.membership_id <> tp.membership_id
+                AND tp.business_role IN ('admin', 'group_admin')
+            ), 0) AS subaccount_count
+          FROM memberships m
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          LEFT JOIN workspaces w ON w.id = m.workspace_id
+          LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
+          LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
+          WHERE m.user_id = u.id
+          ORDER BY
+            (m.status = 'active') DESC,
+            CASE
+              WHEN m.role = 'owner_admin' AND tp.id IS NULL THEN 0
+              WHEN tp.business_role IN ('admin', 'group_admin') THEN 1
+              WHEN m.role = 'owner_admin' THEN 2
+              WHEN m.role = 'sub_account' OR tp.id IS NOT NULL THEN 3
+              ELSE 4
+            END,
+            m.created_at ASC,
+            m.id ASC
+          LIMIT 1
+        ) account ON TRUE
         ORDER BY u.created_at DESC, u.id ASC
-        LIMIT $${params.length + 1}
-        OFFSET $${params.length + 2}
       `,
       [...params, pageSize, offset],
     );
@@ -190,6 +239,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           tg.name AS team_group_name,
           o.credit_balance_cached AS organization_credit_balance,
           o.credit_reserved_cached AS organization_reserved_balance,
+          o.credit_frozen_cached AS organization_frozen_balance,
           tp.credit_balance_cached AS member_credit_balance,
           tp.credit_used_cached AS member_credit_used,
           0 AS workspace_reserved_credits,
@@ -273,6 +323,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           tg.name AS team_group_name,
           o.credit_balance_cached AS organization_credit_balance,
           o.credit_reserved_cached AS organization_reserved_balance,
+          o.credit_frozen_cached AS organization_frozen_balance,
           tp.credit_balance_cached AS member_credit_balance,
           tp.credit_used_cached AS member_credit_used,
           COALESCE((
@@ -783,6 +834,157 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
+  async function restoreFrozenUserCredits(input: {
+    userId: string;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const reason = input.reason.trim();
+    if (!reason) return error(400, "reason_required", "请填写操作原因");
+    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    if (!target) return error(404, "admin_user_not_found", "用户不存在");
+    if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
+
+    const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    const existingLedger = await queryOne<LedgerRow>(
+      deps.db,
+      `
+        SELECT *
+        FROM credit_ledger_entries
+        WHERE organization_id = $1
+          AND source_type = 'admin_frozen_credit_restore'
+          AND source_id = $2
+          AND entry_type = 'restore'
+        LIMIT 1
+      `,
+      [target.organizationId, sourceId],
+    );
+
+    let restoredAmount = Number(existingLedger?.amount ?? 0);
+    if (!existingLedger) {
+      await deps.db.query("BEGIN");
+      try {
+        const organization = await queryOne<{
+          credit_balance_cached: number | string;
+          credit_reserved_cached: number | string;
+          credit_frozen_cached: number | string;
+        }>(
+          deps.db,
+          `
+            SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
+            FROM organizations
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [target.organizationId],
+        );
+        const frozenAmount = Number(organization?.credit_frozen_cached ?? 0);
+        if (!organization || frozenAmount <= 0) {
+          const replayedLedger = await queryOne<LedgerRow>(
+            deps.db,
+            `
+              SELECT *
+              FROM credit_ledger_entries
+              WHERE organization_id = $1
+                AND source_type = 'admin_frozen_credit_restore'
+                AND source_id = $2
+                AND entry_type = 'restore'
+              LIMIT 1
+            `,
+            [target.organizationId, sourceId],
+          );
+          if (replayedLedger) {
+            restoredAmount = Number(replayedLedger.amount ?? 0);
+            await deps.db.query("ROLLBACK");
+            return {
+              status: 200,
+              body: {
+                data: {
+                  restoredAmount,
+                  availableCredits: Number(organization?.credit_balance_cached ?? 0),
+                  reservedCredits: Number(organization?.credit_reserved_cached ?? 0),
+                  frozenCredits: Number(organization?.credit_frozen_cached ?? 0),
+                },
+              },
+            };
+          }
+          await deps.db.query("ROLLBACK");
+          return error(409, "no_frozen_credits", "该用户当前没有可解冻积分");
+        }
+
+        const restoreResult = await restoreOrganizationWalletCreditsInTransaction(deps.db, {
+          organizationId: target.organizationId,
+          sourceType: "admin_frozen_credit_restore",
+          sourceId,
+          reason,
+          metadata: {
+            adminForced: true,
+            targetUserId: input.userId,
+            targetMembershipId: target.membershipId,
+            actorAdminAccountId: input.actorAdminAccountId,
+          },
+          now: input.now,
+        });
+        restoredAmount = restoreResult.restoredAmount;
+        if (restoredAmount <= 0) {
+          await deps.db.query("ROLLBACK");
+          return error(409, "frozen_credits_not_restorable", "冻结积分已超过保留期，无法解冻");
+        }
+
+        await appendAuditEvent(deps.db, {
+          organizationId: input.auditOrganizationId,
+          workspaceId: input.auditWorkspaceId,
+          actorUserId: null,
+          eventType: "admin.credit.frozen_restored",
+          targetType: "user",
+          targetId: input.userId,
+          reason,
+          sensitive: true,
+          metadata: {
+            restoredAmount,
+            targetOrganizationId: target.organizationId,
+            targetMembershipId: target.membershipId,
+            actorAdminAccountId: input.actorAdminAccountId,
+          },
+        });
+
+        await deps.db.query("COMMIT");
+      } catch (error_) {
+        await deps.db.query("ROLLBACK");
+        throw error_;
+      }
+    }
+
+    const organization = await queryOne<{
+      credit_balance_cached: number | string;
+      credit_reserved_cached: number | string;
+      credit_frozen_cached: number | string;
+    }>(
+      deps.db,
+      `
+        SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
+        FROM organizations
+        WHERE id = $1
+      `,
+      [target.organizationId],
+    );
+    return {
+      status: 200,
+      body: {
+        data: {
+          restoredAmount,
+          availableCredits: Number(organization?.credit_balance_cached ?? 0),
+          reservedCredits: Number(organization?.credit_reserved_cached ?? 0),
+          frozenCredits: Number(organization?.credit_frozen_cached ?? 0),
+        },
+      },
+    };
+  }
+
   async function listUserCreditLedger(input: {
     userId: string;
     pageSize?: number;
@@ -905,6 +1107,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     updateUserProfile,
     updateUserStatus,
     deductUserCredits,
+    restoreFrozenUserCredits,
     listUserCreditLedger,
     getTeamPlanLimit,
     updateTeamPlanLimit,
@@ -1146,10 +1349,18 @@ async function buildUserCreditSummary(
   const organization = await queryOne<{
     credit_balance_cached: number | string;
     credit_reserved_cached: number | string;
+    credit_frozen_cached: number | string;
+    credit_frozen_at: Date | string | null;
+    credit_frozen_until: Date | string | null;
   }>(
     db,
     `
-      SELECT credit_balance_cached, credit_reserved_cached
+      SELECT
+        credit_balance_cached,
+        credit_reserved_cached,
+        credit_frozen_cached,
+        credit_frozen_at,
+        credit_frozen_until
       FROM organizations
       WHERE id = $1
     `,
@@ -1238,17 +1449,28 @@ async function buildUserCreditSummary(
 
   const organizationAvailable = Number(organization?.credit_balance_cached ?? 0);
   const organizationReserved = Number(organization?.credit_reserved_cached ?? 0);
+  const organizationFrozen = isMemberWalletTarget(target) ? 0 : Number(organization?.credit_frozen_cached ?? 0);
   const memberAvailable = member ? Number(member.credit_balance_cached ?? 0) : null;
   const memberUsed = member ? Number(member.credit_used_cached ?? 0) : null;
+  const displayAvailableCredits = memberAvailable ?? organizationAvailable;
   const targetReserved = Number(reservations?.active_reserved ?? 0);
   const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
   return {
     balanceScope: isMemberWalletTarget(target) ? "member" : "organization",
     organizationAvailableCredits: organizationAvailable,
     organizationReservedCredits: organizationReserved,
+    organizationFrozenCredits: organizationFrozen,
+    organizationFrozenAt: organizationFrozen > 0 && organization?.credit_frozen_at
+      ? new Date(organization.credit_frozen_at).toISOString()
+      : null,
+    organizationFrozenUntil: organizationFrozen > 0 && organization?.credit_frozen_until
+      ? new Date(organization.credit_frozen_until).toISOString()
+      : null,
     memberAvailableCredits: memberAvailable,
     memberUsedCredits: memberUsed,
-    displayAvailableCredits: memberAvailable ?? organizationAvailable,
+    displayAvailableCredits,
+    displayCreditBalance: displayAvailableCredits + organizationFrozen,
+    frozenCredits: organizationFrozen,
     displayReservedCredits: isMemberWalletTarget(target) ? targetReserved : organizationReserved,
     totalGrantedCredits: Number(totals?.total_granted ?? 0),
     totalConsumedCredits: totalConsumed,
@@ -1265,6 +1487,10 @@ function isMemberWalletTarget(target: UserCreditTarget) {
 function userFromRow(row: AdminUserRow): AdminUserListItem {
   const accountType = resolveAccountType(row);
   const memberCredits = row.member_credit_balance;
+  const availableCredits = Number(memberCredits ?? row.organization_credit_balance ?? 0);
+  const frozenCredits = accountType === "owner_account"
+    ? Number(row.organization_frozen_balance ?? 0)
+    : 0;
   return {
     userId: row.user_id,
     displayName: row.display_name ?? "未命名用户",
@@ -1280,12 +1506,12 @@ function userFromRow(row: AdminUserRow): AdminUserListItem {
     teamRole: row.team_role,
     teamGroupId: row.team_group_id,
     teamGroupName: row.team_group_name,
-    availableCredits: Number(
-      memberCredits ?? row.organization_credit_balance ?? 0,
-    ),
+    availableCredits,
     reservedCredits: accountType === "owner_account"
       ? Number(row.organization_reserved_balance ?? 0)
       : Number(row.workspace_reserved_credits ?? 0),
+    frozenCredits,
+    displayCreditBalance: availableCredits + frozenCredits,
     usedCredits: Number(row.member_credit_used ?? 0),
     subaccountCount: Number(row.subaccount_count ?? 0),
   };

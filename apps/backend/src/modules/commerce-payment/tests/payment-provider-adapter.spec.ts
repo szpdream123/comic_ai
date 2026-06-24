@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createPublicKey } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   createAlipayAdapter,
@@ -80,6 +83,83 @@ describe("payment provider adapters", () => {
     assert.equal(alipay.kind, "submitted");
     assert.equal(alipay.payAction.kind, "mock_qr");
 
+  });
+
+  it("keeps payment providers local in development even when env enables them", async () => {
+    const registry = createEnvPaymentProviderRegistry({
+      NODE_ENV: "development",
+      WECHAT_PAY_ENABLED: "true",
+      ALIPAY_ENABLED: "true",
+    });
+
+    const wechat = await registry.require("wechat_pay").createPaymentIntent({
+      provider: "wechat_pay",
+      productMode: "native_qr",
+      merchantOrderNo: "ORD-DEV",
+      providerIdempotencyKey: "idem-dev",
+      amountMinor: 100,
+      currency: "CNY",
+      subject: "test",
+      expiresAt: new Date("2026-06-16T00:15:00.000Z"),
+      safeMetadata: {},
+    });
+
+    assert.equal(wechat.kind, "submitted");
+    assert.equal(wechat.payAction.kind, "mock_qr");
+  });
+
+  it("allows explicit real mode to use configured WeChat provider adapters", async () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "payment-provider-adapter-"));
+    try {
+      const merchantPrivateKeyPath = path.join(tempDir, "wechat-merchant-private-key.pem");
+      const platformPublicKeyPath = path.join(tempDir, "wechat-platform-public-key.pem");
+      writeFileSync(merchantPrivateKeyPath, testPrivateKey, "utf8");
+      writeFileSync(
+        platformPublicKeyPath,
+        createPublicKey(testPrivateKey).export({ type: "spki", format: "pem" }).toString(),
+        "utf8",
+      );
+
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({
+          code_url: "weixin://wxpay/bizpayurl?pr=test-real-code",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+
+      const registry = createEnvPaymentProviderRegistry({
+        NODE_ENV: "development",
+        PAYMENT_PROVIDER_MODE: "real",
+        WECHAT_PAY_ENABLED: "true",
+        WECHAT_PAY_APP_ID: "wx-test",
+        WECHAT_PAY_MCH_ID: "mch-test",
+        WECHAT_PAY_MERCHANT_SERIAL_NO: "serial-test",
+        WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+        WECHAT_PAY_MERCHANT_PRIVATE_KEY_PATH: merchantPrivateKeyPath,
+        WECHAT_PAY_PLATFORM_CERT_PATH: platformPublicKeyPath,
+        WECHAT_PAY_NOTIFY_URL: "https://example.test/api/pay/wechat/notify",
+        WECHAT_PAY_API_BASE_URL: "https://wechat.example.test",
+      });
+
+      const wechat = await registry.require("wechat_pay").createPaymentIntent({
+        provider: "wechat_pay",
+        productMode: "native_qr",
+        merchantOrderNo: "ORD-REAL",
+        providerIdempotencyKey: "idem-real",
+        amountMinor: 100,
+        currency: "CNY",
+        subject: "test",
+        expiresAt: new Date("2026-06-16T00:15:00.000Z"),
+        safeMetadata: {},
+      });
+
+      assert.equal(wechat.kind, "submitted");
+      assert.equal(wechat.payAction.kind, "qr_code");
+      assert.equal(wechat.payAction.codeUrl, "weixin://wxpay/bizpayurl?pr=test-real-code");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses provider-specific callback acknowledgements", () => {
