@@ -13,5 +13,7 @@ test("episode asset description editor supports 2500 characters and manual resiz
 
   assert.match(html, /maxlength="2500"/);
   assert.match(html, />\s*480 \/ 2500\s*</);
+  assert.match(html, /episode-replica-asset-full-popover/);
+  assert.match(html, /<p>角色描述角色描述/);
   assert.doesNotMatch(html, /\/ 800/);
 });

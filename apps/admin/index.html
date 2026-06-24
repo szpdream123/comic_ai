@@ -578,7 +578,9 @@
       .table-wrap.users th:nth-child(6),
       .table-wrap.users td:nth-child(6) { width: 112px; }
       .table-wrap.users th:nth-child(7),
-      .table-wrap.users td:nth-child(7) { width: 84px; }
+      .table-wrap.users td:nth-child(7) { width: 128px; }
+      .table-wrap.users th:nth-child(8),
+      .table-wrap.users td:nth-child(8) { width: 84px; }
       .tag {
         display: inline-flex;
         align-items: center;
@@ -1201,6 +1203,7 @@
         directRecharge: "直充积分",
         prompts: "提示词管理",
         risks: "风控与审计",
+        smsRecords: "短信记录",
         settings: "系统设置",
         account: "管理员账户",
       };
@@ -1233,6 +1236,8 @@
         scriptPromptPackages: [],
         scriptPromptLoadError: "",
         imagePromptStyles: [],
+        imagePromptTotal: 0,
+        imagePromptPageSize: 500,
         imagePromptLoadError: "",
         batchImagePromptPresetCategories: { character: [], scene: [], prop: [] },
         batchImagePromptLoadError: "",
@@ -1264,6 +1269,9 @@
         auditEvents: [],
         riskLoadError: "",
         riskStatusFilter: "all",
+        smsRecords: [],
+        smsRecordLoadError: "",
+        smsRecordRange: "all",
         dashboard: {
           metrics: {
             generationCountToday: 0,
@@ -1298,9 +1306,17 @@
         {
           key: "creator.batch_image_prompt_preset_categories",
           value: {
-            scene: [],
-            character: [],
-            prop: [],
+            scene: [
+              { id: "scene-vr", label: "[系统]VR场景图" },
+              { id: "scene-overlook", label: "[系统]场景-俯视图" },
+              { id: "scene-wide", label: "[系统]场景-广角图" },
+            ],
+            character: [
+              { id: "character-triple", label: "[系统]角色-三视图" },
+            ],
+            prop: [
+              { id: "prop-triple", label: "[系统]道具-三视图" },
+            ],
           },
           valueType: "json",
           scope: "creator",
@@ -1374,6 +1390,7 @@
         if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/sms-records")) return "smsRecords";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
         return "dashboard";
@@ -1660,6 +1677,7 @@
                 ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "提示词管理")}
                 ${navButton("risks", "风控审计")}
+                ${navButton("smsRecords", "短信记录")}
                 ${navButton("settings", "系统设置")}
               </nav>
             </aside>
@@ -1930,6 +1948,8 @@
         return source.map((item, index) => ({
           id: String(item?.id || `${target}-batch-prompt-${index + 1}`),
           label: String(item?.label || item?.name || `${batchImagePromptDrawerTitle(target)}${index + 1}`),
+          prompt_content: String(item?.prompt_content || item?.promptContent || ""),
+          promptContent: String(item?.prompt_content || item?.promptContent || ""),
           sort_order: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
           sortOrder: Number(item?.sort_order || item?.sortOrder || (index + 1) * 100),
         }));
@@ -1964,14 +1984,21 @@
         return {
           scene: normalizeBatchImagePromptTemplates("scene", getBatchImagePromptTemplates("scene"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
           character: normalizeBatchImagePromptTemplates("character", getBatchImagePromptTemplates("character"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
           prop: normalizeBatchImagePromptTemplates("prop", getBatchImagePromptTemplates("prop"))
             .sort((a, b) => Number(a.sort_order || a.sortOrder || 0) - Number(b.sort_order || b.sortOrder || 0))
-            .map((item) => ({ id: item.id, label: item.label })),
+            .map((item) => batchImagePromptTemplatePayloadItem(item)),
         };
+      }
+
+      function batchImagePromptTemplatePayloadItem(item) {
+        const promptContent = String(item?.prompt_content || item?.promptContent || "").trim();
+        return promptContent
+          ? { id: item.id, label: item.label, prompt_content: promptContent }
+          : { id: item.id, label: item.label };
       }
 
       async function loadBatchImagePromptTemplates() {
@@ -2419,19 +2446,27 @@
         item.coverImageUrl = item.cover_image_url;
       });
 
-      async function loadImagePromptStyles() {
+      async function loadImagePromptStyles(category = state.imagePromptCategory, keyword = state.imagePromptKeyword) {
+        const normalizedCategory = imagePromptKinds.some((item) => item.key === category) ? category : "all";
+        const params = new URLSearchParams({
+          page_size: String(Number(state.imagePromptPageSize || 500)),
+        });
+        if (normalizedCategory !== "all") params.set("category", normalizedCategory);
+        if ((keyword || "").trim()) params.set("keyword", (keyword || "").trim());
         try {
-          const result = await api("/api/admin/image-prompt/styles?page_size=200");
+          const result = await api(`/api/admin/image-prompt/styles?${params.toString()}`);
           const loadedStyles = Array.isArray(result.data)
             ? result.data
             : Array.isArray(result.data?.data)
               ? result.data.data
               : [];
-          state.imagePromptStyles = normalizeImagePromptStyles(loadedStyles.length ? loadedStyles : imagePromptStyleFallback);
+          state.imagePromptStyles = normalizeImagePromptStyles(loadedStyles);
+          state.imagePromptTotal = Number(result.meta?.total || loadedStyles.length || 0);
           state.imagePromptLoadError = "";
         } catch (error) {
-          state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用，当前展示内置豆包样例";
-          state.imagePromptStyles = normalizeImagePromptStyles(imagePromptStyleFallback);
+          state.imagePromptLoadError = error.payload?.error?.message || "生图题词接口暂不可用";
+          state.imagePromptStyles = [];
+          state.imagePromptTotal = 0;
         }
       }
 
@@ -2496,6 +2531,32 @@
         }
       }
 
+      async function loadSmsRecords() {
+        setPageLoading("smsRecords", true);
+        try {
+          const params = new URLSearchParams({
+            pageSize: "200",
+            range: state.smsRecordRange || "all",
+          });
+          const result = await api(`/api/admin/sms-records?${params.toString()}`);
+          state.smsRecords = result.data || [];
+          state.smsRecordLoadError = "";
+          clearPageForbidden("smsRecords");
+        } catch (error) {
+          setPageForbidden("smsRecords", error);
+          state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
+          state.smsRecords = [];
+        } finally {
+          setPageLoading("smsRecords", false);
+        }
+      }
+
+      async function updateSmsRecordRange(value) {
+        state.smsRecordRange = value || "all";
+        await loadSmsRecords();
+        renderShell();
+      }
+
       async function loadDashboard() {
         setPageLoading("dashboard", true);
         try {
@@ -2555,6 +2616,26 @@
         }
       }
 
+      async function loadSmsRecords() {
+        setPageLoading("smsRecords", true);
+        try {
+          const params = new URLSearchParams({
+            pageSize: "200",
+            range: state.smsRecordRange || "all",
+          });
+          const result = await api(`/api/admin/sms-records?${params.toString()}`);
+          state.smsRecords = result.data || [];
+          state.smsRecordLoadError = "";
+          clearPageForbidden("smsRecords");
+        } catch (error) {
+          setPageForbidden("smsRecords", error);
+          state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
+          state.smsRecords = [];
+        } finally {
+          setPageLoading("smsRecords", false);
+        }
+      }
+
       function navButton(page, label) {
         return `<button class="${state.page === page ? "active" : ""}" data-page="${page}"><span>${label}</span></button>`;
       }
@@ -2569,6 +2650,7 @@
           directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
+          smsRecords: "/admin/sms-records",
           settings: "/admin/settings",
           account: "/admin/account",
         };
@@ -2593,6 +2675,7 @@
         if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
       }
@@ -3253,7 +3336,7 @@
           <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
           <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}</span>
         </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
-          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
           ${userRowsHtml(visibleUsers)}
         </tbody></table></div>`;
       }
@@ -3261,7 +3344,7 @@
       function userRowsHtml(users) {
         return users.length
           ? users.map((user) => `${userRow(user)}${userModelRequestInlineRow(user)}`).join("")
-          : `<tr><td colspan="8">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+          : `<tr><td colspan="9">${state.userLoadError || "暂无用户数据"}</td></tr>`;
       }
 
       function userModelRequestInlineRow(user) {
@@ -3276,7 +3359,7 @@
             title: `模型请求记录（${escapeHtml(user.displayName || user.userId)}）`,
           });
         }
-        return `<tr class="user-model-request-inline-row"><td colspan="6"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
+        return `<tr class="user-model-request-inline-row"><td colspan="9"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
       }
 
       function renderMembershipPage() {
@@ -4023,7 +4106,7 @@
         const selected = items[0] || getBatchImagePromptTemplates(target)[0];
         if (!selected) return "暂无可预览的预设。";
         const scope = batchImagePromptScope(target);
-        return escapeHtml(`【${scope.fieldLabel}】\n名称：${selected.label || "-"}\n编码：${selected.id || "-"}\n排序：${Number(selected.sort_order || selected.sortOrder || 0)}`);
+        return escapeHtml(`【${scope.fieldLabel}】\n名称：${selected.label || "-"}\n编码：${selected.id || "-"}\n排序：${Number(selected.sort_order || selected.sortOrder || 0)}\n\n正文内容：\n${selected.prompt_content || selected.promptContent || ""}`);
       }
 
       function batchImagePromptDrawerTitle(target) {
@@ -4367,24 +4450,26 @@
         const activeKind = imagePromptKinds.find((item) => item.key === state.imagePromptCategory) || imagePromptKinds[0];
         const keyword = (state.imagePromptKeyword || "").trim().toLowerCase();
         const filtered = state.imagePromptStyles
-          .filter((item) => activeKind.key === "all" || item.category === activeKind.key)
           .filter((item) => !keyword || [item.name, item.code, item.category, item.model_family || item.modelFamily, (item.tags || []).join(" "), item.prompt_content || item.promptContent].join(" ").toLowerCase().includes(keyword))
           .sort((a, b) => Number(b.sort_order || b.sortOrder || 0) - Number(a.sort_order || a.sortOrder || 0));
         const rows = filtered.length
           ? filtered.map(imagePromptStyleRow).join("")
           : `<tr><td colspan="10">${state.imagePromptLoadError || "暂无该分类的生图题词"}</td></tr>`;
+        const total = Number(state.imagePromptTotal || 0);
+        const filteredCountNote = total > filtered.length ? `显示 ${filtered.length} / ${total}` : `共 ${filtered.length} 条`;
+        const sourceNote = state.imagePromptLoadError ? `真实接口加载失败：${state.imagePromptLoadError}` : "";
         return `${promptTabs()}<section class="prompt-workbench" data-required-permission="storyboard_prompt:view">
           <aside class="card">
             <div class="prompt-kind-list">${imagePromptKinds.map((item) => `<button class="prompt-kind-card ${item.key === activeKind.key ? "active" : ""}" onclick="updateImagePromptCategory('${item.key}')"><strong>${item.title}</strong><span class="metric-note">${item.note}</span></button>`).join("")}</div>
           </aside>
           <section class="section">
             <div class="toolbar">
-              <div class="prompt-toolbar-title"><h3>${activeKind.title}管理</h3><div class="metric-note">${activeKind.note}</div></div>
+              <div class="prompt-toolbar-title"><h3>${activeKind.title}管理</h3><div class="metric-note">${activeKind.note}</div><div class="metric-note">${filteredCountNote}</div>${sourceNote ? `<div class="error-text">${escapeHtml(sourceNote)}</div>` : ""}</div>
               <div class="filters">
                 <input value="${escapeAttribute(state.imagePromptKeyword || "")}" placeholder="搜索名称 / 编码 / 标签" oninput="updateImagePromptKeyword(this.value)" />
                 <select onchange="updateImagePromptCategory(this.value)">${optionList(imagePromptKinds.map((item) => item.key), activeKind.key)}</select>
                 <button class="btn primary" onclick="openImagePromptStyleDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增生图题词</button>
-                <button class="btn ghost" onclick="loadImagePromptStyles().then(renderShell)">刷新</button>
+                <button class="btn ghost" onclick="loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell)">刷新</button>
               </div>
             </div>
             <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>编码</th><th>分类</th><th>模型族</th><th>状态</th><th>默认</th><th>排序</th><th>提示词</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -4426,12 +4511,12 @@
 
       function updateImagePromptCategory(category) {
         state.imagePromptCategory = imagePromptKinds.some((item) => item.key === category) ? category : "all";
-        renderShell();
+        loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell);
       }
 
       function updateImagePromptKeyword(value) {
         state.imagePromptKeyword = value || "";
-        renderShell();
+        loadImagePromptStyles(state.imagePromptCategory, state.imagePromptKeyword).then(renderShell);
       }
 
       function formatShortDate(value) {
@@ -4449,7 +4534,7 @@
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
         const nextStatus = user.status === "active" ? "disabled" : "active";
         const statusAction = nextStatus === "disabled" ? "disable" : "enable";
-        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用账户" : "启用账户"}</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>归档账户</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button></div></td></tr>`;
+        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
       }
 
       async function toggleUserModelRequestInline(userId) {
@@ -4588,6 +4673,32 @@
             <div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${auditRows}</tbody></table></div>
           </section>
         </div>`;
+      }
+
+      function smsRecordsPage() {
+        const rows = state.smsRecords.length
+          ? state.smsRecords.map((item) => `
+            <tr>
+              <td>${escapeHtml(formatAdminDateTime(item.createdAt))}</td>
+              <td>${escapeHtml(item.phone || "-")}</td>
+              <td><span class="tag blue">${escapeHtml(item.verificationCode || "-")}</span></td>
+              <td>${escapeHtml(item.ipAddress || "-")}</td>
+              <td><div class="metric-note">${escapeHtml(item.smsContent || "-")}</div></td>
+              <td><span class="tag ${item.status === "sent" ? "green" : "warn"}">${item.status === "sent" ? "成功" : "失败"}</span></td>
+            </tr>
+          `).join("")
+          : `<tr><td colspan="6">${state.smsRecordLoadError || "暂无短信记录"}</td></tr>`;
+        return `<section class="card">
+          <div class="toolbar">
+            <h3>短信记录</h3>
+            <div class="filters">
+              <select onchange="updateSmsRecordRange(this.value)">${smsRecordRangeOptions(state.smsRecordRange || "all")}</select>
+              <button class="btn ghost" onclick="loadSmsRecords().then(renderShell)">刷新</button>
+            </div>
+          </div>
+          <div class="metric-note">默认显示全部记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
+          <div class="table-wrap dense"><table><thead><tr><th>时间</th><th>手机号</th><th>验证码</th><th>IP</th><th>短信内容</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>
+        </section>`;
       }
 
       function riskTable(name, severity, status) {
@@ -7185,9 +7296,12 @@
       function batchImagePromptTemplatePayloadFromForm(target, form, existing) {
         const items = getBatchImagePromptTemplates(target);
         const maxSortOrder = items.reduce((max, item) => Math.max(max, Number(item.sort_order || item.sortOrder || 0)), 0);
+        const promptContent = String(form.get("prompt_content") || "").trim();
         return {
           id: existing?.id || String(form.get("id") || "").trim(),
           label: String(form.get("label") || "").trim(),
+          prompt_content: promptContent,
+          promptContent,
           sort_order: Number(form.get("sort_order") || (maxSortOrder + 100 || 100)),
         };
       }
@@ -7205,6 +7319,7 @@
               <label class="field"><span>编码</span><input name="id" value="${escapeAttribute(existing?.id || "")}" pattern="[a-z0-9-]+" ${existing ? "readonly" : ""} required /></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
             </div>
+            <label class="field"><span>正文内容</span><textarea name="prompt_content" rows="12">${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
             <div class="error-text" id="batch-image-preset-error"></div>
             <div class="toolbar">
               <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
@@ -7683,6 +7798,15 @@
         return options.map((option) => `<option value="${option}" ${option === selected ? "selected" : ""}>${option}</option>`).join("");
       }
 
+      function smsRecordRangeOptions(selected) {
+        const options = [
+          { value: "all", label: "全部" },
+          { value: "day", label: "天" },
+          { value: "month", label: "月" },
+        ];
+        return options.map((option) => `<option value="${option.value}" ${option.value === selected ? "selected" : ""}>${option.label}</option>`).join("");
+      }
+
       function escapeAttribute(value) {
         return escapeHtml(value).replaceAll('"', "&quot;");
       }
@@ -7881,6 +8005,7 @@
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
                 ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
               </nav>
@@ -7914,8 +8039,10 @@
         if (state.page === "dashboard") return dashboardPage();
         if (state.page === "models") return modelsPage();
         if (state.page === "users") return usersPage();
+        if (state.page === "membership") return renderMembershipPage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "agreements") return agreementsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
@@ -8283,6 +8410,7 @@
         directRecharge: () => loadDirectRechargePackages(),
         prompts: () => loadPromptManagement(),
         risks: () => loadRiskAudit(),
+        smsRecords: () => loadSmsRecords(),
         agreements: () => loadLegalDocuments(),
         settings: () => loadSettings(),
         account: () => loadAdminSessions(),
@@ -8566,6 +8694,7 @@
         if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
+        if (path.includes("/sms-records")) return "smsRecords";
         if (path.includes("/agreements")) return "agreements";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
@@ -8583,6 +8712,7 @@
           directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
+          smsRecords: "/admin/sms-records",
           agreements: "/admin/agreements",
           settings: "/admin/settings",
           account: "/admin/account",
@@ -8606,6 +8736,7 @@
                 ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
+                ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
                 ${navButton("agreements", "\u534f\u8bae\u7ba1\u7406")}
                 ${navButton("settings", "\u7cfb\u7edf\u8bbe\u7f6e")}
               </nav>
@@ -8643,6 +8774,7 @@
         if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
+        if (state.page === "smsRecords") return smsRecordsPage();
         if (state.page === "agreements") return agreementsPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();

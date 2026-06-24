@@ -1,4 +1,5 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
@@ -2739,6 +2740,71 @@ describe("phone auth dev server", () => {
       }
   });
 
+  it("exposes narrow batch image model options without unrelated generation config fields", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "batch-image-model-options-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Batch image options contract",
+          scriptInput: "Episode 1: The batch image modal needs only image model options.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "batch-image-model-options-episode",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const createdEpisodeEnvelope = await createEpisodeResponse.json();
+      const episodeId = createdEpisodeEnvelope.data.episode.id;
+
+      const optionsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/batch-image-model-options`,
+        { headers: { cookie } },
+      );
+      const optionsEnvelope = await optionsResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(optionsResponse.status, 200);
+      assert.deepEqual(Object.keys(optionsEnvelope.data).sort(), ["models"]);
+      assert.ok(optionsEnvelope.data.models.length > 0);
+      for (const model of optionsEnvelope.data.models) {
+        assert.deepEqual(Object.keys(model).sort(), [
+          "modelId",
+          "modelName",
+          "qualities",
+          "ratios",
+        ]);
+        assert.equal(typeof model.modelId, "string");
+        assert.equal(typeof model.modelName, "string");
+        assert.ok(Array.isArray(model.ratios));
+        assert.ok(Array.isArray(model.qualities));
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("uses active admin video model configs for episode generation config", async () => {
     const db = await createDevDb();
     await db.query(
@@ -3520,6 +3586,7 @@ describe("phone auth dev server", () => {
       assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
       assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
       assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/admin/assets/prompt-covers/")));
+      assert.ok(envelope.styles.some((item: { prompt_content?: string }) => item.prompt_content?.includes("二次元")));
       assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
     } finally {
       await server.close();
@@ -5146,6 +5213,179 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("hydrates and persists an existing episode asset image from a same-name project library asset", async () => {
+    const server = createPhoneAuthDevServer();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "same-name-episode-asset-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Same-name episode asset image",
+          scriptInput: "Episode 1: reuse same-name project asset images in episode tabs.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+
+      const createFirstEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "same-name-episode-asset-first",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode One" }),
+        },
+      );
+      const firstEpisodeId = (await createFirstEpisodeResponse.json()).data.episode.id;
+
+      const createSourceAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: "任小野",
+            description: "source project library image",
+          }),
+        },
+      );
+      const sourceAssetId = (await createSourceAssetResponse.json()).data.asset.assetId;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "same-name-episode-asset-image",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "asset",
+            targetId: sourceAssetId,
+            assetId: sourceAssetId,
+            assetType: "scene",
+            prompt: "A reusable concept sheet for 任小野",
+            model: "nano_banana_2",
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const visibleImageUrl = "https://example.com/project-library-renxiaoye.png";
+
+      const setFixedImageResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets/${sourceAssetId}/set-fixed-image`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: imageTaskEnvelope.data.result.assetVersionId,
+            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+            sourceUrl: visibleImageUrl,
+            previewUrl: visibleImageUrl,
+          }),
+        },
+      );
+
+      const saveToLibraryResponse = await fetch(
+        `${server.origin}/api/episodes/${firstEpisodeId}/assets/${sourceAssetId}/save-to-library`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+
+      const createSecondEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${createdProject.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "same-name-episode-asset-second",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Two" }),
+        },
+      );
+      const secondEpisodeId = (await createSecondEpisodeResponse.json()).data.episode.id;
+
+      const createBlankEpisodeAssetResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/assets`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: "任小野",
+            description: "episode-local asset should inherit the project image",
+          }),
+        },
+      );
+      const blankEpisodeAssetId = (await createBlankEpisodeAssetResponse.json()).data.asset.assetId;
+
+      const firstListResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=scene&page=1&pageSize=20`,
+        { headers: { cookie } },
+      );
+      const firstListEnvelope = await firstListResponse.json();
+
+      const secondListResponse = await fetch(
+        `${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=scene&page=1&pageSize=20`,
+        { headers: { cookie } },
+      );
+      const secondListEnvelope = await secondListResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createFirstEpisodeResponse.status, 200);
+      assert.equal(createSourceAssetResponse.status, 200);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(setFixedImageResponse.status, 200);
+      assert.equal(saveToLibraryResponse.status, 200);
+      assert.equal(createSecondEpisodeResponse.status, 200);
+      assert.equal(createBlankEpisodeAssetResponse.status, 200);
+      assert.equal(firstListResponse.status, 200);
+      assert.equal(secondListResponse.status, 200);
+      const hydratedAsset = firstListEnvelope.data.items.find(
+        (asset: { assetId: string }) => asset.assetId === blankEpisodeAssetId,
+      );
+      const persistedHydratedAsset = secondListEnvelope.data.items.find(
+        (asset: { assetId: string }) => asset.assetId === blankEpisodeAssetId,
+      );
+      assert.equal(String(hydratedAsset?.fixedImageUrl).split("?")[0], visibleImageUrl);
+      assert.equal(String(persistedHydratedAsset?.fixedImageUrl).split("?")[0], visibleImageUrl);
+      assert.ok(hydratedAsset?.fixedImageFileId);
+      assert.equal(persistedHydratedAsset?.fixedImageFileId, hydratedAsset?.fixedImageFileId);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists episode generation tasks with fixed mock media results", async () => {
     const db = await createDevDb();
     const server = createPhoneAuthDevServer({ db });
@@ -5577,6 +5817,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138011");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138011"),
+      });
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
@@ -5688,6 +5931,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138012");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138012"),
+      });
       const readCreatedTask = async (response: Response) => {
         const envelope = await response.json();
         const taskId = envelope.data?.taskId ?? envelope.details?.taskId ?? envelope.data?.details?.taskId;
@@ -6051,6 +6297,205 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("rejects configured generation models when the organization has no active membership", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":45}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const server = creatBearLabAuthDevServer({
+      db,
+      env: {
+        GPT_IMAGE2_PROVIDER_ENABLED: "true",
+        GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      },
+      fetchImpl: (async () => {
+        throw new Error("provider_should_not_be_called_without_membership");
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138013");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "generation-membership-required-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Membership required generation",
+          scriptInput: "Episode 1: Membership should be checked before generation.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Membership Required Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "generation-membership-required-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "membership gate",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "standard",
+            },
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskRows = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM tasks WHERE idempotency_key = $1",
+        ["generation-membership-required-task"],
+      );
+      const reservationRows = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM credit_reservations WHERE metadata_json->>'modelCode' = 'gpt-image-2-cn'",
+      );
+
+      assert.equal(imageTaskResponse.status, 403);
+      assert.equal(imageTaskEnvelope.errorCode, "generation_membership_required");
+      assert.equal(imageTaskEnvelope.message, "有效会员已过期或未开通，请先开通会员。");
+      assert.equal(Number(taskRows.rows[0]?.count ?? -1), 0);
+      assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects configured generation models with the recharge prompt when credits are insufficient", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":45}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const server = creatBearLabAuthDevServer({
+      db,
+      env: {
+        GPT_IMAGE2_PROVIDER_ENABLED: "true",
+        GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      },
+      fetchImpl: (async () => {
+        throw new Error("provider_should_not_be_called_without_credits");
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138014");
+      const organizationId = await readOrganizationIdForPhone(db, "+8613800138014");
+      await seedActiveGenerationMembership(db, { organizationId });
+      await db.query(
+        "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
+        [organizationId],
+      );
+      await db.query("DELETE FROM credit_lots WHERE organization_id = $1", [organizationId]);
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "generation-insufficient-credit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Insufficient credits generation",
+          scriptInput: "Episode 1: Credits should be checked before provider submission.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Insufficient Credits Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "generation-insufficient-credit-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "credit gate",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "standard",
+            },
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const reservationRows = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM credit_reservations WHERE organization_id = $1",
+        [organizationId],
+      );
+      const providerRequests = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM provider_requests WHERE organization_id = $1",
+        [organizationId],
+      );
+
+      assert.equal(imageTaskResponse.status, 402);
+      assert.equal(imageTaskEnvelope.errorCode, "insufficient_credits");
+      assert.equal(imageTaskEnvelope.message, "积分余额不足，请充值。");
+      assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
+      assert.equal(Number(providerRequests.rows[0]?.count ?? -1), 0);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("submits Seedance video tasks through the configured provider instead of mock finalization", async () => {
     const db = await createDevDb();
     await db.query(
@@ -6122,6 +6567,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6378,6 +6826,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6493,6 +6944,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6650,6 +7104,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6848,6 +7305,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -8241,6 +8701,173 @@ async function login(origin: string, phone: string) {
 
   assert.equal(verifyResponse.status, 200);
   return verifyResponse.headers.get("set-cookie") ?? "";
+}
+
+type PhoneAuthTestDb = Awaited<ReturnType<typeof createDevDb>>;
+
+async function readOrganizationIdForPhone(
+  db: PhoneAuthTestDb,
+  phoneE164: string,
+) {
+  const membership = await db.query<{ organization_id: string }>(
+    `
+      SELECT m.organization_id
+      FROM memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE u.phone_e164 = $1
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    `,
+    [phoneE164],
+  );
+  const organizationId = membership.rows[0]?.organization_id;
+  assert.ok(organizationId, `missing organization for ${phoneE164}`);
+  return organizationId;
+}
+
+async function seedActiveGenerationMembership(
+  db: PhoneAuthTestDb,
+  input: {
+    organizationId: string;
+    now?: Date;
+    periodEndAt?: Date;
+    tier?: "experience" | "professional";
+  },
+) {
+  const now = input.now ?? new Date("2026-06-08T08:00:00.000Z");
+  const periodEndAt = input.periodEndAt ?? new Date("2026-07-08T08:00:00.000Z");
+  const tier = input.tier ?? "professional";
+  const owner = await db.query<{ user_id: string }>(
+    "SELECT user_id FROM memberships WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1",
+    [input.organizationId],
+  );
+  const userId = owner.rows[0]?.user_id;
+  assert.ok(userId, "missing organization owner for membership seed");
+
+  const planId = randomUUID();
+  const orderId = randomUUID();
+  const periodId = randomUUID();
+  const planSnapshot = {
+    code: `test_${tier}_${planId.slice(0, 8)}`,
+    displayName: `Test ${tier} membership`,
+    tier,
+    periodUnit: "month",
+    periodCount: 1,
+    giftCredits: 0,
+    amountMinor: 100,
+    seatLimit: 1,
+    entitlements: ["priority_generation"],
+    priorityRules: {},
+  };
+
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status
+      )
+      VALUES ($1, $2, $3, $4, 'month', 1, 100, 'CNY', 0, 1, '{"priority_generation":true}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'active')
+    `,
+    [planId, planSnapshot.code, planSnapshot.displayName, tier],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        product_type,
+        membership_plan_id,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at
+      )
+      VALUES ($1, $2, $3, $4, 'membership_plan', $5, $6::jsonb, $6::jsonb, 0, 100, 'CNY', 'pending_payment', $7)
+    `,
+    [
+      orderId,
+      input.organizationId,
+      userId,
+      `TEST-MEMBER-${orderId.slice(0, 8)}`,
+      planId,
+      JSON.stringify(planSnapshot),
+      periodEndAt,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO organization_membership_subscriptions (
+        id,
+        organization_id,
+        status,
+        current_tier,
+        current_period_start_at,
+        current_period_end_at,
+        latest_order_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (organization_id) DO UPDATE
+      SET status = EXCLUDED.status,
+          current_tier = EXCLUDED.current_tier,
+          current_period_start_at = EXCLUDED.current_period_start_at,
+          current_period_end_at = EXCLUDED.current_period_end_at,
+          latest_order_id = EXCLUDED.latest_order_id,
+          updated_at = $5
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      `${tier}_active`,
+      tier,
+      now,
+      periodEndAt,
+      orderId,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8::jsonb, 'active')
+    `,
+    [
+      periodId,
+      input.organizationId,
+      orderId,
+      planId,
+      tier,
+      now,
+      periodEndAt,
+      JSON.stringify(planSnapshot),
+    ],
+  );
 }
 
 class FakeAiStoryboardTextGateway {

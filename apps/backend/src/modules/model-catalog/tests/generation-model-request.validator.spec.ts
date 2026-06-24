@@ -6,6 +6,7 @@ import {
   GenerationModelRequestValidationError,
   validateGenerationModelRequest,
 } from "../generation-model-request.validator.ts";
+import { findActiveAiModelConfigByCode } from "../ai-model-config.store.ts";
 
 describe("generation model request validator", () => {
   it("accepts parameters supported by the selected image model schema", () => {
@@ -186,6 +187,60 @@ describe("generation model request validator", () => {
         prompt: "animate from first frame to last frame",
       });
     });
+  });
+
+  it("keeps the secret request domain when resolving GPT image model config", async () => {
+    const db = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        if (sql.includes("FROM ai_model_configs")) {
+          return {
+            rows: [
+              {
+                id: "model-config-1",
+                model_code: "gpt-image-2-cn",
+                display_name: "GPT Image 2 CN",
+                provider_name: "openai",
+                provider_model: "gpt-image-2",
+                provider_protocol: "openai_images",
+                invocation_mode: "sync",
+                media_type: "image",
+                task_modes_json: ["image.generate"],
+                capabilities_json: {},
+                parameter_schema_json: {},
+                default_params_json: {},
+                provider_config_json: {
+                  baseURL: "https://relay.example.test",
+                  requestPath: "/v1/images/generations",
+                  apiKeyEnv: "GPT_IMAGE2_API_KEY",
+                },
+                pricing_json: {},
+                limits_json: {},
+                ui_config_json: {},
+                status: "active",
+                sort_order: 10,
+                remark: null,
+              },
+            ] as T[],
+          };
+        }
+        if (sql.includes("FROM admin_secret_values")) {
+          return {
+            rows: [
+              {
+                secret_value: "sk-test",
+                request_domain: "https://image.shoestravel.xin",
+              },
+            ] as T[],
+          };
+        }
+        return { rows: [] as T[] };
+      },
+    } as const;
+
+    const model = await findActiveAiModelConfigByCode(db, "gpt-image-2-cn");
+    assert.equal(model?.providerConfig.baseURL, "https://image.shoestravel.xin");
+    assert.equal(model?.providerConfig.requestPath, "/v1/images/generations");
+    assert.equal(model?.providerConfig.apiKey, "sk-test");
   });
 });
 

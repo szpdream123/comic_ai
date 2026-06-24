@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
-import { dispatchGenerationOutboxBatch } from "../generation-outbox.dispatcher.ts";
+import {
+  dispatchClaimedGenerationOutboxEvents,
+  dispatchGenerationOutboxBatch,
+} from "../generation-outbox.dispatcher.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 
-describe("generation outbox dispatcher", () => {
+describe("generation outbox dispatcher", { concurrency: false }, () => {
   it("publishes generation task events to BullMQ and leaves unrelated outbox events untouched", async () => {
     const db = await createMigratedTestDb();
     const published: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
@@ -83,6 +86,52 @@ describe("generation outbox dispatcher", () => {
       await db.close();
     }
   });
+
+  it("starts publishing all claimed generation events before waiting for previous publishes", async () => {
+    const startedTaskIds: string[] = [];
+    const publishResolvers: Array<() => void> = [];
+    const processedEventIds: string[] = [];
+    const db = {} as never;
+
+    const dispatchPromise = dispatchClaimedGenerationOutboxEvents(db, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [
+        generationOutboxEvent("90000000-0000-4000-8000-000000000011", "task-image-1"),
+        generationOutboxEvent("90000000-0000-4000-8000-000000000012", "task-image-2"),
+      ],
+      config: loadGenerationQueueConfig({
+        GENERATION_SUBMIT_IMAGE_QUEUE: "generation-submit-image",
+      }),
+      publisher: {
+        async add() {},
+      },
+    }, {
+      async publish(event) {
+        startedTaskIds.push(String(event.payload.taskId ?? ""));
+        await new Promise<void>((resolve) => {
+          publishResolvers.push(resolve);
+        });
+      },
+      async markProcessed(_db, input) {
+        processedEventIds.push(input.outboxEventId);
+        return generationOutboxEvent(input.outboxEventId, input.outboxEventId);
+      },
+    });
+    await Promise.resolve();
+
+    assert.deepEqual(startedTaskIds.sort(), ["task-image-1", "task-image-2"]);
+    assert.deepEqual(processedEventIds, []);
+
+    publishResolvers.forEach((resolve) => resolve());
+    const result = await dispatchPromise;
+
+    assert.deepEqual(result.processedEventIds, [
+      "90000000-0000-4000-8000-000000000011",
+      "90000000-0000-4000-8000-000000000012",
+    ]);
+    assert.deepEqual(result.failedEventIds, []);
+    assert.deepEqual(processedEventIds, result.processedEventIds);
+  });
 });
 
 async function seedOutboxEvents(
@@ -123,4 +172,67 @@ async function seedOutboxEvents(
         )
     `,
   );
+}
+
+async function seedParallelGenerationOutboxEvents(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO outbox_events (
+        id,
+        organization_id,
+        event_type,
+        payload_json,
+        status,
+        available_at,
+        created_at,
+        updated_at
+      )
+      VALUES
+        (
+          '90000000-0000-4000-8000-000000000011',
+          NULL,
+          'generation.task.created',
+          '{"workflowId":"workflow-1","taskId":"task-image-1","mediaType":"image","modelCode":"gpt-image-2-cn","queueName":"generation-submit-image","providerExecutor":"gpt-image-2"}'::jsonb,
+          'pending',
+          '2026-06-02T23:59:00.000Z',
+          '2026-06-02T23:59:00.000Z',
+          '2026-06-02T23:59:00.000Z'
+        ),
+        (
+          '90000000-0000-4000-8000-000000000012',
+          NULL,
+          'generation.task.created',
+          '{"workflowId":"workflow-2","taskId":"task-image-2","mediaType":"image","modelCode":"gpt-image-2-cn","queueName":"generation-submit-image","providerExecutor":"gpt-image-2"}'::jsonb,
+          'pending',
+          '2026-06-02T23:59:00.000Z',
+          '2026-06-02T23:59:00.000Z',
+          '2026-06-02T23:59:00.000Z'
+        )
+    `,
+  );
+}
+
+function generationOutboxEvent(id: string, taskId: string) {
+  const now = new Date("2026-06-02T23:59:00.000Z");
+  return {
+    id,
+    organizationId: null,
+    eventType: "generation.task.created",
+    payload: {
+      workflowId: `workflow-${taskId}`,
+      taskId,
+      mediaType: "image",
+      modelCode: "gpt-image-2-cn",
+      queueName: "generation-submit-image",
+      providerExecutor: "gpt-image-2",
+    },
+    status: "processing" as const,
+    availableAt: now,
+    processedAt: null,
+    errorMessage: null,
+    createdAt: now,
+    updatedAt: now,
+  };
 }

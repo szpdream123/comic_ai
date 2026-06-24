@@ -683,8 +683,19 @@ export const creatorApi = {
     });
   },
 
-  getProjects() {
-    return fetchJson("/api/creator/projects", { dedupeKey: "GET /api/creator/projects" });
+  getProjects(input = {}) {
+    const params = new URLSearchParams();
+    const page = Number(input.page ?? 1);
+    params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
+    const pageSize = Number(input.pageSize ?? 18);
+    params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 18));
+    const keyword = String(input.keyword ?? "").trim();
+    if (keyword) {
+      params.set("keyword", keyword);
+    }
+    const query = params.toString();
+    const path = `/api/creator/projects?${query}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
   getCanvasProjects() {
@@ -1294,12 +1305,30 @@ export const creatorApi = {
     return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-tasks${suffix}`);
   },
 
-  listGenerationConfig(episodeId) {
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-config`);
+  listGenerationConfig(episodeId, options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/generation-config${query}`,
+      options.fresh === true ? { cache: "no-store" } : {},
+    );
   },
 
-  listGlobalGenerationConfig() {
-    return fetchJson("/api/generation-config");
+  listBatchImageModelOptions(episodeId, options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/batch-image-model-options${query}`,
+      options.fresh === true ? { cache: "no-store" } : {},
+    );
+  },
+
+  listGlobalGenerationConfig(options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(`/api/generation-config${query}`, options.fresh === true ? { cache: "no-store" } : {});
+  },
+
+  listGlobalBatchImageModelOptions(options = {}) {
+    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    return fetchJson(`/api/batch-image-model-options${query}`, options.fresh === true ? { cache: "no-store" } : {});
   },
 
   createImageTask(episodeId, input, options = {}) {
