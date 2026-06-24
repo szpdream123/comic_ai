@@ -841,8 +841,6 @@ test("simulating a membership payment success runs callback then activates membe
   assert.deepEqual(calls, [
     "paymentPollClearTimeout",
     ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
-    ["getBillingOrder", "order-membership-1"],
-    ["getPaymentIntent", "intent-membership-1"],
     "getMembershipPlans",
     "getMembershipStatus",
     "getTeamOverview",

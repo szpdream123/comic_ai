@@ -3401,7 +3401,7 @@
           <td>${Number(plan.giftCredits || 0).toLocaleString()}</td>
           <td>${Number(plan.seatLimit || 1).toLocaleString()}</td>
           <td><span class="tag ${statusTone}">${membershipStatusLabel(plan.status)}</span></td>
-          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑套餐" onclick="openMembershipPlanDrawer('${escapeAttribute(plan.id)}')" ${permissionAttrs("membership.plan.write")}>编</button></div></td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑套餐" onclick="openMembershipPlanDrawer('${escapeAttribute(plan.id)}')" ${permissionAttrs("membership.plan.write")}>编</button><button class="icon-btn" title="删除套餐" onclick="deleteMembershipPlan('${escapeAttribute(plan.id)}')" ${permissionAttrs("membership.plan.write")}>删</button></div></td>
         </tr>`;
       }
 
@@ -3443,7 +3443,7 @@
           <td>${item.badge ? `<span class="tag blue">${escapeHtml(item.badge)}</span>` : "-"}</td>
           <td>${Number(item.sortOrder || 0).toLocaleString()}</td>
           <td><span class="tag ${statusTone}">${membershipStatusLabel(item.status)}</span></td>
-          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑档位" onclick="openDirectRechargePackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>编</button></div></td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑档位" onclick="openDirectRechargePackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>编</button><button class="icon-btn" title="删除档位" onclick="deleteDirectRechargePackage('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>删</button></div></td>
         </tr>`;
       }
 
@@ -3551,43 +3551,49 @@
       function openMembershipPlanDrawer(planId = "") {
         const existing = planId ? membershipPlanById(planId) : null;
         const defaults = existing || {
-          code: "",
-          displayName: "",
+          code: "专业版月卡299",
+          displayName: "专业版会员套餐",
           tier: "professional",
           periodUnit: "month",
           periodCount: 1,
-          amountMinor: 19900,
+          amountMinor: 29900,
           currency: "CNY",
-          giftCredits: 1000,
-          seatLimit: 5,
-          entitlements: ["team_member_management", "priority_generation"],
+          giftCredits: 3000,
+          seatLimit: 50,
+          entitlements: ["canvas_access", "priority_generation", "team_asset_library", "team_member_management", "full_flow_agent"],
           priorityRules: { modelFamilies: ["seedance"], queuePriority: 1 },
-          displayMetadata: {},
+          displayMetadata: {
+            features: ["可使用画布功能", "Seedance 2.0 优先排队", "团队资产库", "团队成员管理", "全流程 Agent"],
+          },
           status: "active",
           validFrom: "",
           validUntil: "",
         };
+        const amountYuan = Number(defaults.amountMinor || 0) / 100;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
           <div class="drawer-head"><h3>${existing ? "编辑会员套餐" : "新增会员套餐"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          ${membershipConfiguredPlanNotice(existing?.id || "")}
           <form id="membership-plan-form">
             <input type="hidden" name="id" value="${escapeAttribute(existing?.id || "")}" />
             <div class="form-grid">
-              <label class="field"><span>套餐编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="professional_monthly" required /></label>
-              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版月卡" required /></label>
+              <label class="field"><span>套餐标识/内部编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="专业版月卡299，可输入中文、数字或英文" required /></label>
+              <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版会员套餐" required /></label>
               <label class="field"><span>档位</span><select name="tier">${optionPairs([["experience", "体验版"], ["professional", "专业版"]], defaults.tier)}</select></label>
               <label class="field"><span>周期单位</span><select name="periodUnit">${optionPairs([["day", "天"], ["month", "月"], ["quarter", "季"], ["year", "年"]], defaults.periodUnit)}</select></label>
-              <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /></label>
-              <label class="field"><span>价格分</span><input name="amountMinor" type="number" min="1" step="1" value="${Number(defaults.amountMinor || 1)}" required /></label>
+              <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /><small>会员有效期：单位 + 数量，月 + 1 = 1个月会员。</small></label>
+              <label class="field"><span>价格（元）</span><input name="amountYuan" type="number" min="0.01" step="0.01" value="${amountYuan > 0 ? amountYuan.toFixed(2) : ""}" required /></label>
               <label class="field"><span>赠送积分</span><input name="giftCredits" type="number" min="0" step="1" value="${Number(defaults.giftCredits || 0)}" required /></label>
-              <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="1" step="1" value="${Number(defaults.seatLimit || 1)}" required /></label>
+              <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="0" step="1" value="${Number(defaults.seatLimit ?? 0)}" required /></label>
               <label class="field"><span>币种</span><select name="currency">${optionPairs([["CNY", "CNY"]], defaults.currency || "CNY")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
             </div>
-            <label class="field"><span>权益 JSON</span><textarea name="entitlements" rows="3" required>${escapeHtml(JSON.stringify(defaults.entitlements || [], null, 2))}</textarea></label>
+            <label class="field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></label>
+            <label class="field"><span>前端展示权益</span><textarea name="displayFeatures" rows="4" placeholder="每行一条，会展示在前端会员套餐卡片中">${escapeHtml(membershipDisplayFeaturesText(defaults))}</textarea></label>
             <label class="field"><span>优先级规则 JSON</span><textarea name="priorityRules" rows="4">${escapeHtml(JSON.stringify(defaults.priorityRules || {}, null, 2))}</textarea></label>
-            <label class="field"><span>展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
+            <label class="field"><span>高级展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
+            <label class="field"><span>变更原因</span><input name="reason" value="后台配置变更" required /></label>
             <div class="form-grid">
               <label class="field"><span>有效开始</span><input name="validFrom" value="${escapeAttribute(defaults.validFrom || "")}" placeholder="2026-06-09T00:00:00.000Z" /></label>
               <label class="field"><span>有效结束</span><input name="validUntil" value="${escapeAttribute(defaults.validUntil || "")}" placeholder="留空表示长期有效" /></label>
@@ -3609,33 +3615,50 @@
             return;
           }
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api("/api/admin/membership/plans", {
-              method: "POST",
-              headers: { "idempotency-key": `admin-ui-membership-plan-${payload.id || payload.code}-${Date.now()}` },
-              body: JSON.stringify(payload),
-            });
+            try {
+              await api("/api/admin/membership/plans", {
+                method: "POST",
+                headers: { "idempotency-key": adminIdempotencyKey("membership-plan") },
+                body: JSON.stringify(payload),
+              });
+            } catch (err) {
+              if (err.payload?.error?.code === "membership_plan_code_conflict") {
+                await loadMembershipPlans();
+                renderShell();
+                error.textContent = membershipPlanConflictMessage(payload);
+              }
+              throw err;
+            }
             await loadMembershipPlans();
             closeDrawer();
             renderShell();
-          }, "会员套餐已保存").catch(() => undefined);
+          }, "会员套餐已保存").catch((err) => {
+            if (err.payload?.error?.code === "membership_plan_code_conflict") {
+              error.textContent = membershipPlanConflictMessage(payload);
+            }
+          });
         });
       }
 
       function membershipPlanPayloadFromForm(form) {
         const id = String(form.get("id") || "").trim();
+        const amountYuan = Number(form.get("amountYuan") || 0);
+        const entitlements = membershipEntitlementsFromForm(form);
+        const displayMetadata = parseJsonTextarea(form, "displayMetadata");
+        displayMetadata.features = membershipDisplayFeaturesFromForm(form, entitlements);
         const payload = {
           code: String(form.get("code") || "").trim(),
           displayName: String(form.get("displayName") || "").trim(),
           tier: String(form.get("tier") || "professional"),
           periodUnit: String(form.get("periodUnit") || "month"),
           periodCount: Number(form.get("periodCount") || 1),
-          amountMinor: Number(form.get("amountMinor") || 0),
+          amountMinor: Math.round(amountYuan * 100),
           currency: String(form.get("currency") || "CNY"),
           giftCredits: Number(form.get("giftCredits") || 0),
-          seatLimit: Number(form.get("seatLimit") || 1),
-          entitlements: parseJsonArrayTextarea(form, "entitlements"),
+          seatLimit: Number(form.get("seatLimit") || 0),
+          entitlements,
           priorityRules: parseJsonTextarea(form, "priorityRules"),
-          displayMetadata: parseJsonTextarea(form, "displayMetadata"),
+          displayMetadata,
           status: String(form.get("status") || "inactive"),
           validFrom: String(form.get("validFrom") || "").trim() || null,
           validUntil: String(form.get("validUntil") || "").trim() || null,
@@ -3643,7 +3666,7 @@
         };
         if (id) payload.id = id;
         if (!payload.code || !payload.displayName || !payload.reason) {
-          throw new Error("套餐编码、展示名称必填");
+          throw new Error("套餐编码、展示名称、变更原因必填");
         }
         if (!Number.isInteger(payload.periodCount) || payload.periodCount < 1) {
           throw new Error("周期数量必须是正整数");
@@ -3654,10 +3677,57 @@
         if (!Number.isInteger(payload.giftCredits) || payload.giftCredits < 0) {
           throw new Error("赠送积分必须是非负整数");
         }
-        if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 1) {
-          throw new Error("席位上限必须是正整数");
+        if (!Number.isInteger(payload.seatLimit) || payload.seatLimit < 0) {
+          throw new Error("席位上限必须是 0 或正整数");
         }
         return payload;
+      }
+
+      function deleteMembershipPlan(planId) {
+        const plan = membershipPlanById(planId);
+        if (!plan) {
+          showToast("会员套餐不存在或列表已刷新");
+          return;
+        }
+        const expectedText = "确认删除套餐";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(560px,100%);">
+          <div class="drawer-head"><h3>删除会员套餐</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p class="metric-note">删除后前端不再展示，用户不能继续购买；历史订单、支付记录和已开通权益不会被删除。</p>
+          <form id="membership-plan-delete-form">
+            <label class="field"><span>套餐</span><input value="${escapeAttribute(plan.displayName || plan.code || "-")}" disabled /></label>
+            <label class="field"><span>删除原因</span><textarea name="reason" rows="3" required>后台删除不再售卖的会员套餐</textarea></label>
+            ${dangerConfirmField(expectedText)}
+            <div class="error-text" id="membership-plan-delete-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">删除套餐</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("membership-plan-delete-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("membership-plan-delete-error");
+          error.textContent = "";
+          if (!requireDangerConfirm(form, error, expectedText)) return;
+          const reason = String(form.get("reason") || "").trim();
+          if (!reason) {
+            error.textContent = "请填写删除原因";
+            return;
+          }
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/membership/plans/${encodeURIComponent(planId)}`, {
+              method: "DELETE",
+              headers: { "idempotency-key": adminIdempotencyKey("membership-plan-delete") },
+              body: JSON.stringify({ reason }),
+            });
+            await loadMembershipPlans();
+            closeDrawer();
+            renderShell();
+          }, "会员套餐已删除").catch(() => undefined);
+        });
       }
 
       function openDirectRechargePackageDrawer(packageId = "") {
@@ -3770,6 +3840,46 @@
           throw new Error("排序必须是整数");
         }
         return payload;
+      }
+
+      function deleteDirectRechargePackage(packageId) {
+        const item = directRechargePackageById(packageId);
+        if (!item) {
+          showToast("直充积分档位不存在或列表已刷新");
+          return;
+        }
+        const expectedText = "确认删除档位";
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(560px,100%);">
+          <div class="drawer-head"><h3>删除直充积分档位</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p class="metric-note">删除后前端不再展示，会员不能继续购买；历史订单和支付记录不会被删除。</p>
+          <form id="direct-recharge-package-delete-form">
+            <label class="field"><span>档位</span><input value="${escapeAttribute(item.displayName || item.code || "-")}" disabled /></label>
+            ${dangerConfirmField(expectedText)}
+            <div class="error-text" id="direct-recharge-package-delete-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">删除档位</button>
+            </div>
+          </form>
+        </aside>`;
+        document.getElementById("direct-recharge-package-delete-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("direct-recharge-package-delete-error");
+          error.textContent = "";
+          if (!requireDangerConfirm(form, error, expectedText)) return;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/direct-recharge/packages/${encodeURIComponent(packageId)}`, {
+              method: "DELETE",
+              headers: { "idempotency-key": adminIdempotencyKey("direct-recharge-package-delete") },
+            });
+            await loadDirectRechargePackages();
+            closeDrawer();
+            renderShell();
+          }, "直充积分档位已删除").catch(() => undefined);
+        });
       }
 
       function membershipEntitlementsFromForm(form) {

@@ -3248,7 +3248,8 @@ async function finalizeSuccessfulMembershipPayment(workbench) {
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
   await refreshMembershipPaymentCriticalSurfaces(workbench);
-  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
+  workbench.ui.renderedPaymentResultToastMessage = "";
+  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST };
   render(workbench, { preserveLibraryScroll: true });
   queueMembershipPaymentSecondaryRefresh(workbench);
 }
@@ -3260,7 +3261,8 @@ async function finalizeSuccessfulCreditRechargePayment(workbench) {
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
   await refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
+  workbench.ui.renderedPaymentResultToastMessage = "";
+  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST };
   render(workbench, { preserveLibraryScroll: true });
 }
 
@@ -3278,13 +3280,13 @@ function clearPaymentResultToast(workbench) {
   const toastMessage = String(toast.message ?? "").trim();
   if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
     workbench.ui.toast = "";
+    workbench.ui.renderedPaymentResultToastMessage = "";
   }
 }
 
 function isPaymentResultToastState(message) {
   const toast = normalizeWorkbenchToast(message);
-  return [MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(String(toast.message ?? "").trim()) &&
-    Boolean(message && typeof message === "object" && message.__paymentResultToast);
+  return [MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(String(toast.message ?? "").trim());
 }
 
 function consumePaymentResultToastState(workbench) {
@@ -3292,6 +3294,7 @@ function consumePaymentResultToastState(workbench) {
   const toastMessage = String(toast.message ?? "").trim();
   if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
     workbench.ui.toast = "";
+    workbench.ui.renderedPaymentResultToastMessage = "";
   }
 }
 
@@ -3728,9 +3731,6 @@ function render(workbench, options = {}) {
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
   const modalScrollState = captureLibraryTeamModalScrollState(workbench.root);
-  const shouldMarkPaymentResultToastShown =
-    isPaymentResultToastState(workbench.ui?.toast) &&
-    !Boolean(workbench.ui?.toast?.__paymentResultToastShown);
   let renderFailed = false;
   try {
     const activeStoryboards = getActiveStoryboards(workbench);
@@ -3760,12 +3760,6 @@ function render(workbench, options = {}) {
   restoreSingleEpisodeAiPreviewScrollState(workbench.root, singleEpisodeAiScrollState);
   restoreLibraryTeamModalScrollState(workbench.root, modalScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
-  if (!renderFailed && shouldMarkPaymentResultToastShown && workbench.ui?.toast && typeof workbench.ui.toast === "object") {
-    workbench.ui.toast = {
-      ...workbench.ui.toast,
-      __paymentResultToastShown: true,
-    };
-  }
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }

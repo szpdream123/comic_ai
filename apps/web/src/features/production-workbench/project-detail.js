@@ -229,6 +229,7 @@ export function renderProjectDetail(context = {}) {
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
+  const frozenCredits = resolveFrozenCreditBalance(ui, session);
 
   if (activeNavTab === "community") {
     return `
@@ -248,7 +249,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
         </section>
       </section>
@@ -327,7 +328,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -1118,6 +1119,10 @@ function resolveWorkspaceToastTone(message) {
 
 function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
+    session?.user?.displayCreditBalance,
+    session?.displayCreditBalance,
+    ui.displayCreditBalance,
+    ui.creditLedgerSummary?.displayCreditBalance,
     session?.user?.availableCredits,
     session?.user?.creditBalance,
     session?.user?.credits,
@@ -1131,6 +1136,23 @@ function resolveDisplayedCreditBalance(ui, session = {}) {
   for (const candidate of candidates) {
     const numeric = Number(candidate);
     if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+  return 0;
+}
+
+function resolveFrozenCreditBalance(ui = {}, session = {}) {
+  const candidates = [
+    session?.user?.frozenCredits,
+    session?.frozenCredits,
+    ui.frozenCredits,
+    ui.creditLedgerSummary?.frozenCredits,
+    ui.creditLedgerSummary?.organizationFrozenCredits,
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) {
       return numeric;
     }
   }
@@ -6678,8 +6700,9 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null, frozenCredits = 0 } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const hasFrozenCredits = Number(frozenCredits) > 0;
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -6706,6 +6729,7 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
           <span>积分</span>
           <b>${escapeHtml(String(creditBalance))}</b>
+          ${hasFrozenCredits ? `<em class="statusbar-credit-frozen">冻结</em>` : ""}
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
