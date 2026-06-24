@@ -84,6 +84,34 @@ export const saveMembershipPlanCommand: ApiCommandContract = {
   verificationIds: ["IDEMP-membership-plan-save", "MEMBERSHIP-plan-save"],
 };
 
+export const deleteMembershipPlanCommand: ApiCommandContract = {
+  name: "DeleteMembershipPlan",
+  operationName: operationNames.membershipPlanDelete,
+  capability: capabilities.adminBillingConfig,
+  idempotencyRequired: true,
+  requestSchema: {
+    id: "uuid",
+    reason: "required text",
+  },
+  responseSchema: {
+    plan: "archived membership plan view",
+  },
+  resourceScope: "admin:membership_plan:{plan_id}",
+  statePreconditions: [
+    "actor has admin billing configuration capability",
+    "membership_plan exists",
+  ],
+  businessErrors: [
+    "idempotency_conflict",
+    "invalid_plan_id",
+    "plan_not_found",
+    "reason_required",
+    "admin_forbidden",
+  ],
+  auditEvent: "membership.plan.deleted",
+  verificationIds: ["IDEMP-membership-plan-delete", "MEMBERSHIP-plan-delete"],
+};
+
 export const getMembershipStatusCommand: ApiCommandContract = {
   name: "GetMembershipStatus",
   operationName: operationNames.membershipStatusGet,
@@ -106,5 +134,6 @@ export const membershipCommandContracts = [
   listMembershipPlansCommand,
   createMembershipOrderCommand,
   saveMembershipPlanCommand,
+  deleteMembershipPlanCommand,
   getMembershipStatusCommand,
 ];

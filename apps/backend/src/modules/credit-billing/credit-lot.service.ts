@@ -514,6 +514,10 @@ export async function restoreOrganizationWalletCreditsInTransaction(
   db: SqlDatabase,
   input: {
     organizationId: string;
+    sourceType?: string;
+    sourceId?: string;
+    reason?: string;
+    metadata?: Record<string, unknown>;
     now: Date;
   },
 ) {
@@ -538,6 +542,9 @@ export async function restoreOrganizationWalletCreditsInTransaction(
   if (frozenUntil && frozenUntil <= input.now) {
     return { restoredAmount: 0 };
   }
+  const sourceType = input.sourceType ?? "membership_wallet_restore";
+  const sourceId = input.sourceId ?? randomUUID();
+  const reason = input.reason ?? "membership renewed wallet restored";
 
   const ledger = await queryOne<{ id: string }>(
     db,
@@ -559,7 +566,7 @@ export async function restoreOrganizationWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, 'membership_wallet_restore', $6, 'membership renewed wallet restored', $4::jsonb, NULL, $5)
+      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, $6, $7, $8, $4::jsonb, NULL, $5)
       ON CONFLICT (organization_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -571,9 +578,12 @@ export async function restoreOrganizationWalletCreditsInTransaction(
       JSON.stringify({
         restoredAt: input.now.toISOString(),
         previousFrozenUntil: frozenUntil ? frozenUntil.toISOString() : null,
+        ...(input.metadata ?? {}),
       }),
       input.now,
-      randomUUID(),
+      sourceType,
+      sourceId,
+      reason,
     ],
   );
   if (!ledger) {

@@ -335,9 +335,14 @@ test("admin user credit ledger returns balance and usage summary for account det
       balanceScope: "member",
       organizationAvailableCredits: 8000,
       organizationReservedCredits: 120,
+      organizationFrozenCredits: 0,
+      organizationFrozenAt: null,
+      organizationFrozenUntil: null,
       memberAvailableCredits: 680,
       memberUsedCredits: 90,
       displayAvailableCredits: 680,
+      displayCreditBalance: 680,
+      frozenCredits: 0,
       displayReservedCredits: 0,
       totalGrantedCredits: 50,
       totalConsumedCredits: 10,
@@ -386,6 +391,108 @@ test("admin user credit ledger can be scoped to a specific creator organization 
         },
       ],
     );
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger summary separates frozen credits from available credits", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = 0,
+            credit_reserved_cached = 0,
+            credit_frozen_cached = 18800,
+            credit_frozen_at = '2026-06-24T07:10:00.000Z',
+            credit_frozen_until = '2027-06-24T07:10:00.000Z'
+        WHERE id = '91000000-0000-4000-8000-000000002001'
+      `,
+    );
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002001",
+      pageSize: 20,
+    });
+
+    assert.equal(result.summary.displayAvailableCredits, 0);
+    assert.equal(result.summary.frozenCredits, 18800);
+    assert.equal(result.summary.displayCreditBalance, 18800);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user list exposes frozen credits separately from reserved credits", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = 0,
+            credit_reserved_cached = 120,
+            credit_frozen_cached = 18800,
+            credit_frozen_at = '2026-06-24T07:10:00.000Z',
+            credit_frozen_until = '2027-06-24T07:10:00.000Z'
+        WHERE id = '91000000-0000-4000-8000-000000002001'
+      `,
+    );
+
+    const result = await service.listUsers({ keyword: "Scope Owner", pageSize: 20 });
+    const owner = result.data.find((user) => user.userId === "93000000-0000-4000-8000-000000002001");
+
+    assert.equal(owner?.availableCredits, 0);
+    assert.equal(owner?.reservedCredits, 120);
+    assert.equal(owner?.frozenCredits, 18800);
+    assert.equal(owner?.displayCreditBalance, 18800);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin manual credit grant can add available credits while wallet credits are frozen", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = 0,
+            credit_frozen_cached = 18800,
+            credit_frozen_at = '2026-06-24T07:10:00.000Z',
+            credit_frozen_until = '2027-06-24T07:10:00.000Z'
+        WHERE id = '91000000-0000-4000-8000-000000002001'
+      `,
+    );
+
+    const response = await service.grantUserCredits({
+      userId: "93000000-0000-4000-8000-000000002001",
+      amount: 200,
+      reason: "Admin support grant while frozen",
+      adjustmentScenario: "compensation",
+      idempotencyKey: "admin-credit-frozen-owner-grant",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-24T08:00:00.000Z"),
+    });
+    const result = await service.listUsers({ keyword: "Scope Owner", pageSize: 20 });
+    const owner = result.data.find((user) => user.userId === "93000000-0000-4000-8000-000000002001");
+
+    assert.equal(response.status, 200);
+    assert.equal("data" in response.body && response.body.data.availableCredits, 200);
+    assert.equal(owner?.availableCredits, 200);
+    assert.equal(owner?.frozenCredits, 18800);
+    assert.equal(owner?.displayCreditBalance, 19000);
   } finally {
     await db.close();
   }
@@ -595,6 +702,114 @@ test("admin manual credit adjustments accept omitted work order metadata", async
       { source_type: "admin_manual_grant", work_order_no: null },
       { source_type: "admin_manual_deduct", work_order_no: null },
     ]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin can force restore frozen wallet credits without membership renewal", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_balance_cached = 0,
+            credit_frozen_cached = 18800,
+            credit_frozen_at = '2026-06-24T07:10:00.000Z',
+            credit_frozen_until = '2027-06-24T07:10:00.000Z'
+        WHERE id = '91000000-0000-4000-8000-000000002001'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO credit_lots (
+          id,
+          organization_id,
+          source_type,
+          source_id,
+          grant_ledger_entry_id,
+          total_amount,
+          available_amount,
+          reserved_amount,
+          consumed_amount,
+          expired_amount,
+          status,
+          frozen_at,
+          frozen_until,
+          metadata_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '97000000-0000-4000-8000-000000002099',
+          '91000000-0000-4000-8000-000000002001',
+          'payment_order',
+          '99000000-0000-4000-8000-000000002099',
+          '98000000-0000-4000-8000-000000002001',
+          18800,
+          18800,
+          0,
+          0,
+          0,
+          'frozen',
+          '2026-06-24T07:10:00.000Z',
+          '2027-06-24T07:10:00.000Z',
+          '{"kind":"direct_recharge"}'::jsonb,
+          '2026-06-05T07:00:00.000Z',
+          '2026-06-24T07:10:00.000Z'
+        )
+      `,
+    );
+
+    const response = await service.restoreFrozenUserCredits({
+      userId: "93000000-0000-4000-8000-000000002001",
+      reason: "Admin force restore for support ticket",
+      idempotencyKey: "admin-credit-force-restore-owner",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-24T08:00:00.000Z"),
+    });
+    const organization = await db.query<{
+      credit_balance_cached: number;
+      credit_frozen_cached: number;
+      credit_frozen_at: Date | null;
+      credit_frozen_until: Date | null;
+    }>(
+      `
+        SELECT credit_balance_cached, credit_frozen_cached, credit_frozen_at, credit_frozen_until
+        FROM organizations
+        WHERE id = '91000000-0000-4000-8000-000000002001'
+      `,
+    );
+    const lot = await db.query<{ status: string; frozen_at: Date | null; frozen_until: Date | null }>(
+      `
+        SELECT status, frozen_at, frozen_until
+        FROM credit_lots
+        WHERE id = '97000000-0000-4000-8000-000000002099'
+      `,
+    );
+    const audit = await db.query<{ event_type: string; restored_amount: string | null }>(
+      `
+        SELECT event_type, metadata_json->>'restoredAmount' AS restored_amount
+        FROM audit_events
+        WHERE event_type = 'admin.credit.frozen_restored'
+      `,
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal("data" in response.body && response.body.data.restoredAmount, 18800);
+    assert.equal(Number(organization.rows[0]?.credit_balance_cached ?? 0), 18800);
+    assert.equal(Number(organization.rows[0]?.credit_frozen_cached ?? 0), 0);
+    assert.equal(organization.rows[0]?.credit_frozen_at, null);
+    assert.equal(organization.rows[0]?.credit_frozen_until, null);
+    assert.equal(lot.rows[0]?.status, "active");
+    assert.equal(lot.rows[0]?.frozen_at, null);
+    assert.equal(lot.rows[0]?.frozen_until, null);
+    assert.deepEqual(audit.rows, [{ event_type: "admin.credit.frozen_restored", restored_amount: "18800" }]);
   } finally {
     await db.close();
   }

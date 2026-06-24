@@ -348,8 +348,12 @@ interface AuthenticatedUser {
   phone: string | null;
   displayName?: string | null;
   creditBalance: number;
+  displayCreditBalance: number;
   availableCredits: number;
   reservedCredits: number;
+  frozenCredits: number;
+  creditFrozenAt: string | null;
+  creditFrozenUntil: string | null;
 }
 
 interface DevTenantScope {
@@ -2700,16 +2704,57 @@ async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
+  const scope = personalDevTenantScope(userId);
   const row = await queryOne<{
     available_credits: number | string | null;
     reserved_credits: number | string | null;
+    frozen_credits: number | string | null;
+    credit_frozen_at: Date | string | null;
+    credit_frozen_until: Date | string | null;
   }>(
     db,
     `
       SELECT
-        COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0) AS available_credits,
         CASE
-          WHEN tp.id IS NULL THEN COALESCE(o.credit_reserved_cached, 0)
+          WHEN m.organization_id = $2
+           AND m.role = 'owner_admin'
+           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN COALESCE(o.credit_balance_cached, 0)
+          ELSE COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0)
+        END AS available_credits,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN COALESCE(o.credit_frozen_cached, 0)
+          ELSE 0
+        END AS frozen_credits,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN o.credit_frozen_at
+          ELSE NULL
+        END AS credit_frozen_at,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN o.credit_frozen_until
+          ELSE NULL
+        END AS credit_frozen_until,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN COALESCE(o.credit_reserved_cached, 0)
           ELSE COALESCE((
             SELECT SUM(r.amount_reserved)
             FROM credit_reservations r
@@ -2726,16 +2771,31 @@ async function getUserCreditBalance(
       LEFT JOIN organizations o ON o.id = m.organization_id
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE u.id = $1
-      ORDER BY m.created_at ASC
+      ORDER BY
+        CASE
+          WHEN m.organization_id = $2
+           AND m.role = 'owner_admin'
+           AND tp.id IS NULL
+           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN 0
+          ELSE 1
+        END,
+        CASE WHEN tp.id IS NOT NULL THEN 0 ELSE 1 END,
+        CASE WHEN m.organization_id = $2 THEN 0 ELSE 1 END,
+        m.created_at ASC
       LIMIT 1
     `,
-    [userId],
+    [userId, scope.organizationId],
   );
   const availableCredits = Number(row?.available_credits ?? 0);
+  const frozenCredits = Number(row?.frozen_credits ?? 0);
   return {
     availableCredits,
     creditBalance: availableCredits,
+    displayCreditBalance: availableCredits + frozenCredits,
     reservedCredits: Number(row?.reserved_credits ?? 0),
+    frozenCredits,
+    creditFrozenAt: row?.credit_frozen_at ? new Date(row.credit_frozen_at).toISOString() : null,
+    creditFrozenUntil: row?.credit_frozen_until ? new Date(row.credit_frozen_until).toISOString() : null,
   };
 }
 
@@ -9193,8 +9253,12 @@ async function findAuthenticatedUser(
       phone: user.phone_e164,
       displayName: user.display_name,
       creditBalance: credit.creditBalance,
+      displayCreditBalance: credit.displayCreditBalance,
       availableCredits: credit.availableCredits,
       reservedCredits: credit.reservedCredits,
+      frozenCredits: credit.frozenCredits,
+      creditFrozenAt: credit.creditFrozenAt,
+      creditFrozenUntil: credit.creditFrozenUntil,
     },
   };
 }
@@ -11219,6 +11283,38 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      const adminUserRestoreFrozenCreditsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/frozen\/restore$/);
+      if (request.method === "POST" && adminUserRestoreFrozenCreditsMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.restoreFrozenUserCredits({
+            userId: decodeURIComponent(adminUserRestoreFrozenCreditsMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminUserCreditLedgerMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/ledger$/);
       if (request.method === "GET" && adminUserCreditLedgerMatch) {
         const adminRoute = await requireAdminRouteSession({
@@ -11454,6 +11550,35 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      const adminMembershipPlanMatch = pathname.match(/^\/api\/admin\/membership\/plans\/([^/]+)$/);
+      if (request.method === "DELETE" && adminMembershipPlanMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(
+          response,
+          await membershipPlans.deletePlan({
+            id: decodeURIComponent(adminMembershipPlanMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/credit-packages") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -11574,6 +11699,33 @@ export function createPhoneAuthDevServer(
             validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
             validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
             actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminDirectRechargePackageMatch = pathname.match(/^\/api\/admin\/direct-recharge\/packages\/([^/]+)$/);
+      if (request.method === "DELETE" && adminDirectRechargePackageMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.deletePackage({
+            id: decodeURIComponent(adminDirectRechargePackageMatch[1]),
+            metadataKind: "direct_recharge",
             idempotencyKey,
             idempotencyOrganizationId: devOrganizationId,
             now: new Date(),
@@ -14021,8 +14173,12 @@ export function createPhoneAuthDevServer(
               ...(await buildGenerationConfigModelCatalog(db)),
               batchPromptPresetCategories,
               creditBalance: credit.creditBalance,
+              displayCreditBalance: credit.displayCreditBalance,
               availableCredits: credit.availableCredits,
               reservedCredits: credit.reservedCredits,
+              frozenCredits: credit.frozenCredits,
+              creditFrozenAt: credit.creditFrozenAt,
+              creditFrozenUntil: credit.creditFrozenUntil,
             }),
           );
         }
@@ -14753,8 +14909,12 @@ export function createPhoneAuthDevServer(
               body: {
                 ...(stateResponse.body && typeof stateResponse.body === "object" ? stateResponse.body : {}),
                 creditBalance: credit.creditBalance,
+                displayCreditBalance: credit.displayCreditBalance,
                 availableCredits: credit.availableCredits,
                 reservedCredits: credit.reservedCredits,
+                frozenCredits: credit.frozenCredits,
+                creditFrozenAt: credit.creditFrozenAt,
+                creditFrozenUntil: credit.creditFrozenUntil,
               },
             },
           );

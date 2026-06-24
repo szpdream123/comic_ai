@@ -247,7 +247,114 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
     }
   }
 
+  async function deletePlan(input: DeleteMembershipPlanInput): Promise<MembershipPlanMutationResponse> {
+    const parsed = parseDeleteInput(input);
+    if ("error" in parsed) {
+      return parsed.error;
+    }
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
+      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    }
+
+    const store = new SqlIdempotencyRecordStore(deps.db);
+    const requestHash = hashMembershipPlanDeleteRequest(parsed.value);
+
+    try {
+      await deps.db.query("BEGIN");
+
+      let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+        const started = await beginOrReplayCommand(store, {
+          organizationId: parsed.value.idempotencyOrganizationId,
+          operationName: operationNames.membershipPlanDelete,
+          idempotencyKey: parsed.value.idempotencyKey,
+          requestHash,
+        });
+        if (started.kind === "replayed") {
+          const replayedPlan = planFromIdempotencySnapshot(started.record.responseSnapshot)
+            ?? (started.record.responseResourceId ? await getPlan(started.record.responseResourceId) : undefined);
+          if (!replayedPlan) {
+            throw new IdempotencyProcessingError(started.record);
+          }
+          await deps.db.query("COMMIT");
+          return { status: 200, body: { plan: replayedPlan } };
+        }
+        if (started.kind === "processing") {
+          throw new IdempotencyProcessingError(started.record);
+        }
+        idempotencyRecord = started.record;
+      }
+
+      const row = await queryOne<MembershipPlanRow>(
+        deps.db,
+        `
+          UPDATE membership_plans
+          SET status = 'archived',
+              updated_by_admin_id = $2,
+              updated_at = $3
+          WHERE id = $1
+          RETURNING *
+        `,
+        [parsed.value.id, parsed.value.actorAdminAccountId, parsed.value.now],
+      );
+      if (!row) {
+        await deps.db.query("ROLLBACK");
+        return error(404, "plan_not_found", "membership plan not found");
+      }
+
+      const plan = planFromRow(row);
+      await deps.db.query(
+        `
+          INSERT INTO membership_plan_revisions (
+            id,
+            plan_id,
+            snapshot_json,
+            changed_by_admin_id,
+            reason,
+            created_at
+          )
+          VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+          ON CONFLICT (id) DO NOTHING
+        `,
+        [
+          parsed.value.idempotencyKey
+            ? uuidFromIdempotencyKey(`${parsed.value.idempotencyKey}:revision`)
+            : randomUUID(),
+          plan.id,
+          JSON.stringify(plan),
+          parsed.value.actorAdminAccountId,
+          parsed.value.reason,
+          parsed.value.now,
+        ],
+      );
+
+      if (idempotencyRecord) {
+        await store.update({
+          ...idempotencyRecord,
+          responseResourceType: "membership_plan",
+          responseResourceId: plan.id,
+          responseSnapshot: { plan },
+          status: "succeeded",
+          updatedAt: parsed.value.now,
+        });
+      }
+
+      await deps.db.query("COMMIT");
+      return { status: 200, body: { plan } };
+    } catch (deleteError) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      if (deleteError instanceof IdempotencyConflictError) {
+        return error(409, deleteError.code, "Idempotency-Key has already been used with a different request");
+      }
+      if (deleteError instanceof IdempotencyProcessingError) {
+        return error(202, deleteError.code, "Idempotency-Key is already processing");
+      }
+      throw deleteError;
+    }
+  }
+
   return {
+    deletePlan,
     listPlans,
     listPurchasablePlans,
     savePlan,
@@ -287,6 +394,15 @@ export interface SaveMembershipPlanInput {
   now: Date;
 }
 
+export interface DeleteMembershipPlanInput {
+  id: string;
+  actorAdminAccountId?: string | null;
+  reason: string;
+  idempotencyKey?: string | null;
+  idempotencyOrganizationId?: string | null;
+  now: Date;
+}
+
 export interface MembershipPlanView {
   id: string;
   code: string;
@@ -312,6 +428,10 @@ type MembershipPlanSaveResponse =
   | { status: 200; body: { plan: MembershipPlanView } }
   | { status: number; body: { error: { code: string; message: string } } };
 
+type MembershipPlanMutationResponse =
+  | { status: 200; body: { plan: MembershipPlanView } }
+  | { status: number; body: { error: { code: string; message: string } } };
+
 interface ParsedSaveInput {
   id: string | null;
   code: string;
@@ -329,6 +449,15 @@ interface ParsedSaveInput {
   status: string;
   validFrom: Date | null;
   validUntil: Date | null;
+  actorAdminAccountId: string | null;
+  reason: string;
+  idempotencyKey: string | null;
+  idempotencyOrganizationId: string | null;
+  now: Date;
+}
+
+interface ParsedDeleteInput {
+  id: string;
   actorAdminAccountId: string | null;
   reason: string;
   idempotencyKey: string | null;
@@ -433,12 +562,42 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   };
 }
 
+function parseDeleteInput(input: DeleteMembershipPlanInput):
+  | { value: ParsedDeleteInput }
+  | { error: MembershipPlanMutationResponse } {
+  const id = String(input.id ?? "").trim();
+  const reason = String(input.reason ?? "").trim();
+  const idempotencyKey = input.idempotencyKey?.trim() || null;
+  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+
+  if (!id || !isUuid(id)) return { error: error(400, "invalid_plan_id", "membership plan id is invalid") };
+  if (!reason) return { error: error(400, "reason_required", "reason is required") };
+
+  return {
+    value: {
+      id,
+      actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
+      reason,
+      idempotencyKey,
+      idempotencyOrganizationId,
+      now: input.now,
+    },
+  };
+}
+
 function planFromIdempotencySnapshot(snapshot: Record<string, unknown> | undefined) {
   const plan = snapshot?.plan;
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
     return undefined;
   }
   return plan as MembershipPlanView;
+}
+
+function hashMembershipPlanDeleteRequest(input: ParsedDeleteInput) {
+  return hashJson({
+    id: input.id,
+    reason: input.reason,
+  });
 }
 
 function hashMembershipPlanSaveRequest(input: ParsedSaveInput) {

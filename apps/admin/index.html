@@ -4534,7 +4534,7 @@
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
         const nextStatus = user.status === "active" ? "disabled" : "active";
         const statusAction = nextStatus === "disabled" ? "disable" : "enable";
-        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.reservedCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
+        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
       }
 
       async function toggleUserModelRequestInline(userId) {
@@ -4611,7 +4611,8 @@
             <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
             <div><span>当前状态</span><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></div>
             <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
-            <div><span>冻结积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
+            <div><span>冻结积分</span><span>${Number(user.frozenCredits || 0).toLocaleString()}</span></div>
+            <div><span>任务预占积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <div class="user-action-grid">
             <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户与模型记录</button>
@@ -4619,6 +4620,7 @@
             <button class="btn ghost" onclick="openCreditGrantDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动添加积分</button>
             <button class="btn ghost" onclick="openCreditDeductDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动扣减积分</button>
             <button class="btn ghost" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整到目标积分</button>
+            ${Number(user.frozenCredits || 0) > 0 ? `<button class="btn ghost" onclick="openFrozenCreditRestoreDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>强制解冻积分</button>` : ""}
             ${isTeamUserAccount(user) ? `<button class="btn ghost" onclick="openTeamLimitDrawer('${user.userId}')" ${userActionAttrs(user, "teamLimit", "user.write")}>团队额度</button>` : ""}
           </div>
         </aside>`;
@@ -5212,7 +5214,8 @@
             <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
             <div><span>关联子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
             <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
-            <div><span>冻结积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
+            <div><span>冻结积分</span><span>${Number(user?.frozenCredits || 0).toLocaleString()}</span></div>
+            <div><span>任务预占积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <form id="contact-reveal-form" style="margin-top:16px;">
             <div class="error-text" id="contact-reveal-error"></div>
@@ -5265,6 +5268,44 @@
         } catch (err) {
           document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
         }
+      }
+
+      function openFrozenCreditRestoreDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        if (!guardUserAction(user, "credit")) return;
+        const frozenCredits = Number(user?.frozenCredits || 0);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("强制解冻积分", userId)}
+          <p style="color:var(--muted);line-height:1.7">将 ${user?.displayName || userId} 的会员到期冻结积分恢复为可用积分。该操作不会开通会员权益，请仅在人工处理工单时使用。</p>
+          <div class="check-list">
+            <div><span>当前可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
+            <div><span>当前冻结积分</span><span>${frozenCredits.toLocaleString()}</span></div>
+            <div><span>任务预占积分</span><span>${Number(user?.reservedCredits || 0).toLocaleString()}</span></div>
+          </div>
+          <form id="frozen-credit-restore-form" style="margin-top:16px;">
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="3" placeholder="例如：客服工单核实后解冻积分" required></textarea></label>
+            <div class="error-text" id="frozen-credit-restore-error"></div>
+            <button class="btn primary full" type="submit" ${frozenCredits > 0 ? "" : "disabled"}>确认解冻</button>
+          </form>
+        </aside>`;
+        document.getElementById("frozen-credit-restore-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const error = document.getElementById("frozen-credit-restore-error");
+          await runAdminMutation(form, error, async () => {
+            await api(`/api/admin/users/${userId}/credits/frozen/restore`, {
+              method: "POST",
+              headers: { "idempotency-key": `admin-ui-frozen-credit-restore-${userId}-${Date.now()}` },
+              body: JSON.stringify({
+                reason: String(new FormData(form).get("reason") || "").trim(),
+              }),
+            });
+            await loadUsers();
+            openUserActionDrawer(userId);
+          }, "冻结积分已解冻").catch(() => undefined);
+        });
       }
 
       async function openUserModelRequestDrawer(userId) {
@@ -6806,9 +6847,11 @@
             <div class="check-list">
               <div><span>余额口径</span><span class="tag blue">${balanceScope}</span></div>
               <div><span>当前可用积分</span><span>${Number(summary.displayAvailableCredits || 0).toLocaleString()}</span></div>
-              <div><span>当前冻结积分</span><span>${Number(summary.displayReservedCredits || 0).toLocaleString()}</span></div>
+              <div><span>当前冻结积分</span><span>${Number(summary.frozenCredits || 0).toLocaleString()}</span></div>
+              <div><span>任务预占积分</span><span>${Number(summary.displayReservedCredits || 0).toLocaleString()}</span></div>
               <div><span>组织可用积分</span><span>${Number(summary.organizationAvailableCredits || 0).toLocaleString()}</span></div>
-              <div><span>组织冻结积分</span><span>${Number(summary.organizationReservedCredits || 0).toLocaleString()}</span></div>
+              <div><span>组织冻结积分</span><span>${Number(summary.organizationFrozenCredits || 0).toLocaleString()}</span></div>
+              <div><span>组织任务预占积分</span><span>${Number(summary.organizationReservedCredits || 0).toLocaleString()}</span></div>
               <div><span>成员可用积分</span><span>${memberAvailable}</span></div>
               <div><span>成员已用积分</span><span>${memberUsed}</span></div>
               <div><span>账本发放合计</span><span>${Number(summary.totalGrantedCredits || 0).toLocaleString()}</span></div>

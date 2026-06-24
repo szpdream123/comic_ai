@@ -501,6 +501,7 @@ function renderCreditLedgerDrawer(ui = {}) {
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
+        ${renderCreditLedgerMetric("冻结积分", summary.frozenCredits ?? summary.organizationFrozenCredits ?? 0, "frozen")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       <div class="credit-ledger-toolbar">
@@ -550,7 +551,7 @@ function renderCreditLedgerRow(row = {}) {
     <tr>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
-      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
+      <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
 }
@@ -558,16 +559,14 @@ function renderCreditLedgerRow(row = {}) {
 function normalizeCreditLedgerEntry(row = {}) {
   const type = String(row.entryType ?? "");
   const metadata = normalizeLedgerMetadata(row.metadata);
-  const labels = {
-    grant: ["充值/发放", "grant"],
-    consume: ["生成扣减", "consume"],
-    reservation: ["生成扣减", "consume"],
-    reserve: ["生成扣减", "consume"],
-    release: ["释放返还", "release"],
-  };
-  const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
   const amount = Number(row.amount ?? 0);
   const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
+  const fallbackDelta = type === "consume" || type === "reservation" || type === "reserve"
+    ? -Math.abs(amount)
+    : amount;
+  const signedDelta = Number.isFinite(availableDelta) && availableDelta !== 0 ? availableDelta : fallbackDelta;
+  const creditType = normalizeCreditLedgerType(type, signedDelta);
+  const displayAmount = creditType.displayAsAbsolute ? Math.abs(signedDelta || amount) : signedDelta;
   const reason = String(row.reason ?? metadata.reason ?? "").trim();
   const model = creditLedgerModelLabel(metadata);
   const task = String(metadata.taskId ?? metadata.task_id ?? row.sourceId ?? "").trim();
@@ -584,18 +583,45 @@ function normalizeCreditLedgerEntry(row = {}) {
   const description = failure
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
-  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || label;
+  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
   return {
-    label,
-    tone,
-    amount: type === "consume" ? -Math.abs(amount) : amount,
-    availableDelta,
+    label: creditType.label,
+    tone: creditType.tone,
+    valueTone: creditType.valueTone,
+    displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
+    amount: signedDelta,
+    availableDelta: signedDelta,
     createdAt: row.createdAt,
     taskId: task || String(row.sourceId ?? "").trim(),
     title,
     detail: description,
     result,
     source,
+  };
+}
+
+function normalizeCreditLedgerType(type, signedDelta) {
+  if (type === "consume") {
+    return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
+  }
+  if (type === "reservation" || type === "reserve") {
+    return { label: "预占", tone: "reserve", valueTone: "reserve", displayAsAbsolute: false };
+  }
+  if (type === "release") {
+    return { label: "返还", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
+  if (type === "freeze") {
+    return { label: "冻结", tone: "freeze", valueTone: "frozen", displayAsAbsolute: true };
+  }
+  if (type === "restore" || type === "unfreeze") {
+    return { label: "解冻", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
+  const isConsume = signedDelta < 0;
+  return {
+    label: isConsume ? "消耗" : "充值",
+    tone: isConsume ? "consume" : "grant",
+    valueTone: isConsume ? "negative" : "positive",
+    displayAsAbsolute: false,
   };
 }
 

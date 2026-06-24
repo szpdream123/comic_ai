@@ -923,6 +923,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       creditLedgerError: "",
       creditLedgerRows: [],
       creditLedgerSummary: null,
+      displayCreditBalance: null,
+      frozenCredits: 0,
+      creditFrozenAt: null,
+      creditFrozenUntil: null,
       creditLedgerMeta: null,
       communityPosts: initialCommunityData.posts,
       communityFeatures: initialCommunityData.features,
@@ -932,6 +936,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     },
   };
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
+  syncWorkbenchDisplayCreditBalance(workbench, session);
   installCreditBalanceRefresh(workbench);
   workbench.onCanvasNodeSelected = () => {
     workbench.ui.canvasEditorOpen = true;
@@ -3242,12 +3247,10 @@ async function finalizeSuccessfulMembershipPayment(workbench) {
   closeSuccessfulMembershipPaymentFlow(workbench);
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
-  await Promise.allSettled([
-    refreshMembershipEntitlementSurfaces(workbench),
-    refreshSessionCreditBalance(workbench, { renderOnChange: false }),
-  ]);
-  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST };
+  await refreshMembershipPaymentCriticalSurfaces(workbench);
+  workbench.ui.toast = { tone: "success", message: MEMBERSHIP_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
   render(workbench, { preserveLibraryScroll: true });
+  queueMembershipPaymentSecondaryRefresh(workbench);
 }
 
 async function finalizeSuccessfulCreditRechargePayment(workbench) {
@@ -3257,7 +3260,7 @@ async function finalizeSuccessfulCreditRechargePayment(workbench) {
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
   await refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST };
+  workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST, __paymentResultToast: true };
   render(workbench, { preserveLibraryScroll: true });
 }
 
@@ -3265,6 +3268,66 @@ function closeSuccessfulMembershipPaymentFlow(workbench) {
   clearMembershipPaymentState(workbench);
   workbench.ui.isLibraryPricingModalOpen = false;
   workbench.ui.toast = "";
+}
+
+function clearPaymentResultToast(workbench) {
+  if (!workbench?.ui) {
+    return;
+  }
+  const toast = normalizeWorkbenchToast(workbench.ui.toast);
+  const toastMessage = String(toast.message ?? "").trim();
+  if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
+    workbench.ui.toast = "";
+  }
+}
+
+function isPaymentResultToastState(message) {
+  const toast = normalizeWorkbenchToast(message);
+  return [MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(String(toast.message ?? "").trim()) &&
+    Boolean(message && typeof message === "object" && message.__paymentResultToast);
+}
+
+function consumePaymentResultToastState(workbench) {
+  const toast = normalizeWorkbenchToast(workbench.ui.toast);
+  const toastMessage = String(toast.message ?? "").trim();
+  if ([MEMBERSHIP_PAYMENT_SUCCESS_TOAST, CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST].includes(toastMessage)) {
+    workbench.ui.toast = "";
+  }
+}
+
+async function refreshMembershipPaymentCriticalSurfaces(workbench) {
+  await Promise.allSettled([
+    syncMembershipSurface(workbench),
+    refreshSessionCreditBalance(workbench, { renderOnChange: false }),
+  ]);
+}
+
+function queueMembershipPaymentSecondaryRefresh(workbench) {
+  const refreshTask = (async () => {
+    await refreshMembershipPaymentSecondarySurfaces(workbench);
+    render(workbench, { preserveLibraryScroll: true });
+  })().catch(() => {});
+  workbench.membershipPaymentSecondaryRefreshPromise = refreshTask;
+  refreshTask.finally(() => {
+    if (workbench.membershipPaymentSecondaryRefreshPromise === refreshTask) {
+      workbench.membershipPaymentSecondaryRefreshPromise = null;
+    }
+  });
+  return refreshTask;
+}
+
+async function refreshMembershipPaymentSecondarySurfaces(workbench) {
+  const refreshes = [];
+  if (isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+    refreshes.push(loadTeamSurface(workbench));
+  }
+  if (typeof workbench.api?.getLibraryAssets === "function") {
+    refreshes.push(refreshAssetLibraryEntitlementAfterMembership(workbench));
+  }
+  if (typeof workbench.api?.getProjects === "function") {
+    refreshes.push(refreshProjectLibraryIfAvailable(workbench));
+  }
+  await Promise.allSettled(refreshes);
 }
 
 async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId }) {
@@ -3280,6 +3343,34 @@ async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId
     paymentIntent: workbench.ui.lastPaymentIntent,
     payAction: workbench.ui.lastPaymentAction,
   };
+}
+
+function applySimulatedPaidPaymentResult(workbench, result, { orderId = "", paymentIntentId = "" } = {}) {
+  const order = result?.order ?? result?.data?.order ?? null;
+  if (String(order?.status ?? "") !== "paid") {
+    return false;
+  }
+
+  const previousOrder = workbench.ui.lastBillingOrder ?? {};
+  const previousIntent = workbench.ui.lastPaymentIntent ?? {};
+  const expectedOrderId = String(orderId || previousOrder.id || previousIntent.orderId || "");
+  if (expectedOrderId && String(order.id ?? "") !== expectedOrderId) {
+    return false;
+  }
+  const resolvedOrderId = order.id ?? previousOrder.id ?? previousIntent.orderId ?? orderId;
+  workbench.ui.lastBillingOrder = {
+    ...previousOrder,
+    ...order,
+    id: resolvedOrderId,
+    status: "paid",
+  };
+  workbench.ui.lastPaymentIntent = {
+    ...previousIntent,
+    id: previousIntent.id ?? paymentIntentId,
+    orderId: previousIntent.orderId ?? resolvedOrderId,
+    status: "succeeded",
+  };
+  return true;
 }
 
 function isMembershipBillingOrder(order) {
@@ -3637,6 +3728,9 @@ function render(workbench, options = {}) {
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
   const modalScrollState = captureLibraryTeamModalScrollState(workbench.root);
+  const shouldMarkPaymentResultToastShown =
+    isPaymentResultToastState(workbench.ui?.toast) &&
+    !Boolean(workbench.ui?.toast?.__paymentResultToastShown);
   let renderFailed = false;
   try {
     const activeStoryboards = getActiveStoryboards(workbench);
@@ -3666,6 +3760,12 @@ function render(workbench, options = {}) {
   restoreSingleEpisodeAiPreviewScrollState(workbench.root, singleEpisodeAiScrollState);
   restoreLibraryTeamModalScrollState(workbench.root, modalScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
+  if (!renderFailed && shouldMarkPaymentResultToastShown && workbench.ui?.toast && typeof workbench.ui.toast === "object") {
+    workbench.ui.toast = {
+      ...workbench.ui.toast,
+      __paymentResultToastShown: true,
+    };
+  }
   if (options.focusLibrarySearch) {
     restoreLibrarySearchFocus(workbench.root);
   }
@@ -5750,6 +5850,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-pricing") {
     clearMembershipPaymentState(workbench);
+    clearPaymentResultToast(workbench);
     workbench.ui.isLibraryPricingModalOpen = true;
     workbench.ui.pricingModalTab = workbench.ui.pricingModalTab || "membership";
     render(workbench);
@@ -6009,6 +6110,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.busy = true;
     workbench.ui.toast = "正在刷新支付状态...";
     render(workbench);
+    let paymentHandled = false;
     try {
       await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
       const isMembershipOrder = isMembershipBillingOrder(workbench.ui.lastBillingOrder);
@@ -6016,6 +6118,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const changedToPaid = isMembershipOrder || isDirectRechargeOrder
         ? await handleRefreshedMembershipPaymentStatus(workbench)
         : false;
+      paymentHandled = changedToPaid;
       const membershipPaymentIsAwaitingEntitlement =
         isMembershipOrder &&
         isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder);
@@ -6030,7 +6133,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
     } finally {
       workbench.ui.busy = false;
-      render(workbench);
+      if (!paymentHandled) {
+        render(workbench);
+      }
     }
     return;
   }
@@ -6054,16 +6159,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const previousBillingOrder = workbench.ui.lastBillingOrder ? { ...workbench.ui.lastBillingOrder } : null;
     const previousPaymentIntent = workbench.ui.lastPaymentIntent ? { ...workbench.ui.lastPaymentIntent } : null;
     markMembershipPaymentSyncing(workbench, { orderId, paymentIntentId });
+    let paymentHandled = false;
     try {
-      await workbench.api.simulatePaymentIntentSuccess({ paymentIntentId });
+      const simulatedPaymentResult = await workbench.api.simulatePaymentIntentSuccess({ paymentIntentId });
       if (!isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
         return;
       }
-      await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
-      if (!isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
-        return;
+      if (!applySimulatedPaidPaymentResult(workbench, simulatedPaymentResult, { orderId, paymentIntentId })) {
+        await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
+        if (!isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
+          return;
+        }
       }
       const changedToPaid = await handleSimulatedMembershipPaymentStatus(workbench);
+      paymentHandled = changedToPaid;
       if (!changedToPaid) {
         workbench.ui.toast = "";
       }
@@ -6076,7 +6185,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
     } finally {
       workbench.ui.busy = false;
-      render(workbench, { preserveLibraryScroll: true });
+      if (!paymentHandled) {
+        render(workbench, { preserveLibraryScroll: true });
+      }
     }
     return;
   }
@@ -12965,6 +13076,75 @@ function resolveCreditBalanceFromPayload(payload = {}) {
   return null;
 }
 
+function resolveDisplayCreditBalanceFromPayload(payload = {}) {
+  const candidates = [
+    payload?.displayCreditBalance,
+    payload?.user?.displayCreditBalance,
+    payload?.session?.displayCreditBalance,
+    payload?.session?.user?.displayCreditBalance,
+    payload?.summary?.displayCreditBalance,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function resolveFrozenCreditBalanceFromPayload(payload = {}) {
+  const candidates = [
+    payload?.frozenCredits,
+    payload?.organizationFrozenCredits,
+    payload?.user?.frozenCredits,
+    payload?.session?.frozenCredits,
+    payload?.session?.user?.frozenCredits,
+    payload?.summary?.frozenCredits,
+    payload?.summary?.organizationFrozenCredits,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function syncWorkbenchDisplayCreditBalance(workbench, payload = {}) {
+  const displayCreditBalance = resolveDisplayCreditBalanceFromPayload(payload);
+  const frozenCredits = resolveFrozenCreditBalanceFromPayload(payload);
+  const creditFrozenAt =
+    payload?.creditFrozenAt ??
+    payload?.organizationFrozenAt ??
+    payload?.user?.creditFrozenAt ??
+    payload?.session?.creditFrozenAt ??
+    payload?.session?.user?.creditFrozenAt ??
+    payload?.summary?.organizationFrozenAt ??
+    null;
+  const creditFrozenUntil =
+    payload?.creditFrozenUntil ??
+    payload?.organizationFrozenUntil ??
+    payload?.user?.creditFrozenUntil ??
+    payload?.session?.creditFrozenUntil ??
+    payload?.session?.user?.creditFrozenUntil ??
+    payload?.summary?.organizationFrozenUntil ??
+    null;
+  if (displayCreditBalance !== null) {
+    workbench.ui.displayCreditBalance = displayCreditBalance;
+  }
+  if (frozenCredits !== null) {
+    workbench.ui.frozenCredits = frozenCredits;
+  }
+  if (creditFrozenAt !== null) {
+    workbench.ui.creditFrozenAt = creditFrozenAt;
+  }
+  if (creditFrozenUntil !== null) {
+    workbench.ui.creditFrozenUntil = creditFrozenUntil;
+  }
+}
+
 function applyGenerationConfigCreditBalance(workbench, creditBalance) {
   const sessionBalance = resolveCurrentSessionCreditBalance(workbench?.session);
   if (sessionBalance !== null) {
@@ -13009,6 +13189,7 @@ function mergeSessionUser(workbench, sessionPayload) {
   if (nextBalance !== null) {
     setWorkbenchCreditBalance(workbench, nextBalance, { syncGenerationConfig: false });
   }
+  syncWorkbenchDisplayCreditBalance(workbench, sessionPayload);
   return nextBalance !== null && nextBalance !== previousBalance;
 }
 
@@ -13057,6 +13238,7 @@ async function loadCreditLedger(workbench) {
     workbench.ui.creditLedgerRows = Array.isArray(ledger?.data) ? ledger.data : [];
     workbench.ui.creditLedgerSummary = ledger?.summary ?? null;
     workbench.ui.creditLedgerMeta = ledger?.meta ?? null;
+    syncWorkbenchDisplayCreditBalance(workbench, ledger?.summary ?? {});
     const balance = Number(ledger?.summary?.displayAvailableCredits);
     if (Number.isFinite(balance) && balance >= 0) {
       setWorkbenchCreditBalance(workbench, balance, { syncGenerationConfig: false });
