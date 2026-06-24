@@ -323,6 +323,15 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0043_membership_entitlement_keys.sql" });
   }
 
+  if (
+    !(await columnExists(db, "organizations", "credit_frozen_cached")) ||
+    !(await columnExists(db, "credit_lots", "status")) ||
+    !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "freeze")) ||
+    !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "restore"))
+  ) {
+    await applySqlMigrations(db, process.cwd(), { fromName: "0044_credit_direct_recharge_wallet_freeze.sql" });
+  }
+
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
   } else {

@@ -113,7 +113,7 @@ describe("payment provider adapters", () => {
     });
   });
 
-  it("renders WeChat Native code_url as a browser-safe qr image", async () => {
+  it("returns WeChat Native code_url without server-side qr image rendering", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({
         code_url: "weixin://wxpay/bizpayurl?pr=test-native-code",
@@ -151,10 +151,10 @@ describe("payment provider adapters", () => {
     assert.equal(result.kind, "submitted");
     assert.equal(result.payAction.kind, "qr_code");
     assert.equal(result.payAction.codeUrl, "weixin://wxpay/bizpayurl?pr=test-native-code");
-    assert.match(result.payAction.qrCodeImage ?? "", /^data:image\/png;base64,/);
+    assert.equal(result.payAction.qrCodeImage, undefined);
   });
 
-  it("renders Alipay precreate qr_code as a browser-safe qr image", async () => {
+  it("returns Alipay precreate qr_code without server-side qr image rendering", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({
         alipay_trade_precreate_response: {
@@ -194,7 +194,7 @@ describe("payment provider adapters", () => {
     assert.equal(result.kind, "submitted");
     assert.equal(result.payAction.kind, "qr_code");
     assert.equal(result.payAction.codeUrl, "https://qr.alipay.com/test-alipay-code");
-    assert.match(result.payAction.qrCodeImage ?? "", /^data:image\/png;base64,/);
+    assert.equal(result.payAction.qrCodeImage, undefined);
   });
 
 });

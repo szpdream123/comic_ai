@@ -137,6 +137,53 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
+  it("rejects new reservations while membership wallet credits are frozen", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db);
+      await grantCredits(db, {
+        organizationId: ids.organization,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "paid order credited",
+        now: now(),
+      });
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_frozen_cached = 100,
+              credit_frozen_at = $2,
+              credit_frozen_until = $3
+          WHERE id = $1
+        `,
+        [
+          ids.organization,
+          new Date("2026-05-10T10:00:00.000Z"),
+          new Date("2027-05-10T10:00:00.000Z"),
+        ],
+      );
+
+      await assert.rejects(
+        reserveCredits(db, {
+          organizationId: ids.organization,
+          amount: 10,
+          sourceType: "workflow_task",
+          sourceId: ids.task,
+          reason: "shot generation reservation",
+          now: now(),
+        }),
+        (error) => {
+          assert.equal((error as { code?: string }).code, "wallet_frozen_membership_required");
+          return true;
+        },
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("requires an explicit reason for high-risk credit facts", async () => {
     const db = await createMigratedTestDb();
 
@@ -307,10 +354,17 @@ describe("persistent credit ledger and reservation", () => {
         `
           UPDATE organizations
           SET credit_balance_cached = 999,
-              credit_reserved_cached = 999
+              credit_reserved_cached = 999,
+              credit_frozen_cached = 999,
+              credit_frozen_at = $2,
+              credit_frozen_until = $3
           WHERE id = $1
         `,
-        [ids.organization],
+        [
+          ids.organization,
+          new Date("2026-05-10T10:00:00.000Z"),
+          new Date("2027-05-10T10:00:00.000Z"),
+        ],
       );
 
       const repaired = await repairCreditBalanceCache(db, {
@@ -323,9 +377,75 @@ describe("persistent credit ledger and reservation", () => {
         available: 70,
         reserved: 20,
         consumed: 10,
+        frozen: 0,
       });
       assert.equal(organization?.credit_balance_cached, 70);
       assert.equal(organization?.credit_reserved_cached, 20);
+      assert.equal(organization?.credit_frozen_cached, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("repairs frozen wallet cache from frozen credit lots", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db);
+      await grantCredits(db, {
+        organizationId: ids.organization,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "paid order credited",
+        now: now(),
+      });
+      await db.query(
+        `
+          UPDATE credit_lots
+          SET status = 'frozen',
+              frozen_at = $2,
+              frozen_until = $3
+          WHERE organization_id = $1
+        `,
+        [
+          ids.organization,
+          new Date("2026-05-10T10:00:00.000Z"),
+          new Date("2027-05-10T10:00:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_balance_cached = 0,
+              credit_reserved_cached = 0,
+              credit_frozen_cached = 7,
+              credit_frozen_at = $2,
+              credit_frozen_until = $3
+          WHERE id = $1
+        `,
+        [
+          ids.organization,
+          new Date("2026-05-10T10:00:00.000Z"),
+          new Date("2027-05-10T10:00:00.000Z"),
+        ],
+      );
+
+      const repaired = await repairCreditBalanceCache(db, {
+        organizationId: ids.organization,
+      });
+      const organization = await readOrganizationCredits(db);
+
+      assert.deepEqual(repaired, {
+        organizationId: ids.organization,
+        available: 100,
+        reserved: 0,
+        consumed: 0,
+        frozen: 100,
+      });
+      assert.equal(organization?.credit_frozen_cached, 100);
+      assert.ok(organization?.credit_frozen_at);
+      assert.ok(organization?.credit_frozen_until);
     } finally {
       await db.close();
     }
@@ -515,10 +635,13 @@ async function readOrganizationCredits(
   return queryOne<{
     credit_balance_cached: number;
     credit_reserved_cached: number;
+    credit_frozen_cached: number;
+    credit_frozen_at: Date | string | null;
+    credit_frozen_until: Date | string | null;
   }>(
     db,
     `
-      SELECT credit_balance_cached, credit_reserved_cached
+      SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached, credit_frozen_at, credit_frozen_until
       FROM organizations
       WHERE id = $1
     `,

@@ -43,6 +43,7 @@ import {
 import { enqueueMissingMembershipActivationForPaidOrder } from "../membership/payment-succeeded-membership-consumer.service.ts";
 
 const PAYMENT_INTENT_TTL_MS = 15 * 60 * 1000;
+const PAYMENT_PROVIDER_SLOW_CREATE_LOG_MS = 800;
 
 interface AuthenticatedCommerceUser {
   sessionToken: string;
@@ -280,6 +281,17 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
               throw new CommercePaymentError("credit_package_not_found");
             }
 
+            const packageMetadata = normalizeJson(creditPackage.metadata_json);
+            if (packageMetadata.kind === "direct_recharge") {
+              const hasActiveMembership = await hasActiveMembershipSubscription(deps.db, {
+                organizationId: actor.organizationId,
+                now: input.now,
+              });
+              if (!hasActiveMembership) {
+                throw new CommercePaymentError("membership_required_for_credit_recharge");
+              }
+            }
+
             const orderId = randomUUID();
             const totalCredits = creditPackage.credits + creditPackage.gift_credits;
             const packageSnapshot = {
@@ -293,7 +305,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
               currency: creditPackage.currency,
               badge: creditPackage.badge,
               sortOrder: creditPackage.sort_order,
-              metadata: normalizeJson(creditPackage.metadata_json),
+              metadata: packageMetadata,
             };
             const order = await queryOne<BillingOrderRow>(
               deps.db,
@@ -415,6 +427,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         const subject = prepared.order.product_type === "membership_plan"
           ? `Membership ${String(orderSnapshot.code ?? prepared.order.id)}`
           : `Credit package ${prepared.order.credits}`;
+        const providerStartedAt = Date.now();
         const providerResult = await createProviderIntentSafely(adapter, {
           provider: prepared.intent.provider,
           productMode: prepared.intent.product_mode,
@@ -434,13 +447,23 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
             idempotencyRecordId: prepared.idempotencyRecord.id,
           },
         });
+        const providerElapsedMs = Date.now() - providerStartedAt;
         const completed = await completePaymentIntentSubmission(deps.db, {
           prepared,
           providerResult,
           now: input.now,
         });
+        const responseBody = intentResponseBody(completed);
+        logPaymentIntentCreateTiming({
+          provider: prepared.intent.provider,
+          productMode: prepared.intent.product_mode,
+          productType: prepared.order.product_type,
+          providerResultKind: providerResult.kind,
+          providerElapsedMs,
+          actionKind: responseBody.payAction?.kind,
+        });
 
-        return { status: 200, body: intentResponseBody(completed) };
+        return { status: 200, body: responseBody };
       } catch (error) {
         return mapCommerceError(error);
       }
@@ -2078,6 +2101,27 @@ function shouldMarkOrderPaid(eventType: PaymentEventType): boolean {
   return eventType === "payment_succeeded";
 }
 
+function logPaymentIntentCreateTiming(input: {
+  provider: PaymentProvider;
+  productMode: string;
+  productType: string;
+  providerResultKind: CreateProviderPaymentIntentResult["kind"];
+  providerElapsedMs: number;
+  actionKind?: ProviderPayAction["kind"];
+}) {
+  if (input.providerElapsedMs < PAYMENT_PROVIDER_SLOW_CREATE_LOG_MS) {
+    return;
+  }
+  console.info("[payment] provider intent create timing", {
+    provider: input.provider,
+    productMode: input.productMode,
+    productType: input.productType,
+    providerResultKind: input.providerResultKind,
+    actionKind: input.actionKind ?? "none",
+    providerElapsedMs: input.providerElapsedMs,
+  });
+}
+
 async function findActivePackage(
   db: SqlDatabase,
   input: { creditPackageId: string },
@@ -2095,6 +2139,25 @@ async function findActivePackage(
     `,
     [input.creditPackageId],
   );
+}
+
+async function hasActiveMembershipSubscription(
+  db: SqlDatabase,
+  input: { organizationId: string; now: Date },
+) {
+  const row = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT organization_id AS id
+      FROM organization_membership_subscriptions
+      WHERE organization_id = $1
+        AND status IN ('experience_active', 'professional_active')
+        AND current_period_end_at > $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.now],
+  );
+  return Boolean(row);
 }
 
 async function findOrderForActor(

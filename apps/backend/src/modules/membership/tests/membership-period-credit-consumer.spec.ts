@@ -10,6 +10,7 @@ const planId = "95000000-0000-4000-8000-000000060001";
 const orderId = "96000000-0000-4000-8000-000000060001";
 const periodId = "97000000-0000-4000-8000-000000060001";
 const outboxEventId = "98000000-0000-4000-8000-000000060001";
+const paymentIntentId = "99000000-0000-4000-8000-000000060001";
 
 describe("membership period credit consumer", { concurrency: false }, () => {
   it("grants membership gift credits into an expiring credit lot idempotently", async () => {
@@ -104,11 +105,64 @@ describe("membership period credit consumer", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("does not grant membership gift credits unless the membership order is paid", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedMembershipPeriod(db, { giftCredits: 800, orderStatus: "pending_payment" });
+      const event = {
+        id: outboxEventId,
+        organizationId,
+        eventType: "membership.period.started",
+        payload: {
+          membership_period_id: periodId,
+          order_id: orderId,
+          plan_id: planId,
+          gift_credits: 800,
+          period_end_at: "2026-06-15T08:00:00.000Z",
+        },
+        status: "pending" as const,
+        availableAt: new Date("2026-06-08T08:00:00.000Z"),
+        processedAt: null,
+        errorMessage: null,
+        createdAt: new Date("2026-06-08T08:00:00.000Z"),
+        updatedAt: new Date("2026-06-08T08:00:00.000Z"),
+      };
+
+      await assert.rejects(
+        () =>
+          consumeMembershipPeriodCreditGrant(db, {
+            event,
+            now: new Date("2026-06-08T08:01:00.000Z"),
+          }),
+        /membership_period_payment_not_confirmed/,
+      );
+
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+        [organizationId],
+      );
+      const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
+        "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
+        [orderId],
+      );
+      const ledger = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'membership_gift'",
+      );
+
+      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
+      assert.equal(ledger.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedMembershipPeriod(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  input: { giftCredits: number },
+  input: { giftCredits: number; orderStatus?: "paid" | "pending_payment" },
 ) {
   await db.query(
     `
@@ -161,12 +215,71 @@ async function seedMembershipPeriod(
         amount_minor,
         currency,
         status,
+        paid_at,
+        successful_payment_intent_id,
         expires_at
       )
-      VALUES ($1, $2, $3, 'ORD-MEMBERSHIP-PERIOD-CREDIT', 'membership_plan', $4, '{}'::jsonb, '{}'::jsonb, $5, 9900, 'CNY', 'paid', '2026-06-08T08:30:00.000Z')
+      VALUES (
+        $1,
+        $2,
+        $3,
+        'ORD-MEMBERSHIP-PERIOD-CREDIT',
+        'membership_plan',
+        $4,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        $5,
+        9900,
+        'CNY',
+        $6,
+        CASE WHEN $6 = 'paid' THEN '2026-06-08T08:00:00.000Z'::timestamptz ELSE NULL END,
+        CASE WHEN $6 = 'paid' THEN $7::uuid ELSE NULL END,
+        '2026-06-08T08:30:00.000Z'
+      )
     `,
-    [orderId, organizationId, userId, planId, input.giftCredits],
+    [orderId, organizationId, userId, planId, input.giftCredits, input.orderStatus ?? "paid", paymentIntentId],
   );
+  if ((input.orderStatus ?? "paid") === "paid") {
+    await db.query(
+      `
+        INSERT INTO payment_intents (
+          id,
+          organization_id,
+          order_id,
+          provider,
+          product_mode,
+          status,
+          amount_minor,
+          currency,
+          merchant_order_no,
+          provider_trade_id,
+          provider_payload_hash,
+          provider_safe_metadata_json,
+          submitted_at,
+          succeeded_at,
+          expires_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          'wechat_pay',
+          'native_qr',
+          'succeeded',
+          9900,
+          'CNY',
+          'ORD-MEMBERSHIP-PERIOD-CREDIT',
+          'wx-membership-period-credit',
+          'payload-hash',
+          '{}'::jsonb,
+          '2026-06-08T07:59:00.000Z',
+          '2026-06-08T08:00:00.000Z',
+          '2026-06-08T08:30:00.000Z'
+        )
+      `,
+      [paymentIntentId, organizationId, orderId],
+    );
+  }
   await db.query(
     `
       INSERT INTO membership_periods (

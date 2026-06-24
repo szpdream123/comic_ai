@@ -491,6 +491,63 @@ test("admin standalone shell keeps membership plan management visible", () => {
   }
 });
 
+test("admin shell exposes direct credit recharge as its own pricing module", () => {
+  const finalStart = script.indexOf("const ADMIN_PAGE_LOADERS");
+  assert.notEqual(finalStart, -1, "final lazy loader block exists");
+  const finalScript = script.slice(finalStart);
+
+  for (const contract of [
+    "directRecharge: \"直充积分\"",
+    "directRechargePackages: []",
+    "directRechargeLoadError",
+    'path.includes("/direct-recharge")',
+    'directRecharge: "/admin/direct-recharge"',
+    'navButton("directRecharge"',
+    'state.page === "directRecharge"',
+    "renderDirectRechargePage",
+    "loadDirectRechargePackages",
+    "openDirectRechargePackageDrawer",
+    "/api/admin/direct-recharge/packages",
+    "admin-ui-direct-recharge-package",
+    "metadata: { kind: \"direct_recharge\"",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(finalScript, /directRecharge:\s*\(\) => loadDirectRechargePackages\(\)/);
+  assert.doesNotMatch(finalScript, /users:\s*\(\) => loadDirectRechargePackages\(\)/);
+});
+
+test("admin direct recharge drawer explains sort order and save failures clearly", () => {
+  const drawerStart = script.indexOf("function openDirectRechargePackageDrawer");
+  assert.notEqual(drawerStart, -1, "direct recharge drawer exists");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("function directRechargePackagePayloadFromForm", drawerStart));
+
+  assert.match(drawerBlock, /展示顺序（数字越小越靠前）/);
+  assert.match(drawerBlock, /directRechargePackageConflictMessage/);
+  assert.match(drawerBlock, /credit_package_code_conflict/);
+  assert.doesNotMatch(drawerBlock, /<span>排序<\/span>/);
+});
+
+test("admin api surfaces non-enveloped write errors instead of generic request failure", () => {
+  assert.match(script, /function adminApiErrorMessage/);
+  assert.match(script, /typeof error === "string"/);
+  assert.match(script, /idempotency_key_required/);
+  assert.match(script, /response\.status === 404/);
+  assert.doesNotMatch(script, /new Error\(payload\.error\?\.message \|\| "请求失败"\)/);
+});
+
+test("admin user credit page stays focused on manual credit adjustments", () => {
+  const usersPageStart = script.indexOf("function usersPage");
+  assert.notEqual(usersPageStart, -1, "users page exists");
+  const usersPageBlock = script.slice(usersPageStart, script.indexOf("function userRowsHtml", usersPageStart));
+
+  assert.match(usersPageBlock, /refreshUserCreditPage/);
+  assert.doesNotMatch(usersPageBlock, /新增直充/);
+  assert.doesNotMatch(usersPageBlock, /积分档位/);
+  assert.doesNotMatch(usersPageBlock, /openDirectRechargePackageDrawer/);
+});
+
 test("admin membership plan save uses an ASCII-safe idempotency key", () => {
   const saveStart = script.indexOf("/api/admin/membership/plans");
   assert.notEqual(saveStart, -1, "membership plan save endpoint exists");

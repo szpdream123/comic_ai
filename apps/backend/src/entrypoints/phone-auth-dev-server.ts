@@ -212,7 +212,6 @@ type LingxiCommunityItem = {
   promptMeta?: Record<string, unknown> | null;
 };
 const devPaymentCallbackSecret = "dev-payment-secret";
-const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
 const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -297,10 +296,6 @@ const contentTypes: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
 };
-
-function createDevPaymentProviderRegistry() {
-  return createEnvPaymentProviderRegistry(process.env);
-}
 
 interface AuthHttpResponse<T> {
   status: number;
@@ -1485,6 +1480,26 @@ async function repairPaymentCreditForBackendAdmin(input: {
       throw new IdempotencyProcessingError(started.record);
     }
 
+    const baseOrder = await queryOne<{ id: string }>(
+      input.db,
+      `
+        SELECT id
+        FROM billing_orders
+        WHERE organization_id = $1
+          AND id = $2
+          AND product_type = 'credit_package'
+        LIMIT 1
+      `,
+      [devOrganizationId, input.orderId],
+    );
+    if (!baseOrder) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 404,
+        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
+      };
+    }
+
     const order = await queryOne<{
       id: string;
       organization_id: string;
@@ -1494,34 +1509,43 @@ async function repairPaymentCreditForBackendAdmin(input: {
       status: string;
       credit_grant_ledger_entry_id: string | null;
       successful_payment_intent_id: string | null;
+      provider_event_id: string | null;
     }>(
       input.db,
       `
         SELECT
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          credits,
-          status,
-          credit_grant_ledger_entry_id,
-          successful_payment_intent_id
-        FROM billing_orders
-        WHERE organization_id = $1
-          AND id = $2
-          AND product_type = 'credit_package'
-        FOR UPDATE
+          bo.id,
+          bo.organization_id,
+          bo.created_by_user_id,
+          bo.order_no,
+          bo.credits,
+          bo.status,
+          bo.credit_grant_ledger_entry_id,
+          bo.successful_payment_intent_id,
+          ppe.id AS provider_event_id
+        FROM billing_orders bo
+        JOIN payment_intents pi
+          ON pi.organization_id = bo.organization_id
+         AND pi.id = bo.successful_payment_intent_id
+         AND pi.order_id = bo.id
+         AND pi.status = 'succeeded'
+         AND pi.amount_minor = bo.amount_minor
+         AND pi.currency = bo.currency
+        JOIN payment_provider_events ppe
+          ON ppe.organization_id = bo.organization_id
+         AND ppe.order_id = bo.id
+         AND ppe.payment_intent_id = pi.id
+         AND ppe.event_type = 'payment_succeeded'
+         AND ppe.processing_status = 'processed'
+        WHERE bo.organization_id = $1
+          AND bo.id = $2
+          AND bo.product_type = 'credit_package'
+          AND bo.status = 'paid'
+        FOR UPDATE OF bo
       `,
       [devOrganizationId, input.orderId],
     );
-    if (!order) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 404,
-        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
-      };
-    }
-    if (order.status !== "paid" || order.credit_grant_ledger_entry_id) {
+    if (!order || order.status !== "paid" || order.credit_grant_ledger_entry_id) {
       await input.db.query("ROLLBACK");
       return {
         status: 400,
@@ -9141,6 +9165,7 @@ export function createPhoneAuthDevServer(
   const wechatLoginStates = new Map<string, { createdAt: number }>();
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
+  const devPaymentProviderRegistry = createEnvPaymentProviderRegistry(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
     string,
@@ -11118,6 +11143,133 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/credit-packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        await ensureDefaultCreditPackage(db, { now: new Date() });
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await creditPackages.listPackages({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/credit-packages") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.savePackage({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            subtitle: body.subtitle === undefined || body.subtitle === null ? null : String(body.subtitle),
+            credits: Number(body.credits ?? body.baseCredits ?? 0),
+            giftCredits: Number(body.giftCredits ?? 0),
+            amountMinor: Number(body.amountMinor ?? 0),
+            currency: String(body.currency ?? "CNY"),
+            badge: body.badge === undefined || body.badge === null ? null : String(body.badge),
+            sortOrder: body.sortOrder === undefined || body.sortOrder === null ? 100 : Number(body.sortOrder),
+            metadata: objectBody(body.metadata),
+            status: String(body.status ?? "active"),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/direct-recharge/packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const creditPackages = createCreditPackageService({ db });
+        const result = await creditPackages.listPackages({
+          includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+          now: new Date(),
+        });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: {
+              packages: result.data.packages.filter(
+                (item) => item.metadata?.kind === "direct_recharge",
+              ),
+            },
+          },
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/direct-recharge/packages") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const metadata = objectBody(body.metadata);
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.savePackage({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            subtitle: body.subtitle === undefined || body.subtitle === null ? null : String(body.subtitle),
+            credits: Number(body.credits ?? body.baseCredits ?? 0),
+            giftCredits: 0,
+            amountMinor: Number(body.amountMinor ?? 0),
+            currency: String(body.currency ?? "CNY"),
+            badge: body.badge === undefined || body.badge === null ? null : String(body.badge),
+            sortOrder: body.sortOrder === undefined || body.sortOrder === null ? 100 : Number(body.sortOrder),
+            metadata: { ...metadata, kind: "direct_recharge" },
+            status: String(body.status ?? "active"),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/settings") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -12318,6 +12470,57 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (request.method === "POST" && pathname === "/api/membership/checkout") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            membershipPlanId: string;
+            provider: PaymentProvider;
+            productMode?: string | null;
+          };
+          const commercePayment = createCommercePaymentService({
+            db,
+            workspaceId: currentWorkspaceId,
+            callbackSecret: devPaymentCallbackSecret,
+            providerRegistry: devPaymentProviderRegistry,
+            providerCallbackBaseUrl: request.headers.host
+              ? `http://${request.headers.host}`
+              : undefined,
+          });
+          const orderResult = await membershipOrders.createMembershipOrder({
+            user: { sessionToken: authenticated.sessionToken },
+            body: { membershipPlanId: String(body.membershipPlanId ?? "") },
+            idempotencyKey: `${idempotencyKey}:order`,
+            now: new Date(),
+          });
+          if (orderResult.status !== 200 || !("order" in orderResult.body)) {
+            return writeJson(response, orderResult);
+          }
+          const paymentResult = await commercePayment.createPaymentIntent({
+            user: { sessionToken: authenticated.sessionToken },
+            body: {
+              orderId: orderResult.body.order.id,
+              provider: body.provider,
+              productMode: String(body.productMode ?? "native_qr"),
+            },
+            idempotencyKey: `${idempotencyKey}:intent`,
+            now: new Date(),
+          });
+          if (paymentResult.status !== 200 || !("paymentIntent" in paymentResult.body)) {
+            return writeJson(response, paymentResult);
+          }
+          return writeJson(response, {
+            status: 200,
+            body: {
+              order: orderResult.body.order,
+              paymentIntent: paymentResult.body.paymentIntent,
+              payAction: paymentResult.body.payAction,
+            },
+          });
         }
       }
 

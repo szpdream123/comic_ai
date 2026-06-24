@@ -22,5 +22,10 @@ tmp-dev-server/
 tmp-ui-screenshots/
 .worktrees/
 .tmp-edge-canvas-cdp/
-test-results/
+.tmp-*
+.tmp-web-test-output.txt
+.tmp-verify-personal-project-workspace.mjs
 .tmp-project-workbench-test-output.txt
+test-results/
+secrets/
+artifacts/admin-restore/

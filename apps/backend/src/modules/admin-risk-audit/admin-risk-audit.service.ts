@@ -80,6 +80,13 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           bo.successful_payment_intent_id,
           bo.credit_grant_ledger_entry_id
         FROM billing_orders bo
+        JOIN payment_intents pi
+          ON pi.organization_id = bo.organization_id
+         AND pi.id = bo.successful_payment_intent_id
+         AND pi.order_id = bo.id
+         AND pi.status = 'succeeded'
+         AND pi.amount_minor = bo.amount_minor
+         AND pi.currency = bo.currency
         LEFT JOIN credit_ledger_entries cle
           ON cle.organization_id = bo.organization_id
          AND cle.source_type = 'payment_order'
@@ -90,6 +97,15 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           AND bo.status = 'paid'
           AND bo.credit_grant_ledger_entry_id IS NULL
           AND cle.id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM payment_provider_events ppe
+            WHERE ppe.organization_id = bo.organization_id
+              AND ppe.order_id = bo.id
+              AND ppe.payment_intent_id = pi.id
+              AND ppe.event_type = 'payment_succeeded'
+              AND ppe.processing_status = 'processed'
+          )
         ORDER BY bo.paid_at DESC NULLS LAST, bo.updated_at DESC
         LIMIT $2
       `,

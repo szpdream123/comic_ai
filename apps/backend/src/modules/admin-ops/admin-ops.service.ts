@@ -152,6 +152,12 @@ interface AdminPaymentIssueRow {
   credit_grant_ledger_entry_id: string | null;
 }
 
+interface VerifiedPaidCreditOrderRow extends AdminBillingOrderRow {
+  intent_amount_minor: number | string | null;
+  intent_currency: string | null;
+  provider_event_id: string | null;
+}
+
 export interface AdminPaymentIssueView {
   issueType: "paid_without_credit";
   orderId: string;
@@ -969,14 +975,18 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             };
           },
           execute: async ({ actor }) => {
-            const order = await getBillingOrderForOps(deps.db, {
+            const baseOrder = await getBillingOrderForOps(deps.db, {
               organizationId: actor.organizationId,
               orderId: input.body.orderId,
             });
-            if (!order) {
+            if (!baseOrder) {
               throw new AdminOpsBusinessError("payment_issue_not_found");
             }
-            if (order.status !== "paid" || order.credit_grant_ledger_entry_id) {
+            const order = await getVerifiedPaidCreditOrderForOps(deps.db, {
+              organizationId: actor.organizationId,
+              orderId: input.body.orderId,
+            });
+            if (!order || order.status !== "paid" || order.credit_grant_ledger_entry_id) {
               throw new AdminOpsBusinessError("payment_issue_not_repairable");
             }
 
@@ -1337,6 +1347,13 @@ async function listPaymentIssuesForOps(
         bo.successful_payment_intent_id,
         bo.credit_grant_ledger_entry_id
       FROM billing_orders bo
+      JOIN payment_intents pi
+        ON pi.organization_id = bo.organization_id
+       AND pi.id = bo.successful_payment_intent_id
+       AND pi.order_id = bo.id
+       AND pi.status = 'succeeded'
+       AND pi.amount_minor = bo.amount_minor
+       AND pi.currency = bo.currency
       LEFT JOIN credit_ledger_entries cle
         ON cle.organization_id = bo.organization_id
        AND cle.source_type = 'payment_order'
@@ -1347,6 +1364,15 @@ async function listPaymentIssuesForOps(
         AND bo.status = 'paid'
         AND bo.credit_grant_ledger_entry_id IS NULL
         AND cle.id IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM payment_provider_events ppe
+          WHERE ppe.organization_id = bo.organization_id
+            AND ppe.order_id = bo.id
+            AND ppe.payment_intent_id = pi.id
+            AND ppe.event_type = 'payment_succeeded'
+            AND ppe.processing_status = 'processed'
+        )
       ORDER BY bo.paid_at DESC NULLS LAST, bo.updated_at DESC
       LIMIT 50
     `,
@@ -1388,6 +1414,43 @@ async function getBillingOrderForOps(
         AND id = $2
         AND product_type = 'credit_package'
       LIMIT 1
+    `,
+    [input.organizationId, input.orderId],
+  );
+}
+
+async function getVerifiedPaidCreditOrderForOps(
+  db: SqlDatabase,
+  input: { organizationId: string; orderId: string },
+) {
+  return queryOne<VerifiedPaidCreditOrderRow>(
+    db,
+    `
+      SELECT
+        bo.*,
+        pi.amount_minor AS intent_amount_minor,
+        pi.currency AS intent_currency,
+        ppe.id AS provider_event_id
+      FROM billing_orders bo
+      JOIN payment_intents pi
+        ON pi.organization_id = bo.organization_id
+       AND pi.id = bo.successful_payment_intent_id
+       AND pi.order_id = bo.id
+       AND pi.status = 'succeeded'
+       AND pi.amount_minor = bo.amount_minor
+       AND pi.currency = bo.currency
+      JOIN payment_provider_events ppe
+        ON ppe.organization_id = bo.organization_id
+       AND ppe.order_id = bo.id
+       AND ppe.payment_intent_id = pi.id
+       AND ppe.event_type = 'payment_succeeded'
+       AND ppe.processing_status = 'processed'
+      WHERE bo.organization_id = $1
+        AND bo.id = $2
+        AND bo.product_type = 'credit_package'
+        AND bo.status = 'paid'
+      LIMIT 1
+      FOR UPDATE OF bo
     `,
     [input.organizationId, input.orderId],
   );
