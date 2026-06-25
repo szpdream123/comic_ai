@@ -422,6 +422,7 @@ function renderOfficialTeamLibrary(context) {
         paymentIntent: context.paymentIntent ?? null,
         paymentAction: context.paymentAction ?? null,
         membershipPaymentState: context.membershipPaymentState ?? null,
+        pricingTab: context.pricingTab ?? "membership",
       })}
     </section>
   `;

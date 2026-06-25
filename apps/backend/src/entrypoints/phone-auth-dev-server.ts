@@ -212,7 +212,6 @@ type LingxiCommunityItem = {
   promptMeta?: Record<string, unknown> | null;
 };
 const devPaymentCallbackSecret = "dev-payment-secret";
-const devPaymentProviderRegistry = createDevPaymentProviderRegistry();
 const imageGenerationTaskTimeoutMs = 15 * 60 * 1000;
 const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
@@ -298,10 +297,6 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
-function createDevPaymentProviderRegistry() {
-  return createEnvPaymentProviderRegistry(process.env);
-}
-
 interface AuthHttpResponse<T> {
   status: number;
   body: T;
@@ -353,8 +348,12 @@ interface AuthenticatedUser {
   phone: string | null;
   displayName?: string | null;
   creditBalance: number;
+  displayCreditBalance: number;
   availableCredits: number;
   reservedCredits: number;
+  frozenCredits: number;
+  creditFrozenAt: string | null;
+  creditFrozenUntil: string | null;
 }
 
 interface DevTenantScope {
@@ -1493,6 +1492,26 @@ async function repairPaymentCreditForBackendAdmin(input: {
       throw new IdempotencyProcessingError(started.record);
     }
 
+    const baseOrder = await queryOne<{ id: string }>(
+      input.db,
+      `
+        SELECT id
+        FROM billing_orders
+        WHERE organization_id = $1
+          AND id = $2
+          AND product_type = 'credit_package'
+        LIMIT 1
+      `,
+      [devOrganizationId, input.orderId],
+    );
+    if (!baseOrder) {
+      await input.db.query("ROLLBACK");
+      return {
+        status: 404,
+        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
+      };
+    }
+
     const order = await queryOne<{
       id: string;
       organization_id: string;
@@ -1502,34 +1521,43 @@ async function repairPaymentCreditForBackendAdmin(input: {
       status: string;
       credit_grant_ledger_entry_id: string | null;
       successful_payment_intent_id: string | null;
+      provider_event_id: string | null;
     }>(
       input.db,
       `
         SELECT
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          credits,
-          status,
-          credit_grant_ledger_entry_id,
-          successful_payment_intent_id
-        FROM billing_orders
-        WHERE organization_id = $1
-          AND id = $2
-          AND product_type = 'credit_package'
-        FOR UPDATE
+          bo.id,
+          bo.organization_id,
+          bo.created_by_user_id,
+          bo.order_no,
+          bo.credits,
+          bo.status,
+          bo.credit_grant_ledger_entry_id,
+          bo.successful_payment_intent_id,
+          ppe.id AS provider_event_id
+        FROM billing_orders bo
+        JOIN payment_intents pi
+          ON pi.organization_id = bo.organization_id
+         AND pi.id = bo.successful_payment_intent_id
+         AND pi.order_id = bo.id
+         AND pi.status = 'succeeded'
+         AND pi.amount_minor = bo.amount_minor
+         AND pi.currency = bo.currency
+        JOIN payment_provider_events ppe
+          ON ppe.organization_id = bo.organization_id
+         AND ppe.order_id = bo.id
+         AND ppe.payment_intent_id = pi.id
+         AND ppe.event_type = 'payment_succeeded'
+         AND ppe.processing_status = 'processed'
+        WHERE bo.organization_id = $1
+          AND bo.id = $2
+          AND bo.product_type = 'credit_package'
+          AND bo.status = 'paid'
+        FOR UPDATE OF bo
       `,
       [devOrganizationId, input.orderId],
     );
-    if (!order) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 404,
-        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
-      };
-    }
-    if (order.status !== "paid" || order.credit_grant_ledger_entry_id) {
+    if (!order || order.status !== "paid" || order.credit_grant_ledger_entry_id) {
       await input.db.query("ROLLBACK");
       return {
         status: 400,
@@ -2692,16 +2720,57 @@ async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
+  const scope = personalDevTenantScope(userId);
   const row = await queryOne<{
     available_credits: number | string | null;
     reserved_credits: number | string | null;
+    frozen_credits: number | string | null;
+    credit_frozen_at: Date | string | null;
+    credit_frozen_until: Date | string | null;
   }>(
     db,
     `
       SELECT
-        COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0) AS available_credits,
         CASE
-          WHEN tp.id IS NULL THEN COALESCE(o.credit_reserved_cached, 0)
+          WHEN m.organization_id = $2
+           AND m.role = 'owner_admin'
+           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN COALESCE(o.credit_balance_cached, 0)
+          ELSE COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0)
+        END AS available_credits,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN COALESCE(o.credit_frozen_cached, 0)
+          ELSE 0
+        END AS frozen_credits,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN o.credit_frozen_at
+          ELSE NULL
+        END AS credit_frozen_at,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN o.credit_frozen_until
+          ELSE NULL
+        END AS credit_frozen_until,
+        CASE
+          WHEN tp.id IS NULL
+            OR (
+              m.organization_id = $2
+              AND m.role = 'owner_admin'
+              AND COALESCE(o.credit_frozen_cached, 0) > 0
+            ) THEN COALESCE(o.credit_reserved_cached, 0)
           ELSE COALESCE((
             SELECT SUM(r.amount_reserved)
             FROM credit_reservations r
@@ -2718,16 +2787,31 @@ async function getUserCreditBalance(
       LEFT JOIN organizations o ON o.id = m.organization_id
       LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE u.id = $1
-      ORDER BY m.created_at ASC
+      ORDER BY
+        CASE
+          WHEN m.organization_id = $2
+           AND m.role = 'owner_admin'
+           AND tp.id IS NULL
+           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN 0
+          ELSE 1
+        END,
+        CASE WHEN tp.id IS NOT NULL THEN 0 ELSE 1 END,
+        CASE WHEN m.organization_id = $2 THEN 0 ELSE 1 END,
+        m.created_at ASC
       LIMIT 1
     `,
-    [userId],
+    [userId, scope.organizationId],
   );
   const availableCredits = Number(row?.available_credits ?? 0);
+  const frozenCredits = Number(row?.frozen_credits ?? 0);
   return {
     availableCredits,
     creditBalance: availableCredits,
+    displayCreditBalance: availableCredits + frozenCredits,
     reservedCredits: Number(row?.reserved_credits ?? 0),
+    frozenCredits,
+    creditFrozenAt: row?.credit_frozen_at ? new Date(row.credit_frozen_at).toISOString() : null,
+    creditFrozenUntil: row?.credit_frozen_until ? new Date(row.credit_frozen_until).toISOString() : null,
   };
 }
 
@@ -9311,8 +9395,12 @@ async function findAuthenticatedUser(
       phone: user.phone_e164,
       displayName: user.display_name,
       creditBalance: credit.creditBalance,
+      displayCreditBalance: credit.displayCreditBalance,
       availableCredits: credit.availableCredits,
       reservedCredits: credit.reservedCredits,
+      frozenCredits: credit.frozenCredits,
+      creditFrozenAt: credit.creditFrozenAt,
+      creditFrozenUntil: credit.creditFrozenUntil,
     },
   };
 }
@@ -9594,6 +9682,7 @@ export function createPhoneAuthDevServer(
   const wechatLoginStates = new Map<string, { createdAt: number }>();
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
+  const devPaymentProviderRegistry = createEnvPaymentProviderRegistry(runtimeEnv);
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
     string,
@@ -11336,6 +11425,38 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      const adminUserRestoreFrozenCreditsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/frozen\/restore$/);
+      if (request.method === "POST" && adminUserRestoreFrozenCreditsMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          reason?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.restoreFrozenUserCredits({
+            userId: decodeURIComponent(adminUserRestoreFrozenCreditsMatch[1]),
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminUserCreditLedgerMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/ledger$/);
       if (request.method === "GET" && adminUserCreditLedgerMatch) {
         const adminRoute = await requireAdminRouteSession({
@@ -11564,6 +11685,189 @@ export function createPhoneAuthDevServer(
             validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
             actorAdminAccountId: adminRoute.session.admin_account_id,
             reason: String(body.reason ?? ""),
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminMembershipPlanMatch = pathname.match(/^\/api\/admin\/membership\/plans\/([^/]+)$/);
+      if (request.method === "DELETE" && adminMembershipPlanMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(
+          response,
+          await membershipPlans.deletePlan({
+            id: decodeURIComponent(adminMembershipPlanMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? ""),
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/credit-packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        await ensureDefaultCreditPackage(db, { now: new Date() });
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await creditPackages.listPackages({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/credit-packages") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.savePackage({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            subtitle: body.subtitle === undefined || body.subtitle === null ? null : String(body.subtitle),
+            credits: Number(body.credits ?? body.baseCredits ?? 0),
+            giftCredits: Number(body.giftCredits ?? 0),
+            amountMinor: Number(body.amountMinor ?? 0),
+            currency: String(body.currency ?? "CNY"),
+            badge: body.badge === undefined || body.badge === null ? null : String(body.badge),
+            sortOrder: body.sortOrder === undefined || body.sortOrder === null ? 100 : Number(body.sortOrder),
+            metadata: objectBody(body.metadata),
+            status: String(body.status ?? "active"),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/direct-recharge/packages") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const creditPackages = createCreditPackageService({ db });
+        const result = await creditPackages.listPackages({
+          includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+          now: new Date(),
+        });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: {
+              packages: result.data.packages.filter(
+                (item) => item.metadata?.kind === "direct_recharge",
+              ),
+            },
+          },
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/direct-recharge/packages") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const metadata = objectBody(body.metadata);
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.savePackage({
+            id: body.id === undefined || body.id === null ? null : String(body.id),
+            code: String(body.code ?? ""),
+            displayName: String(body.displayName ?? ""),
+            subtitle: body.subtitle === undefined || body.subtitle === null ? null : String(body.subtitle),
+            credits: Number(body.credits ?? body.baseCredits ?? 0),
+            giftCredits: 0,
+            amountMinor: Number(body.amountMinor ?? 0),
+            currency: String(body.currency ?? "CNY"),
+            badge: body.badge === undefined || body.badge === null ? null : String(body.badge),
+            sortOrder: body.sortOrder === undefined || body.sortOrder === null ? 100 : Number(body.sortOrder),
+            metadata: { ...metadata, kind: "direct_recharge" },
+            status: String(body.status ?? "active"),
+            validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
+            validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyOrganizationId: devOrganizationId,
+            now: new Date(),
+          }),
+        );
+      }
+
+      const adminDirectRechargePackageMatch = pathname.match(/^\/api\/admin\/direct-recharge\/packages\/([^/]+)$/);
+      if (request.method === "DELETE" && adminDirectRechargePackageMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.deletePackage({
+            id: decodeURIComponent(adminDirectRechargePackageMatch[1]),
+            metadataKind: "direct_recharge",
             idempotencyKey,
             idempotencyOrganizationId: devOrganizationId,
             now: new Date(),
@@ -12856,6 +13160,57 @@ export function createPhoneAuthDevServer(
             }),
           );
         }
+
+        if (request.method === "POST" && pathname === "/api/membership/checkout") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            membershipPlanId: string;
+            provider: PaymentProvider;
+            productMode?: string | null;
+          };
+          const commercePayment = createCommercePaymentService({
+            db,
+            workspaceId: currentWorkspaceId,
+            callbackSecret: devPaymentCallbackSecret,
+            providerRegistry: devPaymentProviderRegistry,
+            providerCallbackBaseUrl: request.headers.host
+              ? `http://${request.headers.host}`
+              : undefined,
+          });
+          const orderResult = await membershipOrders.createMembershipOrder({
+            user: { sessionToken: authenticated.sessionToken },
+            body: { membershipPlanId: String(body.membershipPlanId ?? "") },
+            idempotencyKey: `${idempotencyKey}:order`,
+            now: new Date(),
+          });
+          if (orderResult.status !== 200 || !("order" in orderResult.body)) {
+            return writeJson(response, orderResult);
+          }
+          const paymentResult = await commercePayment.createPaymentIntent({
+            user: { sessionToken: authenticated.sessionToken },
+            body: {
+              orderId: orderResult.body.order.id,
+              provider: body.provider,
+              productMode: String(body.productMode ?? "native_qr"),
+            },
+            idempotencyKey: `${idempotencyKey}:intent`,
+            now: new Date(),
+          });
+          if (paymentResult.status !== 200 || !("paymentIntent" in paymentResult.body)) {
+            return writeJson(response, paymentResult);
+          }
+          return writeJson(response, {
+            status: 200,
+            body: {
+              order: orderResult.body.order,
+              paymentIntent: paymentResult.body.paymentIntent,
+              payAction: paymentResult.body.payAction,
+            },
+          });
+        }
       }
 
       if (pathname.startsWith("/api/billing/")) {
@@ -13962,8 +14317,12 @@ export function createPhoneAuthDevServer(
               })),
               batchPromptPresetCategories,
               creditBalance: credit.creditBalance,
+              displayCreditBalance: credit.displayCreditBalance,
               availableCredits: credit.availableCredits,
               reservedCredits: credit.reservedCredits,
+              frozenCredits: credit.frozenCredits,
+              creditFrozenAt: credit.creditFrozenAt,
+              creditFrozenUntil: credit.creditFrozenUntil,
             }),
           );
         }
@@ -14657,8 +15016,12 @@ export function createPhoneAuthDevServer(
               body: {
                 ...(stateResponse.body && typeof stateResponse.body === "object" ? stateResponse.body : {}),
                 creditBalance: credit.creditBalance,
+                displayCreditBalance: credit.displayCreditBalance,
                 availableCredits: credit.availableCredits,
                 reservedCredits: credit.reservedCredits,
+                frozenCredits: credit.frozenCredits,
+                creditFrozenAt: credit.creditFrozenAt,
+                creditFrozenUntil: credit.creditFrozenUntil,
               },
             },
           );

@@ -572,6 +572,7 @@ export function renderProjectDetail(context = {}) {
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
+  const frozenCredits = resolveFrozenCreditBalance(ui, session);
 
   if (activeNavTab === "community") {
     return `
@@ -591,7 +592,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
         </section>
       </section>
@@ -752,6 +753,7 @@ function renderGlobalPricingModal(ui = {}) {
     paymentIntent: ui.lastPaymentIntent ?? null,
     paymentAction: ui.lastPaymentAction ?? null,
     membershipPaymentState: resolveMembershipPaymentState(ui),
+    pricingTab: ui.pricingModalTab ?? "membership",
   });
   if (!pricingModal) {
     return "";
@@ -843,6 +845,7 @@ function renderCreditLedgerDrawer(ui = {}) {
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
+        ${renderCreditLedgerMetric("冻结积分", summary.frozenCredits ?? summary.organizationFrozenCredits ?? 0, "frozen")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       <div class="credit-ledger-toolbar">
@@ -892,7 +895,7 @@ function renderCreditLedgerRow(row = {}) {
     <tr>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
-      <td class="${entry.availableDelta >= 0 ? "positive" : "negative"}">${escapeHtml(formatSignedCredit(entry.availableDelta))}</td>
+      <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
 }
@@ -900,16 +903,14 @@ function renderCreditLedgerRow(row = {}) {
 function normalizeCreditLedgerEntry(row = {}) {
   const type = String(row.entryType ?? "");
   const metadata = normalizeLedgerMetadata(row.metadata);
-  const labels = {
-    grant: ["充值/发放", "grant"],
-    consume: ["生成扣减", "consume"],
-    reservation: ["生成扣减", "consume"],
-    reserve: ["生成扣减", "consume"],
-    release: ["释放返还", "release"],
-  };
-  const [label, tone] = labels[type] ?? ["积分变动", "neutral"];
   const amount = Number(row.amount ?? 0);
   const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
+  const fallbackDelta = type === "consume" || type === "reservation" || type === "reserve"
+    ? -Math.abs(amount)
+    : amount;
+  const signedDelta = Number.isFinite(availableDelta) && availableDelta !== 0 ? availableDelta : fallbackDelta;
+  const creditType = normalizeCreditLedgerType(type, signedDelta);
+  const displayAmount = creditType.displayAsAbsolute ? Math.abs(signedDelta || amount) : signedDelta;
   const reason = String(row.reason ?? metadata.reason ?? "").trim();
   const model = creditLedgerModelLabel(metadata);
   const task = String(metadata.taskId ?? metadata.task_id ?? row.sourceId ?? "").trim();
@@ -926,18 +927,45 @@ function normalizeCreditLedgerEntry(row = {}) {
   const description = failure
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
-  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || label;
+  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
   return {
-    label,
-    tone,
-    amount: type === "consume" ? -Math.abs(amount) : amount,
-    availableDelta,
+    label: creditType.label,
+    tone: creditType.tone,
+    valueTone: creditType.valueTone,
+    displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
+    amount: signedDelta,
+    availableDelta: signedDelta,
     createdAt: row.createdAt,
     taskId: task || String(row.sourceId ?? "").trim(),
     title,
     detail: description,
     result,
     source,
+  };
+}
+
+function normalizeCreditLedgerType(type, signedDelta) {
+  if (type === "consume") {
+    return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
+  }
+  if (type === "reservation" || type === "reserve") {
+    return { label: "预占", tone: "reserve", valueTone: "reserve", displayAsAbsolute: false };
+  }
+  if (type === "release") {
+    return { label: "返还", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
+  if (type === "freeze") {
+    return { label: "冻结", tone: "freeze", valueTone: "frozen", displayAsAbsolute: true };
+  }
+  if (type === "restore" || type === "unfreeze") {
+    return { label: "解冻", tone: "release", valueTone: "positive", displayAsAbsolute: false };
+  }
+  const isConsume = signedDelta < 0;
+  return {
+    label: isConsume ? "消耗" : "充值",
+    tone: isConsume ? "consume" : "grant",
+    valueTone: isConsume ? "negative" : "positive",
+    displayAsAbsolute: false,
   };
 }
 
@@ -1376,10 +1404,11 @@ function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
 }
 
 function renderOverlayWorkspaceStatusToast(ui = {}) {
-  if (!ui.accountSettingsOpen) {
+  const toast = normalizeWorkspaceToast(ui.toast);
+  if (!ui.accountSettingsOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
-  return renderWorkspaceStatusToast(ui.toast, "account-settings-toast");
+  return renderWorkspaceStatusToast(toast, ui.accountSettingsOpen ? "account-settings-toast" : "");
 }
 
 function normalizeWorkspaceToast(message) {
@@ -1392,6 +1421,22 @@ function normalizeWorkspaceToast(message) {
     };
   }
   return { message: String(message ?? "").trim(), tone: "" };
+}
+
+function isPaymentResultToast(message) {
+  const toast = normalizeWorkspaceToast(message);
+  return [
+    "会员权益已开通",
+    "积分已到账",
+  ].includes(toast.message);
+}
+
+function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
+  return (
+    ui.activeNavTab === "tools" &&
+    ui.canvasProjectView === "detail" &&
+    isPaymentResultToast(message)
+  );
 }
 
 function resolveWorkspaceToastTone(message) {
@@ -1417,6 +1462,10 @@ function resolveWorkspaceToastTone(message) {
 
 function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
+    session?.user?.displayCreditBalance,
+    session?.displayCreditBalance,
+    ui.displayCreditBalance,
+    ui.creditLedgerSummary?.displayCreditBalance,
     session?.user?.availableCredits,
     session?.user?.creditBalance,
     session?.user?.credits,
@@ -1436,13 +1485,33 @@ function resolveDisplayedCreditBalance(ui, session = {}) {
   return 0;
 }
 
+function resolveFrozenCreditBalance(ui = {}, session = {}) {
+  const candidates = [
+    session?.user?.frozenCredits,
+    session?.frozenCredits,
+    ui.frozenCredits,
+    ui.creditLedgerSummary?.frozenCredits,
+    ui.creditLedgerSummary?.organizationFrozenCredits,
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+  }
+  return 0;
+}
+
 function resolveMembershipPaymentState(ui) {
   return {
     pendingMembershipPlanId: ui.pendingMembershipPlanId ?? "",
+    pendingBillingPackageId: ui.pendingBillingPackageId ?? "",
     provider: ui.pendingMembershipPaymentProvider ?? ui.lastPaymentIntent?.provider ?? "wechat_pay",
     qrCreatedAt: ui.membershipPaymentQrCreatedAt ?? null,
     qrExpiresAt: ui.membershipPaymentQrExpiresAt ?? ui.lastPaymentIntent?.expiresAt ?? null,
     polling: Boolean(ui.membershipPaymentPolling),
+    creating: Boolean(ui.membershipPaymentCreating),
+    syncing: Boolean(ui.membershipPaymentSyncing),
     pollFailureCount: Number(ui.membershipPaymentPollFailureCount ?? 0),
     agreementAccepted: ui.membershipPaymentAgreementAccepted !== false,
   };
@@ -7310,12 +7379,12 @@ function renderGlobalStatusbar(session, options = {}) {
           <span>商务合作</span>
         </button>
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
-          <span class="statusbar-action-icon">${renderStatusbarActionIcon("sparkle")}</span>
-          <span class="statusbar-action-icon trailing">${renderStatusbarActionIcon("cart")}</span>
+          <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
+          <span>购物车</span>
         </button>
         <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
-          <span class="statusbar-action-icon">${renderStatusbarActionIcon("wallet")}</span>
-          <span>钱包</span>
+          <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
+          <span>积分</span>
           <b>${escapeHtml(String(creditBalance))}</b>
           ${hasFrozenCredits ? `<em class="statusbar-credit-frozen">冻结</em>` : ""}
         </button>

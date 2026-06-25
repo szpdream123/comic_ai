@@ -14,7 +14,10 @@ interface CreditLotRow {
   reserved_amount: number;
   consumed_amount: number;
   expired_amount: number;
+  status: "active" | "frozen" | "expired";
   expires_at: Date | string | null;
+  frozen_at: Date | string | null;
+  frozen_until: Date | string | null;
   metadata_json: unknown;
   created_at: Date | string;
   updated_at: Date | string;
@@ -42,7 +45,10 @@ export interface CreditLotRecord {
   reservedAmount: number;
   consumedAmount: number;
   expiredAmount: number;
+  status: "active" | "frozen" | "expired";
   expiresAt: string | null;
+  frozenAt: string | null;
+  frozenUntil: string | null;
   metadata: Record<string, unknown>;
 }
 
@@ -141,6 +147,7 @@ export async function allocateCreditLotsForReservation(
       FROM credit_lots
       WHERE organization_id = $1
         AND available_amount > 0
+        AND status = 'active'
         AND (expires_at IS NULL OR expires_at > $2)
       ORDER BY expires_at ASC NULLS LAST, created_at ASC
       FOR UPDATE
@@ -319,6 +326,7 @@ export async function expireAvailableCreditLotsInTransaction(
       SELECT *
       FROM credit_lots
       WHERE available_amount > 0
+        AND status = 'active'
         AND expires_at IS NOT NULL
         AND expires_at <= $1
         ${organizationWhere}
@@ -405,6 +413,312 @@ export async function expireAvailableCreditLotsInTransaction(
   return { expiredAmount, expiredLotIds };
 }
 
+export async function freezeOrganizationWalletCreditsInTransaction(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    now: Date;
+  },
+) {
+  const organization = await queryOne<{
+    credit_balance_cached: number;
+    credit_reserved_cached: number;
+    credit_frozen_cached: number;
+  }>(
+    db,
+    `
+      SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
+      FROM organizations
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [input.organizationId],
+  );
+  const amount = Number(organization?.credit_balance_cached ?? 0);
+  if (!organization || amount <= 0 || Number(organization.credit_frozen_cached ?? 0) > 0) {
+    return { frozenAmount: 0 };
+  }
+
+  const frozenUntil = addYears(input.now, 1);
+  const ledger = await queryOne<{ id: string }>(
+    db,
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        reservation_id,
+        allocation_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, 'membership lapsed wallet frozen', $4::jsonb, NULL, $5)
+      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      DO NOTHING
+      RETURNING id
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      amount,
+      JSON.stringify({
+        frozenAt: input.now.toISOString(),
+        frozenUntil: frozenUntil.toISOString(),
+      }),
+      input.now,
+      randomUUID(),
+    ],
+  );
+  if (!ledger) {
+    return { frozenAmount: 0 };
+  }
+
+  await db.query(
+    `
+      UPDATE credit_lots
+      SET status = 'frozen',
+          frozen_at = $2,
+          frozen_until = $3,
+          updated_at = $2
+      WHERE organization_id = $1
+        AND status = 'active'
+        AND available_amount > 0
+    `,
+    [input.organizationId, input.now, frozenUntil],
+  );
+  await db.query(
+    `
+      UPDATE organizations
+      SET credit_balance_cached = credit_balance_cached - $2,
+          credit_frozen_cached = credit_frozen_cached + $2,
+          credit_frozen_at = $3,
+          credit_frozen_until = $4,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.organizationId, amount, input.now, frozenUntil],
+  );
+
+  return { frozenAmount: amount };
+}
+
+export async function restoreOrganizationWalletCreditsInTransaction(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    sourceType?: string;
+    sourceId?: string;
+    reason?: string;
+    metadata?: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  const organization = await queryOne<{
+    credit_frozen_cached: number;
+    credit_frozen_until: Date | string | null;
+  }>(
+    db,
+    `
+      SELECT credit_frozen_cached, credit_frozen_until
+      FROM organizations
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [input.organizationId],
+  );
+  const amount = Number(organization?.credit_frozen_cached ?? 0);
+  if (!organization || amount <= 0) {
+    return { restoredAmount: 0 };
+  }
+  const frozenUntil = organization.credit_frozen_until ? new Date(organization.credit_frozen_until) : null;
+  if (frozenUntil && frozenUntil <= input.now) {
+    return { restoredAmount: 0 };
+  }
+  const sourceType = input.sourceType ?? "membership_wallet_restore";
+  const sourceId = input.sourceId ?? randomUUID();
+  const reason = input.reason ?? "membership renewed wallet restored";
+
+  const ledger = await queryOne<{ id: string }>(
+    db,
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        reservation_id,
+        allocation_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, $6, $7, $8, $4::jsonb, NULL, $5)
+      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      DO NOTHING
+      RETURNING id
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      amount,
+      JSON.stringify({
+        restoredAt: input.now.toISOString(),
+        previousFrozenUntil: frozenUntil ? frozenUntil.toISOString() : null,
+        ...(input.metadata ?? {}),
+      }),
+      input.now,
+      sourceType,
+      sourceId,
+      reason,
+    ],
+  );
+  if (!ledger) {
+    return { restoredAmount: 0 };
+  }
+
+  await db.query(
+    `
+      UPDATE credit_lots
+      SET status = 'active',
+          frozen_at = NULL,
+          frozen_until = NULL,
+          updated_at = $2
+      WHERE organization_id = $1
+        AND status = 'frozen'
+        AND available_amount > 0
+        AND (frozen_until IS NULL OR frozen_until > $2)
+    `,
+    [input.organizationId, input.now],
+  );
+  await db.query(
+    `
+      UPDATE organizations
+      SET credit_balance_cached = credit_balance_cached + $2,
+          credit_frozen_cached = 0,
+          credit_frozen_at = NULL,
+          credit_frozen_until = NULL,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.organizationId, amount, input.now],
+  );
+
+  return { restoredAmount: amount };
+}
+
+export async function expireFrozenWalletCreditsInTransaction(
+  db: SqlDatabase,
+  input: { now: Date; limit: number },
+) {
+  const organizations = await db.query<{
+    id: string;
+    credit_frozen_cached: number;
+    credit_frozen_until: Date | string;
+  }>(
+    `
+      SELECT id, credit_frozen_cached, credit_frozen_until
+      FROM organizations
+      WHERE credit_frozen_cached > 0
+        AND credit_frozen_until IS NOT NULL
+        AND credit_frozen_until <= $1
+      ORDER BY credit_frozen_until ASC, updated_at ASC
+      LIMIT $2
+      FOR UPDATE
+    `,
+    [input.now, input.limit],
+  );
+  let expiredAmount = 0;
+
+  for (const organization of organizations.rows) {
+    const amount = Number(organization.credit_frozen_cached ?? 0);
+    if (amount <= 0) continue;
+    const ledger = await queryOne<{ id: string }>(
+      db,
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          reservation_id,
+          allocation_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, 'membership frozen credits expired', $4::jsonb, NULL, $5)
+        ON CONFLICT (organization_id, source_type, source_id, entry_type)
+        DO NOTHING
+        RETURNING id
+      `,
+      [
+        randomUUID(),
+        organization.id,
+        amount,
+        JSON.stringify({
+          frozenUntil: new Date(organization.credit_frozen_until).toISOString(),
+        }),
+        input.now,
+        randomUUID(),
+      ],
+    );
+    if (!ledger) {
+      continue;
+    }
+
+    await db.query(
+      `
+        UPDATE credit_lots
+        SET available_amount = 0,
+            expired_amount = expired_amount + available_amount,
+            status = 'expired',
+            frozen_at = NULL,
+            frozen_until = NULL,
+            updated_at = $2
+        WHERE organization_id = $1
+          AND status = 'frozen'
+          AND available_amount > 0
+          AND frozen_until <= $2
+      `,
+      [organization.id, input.now],
+    );
+    await db.query(
+      `
+        UPDATE organizations
+        SET credit_frozen_cached = 0,
+            credit_frozen_at = NULL,
+            credit_frozen_until = NULL,
+            updated_at = $2
+        WHERE id = $1
+      `,
+      [organization.id, input.now],
+    );
+    expiredAmount += amount;
+  }
+
+  return { expiredAmount };
+}
+
 function lotFromRow(row: CreditLotRow): CreditLotRecord {
   return {
     id: row.id,
@@ -417,9 +731,18 @@ function lotFromRow(row: CreditLotRow): CreditLotRecord {
     reservedAmount: row.reserved_amount,
     consumedAmount: row.consumed_amount,
     expiredAmount: row.expired_amount,
+    status: row.status,
     expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+    frozenAt: row.frozen_at ? new Date(row.frozen_at).toISOString() : null,
+    frozenUntil: row.frozen_until ? new Date(row.frozen_until).toISOString() : null,
     metadata: normalizeObject(row.metadata_json),
   };
+}
+
+function addYears(date: Date, years: number) {
+  const next = new Date(date);
+  next.setUTCFullYear(next.getUTCFullYear() + years);
+  return next;
 }
 
 function normalizeObject(value: unknown): Record<string, unknown> {

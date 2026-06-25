@@ -26,6 +26,7 @@ interface MembershipPeriodRow {
   period_end_at: Date | string;
   gift_credits: number;
   order_no: string | null;
+  order_status: string | null;
   plan_code: string | null;
 }
 
@@ -53,6 +54,9 @@ export async function consumeMembershipPeriodCreditGrant(
           throw new Error("membership_period_not_found");
         }
         assertPayloadMatchesPeriod(payload, period);
+        if (period.order_status !== "paid") {
+          throw new Error("membership_period_payment_not_confirmed");
+        }
 
         if (period.gift_credits <= 0) {
           await db.query("COMMIT");
@@ -128,6 +132,7 @@ async function findMembershipPeriodForCreditGrant(
         mp.period_end_at,
         mp.gift_credits,
         bo.order_no,
+        bo.status AS order_status,
         mplan.code AS plan_code
       FROM membership_periods mp
       LEFT JOIN billing_orders bo

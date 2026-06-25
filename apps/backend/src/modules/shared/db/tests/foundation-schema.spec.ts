@@ -202,7 +202,7 @@ describe("foundation schema", () => {
   it("models configurable credit packages and team pool transfers", async () => {
     const db = await createMigratedTestDb();
     try {
-      assert.deepEqual(await listColumnNames(db, "credit_packages"), [
+      assert.deepEqual(new Set(await listColumnNames(db, "credit_packages")), new Set([
         "id",
         "code",
         "display_name",
@@ -219,7 +219,7 @@ describe("foundation schema", () => {
         "valid_until",
         "created_at",
         "updated_at",
-      ]);
+      ]));
 
       assert.deepEqual(await listColumnNames(db, "credit_wallet_transfers"), [
         "id",
@@ -235,6 +235,20 @@ describe("foundation schema", () => {
         "metadata_json",
         "created_at",
         "updated_at",
+      ]);
+
+      assert.deepEqual((await listColumnNames(db, "organizations")).filter((column) => column.startsWith("credit_")), [
+        "credit_balance_cached",
+        "credit_reserved_cached",
+        "credit_frozen_cached",
+        "credit_frozen_at",
+        "credit_frozen_until",
+      ]);
+
+      assert.deepEqual((await listColumnNames(db, "credit_lots")).filter((column) => column.includes("frozen") || column === "status"), [
+        "status",
+        "frozen_at",
+        "frozen_until",
       ]);
 
       await db.query(`
@@ -693,18 +707,10 @@ describe("foundation schema", () => {
         "organization_membership_subscriptions",
       ]);
 
-      const orderColumns = await db.query<{ column_name: string }>(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name = 'billing_orders'
-          AND column_name IN ('product_type', 'membership_plan_id', 'product_snapshot_json')
-        ORDER BY column_name
-      `);
-      assert.deepEqual(orderColumns.rows.map((row) => row.column_name), [
-        "membership_plan_id",
-        "product_snapshot_json",
-        "product_type",
-      ]);
+      const orderColumnNames = await listColumnNames(db, "billing_orders");
+      for (const columnName of ["membership_plan_id", "product_snapshot_json", "product_type"]) {
+        assert.ok(orderColumnNames.includes(columnName), `expected billing_orders.${columnName}`);
+      }
     } finally {
       await db.close();
     }

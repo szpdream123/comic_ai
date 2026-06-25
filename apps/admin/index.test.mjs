@@ -491,7 +491,9 @@ test("admin shell includes membership plan management page", async () => {
   assert.match(html, /membership-plans/);
   assert.match(html, /loadMembershipPlans/);
   assert.match(html, /openMembershipPlanDrawer/);
+  assert.match(html, /deleteMembershipPlan/);
   assert.match(html, /\/api\/admin\/membership\/plans/);
+  assert.match(html, /method: "DELETE"/);
   assert.match(html, /permissionAttrs\("membership\.plan\.write"\)/);
 });
 
@@ -505,6 +507,82 @@ test("admin standalone shell keeps membership plan management visible", () => {
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
+});
+
+test("admin shell exposes direct credit recharge as its own pricing module", () => {
+  const finalStart = script.indexOf("const ADMIN_PAGE_LOADERS");
+  assert.notEqual(finalStart, -1, "final lazy loader block exists");
+  const finalScript = script.slice(finalStart);
+
+  for (const contract of [
+    "directRecharge: \"直充积分\"",
+    "directRechargePackages: []",
+    "directRechargeLoadError",
+    'path.includes("/direct-recharge")',
+    'directRecharge: "/admin/direct-recharge"',
+    'navButton("directRecharge"',
+    'state.page === "directRecharge"',
+    "renderDirectRechargePage",
+    "loadDirectRechargePackages",
+    "openDirectRechargePackageDrawer",
+    "deleteDirectRechargePackage",
+    "/api/admin/direct-recharge/packages",
+    "admin-ui-direct-recharge-package",
+    "metadata: { kind: \"direct_recharge\"",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(finalScript, /directRecharge:\s*\(\) => loadDirectRechargePackages\(\)/);
+  assert.doesNotMatch(finalScript, /users:\s*\(\) => loadDirectRechargePackages\(\)/);
+});
+
+test("admin membership and direct recharge pricing rows expose delete actions", () => {
+  const membershipRowStart = script.indexOf("function renderMembershipPlanRow");
+  assert.notEqual(membershipRowStart, -1, "membership row renderer exists");
+  const membershipRowBlock = script.slice(membershipRowStart, script.indexOf("function renderDirectRechargePage", membershipRowStart));
+  const directRechargeRowStart = script.indexOf("function renderDirectRechargePackageRow");
+  assert.notEqual(directRechargeRowStart, -1, "direct recharge row renderer exists");
+  const directRechargeRowBlock = script.slice(directRechargeRowStart, script.indexOf("function directRechargePackageById", directRechargeRowStart));
+
+  assert.match(membershipRowBlock, /title="删除套餐"/);
+  assert.match(membershipRowBlock, /deleteMembershipPlan/);
+  assert.match(directRechargeRowBlock, /title="删除档位"/);
+  assert.match(directRechargeRowBlock, /deleteDirectRechargePackage/);
+  assert.match(script, /function deleteMembershipPlan/);
+  assert.match(script, /function deleteDirectRechargePackage/);
+  assert.match(script, /\/api\/admin\/membership\/plans\/\$\{encodeURIComponent\(planId\)\}/);
+  assert.match(script, /\/api\/admin\/direct-recharge\/packages\/\$\{encodeURIComponent\(packageId\)\}/);
+});
+
+test("admin direct recharge drawer explains sort order and save failures clearly", () => {
+  const drawerStart = script.indexOf("function openDirectRechargePackageDrawer");
+  assert.notEqual(drawerStart, -1, "direct recharge drawer exists");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("function directRechargePackagePayloadFromForm", drawerStart));
+
+  assert.match(drawerBlock, /展示顺序（数字越小越靠前）/);
+  assert.match(drawerBlock, /directRechargePackageConflictMessage/);
+  assert.match(drawerBlock, /credit_package_code_conflict/);
+  assert.doesNotMatch(drawerBlock, /<span>排序<\/span>/);
+});
+
+test("admin api surfaces non-enveloped write errors instead of generic request failure", () => {
+  assert.match(script, /function adminApiErrorMessage/);
+  assert.match(script, /typeof error === "string"/);
+  assert.match(script, /idempotency_key_required/);
+  assert.match(script, /response\.status === 404/);
+  assert.doesNotMatch(script, /new Error\(payload\.error\?\.message \|\| "请求失败"\)/);
+});
+
+test("admin user credit page stays focused on manual credit adjustments", () => {
+  const usersPageStart = script.indexOf("function usersPage");
+  assert.notEqual(usersPageStart, -1, "users page exists");
+  const usersPageBlock = script.slice(usersPageStart, script.indexOf("function userRowsHtml", usersPageStart));
+
+  assert.match(usersPageBlock, /refreshUserCreditPage/);
+  assert.doesNotMatch(usersPageBlock, /新增直充/);
+  assert.doesNotMatch(usersPageBlock, /积分档位/);
+  assert.doesNotMatch(usersPageBlock, /openDirectRechargePackageDrawer/);
 });
 
 test("admin membership plan save uses an ASCII-safe idempotency key", () => {
@@ -665,6 +743,35 @@ test("admin user credit row locks disabled user actions except view and enable",
   assert.match(script, /guardUserAction\(user, "credit"\)/);
   assert.match(script, /guardUserAction\(user, "profile"\)/);
   assert.match(script, /guardUserAction\(user, "archive"\)/);
+});
+
+test("admin user credit page separates frozen wallet credits from task reservations", () => {
+  const rowStart = script.indexOf("function userRow(user)");
+  const actionStart = script.indexOf("function openUserActionDrawer");
+  const detailStart = script.indexOf("async function openUserDetailDrawer");
+  const summaryStart = script.indexOf("function renderCreditSummary");
+  assert.notEqual(rowStart, -1, "user row renderer exists");
+  assert.notEqual(actionStart, -1, "user action drawer exists");
+  assert.notEqual(detailStart, -1, "user detail drawer exists");
+  assert.notEqual(summaryStart, -1, "credit summary renderer exists");
+
+  const rowBlock = script.slice(rowStart, actionStart);
+  const actionBlock = script.slice(actionStart, script.indexOf("function userDrawerHead", actionStart));
+  const detailBlock = script.slice(detailStart, script.indexOf("function openUserProfileDrawer", detailStart));
+  const summaryBlock = script.slice(summaryStart, script.indexOf("function modelPayloadFromForm", summaryStart));
+
+  assert.match(rowBlock, /user\.frozenCredits/);
+  assert.doesNotMatch(rowBlock, /<td>\$\{Number\(user\.reservedCredits/);
+  assert.match(actionBlock, /Number\(user\.frozenCredits \|\| 0\)/);
+  assert.match(actionBlock, /任务预占积分/);
+  assert.match(actionBlock, /openFrozenCreditRestoreDrawer/);
+  assert.match(detailBlock, /Number\(user\?\.frozenCredits \|\| 0\)/);
+  assert.match(detailBlock, /任务预占积分/);
+  assert.match(summaryBlock, /summary\.frozenCredits/);
+  assert.match(summaryBlock, /summary\.organizationFrozenCredits/);
+  assert.match(summaryBlock, /任务预占积分/);
+  assert.match(script, /function openFrozenCreditRestoreDrawer\(userId\)/);
+  assert.match(script, /\/credits\/frozen\/restore/);
 });
 
 test("admin shell disables sensitive actions from session permissions", () => {

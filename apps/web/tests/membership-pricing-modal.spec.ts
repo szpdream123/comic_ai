@@ -93,6 +93,42 @@ test("renders provider qr code images for url-based payment codes", () => {
   assert.doesNotMatch(html, /打开支付页面/);
 });
 
+test("renders real provider code urls as scannable qr svg when no qr image is returned", () => {
+  const html = renderPricingModal({
+    open: true,
+    paymentIntent: {
+      id: "intent-code-url",
+      orderId: "order-code-url",
+      provider: "wechat_pay",
+      status: "submitted",
+      amountMinor: 1,
+      currency: "CNY",
+      merchantOrderNo: "MO-CODE-URL",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    },
+    paymentAction: {
+      kind: "qr_code",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-CODE-URL",
+      amountMinor: 1,
+      currency: "CNY",
+      url: "weixin://wxpay/bizpayurl?pr=test-native-code",
+      codeUrl: "weixin://wxpay/bizpayurl?pr=test-native-code",
+    },
+    billingOrder: {
+      id: "order-code-url",
+      status: "pending_payment",
+      productType: "membership_plan",
+    },
+  });
+
+  assert.match(html, /data-payment-real-action/);
+  assert.match(html, /data-payment-code-url/);
+  assert.match(html, /library-team-payment-qr-svg/);
+  assert.doesNotMatch(html, /打开微信支付支付页面/);
+  assert.doesNotMatch(html, /微信支付未返回真实二维码/);
+});
+
 test("renders membership payment qr in a separate modal instead of the subscription layout", () => {
   const html = renderPricingModal({
     open: true,
@@ -160,6 +196,37 @@ test("renders membership payment qr in a separate modal instead of the subscript
   assert.match(html, /《付费会员服务协议》/);
 });
 
+test("renders membership payment generating state before payment intent exists", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-pro-month",
+        code: "professional_monthly",
+        displayName: "专业版",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 29900,
+        currency: "CNY",
+        giftCredits: 3000,
+      },
+    ],
+    membershipPaymentState: {
+      pendingMembershipPlanId: "plan-pro-month",
+      provider: "alipay",
+      creating: true,
+    },
+  });
+
+  assert.match(html, /data-modal="membership-payment"/);
+  assert.match(html, /data-membership-payment-creating/);
+  assert.match(html, /正在生成支付二维码/);
+  assert.match(html, /支付宝订单创建中/);
+  assert.doesNotMatch(html, /data-payment-countdown/);
+  assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
+});
+
 test("renders local payment simulation action on localhost", () => {
   const originalWindow = globalThis.window;
   globalThis.window = { location: { host: "localhost:4310" } };
@@ -194,6 +261,46 @@ test("renders local payment simulation action on localhost", () => {
 
     assert.match(html, /simulate-membership-payment-success/);
     assert.match(html, /本地模拟支付成功/);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("renders local mock payment actions as a scannable acceptance qr", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { host: "127.0.0.1:4310" } };
+  try {
+    const html = renderPricingModal({
+      open: true,
+      paymentIntent: {
+        id: "intent-local-qr",
+        orderId: "order-local-qr",
+        provider: "alipay",
+        status: "submitted",
+        amountMinor: 1,
+        currency: "CNY",
+        merchantOrderNo: "MO-LOCAL-QR",
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      },
+      paymentAction: {
+        kind: "mock_qr",
+        provider: "alipay",
+        merchantOrderNo: "MO-LOCAL-QR",
+        amountMinor: 1,
+        currency: "CNY",
+      },
+      billingOrder: {
+        id: "order-local-qr",
+        status: "pending_payment",
+        productType: "membership_plan",
+      },
+    });
+
+    assert.match(html, /data-payment-local-qr/);
+    assert.match(html, /comic-ai-local-payment:\/\/alipay\/MO-LOCAL-QR/);
+    assert.match(html, /library-team-payment-qr-svg/);
+    assert.match(html, /本地验收二维码/);
+    assert.doesNotMatch(html, /支付宝未返回真实二维码/);
   } finally {
     globalThis.window = originalWindow;
   }
@@ -499,6 +606,123 @@ test("renders WeChat and Alipay subscription actions for membership plans", () =
   assert.doesNotMatch(html, />立即订阅<\/button>/);
 });
 
+test("renders direct recharge tab with active member package actions", () => {
+  const html = renderPricingModal({
+    open: true,
+    pricingTab: "credits",
+    membershipStatus: { status: "professional_active" },
+    packages: [
+      {
+        id: "pkg-direct-500",
+        code: "direct_500",
+        displayName: "500 积分",
+        credits: 500,
+        amountMinor: 19900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+      {
+        id: "pkg-legacy",
+        code: "legacy",
+        displayName: "Legacy",
+        credits: 10,
+        amountMinor: 100,
+        currency: "CNY",
+      },
+    ],
+  });
+
+  assert.match(html, /data-pricing-tab="credits"/);
+  assert.match(html, /积分直充/);
+  assert.match(html, /500 积分/);
+  assert.match(html, /仅增加积分，不延长会员有效期/);
+  assert.match(html, /data-action="purchase-billing-package"/);
+  assert.match(html, /data-package-id="pkg-direct-500"/);
+  assert.match(html, /微信充值/);
+  assert.match(html, /支付宝充值/);
+  assert.doesNotMatch(html, /Legacy/);
+});
+
+test("blocks direct recharge tab for non-members", () => {
+  const html = renderPricingModal({
+    open: true,
+    pricingTab: "credits",
+    membershipStatus: { status: "expired" },
+    packages: [
+      {
+        id: "pkg-direct-500",
+        code: "direct_500",
+        displayName: "500 积分",
+        credits: 500,
+        amountMinor: 19900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+    ],
+  });
+
+  assert.match(html, /data-direct-recharge-blocked/);
+  assert.match(html, /开通会员后可充值积分/);
+  assert.match(html, />开通会员<\/button>/);
+  assert.doesNotMatch(html, /先开通会员/);
+  assert.match(html, /data-action="switch-pricing-tab"/);
+  assert.match(html, /data-pricing-tab-target="membership"/);
+  assert.doesNotMatch(html, /purchase-billing-package/);
+  assert.doesNotMatch(html, /library-team-empty-icon[^>]*>C</);
+  assert.doesNotMatch(html, /library-team-subscription-mark[^>]*>C</);
+});
+
+test("renders credit recharge payment copy instead of membership entitlement copy", () => {
+  const html = renderPricingModal({
+    open: true,
+    pricingTab: "credits",
+    membershipStatus: { status: "professional_active" },
+    packages: [
+      {
+        id: "pkg-direct-500",
+        code: "direct_500",
+        displayName: "500 积分",
+        credits: 500,
+        amountMinor: 19900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+    ],
+    paymentIntent: {
+      id: "intent-credit",
+      orderId: "order-credit",
+      provider: "wechat_pay",
+      status: "succeeded",
+      amountMinor: 19900,
+      currency: "CNY",
+      merchantOrderNo: "MO-CREDIT",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    },
+    paymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-CREDIT",
+    },
+    billingOrder: {
+      id: "order-credit",
+      status: "paid",
+      productType: "credit_package",
+      creditPackageId: "pkg-direct-500",
+      credits: 500,
+    },
+    membershipPaymentState: {
+      pendingBillingPackageId: "pkg-direct-500",
+      polling: false,
+    },
+  });
+
+  assert.match(html, /积分已到账/);
+  assert.match(html, /积分支付/);
+  assert.match(html, /500 积分/);
+  assert.doesNotMatch(html, /会员权益已生效/);
+  assert.doesNotMatch(html, /权益生效/);
+});
+
 test("renders membership benefits from backend display metadata before fallback copy", () => {
   const html = renderPricingModal({
     open: true,
@@ -513,13 +737,18 @@ test("renders membership benefits from backend display metadata before fallback 
         amountMinor: 29900,
         currency: "CNY",
         giftCredits: 3000,
+        entitlements: [
+          "canvas_access",
+          "priority_generation",
+          "team_asset_library",
+          "team_member_management",
+          "full_flow_agent",
+        ],
         displayMetadata: {
           note: "后台配置的专业会员权益说明",
           features: [
-            "可使用画布功能",
             "Seedance 2.0 优先排队",
             "团队成员管理",
-            "全流程 Agent",
           ],
         },
       },
@@ -532,12 +761,13 @@ test("renders membership benefits from backend display metadata before fallback 
   assert.match(html, /后台配置的专业会员权益说明/);
   assert.match(html, /可使用画布功能/);
   assert.match(html, /Seedance 2\.0 优先排队/);
+  assert.match(html, /团队资产库/);
   assert.match(html, /团队成员管理/);
   assert.match(html, /全流程 Agent/);
   assert.doesNotMatch(html, /支持 50 人团队/);
 });
 
-test("filters known membership benefits when backend entitlements do not include them", () => {
+test("keeps membership cards aligned with backend entitlement configuration", () => {
   const html = renderPricingModal({
     open: true,
     membershipPlans: [
@@ -551,12 +781,10 @@ test("filters known membership benefits when backend entitlements do not include
         amountMinor: 9900,
         currency: "CNY",
         giftCredits: 100,
-        entitlements: ["canvas_access"],
+        entitlements: ["canvas_access", "priority_generation", "full_flow_agent"],
         displayMetadata: {
           features: [
-            "可使用画布功能",
-            "团队成员管理",
-            "自定义运营文案",
+            "Seedance 2.0 优先排队",
           ],
         },
       },
@@ -564,7 +792,8 @@ test("filters known membership benefits when backend entitlements do not include
   });
 
   assert.match(html, /可使用画布功能/);
-  assert.match(html, /自定义运营文案/);
+  assert.match(html, /Seedance 2\.0 优先排队/);
+  assert.match(html, /全流程 Agent/);
   assert.doesNotMatch(html, /团队成员管理/);
 });
 

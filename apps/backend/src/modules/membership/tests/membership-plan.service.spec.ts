@@ -180,6 +180,84 @@ test("membership plan service lists only currently purchasable active plans", as
   }
 });
 
+test("membership plan service archives a deleted plan and hides it from purchasable lists", async () => {
+  const db = await createMigratedTestDb();
+  const service = createMembershipPlanService({ db });
+  const now = new Date("2026-06-09T09:00:00.000Z");
+
+  try {
+    await seedAdminAccount(db);
+    const created = await service.savePlan(validPlanInput("delete_archive"));
+    assert.equal(created.status, 200);
+
+    const deleted = await service.deletePlan({
+      id: created.body.plan.id,
+      actorAdminAccountId: adminAccountId,
+      reason: "删除不再售卖的会员套餐",
+      idempotencyKey: "membership-plan-delete-archive",
+      idempotencyOrganizationId: organizationId,
+      now,
+    });
+    const nonArchived = await service.listPlans({ includeArchived: false, now });
+    const withArchived = await service.listPlans({ includeArchived: true, now });
+    const purchasable = await service.listPurchasablePlans({ now });
+    const revisions = await db.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM membership_plan_revisions WHERE plan_id = $1",
+      [created.body.plan.id],
+    );
+
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.plan.id, created.body.plan.id);
+    assert.equal(deleted.body.plan.status, "archived");
+    assert.equal(nonArchived.data.plans.some((plan) => plan.id === created.body.plan.id), false);
+    assert.equal(withArchived.data.plans.some((plan) => plan.id === created.body.plan.id), true);
+    assert.equal(purchasable.data.plans.some((plan) => plan.id === created.body.plan.id), false);
+    assert.deepEqual(revisions.rows, [{ count: 2 }]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("membership plan service validates delete requests without mutating plans", async () => {
+  const db = await createMigratedTestDb();
+  const service = createMembershipPlanService({ db });
+
+  try {
+    await seedAdminAccount(db);
+    const created = await service.savePlan(validPlanInput("delete_validation"));
+    assert.equal(created.status, 200);
+
+    const invalidId = await service.deletePlan({
+      id: "not-a-uuid",
+      actorAdminAccountId: adminAccountId,
+      reason: "删除会员套餐",
+      idempotencyKey: "membership-plan-delete-invalid-id",
+      idempotencyOrganizationId: organizationId,
+      now: new Date("2026-06-09T09:00:00.000Z"),
+    });
+    const missingReason = await service.deletePlan({
+      id: created.body.plan.id,
+      actorAdminAccountId: adminAccountId,
+      reason: " ",
+      idempotencyKey: "membership-plan-delete-missing-reason",
+      idempotencyOrganizationId: organizationId,
+      now: new Date("2026-06-09T09:00:00.000Z"),
+    });
+    const stillVisible = await service.listPlans({
+      includeArchived: false,
+      now: new Date("2026-06-09T09:00:00.000Z"),
+    });
+
+    assert.equal(invalidId.status, 400);
+    assert.equal(invalidId.body.error.code, "invalid_plan_id");
+    assert.equal(missingReason.status, 400);
+    assert.equal(missingReason.body.error.code, "reason_required");
+    assert.equal(stillVisible.data.plans.some((plan) => plan.id === created.body.plan.id), true);
+  } finally {
+    await db.close();
+  }
+});
+
 test("membership plan service validates save input", async () => {
   const db = await createMigratedTestDb();
   const service = createMembershipPlanService({ db });

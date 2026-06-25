@@ -9,6 +9,7 @@ export interface CreditBalanceReadModelLike {
   organizationId: string;
   creditBalanceCached: number;
   creditReservedCached: number;
+  creditFrozenCached?: number;
 }
 
 export interface RecomputedCreditBalance {
@@ -16,6 +17,7 @@ export interface RecomputedCreditBalance {
   available: number;
   reserved: number;
   consumed: number;
+  frozen?: number;
 }
 
 export function recomputeCreditBalance(

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { eventTypes } from "../../../../../packages/contracts/domain/event-types.ts";
+import { restoreOrganizationWalletCreditsInTransaction } from "../credit-billing/credit-lot.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
@@ -296,12 +297,18 @@ export async function consumePaymentSucceededMembershipActivation(
         const currentPeriodEndAt = currentSameTier?.current_period_end_at
           ? new Date(currentSameTier.current_period_end_at)
           : null;
-        const window = calculateMembershipWindow({
+        const baseWindow = calculateMembershipWindow({
           paidAt,
           currentPeriodEndAt,
           periodUnit: planSnapshot.periodUnit,
           periodCount: planSnapshot.periodCount,
         });
+        const window = keepCurrentProfessionalSubscription && activeProfessionalPeriod
+          ? {
+              periodStartAt: baseWindow.periodStartAt,
+              periodEndAt: new Date(activeProfessionalPeriod.period_end_at),
+            }
+          : baseWindow;
         const insertedPeriod = await insertMembershipPeriod(db, {
           order,
           planSnapshot,
@@ -333,6 +340,10 @@ export async function consumePaymentSucceededMembershipActivation(
           planSnapshot,
           keepCurrentProfessionalSubscription,
           activeProfessionalPeriod,
+          now: input.now,
+        });
+        await restoreOrganizationWalletCreditsInTransaction(db, {
+          organizationId: order.organization_id,
           now: input.now,
         });
 

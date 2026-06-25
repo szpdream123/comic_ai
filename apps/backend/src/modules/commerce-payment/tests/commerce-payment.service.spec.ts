@@ -300,6 +300,105 @@ describe("commerce payment service", { concurrency: false }, () => {
     }
   });
 
+  it("requires active membership before creating a direct recharge credit order", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const directPackageId = "90000000-0000-4000-8000-000000000902";
+      await db.query(
+        `
+          INSERT INTO credit_packages (
+            id,
+            code,
+            display_name,
+            subtitle,
+            credits,
+            gift_credits,
+            amount_minor,
+            currency,
+            sort_order,
+            metadata_json,
+            status
+          )
+          VALUES (
+            $1,
+            'direct_recharge_500',
+            '500 积分直充',
+            '仅增加积分，不延长会员',
+            500,
+            0,
+            19900,
+            'CNY',
+            20,
+            '{"kind":"direct_recharge"}'::jsonb,
+            'active'
+          )
+        `,
+        [directPackageId],
+      );
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const blocked = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: directPackageId },
+        idempotencyKey: "order-key-direct-recharge-blocked",
+        now: new Date("2026-05-21T08:35:00.000Z"),
+      });
+      await seedActiveMembershipSubscription(db, {
+        currentPeriodEndAt: new Date("2026-06-21T08:35:00.000Z"),
+      });
+      const allowed = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: directPackageId },
+        idempotencyKey: "order-key-direct-recharge-allowed",
+        now: new Date("2026-05-21T08:36:00.000Z"),
+      });
+
+      assert.equal(blocked.status, 409);
+      assert.equal(blocked.body.error, "membership_required_for_credit_recharge");
+      assert.equal(allowed.status, 200);
+      assert.equal(allowed.body.order.productType, "credit_package");
+      assert.equal(allowed.body.order.credits, 500);
+      assert.deepEqual(allowed.body.order.productSnapshot.metadata, {
+        kind: "direct_recharge",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps existing non-direct credit package order behavior for non-members", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId,
+      });
+
+      const response = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-ordinary-credit-non-member",
+        now: new Date("2026-05-21T08:37:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.order.creditPackageId, packageId);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("creates a PayLab payment intent through the provider adapter and replays idempotently", async () => {
     const db = await createMigratedTestDb();
 
@@ -2347,4 +2446,49 @@ async function seedCommerceFixture(
   );
 
   return session;
+}
+
+async function seedActiveMembershipSubscription(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: { currentPeriodEndAt: Date },
+) {
+  await db.query(
+    `
+      INSERT INTO organization_membership_subscriptions (
+        id,
+        organization_id,
+        status,
+        current_tier,
+        current_period_start_at,
+        current_period_end_at,
+        latest_order_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        'professional_active',
+        'professional',
+        $3,
+        $4,
+        NULL,
+        $3,
+        $3
+      )
+      ON CONFLICT (organization_id)
+      DO UPDATE SET
+        status = EXCLUDED.status,
+        current_tier = EXCLUDED.current_tier,
+        current_period_start_at = EXCLUDED.current_period_start_at,
+        current_period_end_at = EXCLUDED.current_period_end_at,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      "85000000-0000-4000-8000-000000000001",
+      organizationId,
+      new Date("2026-05-21T08:00:00.000Z"),
+      input.currentPeriodEndAt,
+    ],
+  );
 }

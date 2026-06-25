@@ -10,7 +10,6 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
-import QRCode from "qrcode";
 
 export type PaymentProvider = "paylab" | "wechat_pay" | "alipay";
 
@@ -209,11 +208,12 @@ export function createDefaultPaymentProviderRegistry(): PaymentProviderRegistry 
 export function createEnvPaymentProviderRegistry(
   env: Record<string, string | undefined> = process.env,
 ): PaymentProviderRegistry {
+  const useRealProviders = resolvePaymentProviderMode(env) === "real";
   return createStaticPaymentProviderRegistry({
-    wechat_pay: envFlag(env.WECHAT_PAY_ENABLED)
+    wechat_pay: useRealProviders && envFlag(env.WECHAT_PAY_ENABLED)
       ? createWechatPayAdapter(readWechatPayConfigFromEnv(env))
       : createLocalProviderAdapter("wechat_pay"),
-    alipay: envFlag(env.ALIPAY_ENABLED)
+    alipay: useRealProviders && envFlag(env.ALIPAY_ENABLED)
       ? createAlipayAdapter(readAlipayConfigFromEnv(env))
       : createLocalProviderAdapter("alipay"),
   });
@@ -578,12 +578,6 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
           failureCode: "wechat_code_url_missing",
         };
       }
-      const qrCodeImage = await QRCode.toDataURL(codeUrl, {
-        errorCorrectionLevel: "M",
-        margin: 1,
-        width: 320,
-      });
-
       return {
         kind: "submitted",
         providerIntentId: input.merchantOrderNo,
@@ -591,7 +585,6 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
         providerSafeMetadata: {
           providerIntentId: input.merchantOrderNo,
           codeUrl,
-          qrCodeImage,
         },
         payAction: {
           kind: "qr_code",
@@ -601,7 +594,6 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
           currency: input.currency,
           url: codeUrl,
           codeUrl,
-          qrCodeImage,
           expiresAt: input.expiresAt.toISOString(),
         },
       };
@@ -809,12 +801,6 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
           failureCode: "alipay_qr_code_missing",
         };
       }
-      const qrCodeImage = await QRCode.toDataURL(qrCode, {
-        errorCorrectionLevel: "M",
-        margin: 1,
-        width: 320,
-      });
-
       return {
         kind: "submitted",
         providerIntentId: stringField(payload, "out_trade_no") ?? input.merchantOrderNo,
@@ -823,7 +809,6 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
           providerIntentId: input.merchantOrderNo,
           method,
           qrCode,
-          qrCodeImage,
         },
         payAction: {
           kind: "qr_code",
@@ -833,7 +818,6 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
           currency: input.currency,
           url: qrCode,
           codeUrl: qrCode,
-          qrCodeImage,
           expiresAt: input.expiresAt.toISOString(),
         },
       };
@@ -952,6 +936,14 @@ function hashJson(value: unknown) {
 
 function envFlag(value: string | undefined) {
   return value?.trim().toLowerCase() === "true";
+}
+
+function resolvePaymentProviderMode(env: Record<string, string | undefined>) {
+  const explicitMode = env.PAYMENT_PROVIDER_MODE?.trim().toLowerCase();
+  if (explicitMode === "local" || explicitMode === "real") {
+    return explicitMode;
+  }
+  return env.NODE_ENV?.trim().toLowerCase() === "production" ? "real" : "local";
 }
 
 function rawBodyToString(rawBody: Buffer | string) {

@@ -8537,6 +8537,137 @@ describe("production workbench project tab", () => {
     assert.match(workbench.ui.toast, /已创建会员支付意图/);
   });
 
+  it("renders membership payment success toast above the canvas project list", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: { status: "professional_active" },
+        toast: { tone: "success", message: "会员权益已开通" },
+      }),
+    });
+
+    assert.match(html, /id="workspace-status"/);
+    assert.match(html, /会员权益已开通/);
+    assert.doesNotMatch(html, /操作成功/);
+  });
+
+  it("closes local simulated membership payment immediately after critical entitlement sync", async () => {
+    let resolveSlowTeamOverview;
+    const slowTeamOverview = new Promise((resolve) => {
+      resolveSlowTeamOverview = resolve;
+    });
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000", creditBalance: 0 } },
+      ui: buildProjectUi({
+        isLibraryPricingModalOpen: true,
+        pendingMembershipPlanId: "plan-pro-month",
+        lastBillingOrder: {
+          id: "order-membership-1",
+          productType: "membership_plan",
+          status: "pending_payment",
+        },
+        lastPaymentIntent: {
+          id: "intent-membership-1",
+          orderId: "order-membership-1",
+          status: "submitted",
+        },
+      }),
+      paymentPollClearTimeout() {},
+      api: {
+        async simulatePaymentIntentSuccess(input) {
+          calls.push(["simulatePaymentIntentSuccess", input]);
+          return { ok: true };
+        },
+        async getBillingOrder(orderId) {
+          calls.push(["getBillingOrder", orderId]);
+          return {
+            order: {
+              id: orderId,
+              productType: "membership_plan",
+              status: "paid",
+            },
+          };
+        },
+        async getPaymentIntent(paymentIntentId) {
+          calls.push(["getPaymentIntent", paymentIntentId]);
+          return {
+            paymentIntent: {
+              id: paymentIntentId,
+              orderId: "order-membership-1",
+              status: "succeeded",
+            },
+          };
+        },
+        async getMembershipStatus() {
+          calls.push("getMembershipStatus");
+          return { membership: { status: "professional_active" } };
+        },
+        async getSession() {
+          calls.push("getSession");
+          return { user: { phone: "+86 13800138000", creditBalance: 1000 } };
+        },
+        async getMembershipPlans() {
+          calls.push("getMembershipPlans");
+          return { data: { plans: [] } };
+        },
+        async getTeamOverview() {
+          calls.push("getTeamOverview");
+          return slowTeamOverview;
+        },
+        async getTeamMembers() {
+          calls.push("getTeamMembers");
+          return { members: [] };
+        },
+        async getLibraryAssets() {
+          calls.push("getLibraryAssets");
+          return { assets: [], folders: [], categories: [], entitlement: { hasTeamAssetLibrary: true } };
+        },
+        async getProjects() {
+          calls.push("getProjects");
+          return { projects: [] };
+        },
+      },
+    };
+
+    const actionPromise = handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "simulate-membership-payment-success",
+        paymentIntentId: "intent-membership-1",
+        orderId: "order-membership-1",
+      },
+    });
+    const completion = await Promise.race([
+      actionPromise.then(() => "resolved"),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    assert.equal(completion, "resolved");
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+    assert.deepEqual(workbench.ui.toast, {
+      tone: "success",
+      message: "会员权益已开通",
+      __paymentResultToast: true,
+      __paymentResultToastShown: true,
+    });
+    assert.match(workbench.root.innerHTML, /会员权益已开通/);
+    assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+
+    resolveSlowTeamOverview?.({ overview: { entitlements: { teamAssetLibrary: true } } });
+    await actionPromise;
+    await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
+    assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
+  });
+
   it("starts polling after membership payment intent creation and refreshes entitlements when paid", async () => {
     const calls = [];
     const scheduledPolls = [];
@@ -8625,8 +8756,14 @@ describe("production workbench project tab", () => {
 
     assert.ok(calls.some((call) => Array.isArray(call) && call[0] === "getPaymentIntent"));
     assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+    assert.deepEqual(workbench.ui.toast, {
+      tone: "success",
+      message: "会员权益已开通",
+      __paymentResultToast: true,
+      __paymentResultToastShown: true,
+    });
+    await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
     assert.equal(workbench.ui.libraryEntitlement.hasTeamAssetLibrary, true);
-    assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
   });
 
   it("can regenerate an expired membership payment qr code with a new order", async () => {
@@ -8757,6 +8894,7 @@ describe("production workbench project tab", () => {
         orderId: "order-membership-1",
       },
     });
+    await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
 
     assert.deepEqual(calls, [
       ["getBillingOrder", "order-membership-1"],

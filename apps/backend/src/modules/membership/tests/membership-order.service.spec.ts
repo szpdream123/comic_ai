@@ -519,6 +519,49 @@ describe("membership order service", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("freezes remaining wallet credits when expired membership status is requested before maintenance catches up", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedActiveProfessionalStatus(db, {
+        periodStartAt: "2026-06-08T07:00:00.000Z",
+        periodEndAt: "2026-06-08T07:59:59.000Z",
+      });
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_balance_cached = 21800,
+              credit_frozen_cached = 0
+          WHERE id = $1
+        `,
+        [organizationId],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-08T08:00:00.000Z"),
+      });
+      const organization = await db.query<{ credit_balance_cached: number; credit_frozen_cached: number }>(
+        "SELECT credit_balance_cached, credit_frozen_cached FROM organizations WHERE id = $1",
+        [organizationId],
+      );
+      const ledger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
+        "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE organization_id = $1 AND source_type = 'membership_wallet_freeze'",
+        [organizationId],
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "expired");
+      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(organization.rows[0]?.credit_frozen_cached, 21800);
+      assert.deepEqual(ledger.rows, [{ entry_type: "freeze", amount: 21800, available_delta: -21800 }]);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedCreator(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
