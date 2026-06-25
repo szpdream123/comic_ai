@@ -8243,6 +8243,10 @@ describe("phone auth dev server", () => {
       new URL("../../../../../scripts/run-phone-auth-dev-server.mjs", import.meta.url),
       "utf8",
     );
+    const productionLauncherScript = await readFile(
+      new URL("../../../../../scripts/run-phone-auth-production.mjs", import.meta.url),
+      "utf8",
+    );
     const packageJson = await readFile(
       new URL("../../../../../package.json", import.meta.url),
       "utf8",
@@ -8265,6 +8269,11 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
     assert.match(launcherScript, /loadDotEnvFile/);
     assert.match(launcherScript, /\.env/);
+    assert.match(productionLauncherScript, /allowProduction:\s*true/);
+    assert.match(productionLauncherScript, /allowLocalDatabaseUrl:\s*true/);
+    assert.match(productionLauncherScript, /listenHost:/);
+    assert.match(productionLauncherScript, /NODE_ENV\s*=\s*"production"/);
+    assert.match(packageJson, /"start"\s*:\s*"node scripts\/run-phone-auth-production\.mjs"/);
   });
 
   it("gates team member creation behind the paid team entitlement", async () => {

@@ -382,6 +382,9 @@ export interface PhoneAuthDevServerOptions {
   seedTeamEntitlements?: boolean;
   generationQueueJobOpsService?: GenerationQueueJobOpsService;
   textChatGateway?: TextChatGatewayLike;
+  allowProduction?: boolean;
+  allowLocalDatabaseUrl?: boolean;
+  listenHost?: string;
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -8243,9 +8246,7 @@ function applyDevCorsHeaders(
     return;
   }
 
-  const isAllowedOrigin =
-    origin === "null" ||
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+  const isAllowedOrigin = isAllowedCorsOrigin(origin);
   if (!isAllowedOrigin) {
     return;
   }
@@ -8265,10 +8266,38 @@ function isForbiddenCorsRequest(request: Parameters<typeof createServer>[0]) {
   if (typeof origin !== "string") {
     return false;
   }
+  return !isAllowedCorsOrigin(origin);
+}
+
+function isAllowedCorsOrigin(origin: string) {
   if (origin === "null") {
-    return false;
+    return true;
   }
-  return !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+    return true;
+  }
+
+  const configuredOrigins = readConfiguredCorsOrigins();
+  return configuredOrigins.has(origin.toLowerCase());
+}
+
+function readConfiguredCorsOrigins() {
+  const values = new Set<string>();
+  const rawValue = process.env.ALLOWED_ORIGINS?.trim() ?? "";
+  if (!rawValue) {
+    return values;
+  }
+
+  for (const item of rawValue.split(",")) {
+    const normalized = item.trim().replace(/\/+$/, "").toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+    values.add(normalized);
+  }
+
+  return values;
 }
 
 async function serveStatic(pathname: string, response: ServerResponse) {
@@ -9657,12 +9686,14 @@ export function createPhoneAuthDevServer(
     ...process.env,
     ...(options.env ?? {}),
   };
-  if (runtimeEnv.NODE_ENV === "production") {
+  if (runtimeEnv.NODE_ENV === "production" && options.allowProduction !== true) {
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
-  if (!options.db) {
+  if (!options.db && options.allowLocalDatabaseUrl !== true) {
     assertRemoteDevServerDatabaseUrl(runtimeEnv);
   }
+  const listenHost = options.listenHost?.trim() || "127.0.0.1";
+  const originHost = listenHost === "0.0.0.0" ? "127.0.0.1" : listenHost;
   const dbPromise = options.db
     ? Promise.resolve(options.db)
     : runtimeEnv.NODE_ENV === "test"
@@ -17278,11 +17309,11 @@ export function createPhoneAuthDevServer(
   }
 
   return {
-    origin: "http://127.0.0.1:0",
+    origin: `http://${originHost}:0`,
     async listen(port: number) {
       await new Promise<void>((resolve, reject) => {
         httpServer.once("error", reject);
-        httpServer.listen(port, "127.0.0.1", () => resolve());
+        httpServer.listen(port, listenHost, () => resolve());
       });
 
       const address = httpServer.address();
@@ -17291,7 +17322,7 @@ export function createPhoneAuthDevServer(
         throw new Error("server_address_unavailable");
       }
 
-      this.origin = `http://127.0.0.1:${address.port}`;
+      this.origin = `http://${originHost}:${address.port}`;
       startRepairScheduler();
     },
     async close() {

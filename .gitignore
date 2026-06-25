@@ -9,6 +9,7 @@ artifacts/worker-c-preview/
 .tmp-logs/
 .logs/
 .codex-logs/
+.codex-runtime/
 *.log
 .env
 .env.local
