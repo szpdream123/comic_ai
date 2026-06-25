@@ -9400,10 +9400,12 @@
         return `<div class="parameter-selected-values" data-parameter-selected-values="${escapeAttribute(parameterKey)}">${values.map((value) => `<span class="parameter-value-chip">${escapeHtml(value)}</span>`).join("")}</div>`;
       }
 
-      function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}) {
-        const defaultSupportedKeys = mediaType === "text"
-          ? ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"]
-          : ["prompt", "aspectRatio", "quality", "count", "durationSec"];
+      function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false) {
+        const defaultSupportedKeys = useDefaultSelections
+          ? (mediaType === "text"
+            ? ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"]
+            : ["prompt", "aspectRatio", "quality", "count", "durationSec"])
+          : [];
         const rows = parameterTemplates()
           .map((template) => {
             const current = schema[template.key] || {};
@@ -9542,7 +9544,7 @@
                 <button class="btn ghost" type="button" onclick="navigate('parameterTemplates')">\u7ba1\u7406\u53c2\u6570\u6a21\u677f</button>
               </div>
               <div class="table-wrap dense" id="model-parameter-template-list">
-                <table><thead><tr><th>\u53c2\u6570</th><th>\u7c7b\u578b</th><th>\u9009\u9879</th><th>\u9875\u9762\u663e\u793a\u6570\u636e</th><th>\u9ed8\u8ba4\u503c</th><th>\u5fc5\u586b</th></tr></thead><tbody>${parameterTemplateSelectionRows(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {})}</tbody></table>
+                <table><thead><tr><th>\u53c2\u6570</th><th>\u7c7b\u578b</th><th>\u9009\u9879</th><th>\u9875\u9762\u663e\u793a\u6570\u636e</th><th>\u9ed8\u8ba4\u503c</th><th>\u5fc5\u586b</th></tr></thead><tbody>${parameterTemplateSelectionRows(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit)}</tbody></table>
               </div>
             </section>
             <section class="card" style="box-shadow:none;border:1px solid var(--border);">
@@ -9561,7 +9563,7 @@
         });
         form.elements.modelKind.addEventListener("change", () => {
           const kind = modelKindOption(form.elements.modelKind.value);
-          document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {});
+          document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit);
         });
         form.addEventListener("change", (event) => {
           const name = event.target?.name || "";

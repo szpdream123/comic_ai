@@ -320,6 +320,13 @@ test("model parameter builder displays known image parameters in Chinese", () =>
   assert.match(script, /选项/);
 });
 
+test("model parameter template defaults only seed new-model selections", () => {
+  assert.match(script, /function parameterTemplateSelectionRows\(mediaType, schema = \{\}, defaultParams = \{\}, useDefaultSelections = false\)/);
+  assert.match(script, /const defaultSupportedKeys = useDefaultSelections/);
+  assert.match(script, /parameterTemplateSelectionRows\(modelKindOption\(selectedModelKind\)\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
+  assert.match(script, /parameterTemplateSelectionRows\(kind\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
+});
+
 test("admin model management uses parameter templates and a simplified model editor", () => {
   for (const contract of [
     "MODEL_PARAMETER_TEMPLATES_CONFIG_KEY",

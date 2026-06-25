@@ -89,12 +89,22 @@ test("project status filter controls do not show a success toast", async () => {
 
 test("opening a project workspace does not show a success toast", async () => {
   const workbench = createWorkbench();
+  workbench.state.project = { id: "project-old", name: "try", phase: "draft", aspectRatio: "16:9" };
+  workbench.state.projectDetail = {
+    project: { id: "project-old", projectId: "project-old", name: "try", phase: "draft", aspectRatio: "16:9" },
+    episodes: [],
+    assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+    shots: [],
+  };
+  workbench.ui.projectLibrary = [
+    { id: "project-1", name: "龙珠", status: "进行中", aspectRatio: "9:16", createdAt: "2026/06/03" },
+  ];
   const originalWindow = globalThis.window;
   globalThis.window = { location: { hash: "" } };
   workbench.api.selectProject = async ({ projectId }) => ({
     project: {
       id: projectId,
-      name: "项目 1",
+      name: "龙珠",
       phase: "asset_review",
       aspectRatio: "9:16",
       resolution: "1080p",
@@ -130,8 +140,13 @@ test("opening a project workspace does not show a success toast", async () => {
   assert.equal(workbench.ui.projectPanelMode, "workspace");
   assert.equal(workbench.ui.projectInteriorSection, "overview");
   assert.equal(workbench.ui.selectedProjectCardId, "project-1");
+  assert.equal(workbench.state.project.name, "龙珠");
+  assert.equal(workbench.state.projectDetail.project.name, "龙珠");
   assert.equal(workbench.ui.toast, "");
+  assert.doesNotMatch(workbench.root.innerHTML, /try/);
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast success/);
+  assert.doesNotMatch(workbench.root.innerHTML, /修改项目制作状态/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="toggle-project-interior-status-menu"/);
 });
 
 test("project detail hash keeps the workspace on overview", () => {

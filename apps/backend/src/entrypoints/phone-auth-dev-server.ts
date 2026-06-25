@@ -93,7 +93,7 @@ import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
 } from "../modules/project/project-upload-record.service.ts";
-import { createEpisodeForProject } from "../modules/project/episode-record.service.ts";
+import { createEpisodeForProject, listEpisodesForProject } from "../modules/project/episode-record.service.ts";
 import {
   AuthorizationError,
   type ActorContext,
@@ -2373,15 +2373,28 @@ async function buildBatchImageModelOptions(db: Parameters<typeof listActiveAiMod
   };
 }
 
-async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0]) {
+function readGenerationConfigMediaType(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["image", "video", "text"].includes(normalized) ? normalized : "";
+}
+
+async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiveAiModelConfigs>[0], options: { mediaType?: string | null } = {}) {
+  const requestedMediaType = readGenerationConfigMediaType(options.mediaType);
   const [activeImageModels, activeVideoModels, activeTextModels] = await Promise.all([
-    listActiveAiModelConfigs(db, { mediaType: "image" }),
-    listActiveAiModelConfigs(db, { mediaType: "video" }),
-    listActiveAiModelConfigs(db, { mediaType: "text" }),
+    !requestedMediaType || requestedMediaType === "image"
+      ? listActiveAiModelConfigs(db, { mediaType: "image" })
+      : Promise.resolve([]),
+    !requestedMediaType || requestedMediaType === "video"
+      ? listActiveAiModelConfigs(db, { mediaType: "video" })
+      : Promise.resolve([]),
+    !requestedMediaType || requestedMediaType === "text"
+      ? listActiveAiModelConfigs(db, { mediaType: "text" })
+      : Promise.resolve([]),
   ]);
   const imageModels = activeImageModels.length
     ? activeImageModels.map(modelConfigToGenerationConfigModel)
-    : [
+    : !requestedMediaType || requestedMediaType === "image"
+      ? [
         {
           modelCode: "nano_banana_2",
           modelLabel: "nano banana 2",
@@ -2393,10 +2406,12 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
           displayBaseCost: 90,
           disabled: false,
         },
-      ];
+      ]
+      : [];
   const videoModels = activeVideoModels.length
     ? activeVideoModels.map(modelConfigToGenerationConfigModel)
-    : [
+    : !requestedMediaType || requestedMediaType === "video"
+      ? [
         {
           modelCode: "video_mock_1",
           modelLabel: "Video Mock",
@@ -2408,7 +2423,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
           displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
           disabled: false,
         },
-      ];
+      ]
+      : [];
   const defaultVideoModel =
     videoModels.find((model) => model.videoCategory === "reference") ??
     videoModels[0] ??
@@ -2898,6 +2914,33 @@ async function resolveCanvasRunEpisodeId(
     [input.organizationId, input.projectId],
   );
   return fallback?.id ?? null;
+}
+
+async function resolveProjectAssetGenerationEpisodeId(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    projectId: string;
+    userId: string;
+    now: Date;
+  },
+) {
+  const episodes = await listEpisodesForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+  });
+  const existing = episodes[0]?.id ?? null;
+  if (existing) {
+    return existing;
+  }
+  const created = await createEpisodeForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    title: "项目资产生成",
+    createdByUserId: input.userId,
+    now: input.now,
+  });
+  return created.id;
 }
 
 async function ensureStandaloneCanvasRunProject(
@@ -3421,6 +3464,105 @@ async function mapGenerationTaskResponse(
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+function resolveGenerationTaskAssetPreviewUrl(task: Record<string, unknown>) {
+  const result = task.result && typeof task.result === "object"
+    ? task.result as Record<string, unknown>
+    : {};
+  const version = task.version && typeof task.version === "object"
+    ? task.version as Record<string, unknown>
+    : {};
+  const versionMetadata = version.metadata && typeof version.metadata === "object"
+    ? version.metadata as Record<string, unknown>
+    : {};
+  const fixedImages = Array.isArray(task.fixedImages) ? task.fixedImages : [];
+  const fixedImage = fixedImages.find((item) => item && typeof item === "object") as Record<string, unknown> | undefined;
+  const candidates = [
+    result.imageUrl,
+    result.previewUrl,
+    result.sourceUrl,
+    result.downloadUrl,
+    result.thumbnailUrl,
+    fixedImage?.previewUrl,
+    fixedImage?.url,
+    fixedImage?.src,
+    version.previewUrl,
+    versionMetadata.previewUrl,
+    versionMetadata.sourceUrl,
+  ];
+  for (const candidate of candidates) {
+    const value = readString(candidate);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+async function syncProjectAssetGenerationTaskMetadata(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    task: Record<string, unknown>;
+    organizationId: string;
+    now: Date;
+  },
+) {
+  const targetType = readString(input.task.targetType);
+  const assetId = readString(input.task.targetId);
+  if (targetType !== "asset" || !isUuid(assetId)) {
+    return;
+  }
+  const previewUrl = resolveGenerationTaskAssetPreviewUrl(input.task);
+  const status = readString(input.task.status) || readString(input.task.workflowStatus) || null;
+  const latestVersion = await queryOne<{
+    id: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT id, metadata_json
+      FROM asset_versions
+      WHERE organization_id = $1
+        AND asset_id = $2
+      ORDER BY version_number DESC
+      LIMIT 1
+    `,
+    [input.organizationId, assetId],
+  );
+  if (!latestVersion) {
+    return;
+  }
+  const metadata = {
+    ...readJsonRecord(latestVersion.metadata_json),
+    generationTaskId: readString(input.task.taskId) || null,
+    generationStatus: status,
+    generationResult: input.task,
+  };
+  if (previewUrl) {
+    metadata.previewUrl = previewUrl;
+    metadata.fixedImageUrl = previewUrl;
+    metadata.sourceUrl = previewUrl;
+    metadata.downloadUrl = previewUrl;
+  }
+  await db.query(
+    `
+      UPDATE asset_versions
+      SET metadata_json = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, latestVersion.id, metadata],
+  );
+  await db.query(
+    `
+      UPDATE assets
+      SET updated_at = $3
+      WHERE organization_id = $1
+        AND id = $2
+    `,
+    [input.organizationId, assetId, input.now],
+  );
 }
 
 async function recordCanvasHistoryFromGenerationResponse(
@@ -14170,7 +14312,9 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             enveloped(200, {
-              ...(await buildGenerationConfigModelCatalog(db)),
+              ...(await buildGenerationConfigModelCatalog(db, {
+                mediaType: url.searchParams.get("mediaType"),
+              })),
               batchPromptPresetCategories,
               creditBalance: credit.creditBalance,
               displayCreditBalance: credit.displayCreditBalance,
@@ -14218,7 +14362,7 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/generation-config")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const [context, activeImageModels, activeVideoModels, activeTextModels, batchPromptPresetCategories] = await Promise.all([
+          const [context, modelCatalog, batchPromptPresetCategories] = await Promise.all([
             getEpisodeContext(db, {
               episodeId,
               sessionToken: authenticated.sessionToken,
@@ -14226,62 +14370,20 @@ export function createPhoneAuthDevServer(
               capability: capabilities.generationStart,
               now: new Date(),
             }),
-            listActiveAiModelConfigs(db, { mediaType: "image" }),
-            listActiveAiModelConfigs(db, { mediaType: "video" }),
-            listActiveAiModelConfigs(db, { mediaType: "text" }),
+            buildGenerationConfigModelCatalog(db, {
+              mediaType: url.searchParams.get("mediaType"),
+            }),
             readBatchImagePromptPresetCategoriesFromDb(db),
           ]);
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "\u5267\u96c6\u4e0d\u5b58\u5728\u6216\u5df2\u88ab\u5220\u9664"));
           }
-          const imageModels = activeImageModels.length
-            ? activeImageModels.map(modelConfigToGenerationConfigModel)
-            : [
-                {
-                  modelCode: "nano_banana_2",
-                  modelLabel: "nano banana 2",
-                  providerGroup: "Nano banana",
-                  pipeline: "G",
-                  supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
-                  supportedRatios: ["16:9", "9:16", "1:1"],
-                  supportedQuality: ["2K"],
-                  displayBaseCost: 90,
-                  disabled: false,
-                },
-              ];
-          const videoModels = activeVideoModels.length
-            ? activeVideoModels.map(modelConfigToGenerationConfigModel)
-            : [
-              {
-                  modelCode: "video_mock_1",
-                  modelLabel: "固定视频 Mock",
-                  providerGroup: "Mock",
-                  pipeline: "mock",
-                  supportedModes: ["video"],
-                  supportedRatios: ["16:9", "9:16"],
-                  supportedQuality: ["720p"],
-                  displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
-                  disabled: false,
-                },
-              ];
-          const defaultVideoModel =
-            videoModels.find((model) => model.videoCategory === "reference") ??
-            videoModels[0] ??
-            null;
-          const textModels = activeTextModels.map(modelConfigToGenerationConfigModel);
           return writeJson(
             response,
             enveloped(200, {
-              models: [
-                ...imageModels,
-                ...videoModels,
-                ...textModels,
-              ],
-              presets: [],
+              ...modelCatalog,
               batchPromptPresetCategories,
               uploadLimits: episodeUploadLimits,
-              defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
-              defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
               creditBalance: context.creditBalance,
               displayCreditBalance: context.displayCreditBalance,
               availableCredits: context.availableCredits,
@@ -14765,6 +14867,11 @@ export function createPhoneAuthDevServer(
           await recordCanvasHistoryFromGenerationResponse(db, {
             responseBody: task,
             userId: authenticated.user.id,
+            now,
+          });
+          await syncProjectAssetGenerationTaskMetadata(db, {
+            task: task as Record<string, unknown>,
+            organizationId: taskContext.actor.organizationId,
             now,
           });
           return writeJson(response, enveloped(200, task));
@@ -15880,6 +15987,9 @@ export function createPhoneAuthDevServer(
             storageObjectId?: string | null;
             storageObjectKey?: string | null;
             mimeType?: string | null;
+            generationTaskId?: string | null;
+            generationStatus?: string | null;
+            generationResult?: Record<string, unknown> | null;
           };
           return writeJson(
             response,
@@ -16224,23 +16334,112 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/assets/generate") {
           const body = (await readJsonBody(request)) as {
             kind: "character" | "scene" | "prop" | "image" | "video";
+            projectId?: string | null;
             name?: string | null;
             prompt?: string | null;
             model?: string | null;
             width?: number | null;
             height?: number | null;
+            parameters?: Record<string, unknown> | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.generateAsset({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              body,
-              now: new Date(),
-            }),
-          );
+          const now = new Date();
+          const created = await creatorApplication.generateAsset({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            body,
+            now,
+          });
+          if (created.status >= 400) {
+            return writeJson(response, created);
+          }
+
+          const createdBody = created.body as Record<string, unknown>;
+          const asset = createdBody.asset && typeof createdBody.asset === "object"
+            ? createdBody.asset as Record<string, unknown>
+            : {};
+          const assetId = readString(asset.id);
+          const projectId = readString(asset.projectId) || readString(body.projectId);
+          if (!assetId || !projectId || body.kind === "video") {
+            return writeJson(response, created);
+          }
+
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            capability: capabilities.generationStart,
+            now,
+          });
+          const episodeId = await resolveProjectAssetGenerationEpisodeId(db, {
+            organizationId: actor.organizationId,
+            projectId,
+            userId: authenticated.user.id,
+            now,
+          });
+          const idempotencyKey =
+            requiredIdempotencyKeyFromRequest(request) ??
+            sha256(`creator-asset-generate:${assetId}:${now.toISOString()}`);
+          const taskResult = await createEpisodeGenerationTask(db, {
+            kind: "image",
+            episodeId,
+            body: {
+              ...body,
+              prompt: readString(body.prompt),
+              promptOverride: readString(body.prompt),
+              targetType: "asset",
+              targetId: assetId,
+              assetId,
+              assetType: body.kind,
+              parameters: body.parameters ?? {},
+            },
+            idempotencyKey,
+            authenticated,
+            runtime: storageRuntime,
+            env: runtimeEnv,
+            fetchImpl: options.fetchImpl,
+            signedUrlExpiresInSeconds,
+            now,
+          });
+          if (!taskResult.body) {
+            return writeJson(response, created);
+          }
+          const taskBody = taskResult.body as Record<string, unknown>;
+          const taskId = readString(taskBody.taskId);
+          const generationStatus = readString(taskBody.status) || readString(taskBody.workflowStatus) || "running";
+          await creatorApplication.updateProjectAsset({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            assetId,
+            body: {
+              description: readString(body.prompt),
+              generationTaskId: taskId,
+              generationStatus,
+              generationResult: taskBody,
+              previewUrl: resolveGenerationTaskAssetPreviewUrl(taskBody) || null,
+              sourceUrl: resolveGenerationTaskAssetPreviewUrl(taskBody) || null,
+              downloadUrl: resolveGenerationTaskAssetPreviewUrl(taskBody) || null,
+            },
+            now,
+          });
+          await syncProjectAssetGenerationTaskMetadata(db, {
+            task: taskBody,
+            organizationId: actor.organizationId,
+            now,
+          });
+          return writeJson(response, {
+            status: taskResult.status,
+            body: {
+              ...created.body,
+              ...taskBody,
+              asset,
+              generationTaskId: taskId,
+              generationStatus,
+              generationResult: taskBody,
+            },
+          });
         }
 
         if (request.method === "GET" && pathname.startsWith("/api/creator/assets/versions/")) {

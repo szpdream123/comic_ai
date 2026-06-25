@@ -381,6 +381,7 @@ function renderOfficialTeamLibrary(context) {
   const teamAssetContent = canUseTeamLocalUploads
     ? renderTeamAssetWorkspace(selectedCategory, localUploads)
     : "";
+  const pagination = paginateAssetLibrary(assets, context);
 
   return `
     <section class="library-team-page official-library-page" aria-labelledby="official-library-title">
@@ -407,8 +408,9 @@ function renderOfficialTeamLibrary(context) {
                   selectedFolder,
                   query,
                   title,
-                })
+              })
           }
+        ${assetScope === "team" ? "" : renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
       </div>
       ${detailAsset ? renderAssetDetailOverlay(detailAsset, context) : ""}
       ${renderPricingModal({
@@ -424,6 +426,23 @@ function renderOfficialTeamLibrary(context) {
       })}
     </section>
   `;
+}
+
+const ASSET_LIBRARY_PAGE_SIZE = 18;
+
+function paginateAssetLibrary(items = [], context = {}) {
+  const total = Array.isArray(items) ? items.length : 0;
+  const pageSize = ASSET_LIBRARY_PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(Math.max(1, Number(context.assetLibraryPage ?? 1) || 1), totalPages);
+  const start = (currentPage - 1) * pageSize;
+  return {
+    total,
+    pageSize,
+    totalPages,
+    currentPage,
+    pageItems: (Array.isArray(items) ? items : []).slice(start, start + pageSize),
+  };
 }
 
 function renderTeamAssetWorkspace(selectedCategory, uploads) {
@@ -573,7 +592,8 @@ function renderAssetBoard({ assets, context, folders, selectedCategory, selected
   const hasQuery = query.length > 0;
   const category = categoryLabel(selectedCategory);
   const heading = hasQuery ? `搜索“${query}”` : selectedFolder || title;
-  const resultCopy = hasQuery ? `找到 ${assets.length} 个资产` : `${assets.length} 个资产`;
+  const pagination = paginateAssetLibrary(assets, context);
+  const resultCopy = hasQuery ? `找到 ${pagination.total} 个资产` : `${pagination.total} 个资产`;
   const contextCopy = hasQuery ? "角色、场景、道具" : category;
 
   return `
@@ -605,7 +625,8 @@ function renderAssetBoard({ assets, context, folders, selectedCategory, selected
             }
           </div>
         </div>
-        ${renderAssetBrowserBody({ assets, context, selectedCategory, selectedFolder, query })}
+        ${renderAssetBrowserBody({ assets: pagination.pageItems, context, selectedCategory, selectedFolder, query })}
+        ${renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
       </section>
     </div>
   `;
@@ -645,6 +666,73 @@ function renderAssetBrowserBody({ assets, context, selectedCategory, selectedFol
         .join("")}
     </div>
   `;
+}
+
+function renderAssetLibraryPagination(totalItems, currentPage, totalPages, pageSize) {
+  if (totalItems <= 0) {
+    return "";
+  }
+  const pages = buildProjectPageItems(currentPage, totalPages);
+  return `
+    <footer class="asset-library-pagination" aria-label="素材分页">
+      <div class="asset-library-pagination-summary">
+        <span>共 ${totalItems} 个素材</span>
+        <span>${pageSize} 个/页</span>
+      </div>
+      <div class="asset-library-pagination-controls">
+        <button
+          class="asset-library-page-button"
+          type="button"
+          data-action="change-asset-library-page"
+          data-page="${currentPage - 1}"
+          ${currentPage <= 1 ? "disabled" : ""}
+          aria-label="上一页"
+        >
+          ‹
+        </button>
+        ${pages
+          .map((page) =>
+            page === "ellipsis"
+              ? '<span class="asset-library-page-ellipsis" aria-hidden="true">…</span>'
+              : `
+                <button
+                  class="asset-library-page-button ${page === currentPage ? "active" : ""}"
+                  type="button"
+                  data-action="change-asset-library-page"
+                  data-page="${page}"
+                  ${page === currentPage ? 'aria-current="page"' : ""}
+                >
+                  ${page}
+                </button>
+              `,
+          )
+          .join("")}
+        <button
+          class="asset-library-page-button"
+          type="button"
+          data-action="change-asset-library-page"
+          data-page="${currentPage + 1}"
+          ${currentPage >= totalPages ? "disabled" : ""}
+          aria-label="下一页"
+        >
+          ›
+        </button>
+      </div>
+    </footer>
+  `;
+}
+
+function buildProjectPageItems(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis", totalPages];
+  }
+  if (currentPage >= totalPages - 3) {
+    return [1, "ellipsis", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
 function renderStatusState(title, message) {

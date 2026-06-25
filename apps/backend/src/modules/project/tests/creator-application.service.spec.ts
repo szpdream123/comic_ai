@@ -427,6 +427,179 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("counts generated images and videos from persisted shot outputs", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-stats-generated-outputs-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Stats generated outputs",
+          scriptInput: "Episode 1: Real generated outputs should be counted.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-stats-generated-outputs-create",
+        now: new Date("2026-05-18T10:40:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const imageAssetId = "41000000-0000-4000-8000-000000000001";
+      const imageVersionId = "42000000-0000-4000-8000-000000000001";
+      const videoAssetId = "41000000-0000-4000-8000-000000000002";
+      const videoVersionId = "42000000-0000-4000-8000-000000000002";
+      const now = new Date("2026-05-18T10:41:00.000Z");
+
+      await db.query(
+        `
+          INSERT INTO assets (
+            id,
+            organization_id,
+            project_id,
+            asset_type,
+            asset_key,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES
+            ($1, $3, $4, 'shot_image', 'shot-image-1', $5, $6, $6),
+            ($2, $3, $4, 'shot_video', 'shot-video-1', $5, $6, $6)
+        `,
+        [imageAssetId, videoAssetId, organizationId, projectId, userId, now],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id,
+            organization_id,
+            asset_id,
+            version_number,
+            storage_object_key,
+            metadata_json,
+            created_by_user_id,
+            created_at
+          )
+          VALUES
+            ($1, $3, $4, 1, 'generated/shot-image-1.png', '{"mimeType":"image/png"}'::jsonb, $5, $6),
+            ($2, $3, $7, 1, 'generated/shot-video-1.mp4', '{"mimeType":"video/mp4"}'::jsonb, $5, $6)
+        `,
+        [imageVersionId, videoVersionId, organizationId, imageAssetId, userId, now, videoAssetId],
+      );
+      await db.query(
+        `
+          INSERT INTO shots (
+            id,
+            organization_id,
+            project_id,
+            title,
+            description,
+            sort_order,
+            content_revision,
+            content_status,
+            image_status,
+            video_status,
+            current_image_asset_version_id,
+            current_video_asset_version_id,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES
+            ('43000000-0000-4000-8000-000000000001', $1, $2, 'Shot image version', '', 1, 1, 'ready', 'draft', 'not_ready', $3, NULL, $5, $6, $6),
+            ('43000000-0000-4000-8000-000000000002', $1, $2, 'Shot image ready', '', 2, 1, 'ready', 'ready', 'not_ready', NULL, NULL, $5, $6, $6),
+            ('43000000-0000-4000-8000-000000000003', $1, $2, 'Shot video version', '', 3, 1, 'ready', 'draft', 'not_ready', NULL, $4, $5, $6, $6),
+            ('43000000-0000-4000-8000-000000000004', $1, $2, 'Shot video completed', '', 4, 1, 'ready', 'draft', 'completed', NULL, NULL, $5, $6, $6),
+            ('43000000-0000-4000-8000-000000000005', $1, $2, 'Shot failed', '', 5, 1, 'ready', 'failed', 'failed', NULL, NULL, $5, $6, $6)
+        `,
+        [organizationId, projectId, imageVersionId, videoVersionId, userId, now],
+      );
+
+      const stats = await creator.getProjectStats({
+        user,
+        projectId,
+        now: new Date("2026-05-18T10:42:00.000Z"),
+      });
+
+      assert.equal(stats.status, 200);
+      assert.equal((stats.body as any).stats.assetCount, 2);
+      assert.equal((stats.body as any).stats.shotCount, 5);
+      assert.equal((stats.body as any).stats.generatedImageCount, 2);
+      assert.equal((stats.body as any).stats.generatedVideoCount, 2);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("counts only shots with real video assets as generated video", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-video-count-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Video count project",
+          scriptInput: "Episode 1: Count only real video outputs.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-video-count-create",
+        now: new Date("2026-05-18T11:00:00.000Z"),
+      });
+      const projectId = (created.body as { project: { id: string } }).project.id;
+      const episodeId = (await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-05-18T11:01:00.000Z"),
+      })).body?.episodes?.[0]?.id;
+
+      await db.query(
+        `
+          UPDATE shots
+          SET video_status = 'ready',
+              current_video_asset_version_id = NULL
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND episode_id = $3
+        `,
+        [workspaceId, projectId, episodeId],
+      );
+
+      const stats = await creator.getProjectStats({
+        user,
+        projectId,
+        now: new Date("2026-05-18T11:02:00.000Z"),
+      });
+
+      assert.equal(stats.status, 200);
+      assert.equal((stats.body as any).stats.generatedVideoCount, 0);
+      assert.equal((stats.body as any).stats.generatedImageCount, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("commits AI storyboard preview into episode assets, storyboards, and drafts", async () => {
     const db = await createMigratedTestDb();
 

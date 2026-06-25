@@ -1306,7 +1306,14 @@ export const creatorApi = {
   },
 
   listGenerationConfig(episodeId, options = {}) {
-    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    const queryParams = new URLSearchParams();
+    if (options.fresh === true) {
+      queryParams.set("t", String(Date.now()));
+    }
+    if (options.mediaType) {
+      queryParams.set("mediaType", String(options.mediaType));
+    }
+    const query = queryParams.toString() ? `?${queryParams}` : "";
     return fetchJson(
       `/api/episodes/${encodeURIComponent(episodeId)}/generation-config${query}`,
       options.fresh === true ? { cache: "no-store" } : {},
@@ -1322,7 +1329,14 @@ export const creatorApi = {
   },
 
   listGlobalGenerationConfig(options = {}) {
-    const query = options.fresh === true ? `?t=${Date.now()}` : "";
+    const queryParams = new URLSearchParams();
+    if (options.fresh === true) {
+      queryParams.set("t", String(Date.now()));
+    }
+    if (options.mediaType) {
+      queryParams.set("mediaType", String(options.mediaType));
+    }
+    const query = queryParams.toString() ? `?${queryParams}` : "";
     return fetchJson(`/api/generation-config${query}`, options.fresh === true ? { cache: "no-store" } : {});
   },
 

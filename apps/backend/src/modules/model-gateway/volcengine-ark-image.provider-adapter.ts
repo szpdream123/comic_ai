@@ -245,7 +245,9 @@ function collectReferenceImageUrls(payload: Record<string, unknown>) {
     ...readArray(payload.referenceImages),
     ...readArray(payload.references),
     ...readArray(parameters.referenceImages),
+    ...readArray(parameters.quickReferences),
     ...readArray(parameters.references),
+    parameters.imageReference,
   ];
   const urls: string[] = [];
   const seen = new Set<string>();
