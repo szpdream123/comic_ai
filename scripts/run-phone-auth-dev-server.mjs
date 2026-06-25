@@ -51,11 +51,28 @@ const result = spawnSync(
     "--input-type=module",
     "--eval",
     `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
+      const listenWithRetry = async (server, port, attempts = 20, delayMs = 500) => {
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+          try {
+            await server.listen(port);
+            return;
+          } catch (error) {
+            lastError = error;
+            const code = error instanceof Error ? error.code : undefined;
+            if (code !== "EADDRINUSE" || attempt === attempts) {
+              throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+        }
+        throw lastError ?? new Error("listen_retry_exhausted");
+      };
       const server = createPhoneAuthDevServer({
         seedTeamEntitlements: process.env.SEED_TEAM_ENTITLEMENTS === "true",
       });
       const port = Number(process.env.PORT ?? "4310");
-      await server.listen(port);
+      await listenWithRetry(server, port);
       console.log("Phone auth dev server listening on " + server.origin);
       setInterval(() => {}, 1000);
     }).catch((error) => {
@@ -141,7 +158,6 @@ function resolveTsxRuntimeArgs(runtime) {
 
   return ["--loader", "tsx"];
 }
-
 function loadDotEnvFile(envFilePath) {
   if (!existsSync(envFilePath)) {
     return;

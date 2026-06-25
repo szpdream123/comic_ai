@@ -8254,7 +8254,8 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
     assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
     assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
-    assert.match(launcherScript, /server\.listen\(port\)/);
+    assert.match(launcherScript, /listenWithRetry\(server, port\)/);
+    assert.match(launcherScript, /EADDRINUSE/);
     assert.match(launcherScript, /process\.env\.PORT/);
     assert.match(packageJson, /--import tsx/);
     assert.match(launcherScript, /--import|--loader/);
