@@ -13810,9 +13810,9 @@
 
 .other-asset-library {
   display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr);
+  grid-template-columns: minmax(13.5rem, 15rem) minmax(0, 1fr);
   gap: 0.85rem;
-  align-items: stretch;
+  align-items: start;
   height: 100%;
   min-height: 0;
   padding: 0;
@@ -13824,6 +13824,11 @@
 
 .other-asset-library .other-imported-card {
   width: 100%;
+}
+
+.asset-library-content-grid.other-grid-mode {
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  align-content: start;
 }
 
 .other-imported-play {
@@ -13853,15 +13858,17 @@
 }
 
 .other-imported-card.audio {
-  min-height: 18.5rem;
-  padding: 0.7rem;
+  grid-template-rows: auto auto;
+  min-height: 0;
+  padding: 0.58rem;
 }
 
 .other-imported-preview.audio-preview {
   display: grid;
   align-items: end;
-  min-height: 11.6rem;
-  padding: 0.9rem;
+  min-height: 0;
+  padding: 0.75rem;
+  aspect-ratio: 1 / 1;
   background:
     linear-gradient(0deg, rgba(16, 18, 26, 0.26), rgba(16, 18, 26, 0.08)),
     linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.06) 75%, rgba(255, 255, 255, 0.06)),
@@ -13889,8 +13896,9 @@
 .project-audio-avatar {
   justify-self: center;
   align-self: center;
-  width: 7.6rem;
-  height: 8.9rem;
+  width: min(6.8rem, 58%);
+  height: auto;
+  aspect-ratio: 0.86;
   border-radius: 999px 999px 1.2rem 1.2rem;
   background:
     radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.12) 0.45rem, transparent 0.46rem),
@@ -13968,6 +13976,19 @@
 .project-audio-play-button:hover,
 .project-audio-play-button:focus-visible {
   background: rgba(27, 30, 39, 0.94);
+}
+
+.other-imported-card.audio .asset-card-meta-row {
+  align-items: flex-start;
+}
+
+.other-imported-card.audio .asset-card-copy span {
+  white-space: normal;
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: initial;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .asset-intake-hero {
@@ -14085,9 +14106,10 @@
   display: grid;
   place-items: center;
   gap: 0.8rem;
-  flex: 0 0 15rem;
-  width: 15rem;
-  min-height: 18.5rem;
+  align-self: start;
+  width: 100%;
+  min-height: 16rem;
+  aspect-ratio: 4 / 5;
   padding: 1.25rem;
   border: 0;
   border-radius: 1rem;
@@ -14101,6 +14123,20 @@
 
 .seedance-import-card span {
   font-size: 1.25rem;
+}
+
+@media (max-width: 1180px) {
+  .other-asset-library {
+    grid-template-columns: 1fr;
+  }
+
+  .seedance-import-card {
+    max-width: 15rem;
+  }
+
+  .asset-library-content-grid.other-grid-mode {
+    grid-template-columns: repeat(auto-fill, minmax(10.8rem, 1fr));
+  }
 }
 
 .seedance-library-empty {
