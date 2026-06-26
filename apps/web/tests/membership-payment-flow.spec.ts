@@ -129,6 +129,81 @@ test("creating a direct credit recharge payment requires active membership and k
   assert.equal(workbench.ui.lastPaymentIntent.provider, "alipay");
 });
 
+test("creating a direct credit recharge payment refreshes stale membership state first", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+    pricingModalTab: "credits",
+    membershipStatus: null,
+  }, {
+    async getMembershipStatus() {
+      calls.push(["getMembershipStatus"]);
+      return {
+        data: {
+          membership: {
+            status: "professional_active",
+            currentTier: "professional",
+          },
+        },
+      };
+    },
+    async createBillingOrder(input) {
+      calls.push(["createBillingOrder", input]);
+      return {
+        order: {
+          id: "order-credit-1",
+          orderNo: "CO-1",
+          productType: "credit_package",
+          creditPackageId: input.creditPackageId,
+          status: "pending_payment",
+        },
+      };
+    },
+    async createPaymentIntent(input) {
+      calls.push(["createPaymentIntent", input]);
+      return {
+        paymentIntent: {
+          id: "intent-credit-1",
+          orderId: input.orderId,
+          status: "submitted",
+          provider: input.provider,
+          amountMinor: 19900,
+          currency: "CNY",
+          merchantOrderNo: "CO-1",
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        },
+        payAction: {
+          kind: "mock_qr",
+          provider: input.provider,
+          merchantOrderNo: "CO-1",
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "purchase-billing-package",
+      packageId: "pkg-direct-500",
+      provider: "alipay",
+    },
+  });
+
+  assert.deepEqual(calls, [
+    ["getMembershipStatus"],
+    ["createBillingOrder", { creditPackageId: "pkg-direct-500" }],
+    ["createPaymentIntent", {
+      orderId: "order-credit-1",
+      provider: "alipay",
+      productMode: "native_qr",
+    }],
+  ]);
+  assert.equal(workbench.ui.membershipStatus.status, "professional_active");
+  assert.equal(workbench.ui.lastBillingOrder.productType, "credit_package");
+  assert.equal(workbench.ui.lastPaymentIntent.provider, "alipay");
+});
+
 test("creating a membership payment uses the checkout endpoint when available", async () => {
   const calls = [];
   const workbench = createWorkbench({
@@ -953,8 +1028,10 @@ test("simulating membership payment success shows syncing success state before r
   assert.equal(workbench.ui.membershipPaymentPolling, false);
   assert.equal(workbench.ui.lastBillingOrder.status, "paid");
   assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
+  assert.equal(workbench.ui.toast, "");
   assert.match(workbench.root.innerHTML, /data-payment-success-state/);
   assert.match(workbench.root.innerHTML, /正在同步会员权益/);
+  assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
 
   simulateDeferred.resolve({ simulated: true, order: { id: "order-membership-1", status: "paid" } });
   await actionPromise;
@@ -965,6 +1042,8 @@ test("simulating membership payment success shows syncing success state before r
   assert.equal(workbench.ui.pendingMembershipPlanId, "");
   assert.equal(workbench.ui.lastBillingOrder, null);
   assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
+  assert.equal((workbench.root.innerHTML.match(/会员权益已开通/g) ?? []).length, 1);
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 

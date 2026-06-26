@@ -15,7 +15,6 @@ import {
   IdempotencyConflictError,
   IdempotencyProcessingError,
 } from "../shared/idempotency/idempotency.service.ts";
-import { freezeOrganizationWalletCreditsInTransaction } from "../credit-billing/credit-lot.service.ts";
 import { createMembershipPlanService } from "./membership-plan.service.ts";
 
 interface AuthenticatedMembershipUser {
@@ -299,12 +298,6 @@ async function getMembershipStatus(input: {
       now: input.now,
     });
     const subscriptionView = membershipSubscriptionView(subscription, input.now, preferredActivePeriod);
-    if (subscriptionView.status === "expired") {
-      await freezeExpiredMembershipWalletCredits(input.db, {
-        organizationId: actor.organizationId,
-        now: input.now,
-      });
-    }
     const activeEntitlements = resolveCurrentMembershipEntitlements({
       persistedEntitlements,
       preferredActivePeriod,
@@ -349,35 +342,6 @@ async function getMembershipStatus(input: {
     };
   } catch (error) {
     return mapMembershipOrderError(error);
-  }
-}
-
-async function freezeExpiredMembershipWalletCredits(
-  db: SqlDatabase,
-  input: { organizationId: string; now: Date },
-) {
-  await db.query("BEGIN");
-  try {
-    const activeMembership = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM membership_periods
-        WHERE organization_id = $1
-          AND tier IN ('experience', 'professional')
-          AND status = 'active'
-          AND period_end_at > $2
-        LIMIT 1
-      `,
-      [input.organizationId, input.now],
-    );
-    if (!activeMembership) {
-      await freezeOrganizationWalletCreditsInTransaction(db, input);
-    }
-    await db.query("COMMIT");
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
   }
 }
 

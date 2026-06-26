@@ -97,7 +97,7 @@ describe("membership maintenance", { concurrency: false }, () => {
     }
   });
 
-  it("expires membership, entitlements, and freezes wallet credits at period end", async () => {
+  it("expires membership and entitlements without freezing wallet credits at period end", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -105,6 +105,7 @@ describe("membership maintenance", { concurrency: false }, () => {
         periodEndAt: "2026-06-08T08:00:00.000Z",
         availableCredits: 120,
       });
+      await db.query("UPDATE credit_lots SET expires_at = NULL WHERE id = $1", [lotId]);
 
       const result = await runMembershipMaintenance(db, {
         now: new Date("2026-06-08T08:00:01.000Z"),
@@ -122,12 +123,12 @@ describe("membership maintenance", { concurrency: false }, () => {
         "SELECT status FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key = 'priority_generation'",
         [organizationId],
       );
-      const lot = await db.query<{ status: string; available_amount: number; expired_amount: number }>(
-        "SELECT status, available_amount, expired_amount FROM credit_lots WHERE id = $1",
+      const lot = await db.query<{ available_amount: number; expired_amount: number }>(
+        "SELECT available_amount, expired_amount FROM credit_lots WHERE id = $1",
         [lotId],
       );
-      const organization = await db.query<{ credit_balance_cached: number; credit_frozen_cached: number }>(
-        "SELECT credit_balance_cached, credit_frozen_cached FROM organizations WHERE id = $1",
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
         [organizationId],
       );
       const freezeLedger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
@@ -140,55 +141,41 @@ describe("membership maintenance", { concurrency: false }, () => {
       assert.equal(subscription.rows[0]?.current_tier, null);
       assert.equal(period.rows[0]?.status, "expired");
       assert.equal(entitlement.rows[0]?.status, "expired");
-      assert.equal(lot.rows[0]?.status, "frozen");
       assert.equal(lot.rows[0]?.available_amount, 120);
       assert.equal(lot.rows[0]?.expired_amount, 0);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
-      assert.equal(organization.rows[0]?.credit_frozen_cached, 120);
-      assert.deepEqual(freezeLedger.rows, [{ entry_type: "freeze", amount: 120, available_delta: -120 }]);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.deepEqual(freezeLedger.rows, []);
     } finally {
       await db.close();
     }
   });
 
-  it("expires frozen wallet credits only after one year without renewal", async () => {
+  it("keeps unused membership gift credits when the membership period expires", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedFrozenWallet(db, {
-        frozenAt: "2026-06-08T08:00:01.000Z",
-        frozenUntil: "2027-06-08T08:00:01.000Z",
-        amount: 120,
+      await seedProfessionalPeriod(db, {
+        periodEndAt: "2026-06-08T08:00:00.000Z",
+        availableCredits: 120,
       });
 
-      const beforeDeadline = await runMembershipMaintenance(db, {
-        now: new Date("2027-06-08T08:00:00.000Z"),
+      const result = await runMembershipMaintenance(db, {
+        now: new Date("2026-06-08T08:00:01.000Z"),
         limit: 50,
       });
-      const afterDeadline = await runMembershipMaintenance(db, {
-        now: new Date("2027-06-08T08:00:02.000Z"),
-        limit: 50,
-      });
-      const lot = await db.query<{ status: string; available_amount: number; expired_amount: number }>(
-        "SELECT status, available_amount, expired_amount FROM credit_lots WHERE id = $1",
+      const lot = await db.query<{ available_amount: number; expired_amount: number }>(
+        "SELECT available_amount, expired_amount FROM credit_lots WHERE id = $1",
         [lotId],
       );
-      const organization = await db.query<{ credit_balance_cached: number; credit_frozen_cached: number }>(
-        "SELECT credit_balance_cached, credit_frozen_cached FROM organizations WHERE id = $1",
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
         [organizationId],
       );
-      const expireLedger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
-        "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE source_type = 'membership_frozen_credit_expiry'",
-      );
 
-      assert.equal(beforeDeadline.expiredCreditAmount, 0);
-      assert.equal(afterDeadline.expiredCreditAmount, 120);
-      assert.equal(lot.rows[0]?.status, "expired");
-      assert.equal(lot.rows[0]?.available_amount, 0);
-      assert.equal(lot.rows[0]?.expired_amount, 120);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
-      assert.equal(organization.rows[0]?.credit_frozen_cached, 0);
-      assert.deepEqual(expireLedger.rows, [{ entry_type: "expire", amount: 120, available_delta: 0 }]);
+      assert.equal(result.expiredCreditAmount, 0);
+      assert.equal(lot.rows[0]?.available_amount, 120);
+      assert.equal(lot.rows[0]?.expired_amount, 0);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
     } finally {
       await db.close();
     }
@@ -333,37 +320,6 @@ async function seedProfessionalPeriod(
       JSON.stringify({ tier: "professional", membershipPeriodId: periodId }),
       now,
     ],
-  );
-}
-
-async function seedFrozenWallet(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  input: { frozenAt: string; frozenUntil: string; amount: number },
-) {
-  await seedProfessionalPeriod(db, {
-    periodEndAt: "2026-06-08T08:00:00.000Z",
-    availableCredits: input.amount,
-  });
-  await db.query(
-    `
-      UPDATE organizations
-      SET credit_balance_cached = 0,
-          credit_frozen_cached = $2,
-          credit_frozen_at = $3,
-          credit_frozen_until = $4
-      WHERE id = $1
-    `,
-    [organizationId, input.amount, input.frozenAt, input.frozenUntil],
-  );
-  await db.query(
-    `
-      UPDATE credit_lots
-      SET status = 'frozen',
-          frozen_at = $2,
-          frozen_until = $3
-      WHERE id = $1
-    `,
-    [lotId, input.frozenAt, input.frozenUntil],
   );
 }
 

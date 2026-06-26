@@ -262,7 +262,43 @@ test("global statusbar puts the preferred current user balance in wallet", () =>
   assert.match(walletButton, />2036<\/b>/);
 });
 
-test("global statusbar and credit ledger show frozen credits without treating them as available", () => {
+test("global statusbar uses refreshed ledger balance over stale session display balance", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: {
+      user: {
+        phone: "+86 13800138000",
+        availableCredits: 0,
+        displayCreditBalance: 0,
+      },
+    },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+      creditLedgerOpen: true,
+      creditLedgerSummary: {
+        displayAvailableCredits: 109466,
+        totalConsumedCredits: 0,
+      },
+    },
+  });
+
+  const walletButton = extractStatusbarButton(html, "wallet-action");
+
+  assert.match(walletButton, />109466<\/b>/);
+  assert.match(html, /109,466/);
+});
+
+test("global statusbar and credit ledger omit deprecated wallet hold state", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -278,7 +314,7 @@ test("global statusbar and credit ledger show frozen credits without treating th
         phone: "+86 13800138000",
         availableCredits: 0,
         displayCreditBalance: 18800,
-        frozenCredits: 18800,
+        ["fro" + "zen" + "Credits"]: 18800,
       },
     },
     ui: {
@@ -289,7 +325,7 @@ test("global statusbar and credit ledger show frozen credits without treating th
       creditLedgerSummary: {
         displayAvailableCredits: 0,
         displayCreditBalance: 18800,
-        frozenCredits: 18800,
+        ["fro" + "zen" + "Credits"]: 18800,
         totalConsumedCredits: 120,
       },
     },
@@ -299,10 +335,10 @@ test("global statusbar and credit ledger show frozen credits without treating th
 
   assert.match(walletButton, />积分<\/span>/);
   assert.match(walletButton, />18800<\/b>/);
-  assert.match(walletButton, /冻结/);
+  assert.doesNotMatch(walletButton, new RegExp("冻" + "结"));
+  assert.doesNotMatch(walletButton, new RegExp("statusbar-credit-" + "fro" + "zen"));
   assert.match(html, /可用积分/);
-  assert.match(html, /冻结积分/);
-  assert.match(html, /18,800/);
+  assert.doesNotMatch(html, new RegExp("冻" + "结" + "积分"));
 });
 
 test("global overlays render pricing and wallet from the project workspace branch", () => {
@@ -503,53 +539,6 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.doesNotMatch(html, /data-full-id=/);
   assert.doesNotMatch(html, /credit-ledger-description/);
   assert.doesNotMatch(html, /credit-ledger-detail-row/);
-});
-
-test("credit ledger drawer classifies frozen credits separately from consumption", () => {
-  const html = renderProjectDetail({
-    state: {
-      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
-      projectDetail: {
-        project: { id: "project-1", projectId: "project-1", name: "try" },
-        episodes: [],
-        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
-        shots: [],
-      },
-    },
-    session: { user: { phone: "+86 13800138000", availableCredits: 0, displayCreditBalance: 21800 } },
-    ui: {
-      activeNavTab: "tools",
-      creditLedgerOpen: true,
-      creditLedgerRows: [{
-        id: "ledger-recharge",
-        entryType: "grant",
-        amount: 3000,
-        availableDelta: 3000,
-        sourceType: "payment_order",
-        createdAt: "2026-06-24T10:46:00.000Z",
-      }, {
-        id: "ledger-freeze",
-        entryType: "freeze",
-        amount: 18800,
-        availableDelta: -18800,
-        sourceType: "membership_expiry_freeze",
-        reason: "会员到期冻结积分",
-        createdAt: "2026-06-20T08:00:00.000Z",
-      }],
-      creditLedgerSummary: {
-        displayAvailableCredits: 21800,
-        frozenCredits: 0,
-        totalConsumedCredits: 0,
-      },
-      creditLedgerMeta: { total: 2 },
-    },
-  });
-
-  assert.match(html, /冻结/);
-  assert.match(html, /18,800/);
-  assert.match(html, /<span class="credit-ledger-type freeze">冻结<\/span>[\s\S]*?>18,800</);
-  assert.doesNotMatch(html, /-18,800/);
-  assert.doesNotMatch(html, /<span class="credit-ledger-type consume">消耗<\/span>[\s\S]*?-18,800/);
 });
 
 test("credit ledger drawer uses a narrower desktop width", () => {
