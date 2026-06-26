@@ -2873,7 +2873,7 @@ async function getEpisodeContext(
     actor,
     episode,
     project,
-    creditBalance: (await getUserCreditBalance(db, input.userId)).creditBalance,
+    ...(await getUserCreditBalance(db, input.userId)),
     userId: input.userId,
   };
 }
@@ -14416,6 +14416,12 @@ export function createPhoneAuthDevServer(
               batchPromptPresetCategories,
               uploadLimits: episodeUploadLimits,
               creditBalance: context.creditBalance,
+              displayCreditBalance: context.displayCreditBalance,
+              availableCredits: context.availableCredits,
+              reservedCredits: context.reservedCredits,
+              frozenCredits: context.frozenCredits,
+              creditFrozenAt: context.creditFrozenAt,
+              creditFrozenUntil: context.creditFrozenUntil,
             }),
           );
         }

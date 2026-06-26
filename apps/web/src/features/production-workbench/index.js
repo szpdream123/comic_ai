@@ -949,9 +949,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       creditLedgerRows: [],
       creditLedgerSummary: null,
       displayCreditBalance: null,
-      frozenCredits: 0,
-      creditFrozenAt: null,
-      creditFrozenUntil: null,
       creditLedgerMeta: null,
       communityPosts: initialCommunityData.posts,
       communityFeatures: initialCommunityData.features,
@@ -2501,6 +2498,7 @@ async function refresh(workbench) {
   syncCanvasRouteState(workbench, window.location.hash);
 
   void refreshSessionCreditBalance(workbench, { renderOnChange: false });
+  await refreshMembershipStatusFromApi(workbench);
 
   const visibleTab = workbench.ui.activeNavTab;
   const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";
@@ -2866,6 +2864,21 @@ async function syncMembershipStatusOnly(workbench) {
   workbench.ui.membershipStatus = normalizeMembershipStatus(payload);
 }
 
+async function refreshMembershipStatusFromApi(workbench, options = {}) {
+  if (typeof workbench.api?.getMembershipStatus !== "function") {
+    return true;
+  }
+  try {
+    await syncMembershipStatusOnly(workbench);
+    if (options.renderOnChange) {
+      render(workbench, { preserveLibraryScroll: true });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeMembershipStatus(payload) {
   const value = payload?.data ?? payload;
   if (value?.membership && typeof value.membership === "object") {
@@ -2884,6 +2897,24 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "";
   return status === "experience_active" || status === "professional_active";
+}
+
+function hasActiveMembershipAccess(workbench) {
+  return isActiveMembershipStatus(workbench.ui?.membershipStatus);
+}
+
+function hasActiveTeamAssetLibraryAccess(workbench) {
+  if (workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary !== true) {
+    return false;
+  }
+  return hasActiveMembershipAccess(workbench);
+}
+
+function normalizeLibraryAssetScope(workbench, scope = workbench.ui?.libraryTeamAssetScope ?? "official") {
+  if (scope === "team") {
+    return "team";
+  }
+  return scope === "personal" ? "personal" : "official";
 }
 
 async function ensureEpisodeBatchImageGenerationAllowed(workbench, modal) {
@@ -3123,7 +3154,9 @@ function markMembershipPaymentSyncing(workbench, { orderId = "", paymentIntentId
   workbench.ui.membershipPaymentCreating = false;
   workbench.ui.membershipPaymentSyncing = true;
   workbench.ui.membershipPaymentPolling = false;
-  workbench.ui.toast = "";
+  workbench.ui.toast = isDirectRechargePaymentContext(workbench)
+    ? { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST }
+    : "";
   render(workbench, { preserveLibraryScroll: true });
 }
 
@@ -6130,6 +6163,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!(await ensureMembershipPaymentLogin(workbench))) {
       return;
     }
+    if (!(await refreshMembershipStatusFromApi(workbench))) {
+      workbench.ui.toast = "会员状态获取失败，请稍后重试。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
     if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.toast = "请先开通会员，再充值积分。";
@@ -6160,6 +6198,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     if (!(await ensureMembershipPaymentLogin(workbench))) {
+      return;
+    }
+    if (!(await refreshMembershipStatusFromApi(workbench))) {
+      workbench.ui.toast = "会员状态获取失败，请稍后重试。";
+      render(workbench, { preserveLibraryScroll: true });
       return;
     }
     if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
@@ -6337,7 +6380,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-library-asset-scope") {
     cancelAssetLibrarySearch(workbench);
     workbench.ui.activeNavTab = "library";
-    workbench.ui.libraryTeamAssetScope = target.dataset.assetScope ?? "official";
+    const requestedScope = target.dataset.assetScope === "team" ? "team" : "official";
+    workbench.ui.libraryTeamAssetScope = requestedScope;
     if (
       (workbench.ui.libraryTeamAssetScope === "official" || !workbench.ui.libraryTeamAssetScope) &&
       !isApiBackedLibraryCategory(workbench.ui.libraryCategory)
@@ -6525,8 +6569,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-team-member-create") {
     const overview = workbench.ui.teamOverview;
-    if (overview?.entitlements?.teamMemberManagement !== true) {
+    if (!hasActiveMembershipAccess(workbench) || overview?.entitlements?.teamMemberManagement !== true) {
+      workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
       return;
     }
@@ -6746,6 +6792,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-team-dashboard") {
+    if (!hasActiveMembershipAccess(workbench) || workbench.ui.teamOverview?.entitlements?.teamDashboard !== true) {
+      workbench.ui.pricingModalTab = "membership";
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
+      render(workbench);
+      return;
+    }
     workbench.ui.activeNavTab = "team";
     workbench.ui.libraryTeamRoute = "team-dashboard";
     workbench.ui.teamDashboardTab = "member-consumption";
@@ -6932,6 +6985,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "create-canvas-project") {
+    if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+      workbench.ui.pricingModalTab = "membership";
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
+      render(workbench);
+      return;
+    }
     await runAction(workbench, "正在创建画布...", async () => {
       const project = await createCanvasProject(workbench);
       workbench.ui.canvasProjectView = "detail";
@@ -9911,6 +9971,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-team-asset-library") {
+    if (!hasActiveMembershipAccess(workbench)) {
+      workbench.ui.pricingModalTab = "membership";
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
+      render(workbench);
+      return;
+    }
     const nextAssetKind = normalizeEpisodeWorkbenchAssetKind(
       target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character",
     );
@@ -9931,7 +9998,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "switch-episode-asset-library-scope") {
-    workbench.ui.episodeAssetLibraryModal = target.dataset.libraryScope === "team" ? "team" : "official";
+    const requestedScope = target.dataset.libraryScope === "team" ? "team" : "official";
+    if (requestedScope === "team" && !hasActiveMembershipAccess(workbench)) {
+      workbench.ui.pricingModalTab = "membership";
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.episodeAssetLibraryModal = requestedScope;
     workbench.ui.episodeAssetLibraryQuery = "";
     workbench.ui.assetImportSelection = [];
     render(workbench);
@@ -13335,29 +13410,15 @@ function resolveCreditBalanceFromPayload(payload = {}) {
 function resolveDisplayCreditBalanceFromPayload(payload = {}) {
   const candidates = [
     payload?.displayCreditBalance,
+    payload?.displayAvailableCredits,
     payload?.user?.displayCreditBalance,
+    payload?.user?.displayAvailableCredits,
     payload?.session?.displayCreditBalance,
+    payload?.session?.displayAvailableCredits,
     payload?.session?.user?.displayCreditBalance,
+    payload?.session?.user?.displayAvailableCredits,
     payload?.summary?.displayCreditBalance,
-  ];
-  for (const candidate of candidates) {
-    const value = Number(candidate);
-    if (Number.isFinite(value) && value >= 0) {
-      return value;
-    }
-  }
-  return null;
-}
-
-function resolveFrozenCreditBalanceFromPayload(payload = {}) {
-  const candidates = [
-    payload?.frozenCredits,
-    payload?.organizationFrozenCredits,
-    payload?.user?.frozenCredits,
-    payload?.session?.frozenCredits,
-    payload?.session?.user?.frozenCredits,
-    payload?.summary?.frozenCredits,
-    payload?.summary?.organizationFrozenCredits,
+    payload?.summary?.displayAvailableCredits,
   ];
   for (const candidate of candidates) {
     const value = Number(candidate);
@@ -13370,34 +13431,8 @@ function resolveFrozenCreditBalanceFromPayload(payload = {}) {
 
 function syncWorkbenchDisplayCreditBalance(workbench, payload = {}) {
   const displayCreditBalance = resolveDisplayCreditBalanceFromPayload(payload);
-  const frozenCredits = resolveFrozenCreditBalanceFromPayload(payload);
-  const creditFrozenAt =
-    payload?.creditFrozenAt ??
-    payload?.organizationFrozenAt ??
-    payload?.user?.creditFrozenAt ??
-    payload?.session?.creditFrozenAt ??
-    payload?.session?.user?.creditFrozenAt ??
-    payload?.summary?.organizationFrozenAt ??
-    null;
-  const creditFrozenUntil =
-    payload?.creditFrozenUntil ??
-    payload?.organizationFrozenUntil ??
-    payload?.user?.creditFrozenUntil ??
-    payload?.session?.creditFrozenUntil ??
-    payload?.session?.user?.creditFrozenUntil ??
-    payload?.summary?.organizationFrozenUntil ??
-    null;
   if (displayCreditBalance !== null) {
     workbench.ui.displayCreditBalance = displayCreditBalance;
-  }
-  if (frozenCredits !== null) {
-    workbench.ui.frozenCredits = frozenCredits;
-  }
-  if (creditFrozenAt !== null) {
-    workbench.ui.creditFrozenAt = creditFrozenAt;
-  }
-  if (creditFrozenUntil !== null) {
-    workbench.ui.creditFrozenUntil = creditFrozenUntil;
   }
 }
 
@@ -13424,6 +13459,7 @@ function setWorkbenchCreditBalance(workbench, value, options = {}) {
   if (workbench.session?.user && typeof workbench.session.user === "object") {
     workbench.session.user.creditBalance = normalized;
     workbench.session.user.availableCredits = normalized;
+    workbench.session.user.displayCreditBalance = normalized;
   }
 }
 
@@ -20302,7 +20338,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
 }
 
 function canSyncTeamAssetLocalUploadsToCloud(workbench) {
-  return workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary === true;
+  return hasActiveTeamAssetLibraryAccess(workbench);
 }
 
 async function uploadTeamAssetLocalFile(workbench, category, file) {
@@ -30487,7 +30523,10 @@ async function refreshScriptLibraryIfAvailable(workbench) {
 }
 
 async function syncAssetLibraryFromApi(workbench, options = {}) {
-  const scope = workbench.ui.libraryTeamAssetScope ?? "official";
+  const scope = normalizeLibraryAssetScope(workbench);
+  if (scope !== (workbench.ui.libraryTeamAssetScope ?? "official")) {
+    workbench.ui.libraryTeamAssetScope = scope;
+  }
   if (
     scope === "personal" ||
     typeof workbench.api.getLibraryAssets !== "function" ||

@@ -340,7 +340,7 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
     }
   });
 
-  it("restores frozen wallet credits when a new membership payment activates", async () => {
+  it("activates membership without writing wallet restore ledger entries", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -353,108 +353,17 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         amountMinor: 9900,
         paidAt: new Date("2026-06-10T08:00:00.000Z"),
       });
-      await db.query(
-        `
-          UPDATE organizations
-          SET credit_balance_cached = 0,
-              credit_frozen_cached = 420,
-              credit_frozen_at = '2026-06-09T08:00:00.000Z',
-              credit_frozen_until = '2027-06-09T08:00:00.000Z'
-          WHERE id = $1
-        `,
-        [organizationId],
-      );
-      await db.query(
-        `
-          INSERT INTO credit_ledger_entries (
-            id,
-            organization_id,
-            entry_type,
-            amount,
-            available_delta,
-            reserved_delta,
-            consumed_delta,
-            source_type,
-            source_id,
-            reason,
-            metadata_json
-          )
-          VALUES (
-            '93000000-0000-4000-8000-000000030211',
-            $1,
-            'grant',
-            420,
-            420,
-            0,
-            0,
-            'payment_order',
-            '94000000-0000-4000-8000-000000030211',
-            'seed frozen direct recharge',
-            '{}'::jsonb
-          )
-        `,
-        [organizationId],
-      );
-      await db.query(
-        `
-          INSERT INTO credit_lots (
-            id,
-            organization_id,
-            source_type,
-            source_id,
-            grant_ledger_entry_id,
-            total_amount,
-            available_amount,
-            reserved_amount,
-            consumed_amount,
-            expired_amount,
-            status,
-            frozen_at,
-            frozen_until,
-            metadata_json
-          )
-          VALUES (
-            '94000000-0000-4000-8000-000000030211',
-            $1,
-            'payment_order',
-            '94000000-0000-4000-8000-000000030211',
-            '93000000-0000-4000-8000-000000030211',
-            420,
-            420,
-            0,
-            0,
-            0,
-            'frozen',
-            '2026-06-09T08:00:00.000Z',
-            '2027-06-09T08:00:00.000Z',
-            '{"kind":"direct_recharge"}'::jsonb
-          )
-        `,
-        [organizationId],
-      );
 
       await consumePaymentSucceededMembershipActivation(db, {
         event: experience.event,
         now: new Date("2026-06-10T08:05:00.000Z"),
       });
 
-      const organization = await db.query<{ credit_balance_cached: number; credit_frozen_cached: number }>(
-        "SELECT credit_balance_cached, credit_frozen_cached FROM organizations WHERE id = $1",
-        [organizationId],
-      );
-      const lot = await db.query<{ status: string; frozen_at: Date | string | null; frozen_until: Date | string | null }>(
-        "SELECT status, frozen_at, frozen_until FROM credit_lots WHERE id = '94000000-0000-4000-8000-000000030211'",
-      );
       const restoreLedger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
         "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE source_type = 'membership_wallet_restore'",
       );
 
-      assert.equal(organization.rows[0]?.credit_balance_cached, 420);
-      assert.equal(organization.rows[0]?.credit_frozen_cached, 0);
-      assert.equal(lot.rows[0]?.status, "active");
-      assert.equal(lot.rows[0]?.frozen_at, null);
-      assert.equal(lot.rows[0]?.frozen_until, null);
-      assert.deepEqual(restoreLedger.rows, [{ entry_type: "restore", amount: 420, available_delta: 420 }]);
+      assert.deepEqual(restoreLedger.rows, []);
     } finally {
       await db.close();
     }

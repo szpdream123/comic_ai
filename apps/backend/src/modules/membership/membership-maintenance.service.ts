@@ -1,8 +1,3 @@
-import {
-  expireAvailableCreditLotsInTransaction,
-  expireFrozenWalletCreditsInTransaction,
-  freezeOrganizationWalletCreditsInTransaction,
-} from "../credit-billing/credit-lot.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 
 const reminderWindows = [
@@ -34,60 +29,16 @@ export async function runMembershipMaintenance(
     const expiredMembershipCount = await expireMembershipPeriods(db, input);
     await expireEndedMembershipSubscriptions(db, input);
     await expireMembershipEntitlements(db, input);
-    await freezeLapsedMembershipWallets(db, input);
-    const expiredLots = await expireAvailableCreditLotsInTransaction(db, {
-      now: input.now,
-      limit: input.limit,
-    });
-    const expiredFrozen = await expireFrozenWalletCreditsInTransaction(db, {
-      now: input.now,
-      limit: input.limit,
-    });
-
     await db.query("COMMIT");
     return {
       createdReminderCount,
       deliveredReminderCount,
       expiredMembershipCount,
-      expiredCreditAmount: expiredLots.expiredAmount + expiredFrozen.expiredAmount,
+      expiredCreditAmount: 0,
     };
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
-  }
-}
-
-async function freezeLapsedMembershipWallets(
-  db: SqlDatabase,
-  input: { now: Date; limit: number },
-) {
-  const organizations = await db.query<{ organization_id: string }>(
-    `
-      SELECT subscription.organization_id
-      FROM organization_membership_subscriptions subscription
-      JOIN organizations organization
-        ON organization.id = subscription.organization_id
-      WHERE subscription.status = 'expired'
-        AND organization.credit_balance_cached > 0
-        AND organization.credit_frozen_cached = 0
-        AND NOT EXISTS (
-          SELECT 1
-          FROM membership_periods period
-          WHERE period.organization_id = subscription.organization_id
-            AND period.status = 'active'
-            AND period.period_end_at > $1
-        )
-      ORDER BY subscription.updated_at ASC
-      LIMIT $2
-    `,
-    [input.now, input.limit],
-  );
-
-  for (const organization of organizations.rows) {
-    await freezeOrganizationWalletCreditsInTransaction(db, {
-      organizationId: organization.organization_id,
-      now: input.now,
-    });
   }
 }
 

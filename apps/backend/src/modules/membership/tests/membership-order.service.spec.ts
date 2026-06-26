@@ -520,7 +520,7 @@ describe("membership order service", { concurrency: false }, () => {
     }
   });
 
-  it("freezes remaining wallet credits when expired membership status is requested before maintenance catches up", async () => {
+  it("leaves wallet credits available when expired membership status is requested before maintenance catches up", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -532,8 +532,7 @@ describe("membership order service", { concurrency: false }, () => {
       await db.query(
         `
           UPDATE organizations
-          SET credit_balance_cached = 21800,
-              credit_frozen_cached = 0
+          SET credit_balance_cached = 21800
           WHERE id = $1
         `,
         [organizationId],
@@ -544,8 +543,8 @@ describe("membership order service", { concurrency: false }, () => {
         user: { sessionToken: session.token },
         now: new Date("2026-06-08T08:00:00.000Z"),
       });
-      const organization = await db.query<{ credit_balance_cached: number; credit_frozen_cached: number }>(
-        "SELECT credit_balance_cached, credit_frozen_cached FROM organizations WHERE id = $1",
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
         [organizationId],
       );
       const ledger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
@@ -555,9 +554,8 @@ describe("membership order service", { concurrency: false }, () => {
 
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "expired");
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
-      assert.equal(organization.rows[0]?.credit_frozen_cached, 21800);
-      assert.deepEqual(ledger.rows, [{ entry_type: "freeze", amount: 21800, available_delta: -21800 }]);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 21800);
+      assert.deepEqual(ledger.rows, []);
     } finally {
       await db.close();
     }

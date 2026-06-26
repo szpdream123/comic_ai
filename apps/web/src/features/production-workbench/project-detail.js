@@ -572,7 +572,6 @@ export function renderProjectDetail(context = {}) {
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
-  const frozenCredits = resolveFrozenCreditBalance(ui, session);
 
   if (activeNavTab === "community") {
     return `
@@ -592,7 +591,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
         </section>
       </section>
@@ -671,7 +670,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, frozenCredits, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -845,7 +844,6 @@ function renderCreditLedgerDrawer(ui = {}) {
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
-        ${renderCreditLedgerMetric("冻结积分", summary.frozenCredits ?? summary.organizationFrozenCredits ?? 0, "frozen")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       <div class="credit-ledger-toolbar">
@@ -953,12 +951,6 @@ function normalizeCreditLedgerType(type, signedDelta) {
   }
   if (type === "release") {
     return { label: "返还", tone: "release", valueTone: "positive", displayAsAbsolute: false };
-  }
-  if (type === "freeze") {
-    return { label: "冻结", tone: "freeze", valueTone: "frozen", displayAsAbsolute: true };
-  }
-  if (type === "restore" || type === "unfreeze") {
-    return { label: "解冻", tone: "release", valueTone: "positive", displayAsAbsolute: false };
   }
   const isConsume = signedDelta < 0;
   return {
@@ -1434,7 +1426,6 @@ function isPaymentResultToast(message) {
 function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
   return (
     ui.activeNavTab === "tools" &&
-    ui.canvasProjectView === "detail" &&
     isPaymentResultToast(message)
   );
 }
@@ -1462,15 +1453,16 @@ function resolveWorkspaceToastTone(message) {
 
 function resolveDisplayedCreditBalance(ui, session = {}) {
   const candidates = [
-    session?.user?.displayCreditBalance,
-    session?.displayCreditBalance,
-    ui.displayCreditBalance,
     ui.creditLedgerSummary?.displayCreditBalance,
+    ui.creditLedgerSummary?.displayAvailableCredits,
     session?.user?.availableCredits,
     session?.user?.creditBalance,
     session?.user?.credits,
     session?.availableCredits,
     session?.creditBalance,
+    ui.displayCreditBalance,
+    session?.user?.displayCreditBalance,
+    session?.displayCreditBalance,
     ui.creditBalance,
     ui.episodeGenerationConfig?.creditBalance,
     ui.episodeWorkbenchContext?.creditBalance,
@@ -1479,23 +1471,6 @@ function resolveDisplayedCreditBalance(ui, session = {}) {
   for (const candidate of candidates) {
     const numeric = Number(candidate);
     if (Number.isFinite(numeric) && numeric >= 0) {
-      return numeric;
-    }
-  }
-  return 0;
-}
-
-function resolveFrozenCreditBalance(ui = {}, session = {}) {
-  const candidates = [
-    session?.user?.frozenCredits,
-    session?.frozenCredits,
-    ui.frozenCredits,
-    ui.creditLedgerSummary?.frozenCredits,
-    ui.creditLedgerSummary?.organizationFrozenCredits,
-  ];
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric) && numeric > 0) {
       return numeric;
     }
   }
@@ -1661,6 +1636,8 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
         assetImportDrafts: ui.assetImportDrafts ?? [],
         assetImportSelection: ui.assetImportSelection ?? [],
+        membershipStatus: ui.membershipStatus ?? null,
+        teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
         assetImportPage: ui.assetImportPage ?? 1,
         assetImportPageSize: ui.assetImportPageSize ?? 10,
         assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -3977,7 +3954,7 @@ function renderAudioAssetImportModal(ui) {
               ${
                 exampleImageUploading
                   ? `<i aria-hidden="true">↑</i><strong>上传中...</strong>`
-                  : 
+                  :
                 exampleImageUrl
                   ? `<img src="${escapeAttr(resolveApiUrl(exampleImageUrl))}" alt="配音员示例图" loading="lazy" />`
                   : `<i aria-hidden="true">↑</i><strong>上传图片</strong>`
@@ -5828,6 +5805,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         assetImportCategory: ui.assetImportCategory ?? "domestic-modern-city",
       assetImportDrafts: ui.assetImportDrafts ?? [],
       assetImportSelection: ui.assetImportSelection ?? [],
+      membershipStatus: ui.membershipStatus ?? null,
+      teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
       assetImportPage: ui.assetImportPage ?? 1,
       assetImportPageSize: ui.assetImportPageSize ?? 10,
       assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -6017,6 +5996,7 @@ function renderToolsPanel(ui = {}, state = {}) {
 
 function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
+  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -6036,12 +6016,22 @@ function renderCanvasProjectGallery(ui = {}) {
         ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
       <div class="canvas-project-aurora" aria-hidden="true"></div>
-      <button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
+      <button class="canvas-create-project-button" type="button" data-action="${canCreateCanvasProject ? "create-canvas-project" : "open-pricing"}">
         <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
-        创建画布
+        ${canCreateCanvasProject ? "创建画布" : "开通会员后创建画布"}
       </button>
     </section>
   `;
+}
+
+function isActiveMembershipStatus(membershipStatus) {
+  const status = String(
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "",
+  );
+  return status === "experience_active" || status === "professional_active";
 }
 
 function normalizeCanvasProjectCards(ui = {}) {
@@ -7357,9 +7347,8 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null, frozenCredits = 0 } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
-  const hasFrozenCredits = Number(frozenCredits) > 0;
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -7386,7 +7375,6 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
           <span>积分</span>
           <b>${escapeHtml(String(creditBalance))}</b>
-          ${hasFrozenCredits ? `<em class="statusbar-credit-frozen">冻结</em>` : ""}
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>

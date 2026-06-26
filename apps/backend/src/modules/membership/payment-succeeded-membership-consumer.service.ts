@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { eventTypes } from "../../../../../packages/contracts/domain/event-types.ts";
-import { restoreOrganizationWalletCreditsInTransaction } from "../credit-billing/credit-lot.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
@@ -342,11 +341,6 @@ export async function consumePaymentSucceededMembershipActivation(
           activeProfessionalPeriod,
           now: input.now,
         });
-        await restoreOrganizationWalletCreditsInTransaction(db, {
-          organizationId: order.organization_id,
-          now: input.now,
-        });
-
         await db.query("COMMIT");
         return {
           kind: "applied" as const,
