@@ -35,6 +35,7 @@ const child = spawn(runtime, ["scripts/run-phone-auth-http-only.mjs"], {
   cwd: process.cwd(),
   env: process.env,
   detached: true,
+  windowsHide: true,
   stdio: ["ignore", outFd, errFd],
 });
 

@@ -1439,7 +1439,7 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
     };
   }
   return {
-    sql: `(${targetFilter} OR source_type = 'payment_order')`,
+    sql: `(${targetFilter} OR source_type IN ('payment_order', 'membership_gift'))`,
     params: [target.userId, target.membershipId],
   };
 }

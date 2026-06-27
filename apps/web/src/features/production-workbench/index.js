@@ -31209,4 +31209,3 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
 export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
   return mapEpisodeAssetContracts(assets, kind);
 }
-
