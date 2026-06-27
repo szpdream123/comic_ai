@@ -225,6 +225,52 @@ describe("persistent phone auth", { concurrency: false }, () => {
     }
   });
 
+  it("assigns a unique 10-character invite code when a phone user is created on first login", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const firstChallenge = await createPersistentLoginChallenge(db, {
+        phone: "13800138000",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+        code: "123456",
+      });
+      const secondChallenge = await createPersistentLoginChallenge(db, {
+        phone: "13800138001",
+        now: new Date("2026-06-11T10:01:00.000Z"),
+        code: "654321",
+      });
+
+      const firstVerified = await verifyPersistentLoginChallenge(db, {
+        challengeId: firstChallenge.challengeId,
+        phone: "13800138000",
+        code: "123456",
+        now: new Date("2026-06-11T10:02:00.000Z"),
+      });
+      const secondVerified = await verifyPersistentLoginChallenge(db, {
+        challengeId: secondChallenge.challengeId,
+        phone: "13800138001",
+        code: "654321",
+        now: new Date("2026-06-11T10:03:00.000Z"),
+      });
+      const users = await db.query<{ phone_e164: string; invite_code: string }>(
+        `
+          SELECT phone_e164, invite_code
+          FROM users
+          WHERE phone_e164 IN ('13800138000', '13800138001')
+          ORDER BY phone_e164
+        `,
+      );
+
+      assert.equal(firstVerified.kind, "verified");
+      assert.equal(secondVerified.kind, "verified");
+      assert.equal(users.rows.length, 2);
+      assert.match(users.rows[0]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
+      assert.match(users.rows[1]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
+      assert.notEqual(users.rows[0]?.invite_code, users.rows[1]?.invite_code);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("uses a one-day session when password login is not remembered", async () => {
     const db = await createMigratedTestDb();
     try {

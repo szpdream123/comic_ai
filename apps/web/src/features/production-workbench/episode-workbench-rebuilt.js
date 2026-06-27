@@ -2106,7 +2106,7 @@ export function renderPromptDock({
             "model",
             selectedModel.label,
             isVideoModelMenuOpen ? "model" : null,
-            models.map((item) => [item.id, item.label]),
+            models.map((item) => [item.id, item.label, item.remark]),
             "select-video-model",
             "",
             "toggle-video-model-menu",
@@ -2662,7 +2662,13 @@ function renderControlMenu(field, label, openMenu, options, action = "select-gen
   return `
     <span class="episode-replica-control-wrap">
       <button class="episode-replica-control" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact">${options.map(([value, text]) => `<button type="button" data-action="${escapeAttr(action)}" ${action === "select-video-model" ? `data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"` : `data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}"`}>${escapeHtml(text)}</button>`).join("")}</span>` : ""}
+      ${open ? `<span class="episode-replica-float-menu compact">${options.map((option) => {
+        const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
+        if (action === "select-video-model") {
+          return `<button type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
+        }
+        return `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}">${escapeHtml(text)}</button>`;
+      }).join("")}</span>` : ""}
     </span>
   `;
 }
@@ -2979,6 +2985,7 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
       return {
         id,
         label: String(model?.modelLabel ?? model?.displayName ?? id).trim() || id,
+        remark: String(model?.remark ?? "").trim(),
         credits: Number(model?.displayBaseCost ?? model?.credits ?? 0),
         supportedRatios: normalizeOptionValues(model?.supportedRatios),
         supportedQuality: normalizeOptionValues(model?.supportedQuality),

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
-import { createPhoneAuthDevServer } from "../../../entrypoints/phone-auth-dev-server.ts";
+import { normalizeCnPhone } from "../../identity/phone-auth.utils.ts";
+import {
+  createUserPasswordHash,
+  defaultPasswordFromPhone,
+} from "../../identity/team-account-credentials.service.ts";
+import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../../../entrypoints/phone-auth-dev-server.ts";
+import { createDevDb } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import {
@@ -10,6 +17,27 @@ import {
   processSeedanceVideoPollJob,
   processSeedanceVideoSubmitJob,
 } from "../seedance-video.worker.ts";
+
+const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
+
+function createPhoneAuthDevServer(
+  options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
+) {
+  const server = createPhoneAuthDevServerBase(options);
+  const originalListen = server.listen.bind(server);
+  server.listen = async (...args) => {
+    await originalListen(...args);
+    if (options?.db) {
+      loginDbByOrigin.set(server.origin, options.db);
+    }
+  };
+  const originalClose = server.close.bind(server);
+  server.close = async () => {
+    loginDbByOrigin.delete(server.origin);
+    await originalClose();
+  };
+  return server;
+}
 
 describe("Seedance video BullMQ worker services", () => {
   it("submits, polls, defers finalization, then streams provider video to storage and persists the task result", async () => {
@@ -1053,25 +1081,40 @@ describe("Seedance video BullMQ worker services", () => {
 });
 
 async function login(origin: string, phone: string) {
-  const requestResponse = await fetch(`${origin}/api/auth/code/request`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-  const requested = await requestResponse.json();
-  const debugResponse = await fetch(`${origin}/api/auth/dev/challenges/${requested.challengeId}`);
-  const debug = await debugResponse.json();
-  const verifyResponse = await fetch(`${origin}/api/auth/code/verify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      challengeId: requested.challengeId,
-      phone,
-      code: debug.code,
-    }),
-  });
-  assert.equal(verifyResponse.status, 200);
-  return verifyResponse.headers.get("set-cookie") ?? "";
+  const fallbackDb = loginDbByOrigin.get(origin) ? null : await createDevDb();
+  const db = loginDbByOrigin.get(origin) ?? fallbackDb!;
+  try {
+    const normalizedPhone = normalizeCnPhone(phone);
+    await ensurePasswordLoginUser(db, normalizedPhone);
+    const password = defaultPasswordFromPhone(normalizedPhone);
+    const passwordResponse = await fetch(`${origin}/api/auth/password/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ account: normalizedPhone, password }),
+    });
+    assert.equal(passwordResponse.status, 200);
+    return passwordResponse.headers.get("set-cookie") ?? "";
+  } finally {
+    await fallbackDb?.close();
+  }
+}
+
+async function ensurePasswordLoginUser(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  phone: string,
+) {
+  const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone(phone));
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, password_hash, status)
+      VALUES ($1, $2, $3, 'active')
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET
+        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
+        status = 'active'
+    `,
+    [randomUUID(), phone, passwordHash],
+  );
 }
 
 async function createProjectAndEpisode(origin: string, cookie: string, idempotencyKey = "seedance-worker-project") {

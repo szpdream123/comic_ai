@@ -12,7 +12,7 @@ test("admin user service collapses multiple memberships into one preferred user 
     await db.query(
       `
         INSERT INTO users (id, email, phone_e164, display_name, status)
-        VALUES ('93000000-0000-4000-8000-000000001010', 'repeat@example.test', '+8613800100010', 'Repeat User', 'active')
+        VALUES ('93000000-0000-4000-8000-000000001010', 'repeat@example.test', '13800100010', 'Repeat User', 'active')
       `,
     );
     await db.query(
@@ -114,27 +114,176 @@ test("admin user service collapses multiple memberships into one preferred user 
 
     assert.equal(result.meta.total, 1);
     assert.equal(result.data.length, 1);
-    assert.deepEqual(result.data[0], {
+    assert.match(result.data[0]?.inviteCode ?? "", /^[0-9A-Z]{10}$/);
+    assert.deepEqual({ ...result.data[0], inviteCode: "<invite-code>" }, {
       userId: "93000000-0000-4000-8000-000000001010",
+      inviteCode: "<invite-code>",
       displayName: "Repeat User",
       phone: "13800100010",
       email: "re***@example.test",
       lastLoginAt: null,
       status: "active",
-      organizationId: "91000000-0000-4000-8000-000000001010",
-      organizationName: "Primary Org",
-      workspaceId: "92000000-0000-4000-8000-000000001010",
-      membershipId: "94000000-0000-4000-8000-000000001010",
+      organizationId: "91000000-0000-4000-8000-000000001011",
+      organizationName: "Admin Org",
+      workspaceId: "92000000-0000-4000-8000-000000001011",
+      membershipId: "94000000-0000-4000-8000-000000001011",
+      membershipRole: "sub_account",
+      accountType: "team_permission_account",
+      teamRole: "group_admin",
+      teamGroupId: "95000000-0000-4000-8000-000000001010",
+      teamGroupName: "Admin Group",
+      availableCredits: 900,
+      reservedCredits: 0,
+      frozenCredits: 0,
+      displayCreditBalance: 900,
+      usedCredits: 50,
+      subaccountCount: 0,
+    });
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user list prefers the personal credit workspace over the shared project workspace", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await db.query(
+      `
+        INSERT INTO users (id, email, phone_e164, display_name, status)
+        VALUES ('93000000-0000-4000-8000-000000001020', 'personal@example.test', '13800100020', 'Personal Wallet User', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+        VALUES
+          ('10000000-0000-4000-8000-000000000001', 'Comic AI Studio', 'active', 155346, 1270),
+          ('91000000-0000-4000-8000-000000001020', 'Personal Creator Workspace', 'active', 0, 0)
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES
+          ('92000000-0000-4000-8000-000000001020', '10000000-0000-4000-8000-000000000001', 'Personal Project Workspace', 'active'),
+          ('92000000-0000-4000-8000-000000001021', '91000000-0000-4000-8000-000000001020', 'Personal Workspace', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, created_at)
+        VALUES
+          (
+            '94000000-0000-4000-8000-000000001020',
+            '10000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000001020',
+            '93000000-0000-4000-8000-000000001020',
+            'owner_admin',
+            'active',
+            '2026-06-17T04:09:26.831Z'
+          ),
+          (
+            '94000000-0000-4000-8000-000000001021',
+            '91000000-0000-4000-8000-000000001020',
+            '92000000-0000-4000-8000-000000001021',
+            '93000000-0000-4000-8000-000000001020',
+            'owner_admin',
+            'active',
+            '2026-06-17T04:09:26.627Z'
+          )
+      `,
+    );
+
+    const result = await service.listUsers({ keyword: "Personal Wallet User", pageSize: 20 });
+
+    assert.equal(result.meta.total, 1);
+    assert.match(result.data[0]?.inviteCode ?? "", /^[0-9A-Z]{10}$/);
+    assert.deepEqual({ ...result.data[0], inviteCode: "<invite-code>" }, {
+      userId: "93000000-0000-4000-8000-000000001020",
+      inviteCode: "<invite-code>",
+      displayName: "Personal Wallet User",
+      phone: "13800100020",
+      email: "pe***@example.test",
+      lastLoginAt: null,
+      status: "active",
+      organizationId: "91000000-0000-4000-8000-000000001020",
+      organizationName: "Personal Creator Workspace",
+      workspaceId: "92000000-0000-4000-8000-000000001021",
+      membershipId: "94000000-0000-4000-8000-000000001021",
       membershipRole: "owner_admin",
       accountType: "owner_account",
       teamRole: null,
       teamGroupId: null,
       teamGroupName: null,
-      availableCredits: 6000,
-      reservedCredits: 20,
+      availableCredits: 0,
+      reservedCredits: 0,
+      frozenCredits: 0,
+      displayCreditBalance: 0,
       usedCredits: 0,
       subaccountCount: 0,
     });
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user list does not expose shared organization credits as user credits", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await db.query(
+      `
+        INSERT INTO users (id, email, phone_e164, display_name, status)
+        VALUES ('93000000-0000-4000-8000-000000001030', 'shared@example.test', '13800100030', 'Shared Credit User', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+        VALUES ('10000000-0000-4000-8000-000000000001', 'Comic AI Studio', 'active', 158506, 1270)
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ('92000000-0000-4000-8000-000000001030', '10000000-0000-4000-8000-000000000001', 'Shared Workspace', 'active')
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, created_at)
+        VALUES (
+          '94000000-0000-4000-8000-000000001030',
+          '10000000-0000-4000-8000-000000000001',
+          '92000000-0000-4000-8000-000000001030',
+          '93000000-0000-4000-8000-000000001030',
+          'owner_admin',
+          'active',
+          '2026-06-17T04:09:26.831Z'
+        )
+      `,
+    );
+
+    const result = await service.listUsers({ keyword: "Shared Credit User", pageSize: 20 });
+    const grantResponse = await service.grantUserCredits({
+      userId: "93000000-0000-4000-8000-000000001030",
+      amount: 100,
+      reason: "Should not write shared wallet",
+      idempotencyKey: "admin-credit-shared-wallet-blocked",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000001030",
+      auditOrganizationId: "10000000-0000-4000-8000-000000000001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000001030",
+      now: new Date("2026-06-24T08:00:00.000Z"),
+    });
+
+    assert.equal(result.data[0]?.availableCredits, 0);
+    assert.equal(result.data[0]?.reservedCredits, 0);
+    assert.equal(result.data[0]?.displayCreditBalance, 0);
+    assert.equal(grantResponse.status, 409);
+    assert.equal("error" in grantResponse.body && grantResponse.body.error.code, "credit_account_not_found");
   } finally {
     await db.close();
   }
@@ -149,9 +298,9 @@ test("admin user service lists only team permission accounts with subaccount tot
       `
         INSERT INTO users (id, email, phone_e164, display_name, status)
         VALUES
-          ('93000000-0000-4000-8000-000000001001', 'owner@example.test', '+8613800100001', 'Owner Admin', 'active'),
-          ('93000000-0000-4000-8000-000000001002', 'lead@example.test', '+8613800100002', 'Storyboard Lead', 'active'),
-          ('93000000-0000-4000-8000-000000001003', 'artist@example.test', '+8613800100003', 'Storyboard Artist', 'active')
+          ('93000000-0000-4000-8000-000000001001', 'owner@example.test', '13800100001', 'Owner Admin', 'active'),
+          ('93000000-0000-4000-8000-000000001002', 'lead@example.test', '13800100002', 'Storyboard Lead', 'active'),
+          ('93000000-0000-4000-8000-000000001003', 'artist@example.test', '13800100003', 'Storyboard Artist', 'active')
       `,
     );
     await db.query(
@@ -287,6 +436,28 @@ test("admin user service lists only team permission accounts with subaccount tot
   }
 });
 
+test("admin user service tolerates legacy missing phone values in user lists", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await db.query(
+      `
+        INSERT INTO users (id, email, phone_e164, display_name, status)
+        VALUES ('93000000-0000-4000-8000-000000001099', NULL, NULL, 'Legacy Phone User', 'active')
+      `,
+    );
+
+    const result = await service.listUsers({ keyword: "Legacy Phone User", pageSize: 20 });
+
+    assert.equal(result.meta.total, 1);
+    assert.equal(result.data[0]?.userId, "93000000-0000-4000-8000-000000001099");
+    assert.equal(result.data[0]?.phone, null);
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin user credit ledger keeps subaccount ledger scoped to the target user", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
@@ -361,6 +532,7 @@ test("admin user credit ledger can be scoped to a specific creator organization 
 
   try {
     await seedCreditScopeFixture(db);
+    await seedExplicitCreatorLedgerFixture(db);
 
     const result = await service.listUserCreditLedger({
       userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
@@ -391,6 +563,67 @@ test("admin user credit ledger can be scoped to a specific creator organization 
         },
       ],
     );
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger includes user wallet entries from project organizations", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedExplicitCreatorLedgerFixture(db);
+    await seedPersonalCreatorMembershipFixture(db);
+    await db.query(
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          user_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+          '98000000-0000-4000-8000-000000003003',
+          '10000000-0000-4000-8000-000000000001',
+          '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+          'consume',
+          201,
+          0,
+          -201,
+          201,
+          'episode_generation_task',
+          '99000000-0000-4000-8000-000000003003',
+          'AI storyboard generation',
+          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259f"}'::jsonb,
+          '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+          '2026-06-05T08:02:00.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserCreditLedger({
+      userId: "4af8d99f-a74d-4a80-a610-3c0e725d420b",
+      organizationId: "20000000-0000-4000-8000-000000000001",
+      workspaceId: "daf8d99f-a74d-4a80-8610-3c0e725d420b",
+      pageSize: 10,
+    });
+
+    assert.equal(result.data[0]?.sourceType, "episode_generation_task");
+    assert.equal(result.data[0]?.entryType, "consume");
+    assert.equal(result.data[0]?.amount, 201);
+    assert.equal(result.data[0]?.organizationId, "10000000-0000-4000-8000-000000000001");
+    assert.equal(result.summary.totalConsumedCredits, 201);
   } finally {
     await db.close();
   }
@@ -881,7 +1114,7 @@ test("admin user service manages per-organization team subaccount limits", async
     assert.equal(defaultResponse.status, 200);
     assert.deepEqual(defaultResponse.body.data, {
       organizationId: "91000000-0000-4000-8000-000000002001",
-      organizationName: "Credit Scope Org",
+      organizationName: "Personal Creator Workspace",
       defaultSeatLimit: 50,
       effectiveSeatLimit: 50,
       overrideSeatLimit: null,
@@ -1093,7 +1326,7 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
   await db.query(
     `
       INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
-      VALUES ('91000000-0000-4000-8000-000000002001', 'Credit Scope Org', 'active', 8000, 120)
+      VALUES ('91000000-0000-4000-8000-000000002001', 'Personal Creator Workspace', 'active', 8000, 120)
     `,
   );
   await db.query(
@@ -1398,6 +1631,118 @@ async function seedCreditScopeFixture(db: { query: (sql: string, params?: unknow
           NULL,
           '2026-06-05T07:12:00.000Z'
         )
+    `,
+  );
+}
+
+async function seedExplicitCreatorLedgerFixture(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) {
+  await db.query(
+    `
+      INSERT INTO users (id, email, phone_e164, display_name, status)
+      VALUES ('4af8d99f-a74d-4a80-a610-3c0e725d420b', 'scoped@example.test', '13800109999', 'Scoped Creator', 'active')
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+      VALUES ('10000000-0000-4000-8000-000000000001', 'Comic AI Studio', 'active', 158506, 0)
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ('caf8d99f-a74d-4a80-8610-3c0e725d420b', '10000000-0000-4000-8000-000000000001', 'Scoped Workspace', 'active')
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES (
+        '5af8d99f-a74d-4a80-8610-3c0e725d420b',
+        '10000000-0000-4000-8000-000000000001',
+        'caf8d99f-a74d-4a80-8610-3c0e725d420b',
+        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+        'creator',
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES
+        (
+          '98000000-0000-4000-8000-000000003001',
+          '10000000-0000-4000-8000-000000000001',
+          'release',
+          99,
+          99,
+          -99,
+          0,
+          'credit_reservation_allocation',
+          '99000000-0000-4000-8000-000000003001',
+          'Scoped release',
+          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e"}'::jsonb,
+          '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+          '2026-06-05T08:01:00.000Z'
+        ),
+        (
+          '98000000-0000-4000-8000-000000003002',
+          '10000000-0000-4000-8000-000000000001',
+          'reservation',
+          99,
+          -99,
+          99,
+          0,
+          'episode_generation_task',
+          '99000000-0000-4000-8000-000000003002',
+          'Scoped reservation',
+          '{"taskId":"11cac812-37b1-4d50-abb0-fc046d52259e"}'::jsonb,
+          '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+          '2026-06-05T08:00:00.000Z'
+        )
+    `,
+  );
+}
+
+async function seedPersonalCreatorMembershipFixture(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) {
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+      VALUES ('20000000-0000-4000-8000-000000000001', 'Personal Creator Workspace', 'active', 0, 0)
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ('daf8d99f-a74d-4a80-8610-3c0e725d420b', '20000000-0000-4000-8000-000000000001', 'Personal Credit Workspace', 'active')
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES (
+        '6af8d99f-a74d-4a80-8610-3c0e725d420b',
+        '20000000-0000-4000-8000-000000000001',
+        'daf8d99f-a74d-4a80-8610-3c0e725d420b',
+        '4af8d99f-a74d-4a80-a610-3c0e725d420b',
+        'owner_admin',
+        'active'
+      )
     `,
   );
 }

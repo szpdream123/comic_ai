@@ -7,13 +7,45 @@ import { describe, it } from "node:test";
 // avoid cross-test interference from runtime-level resources in the Node test runner.
 describe.configure?.({ concurrency: 1 });
 
-import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
+import { normalizeCnPhone } from "../../modules/identity/phone-auth.utils.ts";
+import {
+  createUserPasswordHash,
+  defaultPasswordFromPhone,
+} from "../../modules/identity/team-account-credentials.service.ts";
+import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
+import { grantCredits } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
+const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
+
+function createPhoneAuthDevServer(
+  options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
+) {
+  const server = createPhoneAuthDevServerBase(options);
+  const originalListen = server.listen.bind(server);
+  server.listen = async (...args) => {
+    await originalListen(...args);
+    if (options?.db) {
+      loginDbByOrigin.set(server.origin, options.db);
+    }
+  };
+  const originalClose = server.close.bind(server);
+  server.close = async () => {
+    loginDbByOrigin.delete(server.origin);
+    await originalClose();
+  };
+  return server;
+}
+
+async function createPhoneAuthDevServerWithTestDb() {
+  const db = await createMigratedTestDb();
+  return createPhoneAuthDevServer({ db });
+}
+
 describe("phone auth dev server", () => {
   it("serves the login page and static assets", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -29,7 +61,7 @@ describe("phone auth dev server", () => {
   });
 
   it("serves official library PNG previews as binary static assets", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -48,7 +80,7 @@ describe("phone auth dev server", () => {
   });
 
   it("serves the local Three module files used by the LiquidEther homepage background", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -70,7 +102,7 @@ describe("phone auth dev server", () => {
   });
 
   it("serves app shell for episode deep links", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -117,6 +149,9 @@ describe("phone auth dev server", () => {
       });
       const verifyPayload = await verifyResponse.json();
       const cookie = verifyResponse.headers.get("set-cookie") ?? "";
+      const userRecord = await db.query<{ invite_code: string | null }>(
+        "SELECT invite_code FROM users WHERE phone_e164 = '13800138000'",
+      );
 
       const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
         headers: { cookie },
@@ -130,6 +165,7 @@ describe("phone auth dev server", () => {
       assert.equal(verifyResponse.status, 200);
       assert.equal(sessionResponse.status, 200);
       assert.equal(verifyPayload.user.phone, "+8613800138000");
+      assert.match(userRecord.rows[0]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
       assert.equal(sessionPayload.authenticated, true);
       assert.match(cookie, /Max-Age=2592000/);
     } finally {
@@ -581,7 +617,7 @@ describe("phone auth dev server", () => {
   });
 
   it("returns SMS send metadata and records cooldown through the auth request route", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
     try {
       await server.listen(0);
 
@@ -617,7 +653,7 @@ describe("phone auth dev server", () => {
   });
 
   it("allows local file pages to call the development API with credentials", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -650,7 +686,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes the provider callback boundary and rejects unknown payment providers", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -673,7 +709,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes a creator workflow API that can create, parse, and export a mock project", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -781,7 +817,7 @@ describe("phone auth dev server", () => {
   });
 
   it("requires and replays Idempotency-Key for creator project creation", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -1356,7 +1392,7 @@ describe("phone auth dev server", () => {
   });
 
   it("requires and replays Idempotency-Key for creator script parsing", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -1411,7 +1447,7 @@ describe("phone auth dev server", () => {
   });
 
   it("supports single-asset editing plus calibration skip/override and export history routes", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -1594,7 +1630,7 @@ describe("phone auth dev server", () => {
   });
 
   it("requires and replays Idempotency-Key for creator generation, calibration, and export routes", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -1745,7 +1781,7 @@ describe("phone auth dev server", () => {
   });
 
   it("maps creator route validation and state errors to stable responses", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -1839,7 +1875,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes project management, asset library, shot editing, and parameterized generation routes", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -2544,7 +2580,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes reusable official asset library routes without project import", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -2586,7 +2622,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects creator-side single shot retry routes before a shot has failed", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -2659,7 +2695,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes enveloped project-to-episode workbench routes for the new page contract", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -2820,7 +2856,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes narrow batch image model options without unrelated generation config fields", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -2891,6 +2927,7 @@ describe("phone auth dev server", () => {
         UPDATE ai_model_configs
         SET model_code = 'happyhorse-1.0-r2v',
             display_name = '快乐马1.0',
+            remark = '4图3音频/4800积分每条',
             provider_name = 'aliyun-bailian',
             provider_model = 'happyhorse-1.0-r2v',
             provider_protocol = 'aliyun_bailian_video',
@@ -2947,8 +2984,8 @@ describe("phone auth dev server", () => {
       assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "happyhorse-1.0-r2v");
       assert.ok(
         generationConfigEnvelope.data.models.some(
-          (model: { modelCode?: string; modelLabel?: string }) =>
-            model.modelCode === "happyhorse-1.0-r2v" && model.modelLabel === "快乐马1.0",
+          (model: { modelCode?: string; modelLabel?: string; remark?: string | null }) =>
+            model.modelCode === "happyhorse-1.0-r2v" && model.modelLabel === "快乐马1.0" && model.remark === "4图3音频/4800积分每条",
         ),
       );
       assert.equal(
@@ -2961,7 +2998,7 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes enabled storyboard prompt packages to authenticated creators", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -3047,7 +3084,11 @@ describe("phone auth dev server", () => {
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
           method: "POST",
-          headers: { "content-type": "application/json", cookie },
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-request",
+            cookie,
+          },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
@@ -3185,7 +3226,11 @@ describe("phone auth dev server", () => {
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
           method: "POST",
-          headers: { "content-type": "application/json", cookie },
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-no-default-taboo-request",
+            cookie,
+          },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
@@ -3434,7 +3479,11 @@ describe("phone auth dev server", () => {
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
           method: "POST",
-          headers: { "content-type": "application/json", cookie },
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-template-code-request",
+            cookie,
+          },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
@@ -3450,6 +3499,249 @@ describe("phone auth dev server", () => {
       assert.match(textChatGateway.calls[2]?.prompt ?? "", /后台列表默认角色模板/);
       assert.match(textChatGateway.calls[3]?.prompt ?? "", /后台列表默认道具模板/);
       assert.match(textChatGateway.calls[4]?.prompt ?? "", /后台列表默认分镜模板/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deducts script generation credits and writes a ledger record after AI storyboard preview", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scriptText: "任小野把小草托付给闵婶子。",
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await db.query(
+        `
+          INSERT INTO ai_model_configs (
+            id,
+            model_code,
+            display_name,
+            provider_name,
+            provider_model,
+            provider_protocol,
+            invocation_mode,
+            media_type,
+            task_modes_json,
+            capabilities_json,
+            parameter_schema_json,
+            default_params_json,
+            provider_config_json,
+            pricing_json,
+            limits_json,
+            ui_config_json,
+            status,
+            sort_order,
+            remark,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1,
+            'preview-script-model',
+            '预览剧本模型',
+            'deepseek',
+            'deepseek-chat',
+            'openai_compatible_chat',
+            'stream',
+            'text',
+            '["text.script"]'::jsonb,
+            '{"input":["prompt"],"output":["text"]}'::jsonb,
+            '{"scriptPrompt":{"type":"string","required":true}}'::jsonb,
+            '{}'::jsonb,
+            '{"baseURL":"https://api.deepseek.com","requestPath":"/chat/completions","apiKeyEnv":"DEEPSEEK_API_KEY"}'::jsonb,
+            '{"unit":"text","baseCredits":20}'::jsonb,
+            '{}'::jsonb,
+            '{"modelKind":"text.script","supportedModes":["script"]}'::jsonb,
+            'active',
+            1,
+            '',
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (model_code) DO UPDATE
+          SET pricing_json = EXCLUDED.pricing_json,
+              task_modes_json = EXCLUDED.task_modes_json,
+              ui_config_json = EXCLUDED.ui_config_json,
+              status = 'active',
+              updated_at = NOW()
+        `,
+        [randomUUID()],
+      );
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138218");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-credit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview credit project",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const organizationId = await readProjectOrganizationId(db, created.project.id);
+      await seedActiveGenerationMembership(db, { organizationId });
+      await grantCredits(db, {
+        organizationId,
+        amount: 500,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: null,
+        now: new Date(),
+      });
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-credit-request",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+      const ledgerEntries = await db.query<{
+        source_type: string;
+        reason: string | null;
+        amount: number | string;
+        metadata_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT source_type, reason, amount, metadata_json
+          FROM credit_ledger_entries
+          WHERE organization_id = $1
+          ORDER BY created_at DESC
+        `,
+        [organizationId],
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(previewResponse.status, 200);
+      assert.ok(previewEnvelope.data);
+      assert.ok(
+        ledgerEntries.rows.some((entry) =>
+            entry.source_type === "episode_generation_task" &&
+            entry.reason === "script generation" &&
+            Number(entry.amount) === 20 &&
+            String(entry.metadata_json?.modelCode ?? "").includes("script"),
+          ),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("blocks AI storyboard preview when membership or credits are invalid", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await seedPreviewScriptModelConfig(db, 20);
+      await server.listen(0);
+      const cookieNoMembership = await login(server.origin, "13800138219");
+      const noMembershipProject = await createAiStoryboardPreviewProject(server.origin, cookieNoMembership, "no-membership");
+      const packages = await readStoryboardPromptPackages(server.origin, cookieNoMembership);
+
+      const noMembershipResponse = await postAiStoryboardPreview(server.origin, {
+        cookie: cookieNoMembership,
+        projectId: noMembershipProject.project.id,
+        idempotencyKey: "http-ai-storyboard-preview-no-membership",
+        packages,
+      });
+      const noMembershipEnvelope = await noMembershipResponse.json();
+
+      const cookieExpired = await login(server.origin, "13800138220");
+      const expiredProject = await createAiStoryboardPreviewProject(server.origin, cookieExpired, "expired");
+      const expiredOrganizationId = await readProjectOrganizationId(db, expiredProject.project.id);
+      await seedActiveGenerationMembership(db, {
+        organizationId: expiredOrganizationId,
+        now: new Date("2026-05-01T00:00:00.000Z"),
+        periodEndAt: new Date("2026-05-02T00:00:00.000Z"),
+      });
+      await grantCredits(db, {
+        organizationId: expiredOrganizationId,
+        amount: 500,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: null,
+        now: new Date(),
+      });
+      const expiredResponse = await postAiStoryboardPreview(server.origin, {
+        cookie: cookieExpired,
+        projectId: expiredProject.project.id,
+        idempotencyKey: "http-ai-storyboard-preview-expired-membership",
+        packages: await readStoryboardPromptPackages(server.origin, cookieExpired),
+      });
+      const expiredEnvelope = await expiredResponse.json();
+
+      const cookieNoCredits = await login(server.origin, "13800138221");
+      const noCreditsProject = await createAiStoryboardPreviewProject(server.origin, cookieNoCredits, "no-credits");
+      const noCreditsOrganizationId = await readProjectOrganizationId(db, noCreditsProject.project.id);
+      await seedActiveGenerationMembership(db, { organizationId: noCreditsOrganizationId });
+      await db.query(
+        "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
+        [noCreditsOrganizationId],
+      );
+      const noCreditsResponse = await postAiStoryboardPreview(server.origin, {
+        cookie: cookieNoCredits,
+        projectId: noCreditsProject.project.id,
+        idempotencyKey: "http-ai-storyboard-preview-no-credits",
+        packages: await readStoryboardPromptPackages(server.origin, cookieNoCredits),
+      });
+      const noCreditsEnvelope = await noCreditsResponse.json();
+
+      assert.equal(noMembershipResponse.status, 403);
+      assert.equal(noMembershipEnvelope.errorCode, "membership_required");
+      assert.equal(noMembershipEnvelope.message, "请充值会员。");
+      assert.equal(expiredResponse.status, 403);
+      assert.equal(expiredEnvelope.errorCode, "membership_expired");
+      assert.equal(expiredEnvelope.message, "您的会员已过期，请前往续充。");
+      assert.equal(noCreditsResponse.status, 402, JSON.stringify(noCreditsEnvelope));
+      assert.equal(noCreditsEnvelope.errorCode, "insufficient_credits");
+      assert.equal(noCreditsEnvelope.message, "积分不足，请前往充值积分。");
     } finally {
       await server.close();
     }
@@ -3609,7 +3901,12 @@ describe("phone auth dev server", () => {
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
         {
           method: "POST",
-          headers: { "content-type": "application/json", accept: "text/event-stream", cookie },
+          headers: {
+            "content-type": "application/json",
+            accept: "text/event-stream",
+            "idempotency-key": "http-ai-storyboard-stream-request",
+            cookie,
+          },
           body: JSON.stringify({
             scriptText: "任小野托付妹妹。",
             packages: {
@@ -3673,7 +3970,7 @@ describe("phone auth dev server", () => {
   });
 
   it("creates and updates project members through the project-scoped team API", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -3769,7 +4066,7 @@ describe("phone auth dev server", () => {
   });
 
   it("patches member role, note, and status through the member-scoped team API", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -3856,7 +4153,7 @@ describe("phone auth dev server", () => {
   });
 
   it("persists and reloads asset conversation history by selected asset id", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -4002,7 +4299,7 @@ describe("phone auth dev server", () => {
   });
 
   it("deletes only the requested asset conversation turn and keeps the remaining history", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -4196,7 +4493,7 @@ describe("phone auth dev server", () => {
   });
 
   it("deletes a project that has persisted asset conversation history", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -4664,7 +4961,7 @@ describe("phone auth dev server", () => {
   });
 
   it("persists episode asset create, update, list, and delete through the episode workbench APIs", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -4826,7 +5123,7 @@ describe("phone auth dev server", () => {
   });
 
   it("imports assets into the current episode workbench instead of the project asset library", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -4944,7 +5241,7 @@ describe("phone auth dev server", () => {
   });
 
   it("saves an episode asset into the project asset library with real persisted media", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -5124,7 +5421,7 @@ describe("phone auth dev server", () => {
   });
 
   it("keeps a newly created blank episode workbench empty when the project library already has assets", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -5293,7 +5590,7 @@ describe("phone auth dev server", () => {
   });
 
   it("hydrates and persists an existing episode asset image from a same-name project library asset", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -6388,7 +6685,7 @@ describe("phone auth dev server", () => {
         WHERE model_code = 'gpt-image-2-cn'
       `,
     );
-    const server = creatBearLabAuthDevServer({
+    const server = createPhoneAuthDevServer({
       db,
       env: {
         GPT_IMAGE2_PROVIDER_ENABLED: "true",
@@ -6402,12 +6699,14 @@ describe("phone auth dev server", () => {
 
     try {
       await server.listen(0);
+      const idempotencySuffix = randomUUID();
+      const prompt = `membership gate ${idempotencySuffix}`;
       const cookie = await login(server.origin, "13800138013");
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "generation-membership-required-project",
+          "idempotency-key": `generation-membership-required-project-${idempotencySuffix}`,
           cookie,
         },
         body: JSON.stringify({
@@ -6430,6 +6729,7 @@ describe("phone auth dev server", () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      await db.query("DELETE FROM membership_periods");
 
       const imageTaskResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
@@ -6437,13 +6737,13 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": "generation-membership-required-task",
+            "idempotency-key": `generation-membership-required-task-${idempotencySuffix}`,
             cookie,
           },
           body: JSON.stringify({
             targetType: "episode",
             targetId: episodeId,
-            prompt: "membership gate",
+            prompt,
             model: "gpt-image-2-cn",
             parameters: {
               aspectRatio: "16:9",
@@ -6455,15 +6755,98 @@ describe("phone auth dev server", () => {
       const imageTaskEnvelope = await imageTaskResponse.json();
       const taskRows = await db.query<{ count: number | string }>(
         "SELECT count(*) AS count FROM tasks WHERE idempotency_key = $1",
-        ["generation-membership-required-task"],
+        [`generation-membership-required-task-${idempotencySuffix}`],
       );
       const reservationRows = await db.query<{ count: number | string }>(
-        "SELECT count(*) AS count FROM credit_reservations WHERE metadata_json->>'modelCode' = 'gpt-image-2-cn'",
+        "SELECT count(*) AS count FROM credit_reservations WHERE metadata_json->>'prompt' = $1",
+        [prompt],
       );
 
       assert.equal(imageTaskResponse.status, 403);
       assert.equal(imageTaskEnvelope.errorCode, "generation_membership_required");
       assert.equal(imageTaskEnvelope.message, "有效会员已过期或未开通，请先开通会员。");
+      assert.equal(Number(taskRows.rows[0]?.count ?? -1), 0);
+      assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects fallback-priced generation when the organization has no active membership", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      fetchImpl: (async () => {
+        throw new Error("provider_should_not_be_called_without_membership");
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const idempotencySuffix = randomUUID();
+      const cookie = await login(server.origin, "13800138023");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `fallback-generation-membership-required-project-${idempotencySuffix}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Fallback membership required generation",
+          scriptInput: "Episode 1: Fallback priced generation should still require membership.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Fallback Membership Required Episode" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      await db.query("DELETE FROM membership_periods");
+
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `fallback-generation-membership-required-task-${idempotencySuffix}`,
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: "fallback membership gate",
+            model: "nano_banana_2",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "standard",
+            },
+          }),
+        },
+      );
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskRows = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM tasks WHERE idempotency_key = $1",
+        [`fallback-generation-membership-required-task-${idempotencySuffix}`],
+      );
+      const reservationRows = await db.query<{ count: number | string }>(
+        "SELECT count(*) AS count FROM credit_reservations WHERE metadata_json->>'prompt' = 'fallback membership gate'",
+      );
+
+      assert.equal(imageTaskResponse.status, 403);
+      assert.equal(imageTaskEnvelope.errorCode, "generation_membership_required");
       assert.equal(Number(taskRows.rows[0]?.count ?? -1), 0);
       assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
     } finally {
@@ -6483,7 +6866,7 @@ describe("phone auth dev server", () => {
         WHERE model_code = 'gpt-image-2-cn'
       `,
     );
-    const server = creatBearLabAuthDevServer({
+    const server = createPhoneAuthDevServer({
       db,
       env: {
         GPT_IMAGE2_PROVIDER_ENABLED: "true",
@@ -7481,7 +7864,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects media from another episode when setting storyboard media, deleting files, or exporting original video", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -8039,7 +8422,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects non-whitelisted CORS origins with an enveloped 403", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -8356,7 +8739,7 @@ describe("phone auth dev server", () => {
   });
 
   it("gates team member creation behind the paid team entitlement", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -8527,8 +8910,128 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("does not expose shared organization credits as the authenticated user's balance", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138004");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        ["13800138004"],
+      );
+      const userId = user.rows[0]?.id;
+      assert.ok(userId);
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
+          VALUES ('10000000-0000-4000-8000-000000000001', 'Comic AI Studio', 'active', 158506, 1270)
+          ON CONFLICT (id) DO UPDATE
+          SET credit_balance_cached = 158506,
+              credit_reserved_cached = 1270
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES ('92000000-0000-4000-8000-000000008004', '10000000-0000-4000-8000-000000000001', 'Shared Workspace', 'active')
+          ON CONFLICT (id) DO NOTHING
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES (
+            '94000000-0000-4000-8000-000000008004',
+            '10000000-0000-4000-8000-000000000001',
+            '92000000-0000-4000-8000-000000008004',
+            $1,
+            'owner_admin',
+            'active'
+          )
+          ON CONFLICT (organization_id, workspace_id, user_id) DO NOTHING
+        `,
+        [userId],
+      );
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(session.user.availableCredits, 0);
+      assert.equal(session.user.creditBalance, 0);
+      assert.equal(session.user.displayCreditBalance, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("creates billing recharge orders in the personal credit account instead of the shared dev organization", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const packagesResponse = await fetch(`${server.origin}/api/billing/packages`, {
+        headers: { cookie },
+      });
+      const packages = await packagesResponse.json();
+      const creditPackage = packages.packages.find(
+        (item: { metadata?: { kind?: string } }) => item?.metadata?.kind === "direct_recharge",
+      ) ?? packages.packages[0];
+      assert.ok(creditPackage);
+
+      const orderResponse = await fetch(`${server.origin}/api/billing/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "billing-order-personal-scope",
+          cookie,
+        },
+        body: JSON.stringify({ creditPackageId: creditPackage.id }),
+      });
+      const orderPayload = await orderResponse.json();
+
+      const orderRecord = await db.query<{
+        organization_id: string;
+        workspace_id: string;
+        organization_name: string;
+      }>(
+        `
+          SELECT
+            bo.organization_id,
+            m.workspace_id,
+            o.name AS organization_name
+          FROM billing_orders bo
+          JOIN memberships m
+            ON m.organization_id = bo.organization_id
+           AND m.user_id = bo.created_by_user_id
+           AND m.status = 'active'
+          JOIN organizations o
+            ON o.id = bo.organization_id
+          WHERE bo.id = $1
+          ORDER BY CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END, m.created_at ASC
+          LIMIT 1
+        `,
+        [orderPayload.order.id],
+      );
+
+      assert.equal(orderResponse.status, 200);
+      assert.equal(orderRecord.rows[0]?.organization_name, "Personal Creator Workspace");
+      assert.notEqual(orderRecord.rows[0]?.organization_id, "10000000-0000-4000-8000-000000000001");
+      assert.notEqual(orderRecord.rows[0]?.workspace_id, null);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("repairs paid membership order effects when the paid order is polled", async () => {
-    const server = createPhoneAuthDevServer();
+    const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
       await server.listen(0);
@@ -8775,28 +9278,44 @@ describe("phone auth dev server", () => {
 });
 
 async function login(origin: string, phone: string) {
-  const requestResponse = await fetch(`${origin}/api/auth/code/request`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-  const requested = await requestResponse.json();
-  const debugResponse = await fetch(
-    `${origin}/api/auth/dev/challenges/${requested.challengeId}`,
-  );
-  const debug = await debugResponse.json();
-  const verifyResponse = await fetch(`${origin}/api/auth/code/verify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      challengeId: requested.challengeId,
-      phone,
-      code: debug.code,
-    }),
-  });
+  const fallbackDb = loginDbByOrigin.get(origin) ? null : await createDevDb();
+  const db = loginDbByOrigin.get(origin) ?? fallbackDb!;
+  try {
+    const normalizedPhone = normalizeCnPhone(phone);
+    await ensurePasswordLoginUser(db, normalizedPhone);
+    const password = defaultPasswordFromPhone(normalizedPhone);
+    const passwordResponse = await fetch(`${origin}/api/auth/password/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        account: normalizedPhone,
+        password,
+      }),
+    });
 
-  assert.equal(verifyResponse.status, 200);
-  return verifyResponse.headers.get("set-cookie") ?? "";
+    assert.equal(passwordResponse.status, 200);
+    return passwordResponse.headers.get("set-cookie") ?? "";
+  } finally {
+    await fallbackDb?.close();
+  }
+}
+
+async function ensurePasswordLoginUser(
+  db: PhoneAuthTestDb,
+  phone: string,
+) {
+  const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone(phone));
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, password_hash, status)
+      VALUES ($1, $2, $3, 'active')
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET
+        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
+        status = 'active'
+    `,
+    [randomUUID(), phone, passwordHash],
+  );
 }
 
 type PhoneAuthTestDb = Awaited<ReturnType<typeof createDevDb>>;
@@ -8819,6 +9338,144 @@ async function readOrganizationIdForPhone(
   const organizationId = membership.rows[0]?.organization_id;
   assert.ok(organizationId, `missing organization for ${phoneE164}`);
   return organizationId;
+}
+
+async function readProjectOrganizationId(db: PhoneAuthTestDb, projectId: string) {
+  const project = await db.query<{ organization_id: string }>(
+    "SELECT organization_id FROM projects WHERE id = $1 LIMIT 1",
+    [projectId],
+  );
+  const organizationId = project.rows[0]?.organization_id;
+  assert.ok(organizationId, `missing project organization for ${projectId}`);
+  return organizationId;
+}
+
+async function seedPreviewScriptModelConfig(db: PhoneAuthTestDb, baseCredits: number) {
+  await db.query("UPDATE ai_model_configs SET status = 'disabled' WHERE media_type = 'text'");
+  await db.query(
+    `
+      INSERT INTO ai_model_configs (
+        id,
+        model_code,
+        display_name,
+        provider_name,
+        provider_model,
+        provider_protocol,
+        invocation_mode,
+        media_type,
+        task_modes_json,
+        capabilities_json,
+        parameter_schema_json,
+        default_params_json,
+        provider_config_json,
+        pricing_json,
+        limits_json,
+        ui_config_json,
+        status,
+        sort_order,
+        remark,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        'preview-script-model',
+        '预览剧本模型',
+        'deepseek',
+        'deepseek-chat',
+        'openai_compatible_chat',
+        'stream',
+        'text',
+        '["text.script"]'::jsonb,
+        '{"input":["prompt"],"output":["text"]}'::jsonb,
+        '{"scriptPrompt":{"type":"string","required":true}}'::jsonb,
+        '{}'::jsonb,
+        '{"baseURL":"https://api.deepseek.com","requestPath":"/chat/completions","apiKeyEnv":"DEEPSEEK_API_KEY"}'::jsonb,
+        $2::jsonb,
+        '{}'::jsonb,
+        '{"modelKind":"text.script","supportedModes":["script"]}'::jsonb,
+        'active',
+        -1000,
+        '',
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (model_code) DO UPDATE
+      SET pricing_json = EXCLUDED.pricing_json,
+          task_modes_json = EXCLUDED.task_modes_json,
+          ui_config_json = EXCLUDED.ui_config_json,
+          status = 'active',
+          updated_at = NOW()
+    `,
+    [randomUUID(), JSON.stringify({ unit: "text", baseCredits })],
+  );
+}
+
+async function createAiStoryboardPreviewProject(
+  origin: string,
+  cookie: string,
+  keySuffix: string,
+) {
+  const response = await fetch(`${origin}/api/creator/project/create`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": `http-ai-storyboard-preview-${keySuffix}-project`,
+      cookie,
+    },
+    body: JSON.stringify({
+      name: `AI storyboard preview ${keySuffix}`,
+      scriptInput: "任小野把小草托付给闵婶子。",
+      aspectRatio: "9:16",
+      resolution: "1080p",
+    }),
+  });
+  assert.equal(response.status, 200);
+  return await response.json();
+}
+
+async function readStoryboardPromptPackages(origin: string, cookie: string) {
+  const response = await fetch(
+    `${origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+    { headers: { cookie } },
+  );
+  const envelope = await response.json();
+  const packages = envelope.packages as Array<{ id: string; code: string }>;
+  const packageId = (code: string) => {
+    const found = packages.find((item) => item.code === code);
+    assert.ok(found, `missing package ${code}`);
+    return found.id;
+  };
+  return {
+    genrePackageId: packageId("xuanhuan_xiuxian"),
+    emotionPackageId: packageId("male_hotblood"),
+  };
+}
+
+async function postAiStoryboardPreview(
+  origin: string,
+  input: {
+    cookie: string;
+    projectId: string;
+    idempotencyKey: string;
+    packages: {
+      genrePackageId: string;
+      emotionPackageId: string;
+    };
+  },
+) {
+  return fetch(`${origin}/api/creator/projects/${input.projectId}/ai-storyboard-preview`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": input.idempotencyKey,
+      cookie: input.cookie,
+    },
+    body: JSON.stringify({
+      scriptText: "任小野把小草托付给闵婶子。",
+      packages: input.packages,
+    }),
+  });
 }
 
 async function seedActiveGenerationMembership(

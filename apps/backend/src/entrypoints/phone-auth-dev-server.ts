@@ -49,6 +49,7 @@ import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
+import { createCreditPackageService } from "../modules/commerce-payment/credit-package.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
   createEnvPaymentProviderRegistry,
@@ -139,6 +140,10 @@ import type { AssetType } from "../modules/project/asset.service.ts";
 import { createExportRecord } from "../modules/project/export-record.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
 import { InsufficientCreditsError, grantCreditsInTransaction, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
+import {
+  MembershipCreditGateError,
+  verifyMembershipAndConsumeCredits,
+} from "../modules/credit-billing/membership-credit-gate.service.ts";
 import {
   aggregateWorkflowStatus,
   claimQueuedTask,
@@ -469,6 +474,17 @@ function requiredIdempotencyKeyFromRequest(request: {
   const value = Array.isArray(header) ? header[0] : header;
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function uuidFromIdempotencyKey(key: string) {
+  const hex = createHash("sha256").update(key).digest("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `8${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join("-");
 }
 
 function writeIdempotencyKeyRequired(response: ServerResponse) {
@@ -826,6 +842,11 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
 
   if (error instanceof GenerationModelExecutionResolutionError) {
     writeJson(response, envelopedError(400, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof MembershipCreditGateError) {
+    writeJson(response, envelopedError(error.status, error.code, error.message));
     return true;
   }
 
@@ -1569,11 +1590,12 @@ async function repairPaymentCreditForBackendAdmin(input: {
 
     const creditGrant = await grantCreditsInTransaction(input.db, {
       organizationId: order.organization_id,
+      userId: order.created_by_user_id,
       amount: order.credits,
       sourceType: "payment_order",
       sourceId: order.id,
       reason,
-      createdByUserId: null,
+      createdByUserId: order.created_by_user_id,
       metadata: {
         orderNo: order.order_no,
         paymentIntentId: order.successful_payment_intent_id,
@@ -2271,6 +2293,76 @@ function generationCostFromModelConfig(
     : fallbackCost;
 }
 
+function modelConfigSupportsScriptGeneration(modelConfig: AiModelConfigRecord) {
+  const tokens = [
+    modelConfig.mediaType,
+    modelConfig.modelCode,
+    ...modelConfig.taskModes,
+    ...readStringArray(modelConfig.uiConfig.supportedModes),
+  ]
+    .map((item) => String(item ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  return tokens.some((token) => token === "text" || token === "text.script" || token === "script" || token.includes("script"));
+}
+
+async function findActiveScriptGenerationModelConfig(
+  db: Parameters<typeof listActiveAiModelConfigs>[0],
+) {
+  const activeTextModels = await listActiveAiModelConfigs(db, { mediaType: "text" });
+  const scriptModels = activeTextModels.filter(modelConfigSupportsScriptGeneration);
+  return scriptModels.find((modelConfig) => generationCostFromModelConfig(0, modelConfig) > 0) ?? scriptModels[0];
+}
+
+async function reserveAndConsumeAiStoryboardPreviewCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    workspaceId: string | null;
+    projectId: string;
+    createdByUserId: string;
+    idempotencyKey: string;
+    promptPreview: string;
+    modelConfig?: AiModelConfigRecord;
+    now: Date;
+  },
+) {
+  const amount = generationCostFromModelConfig(0, input.modelConfig);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+  const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
+  const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
+  const metadata = {
+    targetUserId: input.createdByUserId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    modelCode,
+    modelLabel,
+    mediaType: "text",
+    kind: "text",
+    taskType: "ai_storyboard_preview",
+    operation: "ai_storyboard_preview",
+    billingEvent: "consumed",
+    outcome: "consumed",
+    promptPreview: input.promptPreview,
+  };
+  return verifyMembershipAndConsumeCredits(db, {
+    userId: input.createdByUserId,
+    requiredCredits: amount,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    idempotencyKey: input.idempotencyKey,
+    sourceType: "episode_generation_task",
+    sourceId,
+    reason: "script generation",
+    allocationKey: "ai_storyboard_preview",
+    metadata,
+    now: input.now,
+  });
+}
+
 async function hasActiveGenerationMembership(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { organizationId: string; now: Date },
@@ -2305,6 +2397,7 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
+    remark: modelConfig.remark,
     mediaType: modelConfig.mediaType,
     videoCategory,
     videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
@@ -2722,136 +2815,43 @@ async function resolveCreditBalanceScope(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
-  await ensurePersonalProjectWorkspaceAccess(db, userId);
-  const personalWorkspaceId = personalProjectWorkspaceId(userId);
-  const personalMembership = await queryOne<{
-    organization_id: string;
-    workspace_id: string;
-    membership_id: string;
-    role: string;
-  }>(
-    db,
-    `
-      SELECT organization_id, workspace_id, id AS membership_id, role
-      FROM memberships
-      WHERE user_id = $1
-        AND organization_id = $2
-        AND workspace_id = $3
-        AND status = 'active'
-      ORDER BY
-        CASE WHEN role = 'owner_admin' THEN 0 ELSE 1 END,
-        created_at ASC
-      LIMIT 1
-    `,
-    [userId, devOrganizationId, personalWorkspaceId],
-  );
-  if (personalMembership) {
-    return {
-      organizationId: personalMembership.organization_id,
-      workspaceId: personalMembership.workspace_id,
-    };
-  }
-
-  const scope = personalDevTenantScope(userId);
-  return {
-    organizationId: scope.organizationId,
-    workspaceId: scope.workspaceId,
-  };
+  await ensurePersonalDevWorkspaceAccess(db, userId);
+  return personalDevTenantScope(userId);
 }
 
 async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
-  const scope = await resolveCreditBalanceScope(db, userId);
+  await resolveCreditBalanceScope(db, userId);
   const row = await queryOne<{
-    available_credits: number | string | null;
-    reserved_credits: number | string | null;
-    frozen_credits: number | string | null;
+    credit_balance_cached: number | string | null;
+    credit_reserved_cached: number | string | null;
+    credit_frozen_cached: number | string | null;
     credit_frozen_at: Date | string | null;
     credit_frozen_until: Date | string | null;
   }>(
     db,
     `
       SELECT
-        CASE
-          WHEN m.organization_id = $2
-           AND m.role = 'owner_admin'
-           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN COALESCE(o.credit_balance_cached, 0)
-          ELSE COALESCE(tp.credit_balance_cached, o.credit_balance_cached, 0)
-        END AS available_credits,
-        CASE
-          WHEN tp.id IS NULL
-            OR (
-              m.organization_id = $2
-              AND m.role = 'owner_admin'
-              AND COALESCE(o.credit_frozen_cached, 0) > 0
-            ) THEN COALESCE(o.credit_frozen_cached, 0)
-          ELSE 0
-        END AS frozen_credits,
-        CASE
-          WHEN tp.id IS NULL
-            OR (
-              m.organization_id = $2
-              AND m.role = 'owner_admin'
-              AND COALESCE(o.credit_frozen_cached, 0) > 0
-            ) THEN o.credit_frozen_at
-          ELSE NULL
-        END AS credit_frozen_at,
-        CASE
-          WHEN tp.id IS NULL
-            OR (
-              m.organization_id = $2
-              AND m.role = 'owner_admin'
-              AND COALESCE(o.credit_frozen_cached, 0) > 0
-            ) THEN o.credit_frozen_until
-          ELSE NULL
-        END AS credit_frozen_until,
-        CASE
-          WHEN tp.id IS NULL
-            OR (
-              m.organization_id = $2
-              AND m.role = 'owner_admin'
-              AND COALESCE(o.credit_frozen_cached, 0) > 0
-            ) THEN COALESCE(o.credit_reserved_cached, 0)
-          ELSE COALESCE((
-            SELECT SUM(r.amount_reserved)
-            FROM credit_reservations r
-            WHERE r.organization_id = m.organization_id
-              AND r.status = 'active'
-              AND (
-                r.metadata_json->>'targetUserId' = u.id::text
-                OR r.metadata_json->>'targetMembershipId' = m.id::text
-              )
-          ), 0)
-        END AS reserved_credits
+        credit_balance_cached,
+        credit_reserved_cached,
+        credit_frozen_cached,
+        credit_frozen_at,
+        credit_frozen_until
       FROM users u
-      LEFT JOIN memberships m ON m.user_id = u.id AND m.status = 'active'
-      LEFT JOIN organizations o ON o.id = m.organization_id
-      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE u.id = $1
-      ORDER BY
-        CASE
-          WHEN m.organization_id = $2
-           AND m.role = 'owner_admin'
-           AND tp.id IS NULL
-           AND COALESCE(o.credit_frozen_cached, 0) > 0 THEN 0
-          ELSE 1
-        END,
-        CASE WHEN tp.id IS NOT NULL THEN 0 ELSE 1 END,
-        CASE WHEN m.organization_id = $2 THEN 0 ELSE 1 END,
-        m.created_at ASC
       LIMIT 1
     `,
-    [userId, scope.organizationId],
+    [userId],
   );
-  const availableCredits = Number(row?.available_credits ?? 0);
-  const frozenCredits = Number(row?.frozen_credits ?? 0);
+  const availableCredits = Number(row?.credit_balance_cached ?? 0);
+  const frozenCredits = Number(row?.credit_frozen_cached ?? 0);
   return {
     availableCredits,
     creditBalance: availableCredits,
     displayCreditBalance: availableCredits + frozenCredits,
-    reservedCredits: Number(row?.reserved_credits ?? 0),
+    reservedCredits: Number(row?.credit_reserved_cached ?? 0),
     frozenCredits,
     creditFrozenAt: row?.credit_frozen_at ? new Date(row.credit_frozen_at).toISOString() : null,
     creditFrozenUntil: row?.credit_frozen_until ? new Date(row.credit_frozen_until).toISOString() : null,
@@ -4755,7 +4755,7 @@ async function createEpisodeGenerationTask(
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
   });
-  if (modelConfig) {
+  if (estimatedCost > 0) {
     const hasMembership = await hasActiveGenerationMembership(db, {
       organizationId: context.actor.organizationId,
       now: input.now,
@@ -4933,6 +4933,7 @@ async function createEpisodeGenerationTask(
 
   const reservation = await reserveCredits(db, {
     organizationId: context.actor.organizationId,
+    userId: context.userId,
     workspaceId: context.actor.workspaceId,
     projectId: context.project.id,
     workflowId: workflow.workflow.id,
@@ -8759,6 +8760,14 @@ async function resolvePersonalProjectWorkspaceForSession(
   return personalProjectWorkspaceId(authenticated.user.id);
 }
 
+async function resolvePersonalBillingScopeForSession(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  authenticated: { sessionToken: string; user: AuthenticatedUser },
+): Promise<DevTenantScope> {
+  await ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
+  return personalDevTenantScope(authenticated.user.id);
+}
+
 async function ensurePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
@@ -10451,7 +10460,7 @@ export function createPhoneAuthDevServer(
           body: await adminUsers.listUsers({
             keyword: url.searchParams.get("keyword"),
             page: Number(url.searchParams.get("page") ?? 1),
-            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 20),
           }),
         });
       }
@@ -10471,7 +10480,7 @@ export function createPhoneAuthDevServer(
           body: await adminUsers.listTeamPermissionAccounts({
             keyword: url.searchParams.get("keyword"),
             page: Number(url.searchParams.get("page") ?? 1),
-            pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+            pageSize: Number(url.searchParams.get("pageSize") ?? 20),
           }),
         });
       }
@@ -12571,20 +12580,44 @@ export function createPhoneAuthDevServer(
         }
 
         const range = String(url.searchParams.get("range") ?? "all");
-        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 100), 1), 500);
+        const requestedPageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 20), 1), 500);
         const now = new Date();
-        let rangeClause = "";
+        const whereClauses = ["1=1"];
         const params: Array<unknown> = [];
         if (range === "day") {
-          rangeClause = `AND created_at >= $1 AND created_at < $2`;
           const day = shanghaiDayWindow(now);
-          params.push(day.start, day.end);
+          whereClauses.push(`created_at >= $${params.length + 1}`);
+          params.push(day.start);
+          whereClauses.push(`created_at < $${params.length + 1}`);
+          params.push(day.end);
         } else if (range === "month") {
           const month = shanghaiMonthWindow(now);
-          rangeClause = `AND created_at >= $1 AND created_at < $2`;
-          params.push(month.start, month.end);
+          whereClauses.push(`created_at >= $${params.length + 1}`);
+          params.push(month.start);
+          whereClauses.push(`created_at < $${params.length + 1}`);
+          params.push(month.end);
         }
-        params.push(pageSize);
+
+        const hiddenPhones = ["13800138000", "13800138001"];
+        const hiddenIpAddresses = ["127.0.0.1", "203.0.113.20"];
+        whereClauses.push(`phone_e164 <> ALL($${params.length + 1})`);
+        params.push(hiddenPhones);
+        whereClauses.push(`COALESCE(ip_address, '') <> ALL($${params.length + 1})`);
+        params.push(hiddenIpAddresses);
+        const whereSql = whereClauses.join("\n              AND ");
+        const totalResult = await db.query<{ count: number | string }>(
+          `
+            SELECT COUNT(*) AS count
+            FROM sms_send_records
+            WHERE ${whereSql}
+          `,
+          params,
+        );
+        const total = Number(totalResult.rows[0]?.count ?? 0);
+        const totalPages = Math.max(1, Math.ceil(total / requestedPageSize));
+        const page = Math.min(Math.max(1, Number(url.searchParams.get("page") ?? 1)), totalPages);
+        const offset = (page - 1) * requestedPageSize;
+        const listParams = [...params, requestedPageSize, offset];
         const rows = await db.query<{
           id: string;
           phone_e164: string;
@@ -12614,12 +12647,12 @@ export function createPhoneAuthDevServer(
               error_code,
               created_at
             FROM sms_send_records
-            WHERE 1=1
-            ${rangeClause}
+            WHERE ${whereSql}
             ORDER BY created_at DESC, id DESC
-            LIMIT $${params.length}
+            LIMIT $${listParams.length - 1}
+            OFFSET $${listParams.length}
           `,
-          params,
+          listParams,
         );
 
         return writeJson(response, {
@@ -12638,6 +12671,11 @@ export function createPhoneAuthDevServer(
               errorCode: row.error_code,
               createdAt: row.created_at.toISOString(),
             })),
+            meta: {
+              page,
+              pageSize: requestedPageSize,
+              total,
+            },
           },
         });
       }
@@ -13792,11 +13830,11 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
+        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
 
         const membershipOrders = createMembershipOrderService({
           db,
-          workspaceId: currentWorkspaceId,
+          workspaceId: billingScope.workspaceId,
         });
         await ensureDefaultMembershipPlan(db, { now: new Date() });
 
@@ -13848,7 +13886,7 @@ export function createPhoneAuthDevServer(
           };
           const commercePayment = createCommercePaymentService({
             db,
-            workspaceId: currentWorkspaceId,
+            workspaceId: billingScope.workspaceId,
             callbackSecret: devPaymentCallbackSecret,
             providerRegistry: devPaymentProviderRegistry,
           });
@@ -13897,12 +13935,12 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
+        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
 
         await ensureDefaultCreditPackage(db, { now: new Date() });
         const commercePayment = createCommercePaymentService({
           db,
-          workspaceId: currentWorkspaceId,
+          workspaceId: billingScope.workspaceId,
           callbackSecret: devPaymentCallbackSecret,
           providerRegistry: devPaymentProviderRegistry,
         });
@@ -15588,13 +15626,13 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
           const adminUsers = createAdminUserService({ db });
-          const workspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
+          const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
           return writeJson(response, {
             status: 200,
             body: await adminUsers.listUserCreditLedger({
               userId: authenticated.user.id,
-              organizationId: devOrganizationId,
-              workspaceId,
+              organizationId: billingScope.organizationId,
+              workspaceId: billingScope.workspaceId,
               pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             }),
           });
@@ -16228,11 +16266,15 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && aiStoryboardPreviewMatch) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
           const projectId = decodeURIComponent(aiStoryboardPreviewMatch[1]);
           if (!isUuid(projectId)) {
             return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
           }
-          await resolveActorContext(db, {
+          const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             projectId,
             now: new Date(),
@@ -16287,6 +16329,17 @@ export function createPhoneAuthDevServer(
           const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
           const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
           const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
+          const scriptModelConfig = await findActiveScriptGenerationModelConfig(db);
+          await reserveAndConsumeAiStoryboardPreviewCredits(db, {
+            organizationId: actor.organizationId,
+            workspaceId: actor.workspaceId ?? null,
+            projectId,
+            createdByUserId: authenticated.user.id,
+            idempotencyKey,
+            promptPreview: scriptText.slice(0, 200),
+            modelConfig: scriptModelConfig,
+            now: new Date(),
+          });
 
           const previewInput = {
             projectId,

@@ -156,6 +156,47 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("routes Lingdong image models to the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "lingdong-image",
+      modelConfig: imageModelConfig({
+        modelCode: "lingdong-image",
+        providerName: "lingdong",
+        providerProtocol: "lingdong_api",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: {
+        mode: "single-image",
+      },
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.queueName, "generation-submit-image");
+  });
+
+  it("routes Lingdong video models to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "lingdong-video",
+      modelConfig: videoModelConfig({
+        modelCode: "lingdong-video",
+        providerName: "lingdong",
+        providerProtocol: "lingdong_api",
+        providerModel: "sora-2",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
   it("rejects generation requests without an explicit model", () => {
     assertExecutionError(
       () => resolveGenerationModelExecution({

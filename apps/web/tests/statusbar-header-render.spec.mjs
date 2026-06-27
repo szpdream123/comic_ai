@@ -60,6 +60,17 @@ test("global statusbar account card shows phone and keeps upgrade prompt without
   assert.match(card, /当前套餐：未开通/);
 });
 
+test("home statusbar wraps quick actions instead of forcing horizontal overlap on narrow screens", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.workbench-main\.home-mode \.statusbar-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.workbench-main\.home-mode \.statusbar-actions\s*\{[\s\S]*width:\s*100%/);
+  assert.match(css, /\.statusbar-quick-action span:not\(\.statusbar-action-icon\),[\s\S]*text-overflow:\s*ellipsis/);
+});
+
 test("home hero renders cinematic starfield layers for the AI short drama studio", () => {
   const html = renderProjectDetail({
     state: createBaseState(),
@@ -246,7 +257,13 @@ test("global statusbar account menu exposes the community feedback entry", () =>
   });
 
   assert.match(html, /data-action="open-community-page">社区反馈<\/button>/);
-  assert.match(html, /data-action="open-personal-media-page">素材库<\/button>/);
+  assert.doesNotMatch(html, />我的订阅<\/button>/);
+  assert.doesNotMatch(html, />订单开票<\/button>/);
+  assert.doesNotMatch(html, />合伙人中心<\/button>/);
+  assert.doesNotMatch(html, />水印设置<\/button>/);
+  assert.doesNotMatch(html, />更新日志<\/button>/);
+  assert.doesNotMatch(html, />素材库<\/button>/);
+  assert.doesNotMatch(html, />专属服务支持<\/button>/);
 });
 
 test("global statusbar shows the current account credit balance in wallet only", () => {

@@ -2170,6 +2170,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(forbidden.status, 401);
       assert.equal(forbiddenPayload.error.code, "admin_unauthenticated");
       assert.equal(usersResponse.status, 200);
+      assert.equal(usersPayload.meta.page, 1);
+      assert.equal(usersPayload.meta.pageSize, 20);
       assert.ok(usersPayload.data.length >= 3);
       assert.equal(ownerRows.length, 1);
       assert.equal(ownerRows[0].availableCredits, 0);
@@ -5584,6 +5586,32 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         `,
         [randomUUID()],
       );
+      await db.query(
+        `
+          INSERT INTO sms_send_records (
+            id,
+            phone_e164,
+            verification_code,
+            sms_content,
+            provider,
+            status,
+            ip_address,
+            user_agent_hash,
+            created_at
+          ) VALUES (
+            $1,
+            '18612345678',
+            '654321',
+            '【登录验证】验证码 654321，5 分钟内有效。',
+            'tencent',
+            'sent',
+            '198.51.100.42',
+            'hash-ua-real',
+            now()
+          )
+        `,
+        [randomUUID()],
+      );
 
       const forbidden = await fetch(`${server.origin}/api/admin/sms-records`);
       const allowed = await fetch(`${server.origin}/api/admin/sms-records?range=all`, {
@@ -5594,9 +5622,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(forbidden.status, 401);
       assert.equal(allowed.status, 200);
       assert.equal(Array.isArray(payload.data), true);
-      assert.equal(payload.data[0]?.verificationCode, "123456");
-      assert.equal(payload.data[0]?.smsContent, "【登录验证】验证码 123456，5 分钟内有效。");
-      assert.equal(payload.data[0]?.ipAddress, "203.0.113.10");
+      assert.equal(payload.meta.page, 1);
+      assert.equal(payload.meta.pageSize, 20);
+      assert.equal(payload.meta.total, 1);
+      assert.equal(payload.data.length, 1);
+      assert.equal(payload.data[0]?.phone, "18612345678");
+      assert.equal(payload.data[0]?.verificationCode, "654321");
+      assert.equal(payload.data[0]?.smsContent, "【登录验证】验证码 654321，5 分钟内有效。");
+      assert.equal(payload.data[0]?.ipAddress, "198.51.100.42");
     } finally {
       await server.close();
     }

@@ -234,6 +234,9 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   ) {
     await applySqlMigration(db, process.cwd(), "0007_ai_model_configs.sql");
   } else {
+    if (!(await constraintAllowsValue(db, "ai_model_configs", "ai_model_configs_provider_protocol_check", "lingdong_api"))) {
+      await applySqlMigration(db, process.cwd(), "0047_lingdong_api_provider_protocol.sql");
+    }
     if (!(await seedanceModelConfigsCurrent(db))) {
       await applySqlMigration(db, process.cwd(), "0020_seedance_video_model_configs.sql");
     }
@@ -245,6 +248,9 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     }
     if (!(await gptImageReferenceModelConfigsCurrent(db))) {
       await applySqlMigration(db, process.cwd(), "0027_gpt_image_reference_model_config.sql");
+    }
+    if (!(await lingdongModelConfigsCurrent(db))) {
+      await applySqlMigration(db, process.cwd(), "0049_lingdong_model_configs.sql");
     }
     await ensureHappyHorseResolutionConfig(db);
     await ensureVideoModelCategories(db);
@@ -342,6 +348,34 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "restore"))
   ) {
     await applySqlMigration(db, process.cwd(), "0044_credit_direct_recharge_wallet_freeze.sql");
+  }
+
+  if (!(await constraintExists(db, "users", "users_phone_e164_format_check"))) {
+    await applySqlMigration(db, process.cwd(), "0047_users_phone_numeric_constraint.sql");
+  }
+
+  if (
+    !(await columnExists(db, "users", "invite_code")) ||
+    !(await constraintExists(db, "users", "users_invite_code_format_check")) ||
+    !(await indexExists(db, "users_invite_code_key"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0048_user_invite_codes.sql");
+  }
+
+  if (await inviteCodeGeneratorNeedsRefresh(db)) {
+    await applySqlMigration(db, process.cwd(), "0050_random_user_invite_codes.sql");
+  }
+
+  if (
+    !(await columnExists(db, "users", "credit_balance_cached")) ||
+    !(await columnExists(db, "users", "credit_reserved_cached")) ||
+    !(await columnExists(db, "users", "credit_frozen_cached")) ||
+    !(await columnExists(db, "credit_ledger_entries", "user_id")) ||
+    !(await columnExists(db, "credit_reservations", "user_id")) ||
+    !(await columnExists(db, "credit_lots", "user_id")) ||
+    !(await columnExists(db, "credit_reservation_lot_allocations", "user_id"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0051_user_credit_wallets.sql");
   }
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
@@ -547,7 +581,6 @@ async function ensureFoundationBaseSchema(db: SqlDatabase) {
   if (
     (await tableExists(db, "login_challenges")) &&
     (await tableExists(db, "auth_sessions")) &&
-    (await tableExists(db, "sms_send_records")) &&
     (await tableExists(db, "storage_objects")) &&
     (await tableExists(db, "provider_requests")) &&
     (await tableExists(db, "billing_orders")) &&
@@ -1100,6 +1133,51 @@ async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
   return result.rows[0]?.count === 2;
 }
 
+async function lingdongModelConfigsCurrent(db: SqlDatabase) {
+  if (!(await tableExists(db, "ai_model_configs"))) {
+    return false;
+  }
+
+  const result = await db.query<{ count: number }>(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM ai_model_configs
+      WHERE provider_protocol = 'lingdong_api'
+        AND model_code = ANY($1::text[])
+    `,
+    [[
+      "gpt-image-2",
+      "gpt-image-2pro",
+      "sd-2-1",
+      "sd-2-2",
+      "sd-2-fast",
+      "sd-2-4",
+      "sd-2-5",
+      "sd-2-6",
+      "sd-2-7",
+      "sd-2-8",
+      "sd-2-9",
+      "sd-2-10",
+      "sd-2-11",
+      "sd-2-12",
+      "sd-2-13",
+      "sd-2-14",
+      "sd-2-15",
+      "sd-2-16",
+      "omni_flash",
+      "omni_flash-v2v",
+      "omni_flash_nowater",
+      "omni_flash_nowater-v2v",
+      "sora-2",
+      "sora-2-openai-12s",
+      "sora-2-openai-4s",
+      "sora-2-openai-8s",
+    ]],
+  );
+
+  return result.rows[0]?.count === 26;
+}
+
 async function ensureVideoModelCategories(db: SqlDatabase) {
   if (!(await tableExists(db, "ai_model_configs"))) {
     return;
@@ -1183,6 +1261,42 @@ async function constraintExists(db: SqlDatabase, tableName: string, constraintNa
   );
 
   return constraintCheck.rows[0]?.exists === true;
+}
+
+async function indexExists(db: SqlDatabase, indexName: string) {
+  const indexCheck = await db.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = $1
+      ) AS exists
+    `,
+    [indexName],
+  );
+
+  return indexCheck.rows[0]?.exists === true;
+}
+
+async function inviteCodeGeneratorNeedsRefresh(db: SqlDatabase) {
+  const functionCheck = await db.query<{ definition: string }>(
+    `
+      SELECT pg_get_functiondef(proc.oid) AS definition
+      FROM pg_proc proc
+      JOIN pg_namespace namespace ON namespace.oid = proc.pronamespace
+      WHERE namespace.nspname = current_schema()
+        AND proc.proname = 'generate_user_invite_code'
+      LIMIT 1
+    `,
+  );
+
+  const definition = String(functionCheck.rows[0]?.definition ?? "");
+  if (!definition) {
+    return true;
+  }
+
+  return definition.includes("nextval('user_invite_code_seq'");
 }
 
 async function constraintAllowsValue(

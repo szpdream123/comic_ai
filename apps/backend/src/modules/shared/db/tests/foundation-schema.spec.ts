@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   createMigratedTestDb,
   listColumnNames,
+  listIndexNames,
   listTableNames,
 } from "../test-db.ts";
 import { createDevDb } from "../dev-db.ts";
@@ -88,6 +89,30 @@ describe("foundation schema", () => {
         "metadata_json",
         "created_at",
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("adds unique invite codes to users", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userColumns = await listColumnNames(db, "users");
+      const userIndexes = await listIndexNames(db, "users");
+      const generator = await db.query<{ definition: string }>(
+        `
+          SELECT pg_get_functiondef(proc.oid) AS definition
+          FROM pg_proc proc
+          JOIN pg_namespace namespace ON namespace.oid = proc.pronamespace
+          WHERE namespace.nspname = current_schema()
+            AND proc.proname = 'generate_user_invite_code'
+          LIMIT 1
+        `,
+      );
+
+      assert.ok(userColumns.includes("invite_code"));
+      assert.ok(userIndexes.includes("users_invite_code_key"));
+      assert.equal(generator.rows[0]?.definition.includes("nextval('user_invite_code_seq'"), false);
     } finally {
       await db.close();
     }
@@ -253,7 +278,7 @@ describe("foundation schema", () => {
 
       await db.query(`
         INSERT INTO users (id, phone_e164, status)
-        VALUES ('00000000-0000-4000-8000-000000000301', '+8613800138301', 'active')
+        VALUES ('00000000-0000-4000-8000-000000000301', '13800138301', 'active')
       `);
       await db.query(`
         INSERT INTO organizations (id, name, status)
@@ -405,8 +430,8 @@ describe("foundation schema", () => {
         `
           INSERT INTO users (id, phone_e164, status)
           VALUES
-            ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active'),
-            ('00000000-0000-4000-8000-000000000002', '+8613800138001', 'active')
+            ('00000000-0000-4000-8000-000000000001', '13800138000', 'active'),
+            ('00000000-0000-4000-8000-000000000002', '13800138001', 'active')
         `,
       );
       await db.query(
@@ -466,6 +491,14 @@ describe("foundation schema", () => {
               'producer',
               'active'
             )
+          `,
+        ),
+      );
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO users (id, phone_e164, status)
+            VALUES ('00000000-0000-4000-8000-000000000099', '13b6040b3ef', 'active')
           `,
         ),
       );
@@ -532,7 +565,7 @@ describe("foundation schema", () => {
       await db.query(
         `
           INSERT INTO users (id, phone_e164, status)
-          VALUES ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active')
+          VALUES ('00000000-0000-4000-8000-000000000001', '13800138000', 'active')
         `,
       );
       await db.query(
@@ -721,7 +754,7 @@ describe("foundation schema", () => {
     try {
       await db.query(`
         INSERT INTO users (id, phone_e164, status)
-        VALUES ('00000000-0000-4000-8000-000000000101', '+8613800138101', 'active')
+        VALUES ('00000000-0000-4000-8000-000000000101', '13800138101', 'active')
       `);
       await db.query(`
         INSERT INTO organizations (id, name, status)
@@ -917,7 +950,7 @@ describe("foundation schema", () => {
     try {
       await db.query(`
         INSERT INTO users (id, phone_e164, status)
-        VALUES ('00000000-0000-4000-8000-000000000201', '+8613800138201', 'active')
+        VALUES ('00000000-0000-4000-8000-000000000201', '13800138201', 'active')
       `);
       await db.query(`
         INSERT INTO organizations (id, name, status)
