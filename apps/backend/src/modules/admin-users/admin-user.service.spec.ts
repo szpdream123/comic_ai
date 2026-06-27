@@ -427,6 +427,59 @@ test("admin user credit ledger summary separates frozen credits from available c
   }
 });
 
+test("admin user credit ledger includes membership gift grants for the owner account", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+          '98000000-0000-4000-8000-000000002099',
+          '91000000-0000-4000-8000-000000002001',
+          'grant',
+          30,
+          30,
+          0,
+          0,
+          'membership_gift',
+          '99000000-0000-4000-8000-000000002099',
+          'Membership gift credits',
+          '{}'::jsonb,
+          NULL,
+          '2026-06-05T07:15:00.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002001",
+      pageSize: 20,
+    });
+
+    assert.equal(result.data[0]?.sourceType, "membership_gift");
+    assert.equal(result.data[0]?.amount, 30);
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin user list exposes frozen credits separately from reserved credits", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });

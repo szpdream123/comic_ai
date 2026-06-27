@@ -2532,6 +2532,9 @@ async function refresh(workbench) {
   syncCanvasRouteState(workbench, window.location.hash);
 
   void refreshSessionCreditBalance(workbench, { renderOnChange: false });
+  try {
+    await syncMembershipStatusOnly(workbench);
+  } catch {}
 
   const visibleTab = workbench.ui.activeNavTab;
   const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";

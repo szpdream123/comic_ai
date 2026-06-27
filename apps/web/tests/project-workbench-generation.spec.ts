@@ -22,6 +22,7 @@ import {
   parseProjectRouteForWorkbench,
   sanitizeEpisodeWorkbenchSelection,
   findProjectCoverInput,
+  refreshProductionWorkbenchForTest,
   renderProductionWorkbench,
   syncCanvasProjectsFromApiForTest,
   syncEpisodeStoryboardMapForTest,
@@ -14716,6 +14717,59 @@ describe("production workbench project tab", () => {
       assert.equal(workbench.ui.episodeBatchModal?.show, true);
     } finally {
       globalThis.document = previousDocument;
+    }
+  });
+
+  it("refresh syncs membership status so the statusbar keeps professional membership after reload", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getMembershipStatus() {
+          return {
+            data: {
+              status: "professional_active",
+              currentPeriodEndAt: "2026-07-26T10:58:12.356Z",
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "library",
+        membershipStatus: null,
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        hash: "",
+        pathname: "/",
+      },
+      history: {
+        replaceState() {},
+      },
+    };
+
+    try {
+      await refreshProductionWorkbenchForTest(workbench);
+      await Promise.resolve();
+      assert.equal(workbench.ui.membershipStatus?.status, "professional_active");
+
+      const html = renderProductionWorkbench(workbench);
+      assert.match(html, /当前套餐：专业版/);
+    } finally {
+      globalThis.window = previousWindow;
     }
   });
 

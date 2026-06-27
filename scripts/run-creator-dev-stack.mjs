@@ -70,6 +70,7 @@ function startService(name, args) {
       ...process.env,
       CREATOR_DEV_STACK_MANAGED: "true",
     },
+    windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);

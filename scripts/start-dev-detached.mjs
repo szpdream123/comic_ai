@@ -41,6 +41,7 @@ function spawnDetached(command, args, outFd, errFd) {
     cwd: process.cwd(),
     env: process.env,
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", outFd, errFd],
   });
   child.unref();
