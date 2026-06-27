@@ -45,6 +45,18 @@ test("script upload modal close button is pinned to the far-right grid column", 
   assert.match(closeBlock, /grid-column:\s*4/);
 });
 
+test("script management keeps entry and bulk action buttons responsive on narrow screens", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.script-entry-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
+  assert.match(css, /\.script-bulk-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.script-entry-grid\s*\{[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.script-bulk-actions > \.script-bulk-button\s*\{[\s\S]*width:\s*100%/);
+});
+
 test("script management does not render default status toast", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 

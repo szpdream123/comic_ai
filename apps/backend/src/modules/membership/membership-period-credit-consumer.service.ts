@@ -27,6 +27,7 @@ interface MembershipPeriodRow {
   gift_credits: number;
   order_no: string | null;
   order_status: string | null;
+  created_by_user_id: string | null;
   plan_code: string | null;
 }
 
@@ -65,6 +66,7 @@ export async function consumeMembershipPeriodCreditGrant(
 
         const grant = await grantCreditsInTransaction(db, {
           organizationId: period.organization_id,
+          userId: period.created_by_user_id,
           amount: period.gift_credits,
           sourceType: "membership_gift",
           sourceId: period.id,
@@ -86,7 +88,7 @@ export async function consumeMembershipPeriodCreditGrant(
               planId: period.plan_id,
             },
           },
-          createdByUserId: null,
+          createdByUserId: period.created_by_user_id,
           now: input.now,
         });
         await markBillingOrderCreditGranted(db, {
@@ -133,6 +135,7 @@ async function findMembershipPeriodForCreditGrant(
         mp.gift_credits,
         bo.order_no,
         bo.status AS order_status,
+        bo.created_by_user_id,
         mplan.code AS plan_code
       FROM membership_periods mp
       LEFT JOIN billing_orders bo

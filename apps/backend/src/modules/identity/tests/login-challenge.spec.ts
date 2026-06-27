@@ -25,7 +25,7 @@ describe("login challenge schema assumptions", () => {
 
     assert.match(sql, /CREATE TABLE login_challenges \(/);
     assert.match(sql, /CREATE TABLE auth_sessions \(/);
-    assert.match(sql, /phone_e164 text UNIQUE NULL/);
+    assert.match(sql, /phone_e164 text UNIQUE NULL CHECK \(phone_e164 IS NULL OR phone_e164 ~ '\^1\[0-9\]\{10\}\$'\)/);
     assert.doesNotMatch(sql, /email text NOT NULL UNIQUE/);
   });
 

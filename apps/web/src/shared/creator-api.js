@@ -175,14 +175,29 @@ async function* postJsonSse(url, body, options = {}) {
     headers: {
       "content-type": "application/json",
       accept: "text/event-stream",
+      "idempotency-key":
+        options.idempotencyKey ??
+        buildActionIdempotencyKey(url, body ?? {}),
     },
     body: JSON.stringify(body ?? {}),
     signal: options.signal,
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    const error = new Error(text || `request_failed:${response.status}`);
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = {};
+      }
+    }
+    const message = payload.message ?? payload.error ?? payload.errorCode ?? text;
+    const error = new Error(message || `request_failed:${response.status}`);
     error.status = response.status;
+    error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
+    error.details = payload.details ?? null;
+    error.requestId = payload.requestId ?? null;
     throw error;
   }
   const reader = response.body?.getReader?.();
@@ -1133,7 +1148,12 @@ export const creatorApi = {
   createAiStoryboardPreview(projectId, input, options = {}) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key":
+          options.idempotencyKey ??
+          buildActionIdempotencyKey("creator.ai-storyboard-preview", input ?? {}),
+      },
       body: JSON.stringify(input ?? {}),
       timeoutMs: 180000,
       signal: options.signal,

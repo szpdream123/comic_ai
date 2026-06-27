@@ -232,6 +232,7 @@ if (canvas && ctx) {
 const form = document.querySelector("#login-form");
 const phoneInput = document.querySelector("#phone-input");
 const codeInput = document.querySelector("#code-input");
+const inviteCodeInput = document.querySelector("#invite-code-input");
 const requestCodeButton = document.querySelector("#request-code-button");
 const verifyButton = document.querySelector("#verify-button");
 const statusMessage = document.querySelector("#status-message");
@@ -647,6 +648,7 @@ form?.addEventListener("submit", async (event) => {
 
   const phone = phoneInput?.value?.trim() ?? "";
   const code = codeInput?.value?.trim() ?? "";
+  const inviteCode = inviteCodeInput?.value?.trim() ?? "";
 
   if (!isMainlandPhoneInput(phone)) {
     setStatus("请输入11位手机号，且不要带 +86");
@@ -672,6 +674,7 @@ form?.addEventListener("submit", async (event) => {
       challengeId: activeChallengeId,
       phone,
       code,
+      inviteCode: inviteCode || undefined,
       remember: phoneRememberInput?.checked !== false,
     }),
     credentials: "include",

@@ -4,7 +4,7 @@
 CREATE TABLE users (
   id uuid PRIMARY KEY,
   email text UNIQUE,
-  phone_e164 text UNIQUE NULL,
+  phone_e164 text UNIQUE NULL CHECK (phone_e164 IS NULL OR phone_e164 ~ '^1[0-9]{10}$'),
   display_name text NULL,
   password_hash text NULL,
   status text NOT NULL CHECK (status IN ('active', 'disabled')),

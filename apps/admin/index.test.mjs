@@ -467,7 +467,7 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /openUserActionDrawer/);
   assert.match(script, /openUserModelRequestDrawer/);
   assert.match(script, /toggleUserModelRequestInline/);
-  assert.match(script, /<th>用户ID<\/th><th>用户名<\/th><th>手机号<\/th>/);
+  assert.match(script, /<th>用户ID<\/th><th>邀请码<\/th><th>用户名<\/th><th>手机号<\/th>/);
   assert.match(script, /用户操作/);
   assert.match(script, /查看账户与模型记录/);
   assert.match(script, /只看模型记录/);
@@ -485,7 +485,9 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','\$\{nextStatus\}'\)"/);
   assert.match(script, /onclick="openUserActionDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','archived'\)"/);
-  assert.match(script, /<td><div>\$\{user\.userId\}<\/div>/);
+  assert.match(script, /function compactUserId\(userId\)/);
+  assert.match(script, /<td><div title="\$\{escapeAttribute\(user\.userId\)\}">\$\{escapeHtml\(compactUserId\(user\.userId\)\)\}<\/div>/);
+  assert.match(script, /<td>\$\{escapeHtml\(user\.inviteCode \|\| "-"\)\}<\/td>/);
   assert.match(script, /<td>\$\{escapeHtml\(user\.displayName \|\| "未命名用户"\)\}<\/td>/);
   assert.match(script, /<td>\$\{escapeHtml\(user\.phone \|\| "-"\)\}<\/td>/);
   assert.match(script, /user-model-request-inline-row/);
@@ -723,19 +725,48 @@ test("admin user credit search filters rows without rerendering the shell input"
   assert.match(script, /id="user-search-input"/);
   assert.match(script, /id="user-table-body"/);
   assert.match(script, /id="user-visible-count"/);
+  assert.match(script, /id="user-pagination"/);
   assert.match(script, /function refreshUserTable/);
+  assert.match(script, /function renderUserPagination/);
   assert.match(script, /function bindUserFilterControls/);
   assert.match(script, /function scheduleUserKeywordSearch/);
-  assert.match(script, /const params = new URLSearchParams\(\{ pageSize: "100" \}\)/);
+  assert.match(script, /const params = new URLSearchParams\(\{\s*page: String\(Math\.max\(1, Number\(state\.userPage\) \|\| 1\)\),\s*pageSize: String\(Number\(state\.userPageSize\) \|\| 20\),\s*\}\)/);
   assert.match(script, /if \(keyword\) params\.set\("keyword", keyword\)/);
   assert.match(script, /await api\(`\/api\/admin\/users\?\$\{params\.toString\(\)\}`\)/);
   assert.match(script, /state\.userTotal = Number\(result\.meta\?\.total \|\| \(result\.data \|\| \[\]\)\.length \|\| 0\)/);
+  assert.match(script, /state\.userPageSize = pageSize/);
+  assert.match(script, /state\.userPage = Math\.min\(Math\.max\(1, Number\(result\.meta\?\.page \|\| state\.userPage \|\| 1\)\), totalPages\)/);
   assert.match(script, /addEventListener\("input"/);
   assert.match(script, /refreshUserTable\(\)/);
+  assert.match(script, /renderUserPagination\(\)/);
   assert.match(script, /scheduleUserKeywordSearch\(\)/);
   assert.match(script, /setTimeout\(async \(\) =>/);
   assert.doesNotMatch(script, /oninput="updateUserFilter/);
   assert.doesNotMatch(script, /function updateUserFilter\(key, value\) \{[\s\S]*?renderShell\(\);[\s\S]*?\}/);
+});
+
+test("admin user credit page uses backend pagination with 20 users per page", () => {
+  assert.match(script, /userPage: 1/);
+  assert.match(script, /userPageSize: 20/);
+  assert.match(script, /function setUserPage\(page\)/);
+  assert.match(script, /loadUsers\(\)\.then\(renderShell\)/);
+  assert.match(script, /第 \$\{currentPage\} \/ \$\{totalPages\} 页 · 共 \$\{totalCount\} 条/);
+  assert.match(script, /onclick="setUserPage\(\$\{currentPage - 1\}\)"/);
+  assert.match(script, /onclick="setUserPage\(\$\{currentPage \+ 1\}\)"/);
+});
+
+test("admin sms records page uses backend pagination with 20 rows per page", () => {
+  assert.match(script, /smsRecordTotal: 0/);
+  assert.match(script, /smsRecordPage: 1/);
+  assert.match(script, /smsRecordPageSize: 20/);
+  assert.match(script, /function setSmsRecordPage\(page\)/);
+  assert.match(script, /page: String\(Math\.max\(1, Number\(state\.smsRecordPage\) \|\| 1\)\)/);
+  assert.match(script, /pageSize: String\(Number\(state\.smsRecordPageSize\) \|\| 20\)/);
+  assert.match(script, /state\.smsRecordTotal = Number\(result\.meta\?\.total \|\| \(result\.data \|\| \[\]\)\.length \|\| 0\)/);
+  assert.match(script, /state\.smsRecordPage = Math\.min\(Math\.max\(1, Number\(result\.meta\?\.page \|\| state\.smsRecordPage \|\| 1\)\), totalPages\)/);
+  assert.match(script, /state\.smsRecordRange = value \|\| "all";\s*state\.smsRecordPage = 1;/);
+  assert.match(script, /onclick="setSmsRecordPage\(\$\{currentPage - 1\}\)"/);
+  assert.match(script, /onclick="setSmsRecordPage\(\$\{currentPage \+ 1\}\)"/);
 });
 
 test("admin user credit account taxonomy only exposes normal and team users", () => {

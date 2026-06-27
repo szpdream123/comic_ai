@@ -6946,11 +6946,13 @@ describe("production workbench project tab", () => {
             {
               modelCode: "seedance-i2v-fast",
               modelLabel: "Seedance 2.0 Fast",
+              remark: "4图3音频/4000积分每条",
               supportedModes: ["video.image_to_video"],
             },
             {
               modelCode: "seedance-i2v-pro",
               modelLabel: "Seedance 2.0 Pro",
+              remark: "4图3音频/4800积分每条",
               supportedModes: ["video.image_to_video"],
             },
           ],
@@ -6978,6 +6980,8 @@ describe("production workbench project tab", () => {
 
     assert.match(openHtml, /data-model-id="seedance-i2v-fast"/);
     assert.match(openHtml, /data-model-id="seedance-i2v-pro"/);
+    assert.match(openHtml, /4图3音频\/4000积分每条/);
+    assert.match(openHtml, /4图3音频\/4800积分每条/);
   });
 
   it("filters storyboard video model menu by the active video generation page", () => {
@@ -26445,6 +26449,94 @@ describe("production workbench project tab", () => {
     assert.match(html, /麻烦您了/);
     assert.match(html, /任小野递出饭食/);
     assert.match(html, /中景固定镜头/);
+  });
+
+  it("keeps the single episode modal open when AI storyboard membership validation fails", async () => {
+    const state = {
+      ...buildProjectState(),
+      shots: [],
+    };
+    const previewCalls = [];
+    const membershipError = new Error("请先开通会员。");
+    membershipError.errorCode = "membership_required";
+    membershipError.status = 403;
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          throw membershipError;
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    const html = renderProductionWorkbench(workbench);
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(workbench.ui.isSingleEpisodeModalOpen, true);
+    assert.equal(workbench.ui.singleEpisodeAiChecking, false);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+    assert.deepEqual(workbench.ui.toast, { tone: "error", message: "请先开通会员。" });
+    assert.match(html, /single-episode-modal/);
+    assert.match(html, /请先开通会员。/);
+    assert.doesNotMatch(html, /single-episode-ai-overlay/);
+    assert.doesNotMatch(html, /剧本生成中/);
+  });
+
+  it("renders a membership and credit checking state before opening AI storyboard generation", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        isSingleEpisodeModalOpen: true,
+        singleEpisodeScript: "任小野把小草托付给闵婶子。",
+        singleEpisodeAiChecking: true,
+        storyboardPromptPackages: [
+          { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+          { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+        ],
+        selectedSingleEpisodeLookPackageIds: {
+          genre: ["genre-1"],
+          emotion: ["emotion-1"],
+        },
+      }),
+    });
+
+    assert.match(html, /正在分析中/);
+    assert.match(html, /正在读取会员与积分校验结果，通过后会自动开始 AI 分镜生成。/);
+    assert.match(html, /data-action="confirm-single-episode" disabled>正在分析中.../);
+    assert.doesNotMatch(html, /single-episode-ai-overlay/);
   });
 
   it("aborts the running DeepSeek storyboard preview request when closing the preview", async () => {

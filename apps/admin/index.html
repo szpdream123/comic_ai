@@ -810,6 +810,26 @@
         margin-bottom: 12px;
         flex-wrap: wrap;
       }
+      .model-tab-list {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .model-tab-btn {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: #405875;
+        padding: 8px 14px;
+        min-height: 36px;
+        font-size: 13px;
+      }
+      .model-tab-btn.active {
+        border-color: var(--primary);
+        background: var(--primary-soft);
+        color: var(--primary);
+        box-shadow: inset 0 0 0 1px rgba(36,107,254,.12);
+      }
       .toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
       .toolbar input, .toolbar select {
         border: 1px solid var(--line);
@@ -1521,8 +1541,11 @@
         models: [],
         selectedModelId: null,
         modelLoadError: "",
+        modelMediaTab: "image",
         users: [],
         userTotal: 0,
+        userPage: 1,
+        userPageSize: 20,
         userFilters: { keyword: "", status: "all", accountType: "all" },
         userModelRequestInline: {
           expandedUserId: null,
@@ -1579,6 +1602,9 @@
         smsRecords: [],
         smsRecordLoadError: "",
         smsRecordRange: "all",
+        smsRecordTotal: 0,
+        smsRecordPage: 1,
+        smsRecordPageSize: 20,
         resources: [],
         resourceTotal: 0,
         resourceStats: {
@@ -2054,8 +2080,20 @@
       async function loadModels() {
         setPageLoading("models", true);
         try {
-          const result = await api("/api/admin/models?pageSize=100");
-          state.models = result.data || [];
+          const pageSize = 100;
+          let page = 1;
+          let total = 0;
+          const models = [];
+          do {
+            const result = await api(`/api/admin/models?page=${page}&pageSize=${pageSize}`);
+            const rows = Array.isArray(result.data) ? result.data : [];
+            const meta = result.meta || {};
+            models.push(...rows);
+            total = Number(meta.total || rows.length || 0);
+            page += 1;
+            if (rows.length === 0) break;
+          } while (models.length < total);
+          state.models = models;
           state.selectedModelId = state.selectedModelId || state.models[0]?.id || null;
           state.modelLoadError = "";
           clearPageForbidden("models");
@@ -2072,11 +2110,18 @@
         setPageLoading("users", true);
         try {
           const keyword = String(state.userFilters?.keyword || "").trim();
-          const params = new URLSearchParams({ pageSize: "100" });
+          const params = new URLSearchParams({
+            page: String(Math.max(1, Number(state.userPage) || 1)),
+            pageSize: String(Number(state.userPageSize) || 20),
+          });
           if (keyword) params.set("keyword", keyword);
           const result = await api(`/api/admin/users?${params.toString()}`);
           state.users = result.data || [];
           state.userTotal = Number(result.meta?.total || (result.data || []).length || 0);
+          const pageSize = Number(result.meta?.pageSize || state.userPageSize || 20);
+          const totalPages = Math.max(1, Math.ceil(state.userTotal / pageSize));
+          state.userPageSize = pageSize;
+          state.userPage = Math.min(Math.max(1, Number(result.meta?.page || state.userPage || 1)), totalPages);
           state.userLoadError = "";
           clearPageForbidden("users");
         } catch (error) {
@@ -2084,6 +2129,7 @@
           state.userLoadError = error.payload?.error?.message || "用户列表加载失败";
           state.users = [];
           state.userTotal = 0;
+          state.userPage = 1;
         } finally {
           setPageLoading("users", false);
         }
@@ -2883,17 +2929,25 @@
         setPageLoading("smsRecords", true);
         try {
           const params = new URLSearchParams({
-            pageSize: "200",
+            page: String(Math.max(1, Number(state.smsRecordPage) || 1)),
+            pageSize: String(Number(state.smsRecordPageSize) || 20),
             range: state.smsRecordRange || "all",
           });
           const result = await api(`/api/admin/sms-records?${params.toString()}`);
           state.smsRecords = result.data || [];
+          state.smsRecordTotal = Number(result.meta?.total || (result.data || []).length || 0);
+          const pageSize = Number(result.meta?.pageSize || state.smsRecordPageSize || 20);
+          const totalPages = Math.max(1, Math.ceil(state.smsRecordTotal / pageSize));
+          state.smsRecordPageSize = pageSize;
+          state.smsRecordPage = Math.min(Math.max(1, Number(result.meta?.page || state.smsRecordPage || 1)), totalPages);
           state.smsRecordLoadError = "";
           clearPageForbidden("smsRecords");
         } catch (error) {
           setPageForbidden("smsRecords", error);
           state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
           state.smsRecords = [];
+          state.smsRecordTotal = 0;
+          state.smsRecordPage = 1;
         } finally {
           setPageLoading("smsRecords", false);
         }
@@ -2953,6 +3007,7 @@
 
       async function updateSmsRecordRange(value) {
         state.smsRecordRange = value || "all";
+        state.smsRecordPage = 1;
         await loadSmsRecords();
         renderShell();
       }
@@ -3020,17 +3075,25 @@
         setPageLoading("smsRecords", true);
         try {
           const params = new URLSearchParams({
-            pageSize: "200",
+            page: String(Math.max(1, Number(state.smsRecordPage) || 1)),
+            pageSize: String(Number(state.smsRecordPageSize) || 20),
             range: state.smsRecordRange || "all",
           });
           const result = await api(`/api/admin/sms-records?${params.toString()}`);
           state.smsRecords = result.data || [];
+          state.smsRecordTotal = Number(result.meta?.total || (result.data || []).length || 0);
+          const pageSize = Number(result.meta?.pageSize || state.smsRecordPageSize || 20);
+          const totalPages = Math.max(1, Math.ceil(state.smsRecordTotal / pageSize));
+          state.smsRecordPageSize = pageSize;
+          state.smsRecordPage = Math.min(Math.max(1, Number(result.meta?.page || state.smsRecordPage || 1)), totalPages);
           state.smsRecordLoadError = "";
           clearPageForbidden("smsRecords");
         } catch (error) {
           setPageForbidden("smsRecords", error);
           state.smsRecordLoadError = error.payload?.error?.message || "短信记录加载失败";
           state.smsRecords = [];
+          state.smsRecordTotal = 0;
+          state.smsRecordPage = 1;
         } finally {
           setPageLoading("smsRecords", false);
         }
@@ -3331,7 +3394,7 @@
         const statusLabel = model.status === "active" ? "启用" : model.status === "disabled" ? "禁用" : "归档";
         const nextStatus = model.status === "active" ? "disabled" : "active";
         const nextStatusTitle = model.status === "active" ? "禁用" : "启用";
-        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}</td><td>${escapeHtml(model.mediaType || "-")}</td><td>${price}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
+        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}${model.remark ? `<div class="metric-note">${escapeHtml(model.remark)}</div>` : ""}</td><td>${escapeHtml(model.mediaType || "-")}</td><td>${price}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="openModelStatusDrawer('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
       }
 
       function priceSummary(pricing = {}) {
@@ -3668,11 +3731,13 @@
 
       const updateUserFilter = (key, value) => {
         state.userFilters = { ...(state.userFilters || {}), [key]: value };
+        state.userPage = 1;
         if (key === "keyword") {
           scheduleUserKeywordSearch();
           return;
         }
         refreshUserTable();
+        renderUserPagination();
       };
 
       function refreshUserTable() {
@@ -3686,8 +3751,23 @@
         }
       }
 
+      function renderUserPagination() {
+        const panel = document.getElementById("user-pagination");
+        if (!panel) return;
+        const pageSize = Number(state.userPageSize) || 20;
+        const total = Math.max(0, Number(state.userTotal) || 0);
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const currentPage = Math.min(Math.max(1, Number(state.userPage) || 1), totalPages);
+        panel.innerHTML = total
+          ? `<span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${total} 条</span>
+              <button class="btn ghost" type="button" onclick="setUserPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+              <button class="btn ghost" type="button" onclick="setUserPage(${currentPage + 1})" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>`
+          : "";
+      }
+
       function scheduleUserKeywordSearch() {
         refreshUserTable();
+        renderUserPagination();
         if (userSearchDebounceTimer) {
           clearTimeout(userSearchDebounceTimer);
         }
@@ -3696,7 +3776,15 @@
           await loadUsers();
           if (requestToken !== userSearchRequestToken) return;
           refreshUserTable();
+          renderUserPagination();
         }, 180);
+      }
+
+      function setUserPage(page) {
+        const nextPage = Math.max(1, Number(page) || 1);
+        if (nextPage === Number(state.userPage || 1)) return;
+        state.userPage = nextPage;
+        loadUsers().then(renderShell);
       }
 
       function bindUserFilterControls() {
@@ -3775,21 +3863,29 @@
       function usersPage() {
         const visibleUsers = filteredUsers();
         const filters = state.userFilters || {};
+        const pageSize = Number(state.userPageSize) || 20;
+        const totalCount = Math.max(0, Number(state.userTotal) || 0);
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const currentPage = Math.min(Math.max(1, Number(state.userPage) || 1), totalPages);
+        state.userPage = currentPage;
         return `<div class="toolbar"><div class="filters">
           <input id="user-search-input" value="${escapeAttribute(filters.keyword || "")}" placeholder="搜索用户 / 手机号 / 邮箱" />
           <select id="user-status-filter">${userFilterStatusOptions(filters.status || "all")}</select>
           <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
-          <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${state.users.length.toLocaleString()}</span>
+          <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${totalCount.toLocaleString()}</span>
         </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
-          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>邀请码</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
           ${userRowsHtml(visibleUsers)}
-        </tbody></table></div>`;
+        </tbody></table></div>
+        <div class="resource-pagination" id="user-pagination">${totalCount ? `<span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${totalCount} 条</span>
+          <button class="btn ghost" type="button" onclick="setUserPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+          <button class="btn ghost" type="button" onclick="setUserPage(${currentPage + 1})" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>` : ""}</div>`;
       }
 
       function userRowsHtml(users) {
         return users.length
           ? users.map((user) => `${userRow(user)}${userModelRequestInlineRow(user)}`).join("")
-          : `<tr><td colspan="9">${state.userLoadError || "暂无用户数据"}</td></tr>`;
+          : `<tr><td colspan="10">${state.userLoadError || "暂无用户数据"}</td></tr>`;
       }
 
       function userModelRequestInlineRow(user) {
@@ -3804,7 +3900,7 @@
             title: `模型请求记录（${escapeHtml(user.displayName || user.userId)}）`,
           });
         }
-        return `<tr class="user-model-request-inline-row"><td colspan="9"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
+        return `<tr class="user-model-request-inline-row"><td colspan="10"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
       }
 
       function renderMembershipPage() {
@@ -5084,12 +5180,17 @@
         navigator.clipboard?.writeText(text).then(() => showToast("预览已复制")).catch(() => showToast("当前浏览器不支持自动复制"));
       }
 
+      function compactUserId(userId) {
+        const value = String(userId || "");
+        return value.length > 8 ? `${value.slice(0, 8)}...` : value;
+      }
+
       function userRow(user) {
         const typeLabel = frontendAccountTypeLabel(user);
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
         const nextStatus = user.status === "active" ? "disabled" : "active";
         const statusAction = nextStatus === "disabled" ? "disable" : "enable";
-        return `<tr><td><div>${user.userId}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
+        return `<tr><td><div title="${escapeAttribute(user.userId)}">${escapeHtml(compactUserId(user.userId))}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.inviteCode || "-")}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
       }
 
       async function toggleUserModelRequestInline(userId) {
@@ -5233,6 +5334,11 @@
       }
 
       function smsRecordsPage() {
+        const pageSize = Number(state.smsRecordPageSize) || 20;
+        const totalCount = Math.max(0, Number(state.smsRecordTotal) || 0);
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const currentPage = Math.min(Math.max(1, Number(state.smsRecordPage) || 1), totalPages);
+        state.smsRecordPage = currentPage;
         const rows = state.smsRecords.length
           ? state.smsRecords.map((item) => `
             <tr>
@@ -5253,9 +5359,19 @@
               <button class="btn ghost" onclick="loadSmsRecords().then(renderShell)">刷新</button>
             </div>
           </div>
-          <div class="metric-note">默认显示全部记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
+          <div class="metric-note">默认隐藏测试样例号与本机调试记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
           <div class="table-wrap dense"><table><thead><tr><th>时间</th><th>手机号</th><th>验证码</th><th>IP</th><th>短信内容</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>
+          <div class="resource-pagination">${totalCount ? `<span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${totalCount} 条</span>
+            <button class="btn ghost" type="button" onclick="setSmsRecordPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+            <button class="btn ghost" type="button" onclick="setSmsRecordPage(${currentPage + 1})" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>` : ""}</div>
         </section>`;
+      }
+
+      function setSmsRecordPage(page) {
+        const nextPage = Math.max(1, Number(page) || 1);
+        if (nextPage === Number(state.smsRecordPage || 1)) return;
+        state.smsRecordPage = nextPage;
+        loadSmsRecords().then(renderShell);
       }
 
       function formatBytes(value) {
@@ -7112,7 +7228,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -9509,15 +9625,21 @@
       const DEFAULT_MODEL_PARAMETER_TEMPLATES = [
         { key: "prompt", label: "\u6b63\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: true, visible: true, options: [], defaultValue: "", sortOrder: 10 },
         { key: "negativePrompt", label: "\u8d1f\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 20 },
-        { key: "referenceImages", label: "\u53c2\u8003\u56fe", type: "file[]", mediaTypes: ["image"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 30 },
+        { key: "referenceImages", label: "\u53c2\u8003\u56fe", type: "file[]", mediaTypes: ["image", "video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 30 },
         { key: "editInstruction", label: "\u7f16\u8f91\u6307\u4ee4", type: "string", mediaTypes: ["image"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 40 },
-        { key: "aspectRatio", label: "\u753b\u9762\u6bd4\u4f8b", type: "enum", mediaTypes: ["image", "video"], required: true, visible: true, options: ["auto", "1:1", "1024x1024", "2048x2048", "2880x2880", "2:3", "1024x1536", "2048x3072", "2336x3504", "3:2", "1536x1024", "3072x2048", "3504x2336", "3:4", "768x1024", "1536x2048", "2304x3072", "2448x3264", "4:3", "1024x768", "2048x1536", "3072x2304", "3264x2448", "4:5", "1024x1280", "2048x2560", "2560x3200", "5:4", "1280x1024", "2560x2048", "3200x2560", "9:16", "1024x1824", "1280x3840", "1920x3840", "2160x3840", "16:9", "1824x1024", "3840x1280", "3840x2160", "21:9"], defaultValue: "1:1", sortOrder: 50 },
-        { key: "quality", label: "\u6e05\u6670\u5ea6", type: "enum", mediaTypes: ["image"], required: true, visible: true, options: ["standard", "hd", "2K", "high", "medium", "low", "auto"], defaultValue: "standard", sortOrder: 60 },
+        { key: "aspectRatio", label: "\u753b\u9762\u6bd4\u4f8b", type: "enum", mediaTypes: ["image"], required: true, visible: true, options: ["auto", "1:1", "1024x1024", "2048x2048", "2880x2880", "2:3", "1024x1536", "2048x3072", "2336x3504", "3:2", "1536x1024", "3072x2048", "3504x2336", "3:4", "768x1024", "1536x2048", "2304x3072", "2448x3264", "4:3", "1024x768", "2048x1536", "3072x2304", "3264x2448", "4:5", "1024x1280", "2048x2560", "2560x3200", "5:4", "1280x1024", "2560x2048", "3200x2560", "9:16", "1024x1824", "1280x3840", "1920x3840", "2160x3840", "16:9", "1824x1024", "3840x1280", "3840x2160", "21:9"], defaultValue: "1:1", sortOrder: 50 },
+        { key: "ratio", label: "\u89c6\u9891\u6bd4\u4f8b", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], defaultValue: "9:16", sortOrder: 55 },
+        { key: "quality", label: "\u6e05\u6670\u5ea6", type: "enum", mediaTypes: ["image"], required: false, visible: true, options: ["standard", "hd", "2K", "high", "medium", "low", "auto"], defaultValue: "standard", sortOrder: 60 },
+        { key: "size", label: "\u5c3a\u5bf8", type: "enum", mediaTypes: ["image", "video"], required: false, visible: true, options: ["1024x1024", "1280x720", "720x1280", "large", "small"], defaultValue: "", sortOrder: 65 },
         { key: "count", label: "\u751f\u6210\u6570\u91cf", type: "integer", mediaTypes: ["image"], required: true, visible: true, options: ["1", "2", "3", "4"], defaultValue: "1", sortOrder: 70 },
-        { key: "resolution", label: "\u5206\u8fa8\u7387", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["720p", "1080p"], defaultValue: "1080p", sortOrder: 80 },
-        { key: "durationSec", label: "\u89c6\u9891\u65f6\u957f", type: "integer", mediaTypes: ["video"], required: true, visible: true, options: ["5", "10"], defaultValue: "5", sortOrder: 90 },
+        { key: "responseFormat", label: "\u54cd\u5e94\u683c\u5f0f", type: "enum", mediaTypes: ["image"], required: false, visible: true, options: ["url"], defaultValue: "url", sortOrder: 75 },
+        { key: "resolution", label: "\u5206\u8fa8\u7387", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["480p", "720p", "1080p"], defaultValue: "1080p", sortOrder: 80 },
+        { key: "durationSec", label: "\u89c6\u9891\u65f6\u957f", type: "integer", mediaTypes: ["video"], required: true, visible: true, options: ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"], defaultValue: "5", sortOrder: 90 },
+        { key: "orientation", label: "\u65b9\u5411", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["portrait", "landscape", "square"], defaultValue: "", sortOrder: 95 },
         { key: "firstFrame", label: "\u9996\u5e27", type: "file", mediaTypes: ["video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 100 },
         { key: "lastFrame", label: "\u5c3e\u5e27", type: "file", mediaTypes: ["video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 110 },
+        { key: "sourceVideo", label: "\u53c2\u8003/\u6e90\u89c6\u9891", type: "file", mediaTypes: ["video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 115 },
+        { key: "referenceAudio", label: "\u53c2\u8003\u97f3\u9891", type: "file[]", mediaTypes: ["video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 117 },
         { key: "seed", label: "\u968f\u673a\u79cd\u5b50", type: "integer", mediaTypes: ["image", "video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 120 },
         { key: "scriptPrompt", label: "\u5267\u672c\u9700\u6c42", type: "string", mediaTypes: ["text"], required: true, visible: true, options: [], defaultValue: "", sortOrder: 130 },
         { key: "scriptGenre", label: "\u5267\u672c\u9898\u6750", type: "enum", mediaTypes: ["text"], required: false, visible: true, options: ["\u90fd\u5e02", "\u7384\u5e7b", "\u79d1\u5e7b", "\u60ac\u7591", "\u7231\u60c5", "\u559c\u5267"], defaultValue: "", sortOrder: 140 },
@@ -9808,9 +9930,26 @@
 
       function parameterTemplates() {
         const value = parameterTemplateConfig().value || {};
-        const templates = Array.isArray(value.templates) ? value.templates : DEFAULT_MODEL_PARAMETER_TEMPLATES;
-        return templates
+        const configuredTemplates = Array.isArray(value.templates) ? value.templates : [];
+        const merged = new Map(
+          DEFAULT_MODEL_PARAMETER_TEMPLATES
+            .map((template) => normalizeParameterTemplate(template))
+            .map((template) => [template.key, template]),
+        );
+        configuredTemplates
           .map((template) => normalizeParameterTemplate(template))
+          .forEach((template) => {
+            const existing = merged.get(template.key);
+            merged.set(template.key, existing
+              ? {
+                ...existing,
+                ...template,
+                mediaTypes: template.mediaTypes.length ? template.mediaTypes : existing.mediaTypes,
+                options: template.options.length ? template.options : existing.options,
+              }
+              : template);
+          });
+        return [...merged.values()]
           .sort((left, right) => Number(left.sortOrder || 100) - Number(right.sortOrder || 100) || left.key.localeCompare(right.key));
       }
 
@@ -10039,6 +10178,11 @@
           });
       }
 
+      function isLingdongProviderName(providerName = "") {
+        const provider = String(providerName || "").trim().toLowerCase();
+        return provider.includes("lingdong") || provider.includes("灵动");
+      }
+
       function fixedModelTemplate(mediaType, providerName = "") {
         const provider = String(providerName || "").trim().toLowerCase();
         const isVideo = mediaType === "video";
@@ -10046,8 +10190,16 @@
         const protocol = isText
           ? "openai_compatible_chat"
           : isVideo
-          ? (provider.includes("aliyun") || provider.includes("bailian") ? "aliyun_bailian_video" : provider.includes("volc") || provider.includes("doubao") || provider.includes("jimeng") ? "volcengine_ark_video" : "custom_http")
-          : (provider === "openai" ? "openai_images" : "custom_http");
+          ? (
+            isLingdongProviderName(providerName)
+              ? "lingdong_api"
+              : provider.includes("aliyun") || provider.includes("bailian")
+              ? "aliyun_bailian_video"
+              : provider.includes("volc") || provider.includes("doubao") || provider.includes("jimeng")
+              ? "volcengine_ark_video"
+              : "custom_http"
+          )
+          : (provider === "openai" ? "openai_images" : isLingdongProviderName(providerName) ? "lingdong_api" : "custom_http");
         return {
           providerProtocol: protocol,
           invocationMode: isText ? "stream" : isVideo ? "async_polling" : "sync",
@@ -10059,8 +10211,16 @@
           providerConfig: isText
             ? { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 }
             : isVideo
-            ? { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
-            : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 },
+            ? (
+              protocol === "lingdong_api"
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/videos", createTaskEndpoint: "/v1/videos", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
+            )
+            : (
+              protocol === "lingdong_api"
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
+                : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 }
+            ),
           pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },
           limits: {},
           uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
@@ -10138,9 +10298,12 @@
         const defaultSupportedKeys = useDefaultSelections
           ? (mediaType === "text"
             ? ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"]
-            : ["prompt", "aspectRatio", "quality", "count", "durationSec"])
+            : mediaType === "video"
+            ? ["prompt", "ratio", "resolution", "durationSec", "orientation", "referenceImages", "sourceVideo", "referenceAudio"]
+            : ["prompt", "aspectRatio", "quality", "count", "referenceImages", "size", "responseFormat"])
           : [];
         const rows = parameterTemplates()
+          .filter((template) => template.mediaTypes.includes(mediaType))
           .map((template) => {
             const current = schema[template.key] || {};
             const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
@@ -10186,6 +10349,32 @@
         if (!key) return "";
         const secret = (state.settings.secretReferences || []).find((item) => item.envName === key);
         return String(secret?.providerName || "").trim();
+      }
+
+      function resolveVideoTaskModes(kind, existing) {
+        if (kind.mediaType !== "video") return kind.taskModes;
+        if (kind.videoCategory !== "reference") return kind.taskModes;
+        const existingTaskModes = Array.isArray(existing?.taskModes) ? existing.taskModes.map(String) : [];
+        const preservedModes = existingTaskModes.filter((taskMode) => [
+          "video.text_to_video",
+          "video.video_to_video",
+          "video.image_video_to_video",
+        ].includes(taskMode));
+        return [...new Set([...kind.taskModes, ...preservedModes])];
+      }
+
+      function videoSupportedModesByTaskModes(videoCategory, taskModes) {
+        const supportedModes = [];
+        if (videoCategory === "first_frame") supportedModes.push("first_frame");
+        if (videoCategory === "first_last_frame") supportedModes.push("first_last_frame");
+        if (videoCategory === "reference") supportedModes.push("reference");
+        if (taskModes.includes("video.text_to_video")) supportedModes.push("text_to_video");
+        if (taskModes.includes("video.image_to_video")) supportedModes.push("image_to_video");
+        if (taskModes.includes("video.first_last_frame_to_video")) supportedModes.push("first_last_frame_to_video");
+        if (taskModes.includes("video.reference_image_to_video")) supportedModes.push("reference_image_to_video");
+        if (taskModes.includes("video.video_to_video")) supportedModes.push("video_to_video");
+        if (taskModes.includes("video.image_video_to_video")) supportedModes.push("image_video_to_video");
+        return [...new Set(supportedModes)];
       }
 
       const MODEL_KIND_OPTIONS = [
@@ -10328,6 +10517,7 @@
         const mediaType = kind.mediaType;
         const providerName = String(form.get("providerName") || "").trim() || providerNameForSecretKey(form.get("modelApiKeyEnv")) || String(existing?.providerName || "").trim() || "custom";
         const fixed = fixedModelTemplate(mediaType, providerName);
+        const taskModes = kind.mediaType === "video" ? resolveVideoTaskModes(kind, existing) : kind.taskModes;
         const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {});
         const providerConfig = { ...fixed.providerConfig, ...(existing?.providerConfig || {}) };
         const requestPath = String(form.get("requestPath") || "").trim();
@@ -10355,7 +10545,7 @@
             ? ["script"]
             : kind.value.startsWith("image.")
             ? (kind.value === "image.text_to_image" ? ["text_to_image"] : ["reference_image", "multi_reference", "image_to_image"])
-            : (kind.videoCategory === "first_frame" ? ["first_frame", "image_to_video"] : kind.videoCategory === "first_last_frame" ? ["first_last_frame", "first_last_frame_to_video"] : ["reference", "reference_image_to_video"]),
+            : videoSupportedModesByTaskModes(kind.videoCategory, taskModes),
         };
         if (kind.mediaType === "video") {
           uiConfig.videoCategory = kind.videoCategory;
@@ -10372,7 +10562,7 @@
           providerProtocol: fixed.providerProtocol,
           invocationMode: fixed.invocationMode,
           mediaType,
-          taskModes: kind.taskModes,
+          taskModes,
           status: existing?.status || fixed.status,
           sortOrder: Number(existing?.sortOrder || fixed.sortOrder),
           parameterSchema: selected.schema,
@@ -10392,8 +10582,9 @@
         const rows = state.models.length
           ? sortedModelRows().map((model) => modelRow(model)).join("")
           : `<tr><td colspan="7">${state.modelLoadError || "\u6682\u65e0\u6a21\u578b\u914d\u7f6e"}</td></tr>`;
+        const mediaSection = mediaModelSection();
         return `<div class="toolbar"><div class="filters"><input placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0 / \u7f16\u7801" /><select><option>\u5168\u90e8\u72b6\u6001</option><option>\u542f\u7528</option><option>\u7981\u7528</option></select><select><option>\u5168\u90e8\u7c7b\u578b</option><option>\u6587\u751f\u56fe</option><option>\u53c2\u8003\u751f\u56fe</option><option>\u9996\u5e27\u751f\u89c6\u9891</option><option>\u9996\u5c3e\u5e27\u751f\u89c6\u9891</option><option>\u53c2\u8003\u751f\u89c6\u9891</option><option>\u5267\u672c\u6a21\u578b</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>\u65b0\u589e\u6a21\u578b</button></div>
-          <div class="table-wrap models dense"><table><thead><tr><th>\u6a21\u578b\u7f16\u7801</th><th>\u5c55\u793a\u540d</th><th>\u7c7b\u578b</th><th>\u4ef7\u683c\u6458\u8981</th><th>\u6392\u5e8f</th><th>\u72b6\u6001</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+          ${mediaSection}`;
       };
 
       function modelSortValue(model) {
@@ -10403,6 +10594,51 @@
 
       function sortedModelRows() {
         return [...state.models].sort((left, right) => modelSortValue(left) - modelSortValue(right) || String(left.modelCode || "").localeCompare(String(right.modelCode || "")));
+      }
+
+      const modelMediaTabs = [
+        { key: "image", title: "图片模型", note: "查看全部图片模型。" },
+        { key: "video", title: "视频模型", note: "查看全部视频模型。" },
+        { key: "text", title: "文本模型", note: "查看全部文本模型。" },
+      ];
+
+      function modelsByMediaTab(tabKey) {
+        if (tabKey === "video") {
+          return sortedModelRows().filter((model) => String(model.mediaType || "").trim() === "video");
+        }
+        if (tabKey === "text") {
+          return sortedModelRows().filter((model) => {
+            const mediaType = String(model.mediaType || "").trim();
+            return mediaType !== "image" && mediaType !== "video";
+          });
+        }
+        return sortedModelRows().filter((model) => String(model.mediaType || "").trim() === "image");
+      }
+
+      function updateModelMediaTab(tabKey) {
+        state.modelMediaTab = modelMediaTabs.some((item) => item.key === tabKey) ? tabKey : "image";
+        renderShell();
+      }
+
+      function mediaModelSection() {
+        const activeTab = modelMediaTabs.find((item) => item.key === state.modelMediaTab) || modelMediaTabs[0];
+        const mediaRows = modelsByMediaTab(activeTab.key);
+        const rows = mediaRows.length
+          ? mediaRows.map((model) => modelRow(model)).join("")
+          : `<tr><td colspan="7">当前分类下暂无模型</td></tr>`;
+        return `<section class="card" style="margin-bottom:12px;">
+          <div class="toolbar">
+            <div class="prompt-toolbar-title">
+              <h3 style="margin:0;">按媒体类型查看</h3>
+              <div class="metric-note">${escapeHtml(activeTab.note)}</div>
+            </div>
+            <div class="filters"><span class="metric-note">共 ${mediaRows.length} 个</span></div>
+          </div>
+          <div class="model-tab-list" style="margin-bottom:12px;">
+            ${modelMediaTabs.map((item) => `<button class="model-tab-btn ${item.key === activeTab.key ? "active" : ""}" onclick="updateModelMediaTab('${item.key}')">${item.title}<span class="tag blue" style="margin-left:6px;">${modelsByMediaTab(item.key).length}</span></button>`).join("")}
+          </div>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>类型</th><th>价格摘要</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+        </section>`;
       }
 
       modelRow = function modelRow(model) {

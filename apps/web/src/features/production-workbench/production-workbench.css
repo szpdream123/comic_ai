@@ -1787,6 +1787,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.6rem;
+  min-width: 0;
   position: relative;
 }
 
@@ -1819,10 +1820,21 @@
 }
 
 .statusbar-quick-action {
+  flex: 0 1 auto;
   gap: 0.52rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0 1rem;
   font-size: 0.92rem;
   font-weight: 750;
+}
+
+.statusbar-quick-action span:not(.statusbar-action-icon),
+.statusbar-quick-action b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .statusbar-quick-action.text-action {
@@ -4335,6 +4347,22 @@
   border-radius: 9999px;
 }
 
+.script-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.script-entry-actions > button {
+  flex: 1 1 14rem;
+  min-width: min(100%, 14rem);
+  max-width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
 .script-filter-select {
   display: inline-flex;
   align-items: center;
@@ -4391,6 +4419,7 @@
 .script-bulk-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.8rem;
   min-width: 0;
@@ -4405,9 +4434,10 @@
 .script-bulk-summary {
   display: flex;
   align-items: center;
+  flex: 1 1 14rem;
+  flex-wrap: wrap;
   gap: 0.55rem;
   min-width: 0;
-  white-space: nowrap;
 }
 
 .script-bulk-summary strong {
@@ -4436,17 +4466,22 @@
 
 .script-bulk-actions {
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 1 20rem;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.45rem;
+  min-width: 0;
 }
 
 .script-bulk-button {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   justify-content: center;
   min-height: 2.15rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0 0.85rem;
   border: 1px solid oklch(100% 0 0 / 0.1);
   border-radius: 999px;
@@ -12274,6 +12309,53 @@
   letter-spacing: 0.03em;
 }
 
+.single-episode-checking {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: -0.2rem;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid rgba(152, 216, 255, 0.24);
+  border-radius: 1.1rem;
+  background:
+    linear-gradient(135deg, rgba(152, 216, 255, 0.14), rgba(255, 255, 255, 0.04)),
+    rgba(8, 10, 16, 0.72);
+  color: rgba(248, 251, 255, 0.9);
+  box-shadow: 0 1rem 2.4rem rgba(80, 157, 214, 0.12);
+}
+
+.single-episode-checking strong,
+.single-episode-checking small {
+  display: block;
+}
+
+.single-episode-checking strong {
+  font-size: 0.96rem;
+  font-weight: 900;
+}
+
+.single-episode-checking small {
+  margin-top: 0.2rem;
+  color: rgba(230, 240, 255, 0.62);
+  font-size: 0.82rem;
+}
+
+.single-episode-checking-spinner {
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  border: 2px solid rgba(152, 216, 255, 0.28);
+  border-top-color: #98d8ff;
+  border-radius: 999px;
+  animation: singleEpisodeCheckingSpin 0.8s linear infinite;
+}
+
+@keyframes singleEpisodeCheckingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .single-episode-toolbar,
 .single-episode-toolbar-replica {
   display: grid;
@@ -16458,9 +16540,8 @@
     align-items: flex-start;
     justify-content: flex-start;
     min-height: auto;
-    overflow-x: auto;
+    overflow: visible;
     overflow-y: visible;
-    scrollbar-width: none;
   }
 
   .workbench-main.home-mode .global-statusbar::-webkit-scrollbar {
@@ -16473,16 +16554,16 @@
 
   .workbench-main.home-mode .statusbar-actions {
     display: flex;
-    width: max-content;
-    min-width: 100%;
+    width: 100%;
+    min-width: 0;
     justify-content: flex-start;
+    flex-wrap: wrap;
     gap: 0.45rem;
-    white-space: nowrap;
   }
 
   .workbench-main.home-mode .statusbar-quick-action,
   .workbench-main.home-mode .statusbar-avatar {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-height: 2.9rem;
     border-radius: 0.9rem;
   }
@@ -16531,7 +16612,24 @@
   }
 
   .workbench-main.home-mode .home-hero {
-    padding-top: 6.2rem;
+    padding-top: 8.8rem;
+  }
+
+  .script-entry-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .script-entry-actions > button,
+  .script-bulk-button {
+    flex-basis: 100%;
+  }
+
+  .script-bulk-actions {
+    justify-content: stretch;
+  }
+
+  .script-bulk-actions > .script-bulk-button {
+    width: 100%;
   }
 
   .overview-strip {
@@ -20847,6 +20945,21 @@ body.is-episode-layout-resizing {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.episode-replica-float-menu.compact button strong,
+.episode-replica-float-menu.compact button small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.episode-replica-float-menu.compact button small {
+  margin-top: 0.18rem;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .episode-replica-textarea {

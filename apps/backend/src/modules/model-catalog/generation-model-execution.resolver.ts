@@ -76,10 +76,16 @@ function providerExecutorFromProtocol(
   if (kind === "image" && protocol === "openai_images") {
     return "gpt-image-2";
   }
+  if (kind === "image" && protocol === "lingdong_api") {
+    return "gpt-image-2";
+  }
   if (kind === "image" && protocol === "custom_http") {
     return "image-http";
   }
-  if (kind === "video" && (protocol === "volcengine_ark_video" || protocol === "aliyun_bailian_video")) {
+  if (
+    kind === "video" &&
+    (protocol === "volcengine_ark_video" || protocol === "aliyun_bailian_video" || protocol === "lingdong_api")
+  ) {
     return "seedance";
   }
   throw new GenerationModelExecutionResolutionError(

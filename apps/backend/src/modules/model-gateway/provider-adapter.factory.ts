@@ -2,6 +2,7 @@ import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
+import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
 import { VolcengineArkImageProviderAdapter } from "./volcengine-ark-image.provider-adapter.ts";
@@ -68,6 +69,42 @@ export function createProviderAdapterFromModelConfig(
       editEndpoint: resolveProviderEndpoint(providerConfig, "editEndpoint"),
       requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
       resultFormat: resolveProviderResultFormat(providerConfig),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "lingdong_api") {
+    const mediaType = readNonEmptyString(providerConfig.mediaType);
+    const inferredMediaType = mediaType === "video" || mediaType === "image"
+      ? mediaType
+      : resolveProviderEndpoint(providerConfig, "queryTaskEndpoint")
+      ? "video"
+      : "image";
+
+    if (inferredMediaType === "video") {
+      const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+      if (!createTaskEndpoint) {
+        throw new Error("provider_endpoint_required");
+      }
+      return new LingdongApiProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        mediaType: "video",
+        createTaskEndpoint,
+        queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+        fetchImpl,
+      });
+    }
+
+    const imageEndpoint = resolveProviderEndpoint(providerConfig);
+    if (!imageEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+    return new LingdongApiProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      mediaType: "image",
+      imageEndpoint,
       fetchImpl,
     });
   }
