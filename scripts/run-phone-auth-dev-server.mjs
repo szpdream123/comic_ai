@@ -18,7 +18,7 @@ if (!existsSync(serverEntrypoint)) {
   process.exit(1);
 }
 
-loadDotEnvFile(envFilePath);
+loadDotEnvFile(envFilePath, { override: true });
 const generationQueueRequired =
   isEnabled(process.env.GENERATION_QUEUE_REQUIRED) ||
   isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||
@@ -158,7 +158,7 @@ function resolveTsxRuntimeArgs(runtime) {
 
   return ["--loader", "tsx"];
 }
-function loadDotEnvFile(envFilePath) {
+function loadDotEnvFile(envFilePath, options = {}) {
   if (!existsSync(envFilePath)) {
     return;
   }
@@ -176,7 +176,11 @@ function loadDotEnvFile(envFilePath) {
     }
 
     const key = line.slice(0, separatorIndex).trim();
-    if (!key || process.env[key] !== undefined) {
+    if (!key) {
+      continue;
+    }
+
+    if (process.env[key] !== undefined && options.override !== true) {
       continue;
     }
 
