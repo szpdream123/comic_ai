@@ -263,7 +263,7 @@ export function buildStorageObjectPublicUrl(
   if (runtime.mode === "cos" && runtime.bucket && runtime.region) {
     return `https://${runtime.bucket}.cos.${runtime.region}.myqcloud.com/${object.objectKey}`;
   }
-  return null;
+  return `/uploads/storage/${object.bucket}/${object.objectKey}`;
 }
 
 export async function abortUploadSession(

@@ -201,6 +201,35 @@ describe("Seedance video BullMQ worker services", () => {
         "SELECT amount_reserved, amount_consumed, status FROM credit_reservations WHERE task_id = $1",
         [videoTask.taskId],
       );
+      const uploadRecords = await db.query<{
+        actor_user_id: string | null;
+        actor_display_name: string | null;
+        actor_phone_e164: string | null;
+        source_action: string;
+        status: string;
+        public_url: string | null;
+        storage_object_id: string | null;
+      }>(
+        `
+          SELECT actor_user_id, actor_display_name, actor_phone_e164, source_action, status, public_url, storage_object_id
+          FROM project_upload_records
+          WHERE project_id = $1
+          ORDER BY created_at DESC
+        `,
+        [created.projectId],
+      );
+      const storageObjects = await db.query<{
+        id: string;
+        created_by_user_id: string | null;
+      }>(
+        `
+          SELECT id, created_by_user_id
+          FROM storage_objects
+          WHERE project_id = $1
+          ORDER BY created_at DESC
+        `,
+        [created.projectId],
+      );
 
       assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTask.status, "queued");
@@ -242,6 +271,18 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 135);
       assert.equal(reservation.rows[0]?.status, "settled");
+      assert.equal(uploadRecords.rows.length, 1);
+      assert.equal(uploadRecords.rows[0]?.source_action, "generate_video");
+      assert.equal(uploadRecords.rows[0]?.status, "uploaded");
+      assert.match(uploadRecords.rows[0]?.public_url ?? "", /platform-storage\.example\.test/);
+      assert.ok(uploadRecords.rows[0]?.actor_user_id);
+      assert.equal(uploadRecords.rows[0]?.actor_display_name, "用户13800138000");
+      assert.equal(uploadRecords.rows[0]?.actor_phone_e164, "13800138000");
+      assert.equal(
+        uploadRecords.rows[0]?.storage_object_id,
+        storageObjects.rows[0]?.id ?? null,
+      );
+      assert.equal(storageObjects.rows[0]?.created_by_user_id, uploadRecords.rows[0]?.actor_user_id);
     } finally {
       await server.close();
     }

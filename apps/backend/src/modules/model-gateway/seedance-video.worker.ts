@@ -4,6 +4,7 @@ import { Readable, Transform } from "node:stream";
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { settleReservationAllocation } from "../credit-billing/credit-ledger.service.ts";
 import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
+import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
@@ -613,6 +614,16 @@ export async function finalizeSeedanceVideoArtifactJob(
     return { status: "failed", failureCode };
   }
 
+  await ensureProjectUploadRecordForStorageObject(db, {
+    organizationId: row.organization_id,
+    storageObjectId: persisted.storageObjectId,
+    pageKey: "project",
+    sourceAction: "generate_video",
+    publicUrl: persisted.previewUrl,
+    status: "uploaded",
+    now: input.now,
+  });
+
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -999,6 +1010,7 @@ async function persistSeedanceVideoArtifact(
       metadata: artifactMetadata,
       env: input.env,
       fetchImpl: input.fetchImpl,
+      createdByUserId: input.row.created_by_user_id,
       now: input.now,
     });
     pendingStorageObjectId = uploaded.storageObject.id;
@@ -1090,6 +1102,7 @@ async function uploadProviderArtifactToStorage(
     metadata: Record<string, unknown>;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
+    createdByUserId?: string | null;
     now: Date;
   },
 ): Promise<{
@@ -1127,7 +1140,7 @@ async function uploadProviderArtifactToStorage(
         provider: input.runtime.provider,
         status: "pending_upload",
         metadata: input.metadata,
-        createdByUserId: null,
+        createdByUserId: input.createdByUserId ?? null,
         now: input.now,
       });
     }

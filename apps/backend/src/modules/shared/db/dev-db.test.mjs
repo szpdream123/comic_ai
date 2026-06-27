@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import { ensureFoundationSchema } from "./dev-db.ts";
-import { createEmptyTestDb } from "./test-db.ts";
+import { createEmptyTestDb, createMigratedTestDb } from "./test-db.ts";
 
 test("ensureFoundationSchema applies admin management migration to existing foundation databases", async () => {
   const db = await createEmptyTestDb();
@@ -57,6 +57,27 @@ test("ensureFoundationSchema repairs legacy admin account tables missing lock co
   assert.deepEqual(
     columns.rows.map((row) => row.column_name),
     ["failed_login_count", "locked_until"],
+  );
+
+  await db.close();
+});
+
+test("ensureFoundationSchema repairs legacy databases missing admin management tables", async () => {
+  const db = await createEmptyTestDb();
+
+  await ensureFoundationSchema(db);
+
+  const tables = await db.query(`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name IN ('admin_accounts', 'admin_auth_sessions', 'runtime_config_entries', 'admin_secret_references')
+    ORDER BY table_name
+  `);
+
+  assert.deepEqual(
+    tables.rows.map((row) => row.table_name),
+    ["admin_accounts", "admin_auth_sessions", "admin_secret_references", "runtime_config_entries"],
   );
 
   await db.close();
@@ -256,9 +277,8 @@ test("ensureFoundationSchema repairs and enables Seedance model configs on exist
 });
 
 test("ensureFoundationSchema repairs legacy databases missing user model request logs", async () => {
-  const db = await createEmptyTestDb();
-
-  await applyMigrationsBefore("0041_user_model_request_logs.sql", db);
+  const db = await createMigratedTestDb();
+  await db.query(`DROP TABLE user_model_request_logs`);
 
   await ensureFoundationSchema(db);
 

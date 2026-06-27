@@ -247,6 +247,52 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("keeps session credits aligned with creator credit ledger for the personal project workspace", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+
+      await db.query(
+        "UPDATE organizations SET credit_balance_cached = 10006, credit_reserved_cached = 0 WHERE id = $1",
+        ["a3a8817f-59b4-4f39-8717-87c79542f11b"],
+      );
+      await db.query(
+        "UPDATE organizations SET credit_balance_cached = 155196, credit_reserved_cached = 0 WHERE id = $1",
+        ["10000000-0000-4000-8000-000000000001"],
+      );
+
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const state = await stateResponse.json();
+
+      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie },
+      });
+      const ledger = await ledgerResponse.json();
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(stateResponse.status, 200);
+      assert.equal(ledgerResponse.status, 200);
+      assert.equal(session.user.availableCredits, 155196);
+      assert.equal(state.availableCredits, 155196);
+      assert.equal(ledger.summary.displayAvailableCredits, 155196);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists creator display name updates and returns them from session", async () => {
     const db = await createDevDb();
     const server = createPhoneAuthDevServer({ db });
@@ -281,6 +327,39 @@ describe("phone auth dev server", () => {
       assert.equal(sessionResponse.status, 200);
       assert.equal(session.user.displayName, "灵曦导演");
       assert.equal(userRecord.rows[0]?.display_name, "灵曦导演");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects creator display names longer than 8 characters", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const updateResponse = await fetch(`${server.origin}/api/auth/profile`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          displayName: "这是一个超过八字的昵称",
+        }),
+      });
+      const updated = await updateResponse.json();
+
+      const userRecord = await db.query<{ display_name: string }>(
+        "SELECT display_name FROM users WHERE phone_e164 = '+8613800138000'",
+      );
+
+      assert.equal(updateResponse.status, 400);
+      assert.equal(updated.error, "display_name_too_long");
+      assert.equal(updated.message, "显示昵称最多 8 个字。");
+      assert.notEqual(userRecord.rows[0]?.display_name, "这是一个超过八字的昵称");
     } finally {
       await server.close();
     }
@@ -8429,11 +8508,19 @@ describe("phone auth dev server", () => {
       assert.equal(replay.order.id, checkout.order.id);
       assert.equal(replay.paymentIntent.id, checkout.paymentIntent.id);
 
-      const db = await server.db();
+      const paymentLog = await db.query<{
+        request_params_json: Record<string, unknown>;
+      }>(
+        "SELECT request_params_json FROM payment_logs WHERE merchant_order_no = $1",
+        [checkout.paymentIntent.merchantOrderNo],
+      );
+      const notifyUrl = String(paymentLog.rows[0]?.request_params_json?.notifyUrl ?? "");
       const intents = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM payment_intents WHERE order_id = $1",
         [checkout.order.id],
       );
+      assert.notEqual(notifyUrl, "");
+      assert.doesNotMatch(notifyUrl, /^http:\/\/(?:127\.0\.0\.1|localhost)/i);
       assert.equal(intents.rows[0]?.count, 1);
     } finally {
       await server.close();
@@ -8499,7 +8586,6 @@ describe("phone auth dev server", () => {
           signature: signPaymentCallback(callbackFacts, "dev-payment-secret"),
         }),
       });
-
       const db = await server.db();
       await db.query("DELETE FROM organization_entitlements WHERE entitlement_key IN ('canvas_access', 'priority_generation', 'team_asset_library', 'team_dashboard', 'team_member_management', 'full_flow_agent')");
       await db.query("DELETE FROM team_plan_limits");

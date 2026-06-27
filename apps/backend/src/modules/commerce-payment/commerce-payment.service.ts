@@ -42,7 +42,7 @@ import {
 } from "./payment-provider-adapter.ts";
 import { enqueueMissingMembershipActivationForPaidOrder } from "../membership/payment-succeeded-membership-consumer.service.ts";
 
-const PAYMENT_INTENT_TTL_MS = 15 * 60 * 1000;
+const PAYMENT_INTENT_TTL_MS = 10 * 60 * 1000;
 const PAYMENT_PROVIDER_SLOW_CREATE_LOG_MS = 800;
 
 interface AuthenticatedCommerceUser {
@@ -128,6 +128,11 @@ interface ProviderEventRow {
   failure_code: string | null;
   received_at: Date | string;
   processed_at: Date | string | null;
+}
+
+interface PaymentLogRequestContext {
+  requestTime: Date;
+  requestParams: Record<string, unknown>;
 }
 
 interface PaymentRiskEventRow {
@@ -451,6 +456,20 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         const completed = await completePaymentIntentSubmission(deps.db, {
           prepared,
           providerResult,
+          paymentLogRequestContext: {
+            requestTime: input.now,
+            requestParams: {
+              provider: prepared.intent.provider,
+              productMode: prepared.intent.product_mode,
+              merchantOrderNo: prepared.intent.merchant_order_no,
+              amountMinor: prepared.intent.amount_minor,
+              currency: prepared.intent.currency,
+              subject,
+              notifyUrl: providerCallbackUrl(deps.providerCallbackBaseUrl, prepared.intent.provider),
+              returnUrl: deps.paymentReturnUrl,
+              providerIdempotencyKey: providerIdempotencyKey(prepared.intent),
+            },
+          },
           now: input.now,
         });
         const responseBody = intentResponseBody(completed);
@@ -574,6 +593,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       body: PaymentCallbackSignatureInput & { signature: string };
       rawPayloadHash?: string;
       signatureStatus?: SignatureStatus;
+      expectedMerchantId?: string;
       now: Date;
     }) {
       const body = parsePaymentCallbackBody(input.body);
@@ -594,6 +614,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         provider: body.provider,
         merchantOrderNo: body.merchantOrderNo,
       });
+      const expectedMerchantId = input.expectedMerchantId ?? merchantId;
 
       if (signatureStatus === "invalid") {
         return createCallbackRiskResponse(deps.db, {
@@ -648,7 +669,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         });
       }
 
-      const mismatch = callbackMismatch(body, joined, merchantId);
+      const mismatch = callbackMismatch(body, joined, expectedMerchantId);
       if (mismatch) {
         return createCallbackRiskResponse(deps.db, {
           body,
@@ -943,6 +964,68 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         };
       }
 
+      const joined = await findCallbackOrder(deps.db, {
+        provider: input.provider,
+        merchantOrderNo: event.merchantOrderNo,
+      });
+
+      await upsertPaymentLogCallbackReceipt(deps.db, {
+        organizationId: joined?.organization_id ?? null,
+        workspaceId: deps.workspaceId,
+        userId: joined?.created_by_user_id ?? null,
+        orderId: joined?.id ?? null,
+        paymentIntentId: joined?.payment_intent_id ?? null,
+        provider: input.provider,
+        merchantOrderNo: event.merchantOrderNo,
+        providerTradeId: event.providerTradeId,
+        rechargeTitle: paymentLogRechargeTitle(joined),
+        rechargeDescription: paymentLogRechargeDescription(joined),
+        amountMinor: event.amountMinor,
+        currency: event.currency,
+        requestTime: input.now,
+        callbackTime: input.now,
+        requestParams: {
+          provider: input.provider,
+          merchantOrderNo: event.merchantOrderNo,
+          providerTradeId: event.providerTradeId,
+          eventType: event.eventType,
+          amountMinor: event.amountMinor,
+          currency: event.currency,
+          providerEventDedupKey: event.providerEventDedupKey,
+          orderNo: joined?.order_no ?? null,
+          productType: joined?.product_type ?? null,
+        },
+        callbackParams: {
+          provider: event.provider,
+          merchantOrderNo: event.merchantOrderNo,
+          providerTradeId: event.providerTradeId,
+          eventType: event.eventType,
+          amountMinor: event.amountMinor,
+          currency: event.currency,
+          providerEventDedupKey: event.providerEventDedupKey,
+          providerAccountRef: event.providerAccountRef ?? null,
+          eventOccurredAt: event.eventOccurredAt ?? null,
+          signatureStatus: event.signatureStatus,
+          safeMetadata: event.safeMetadata,
+          orderSnapshot: joined
+            ? {
+                orderNo: joined.order_no,
+                productType: joined.product_type,
+                credits: joined.credits,
+                amountMinor: joined.amount_minor,
+                currency: joined.currency,
+              }
+            : null,
+        },
+        requestHeaders: {},
+        callbackHeaders: input.headers,
+        rawRequestHash: createHash("sha256").update(input.rawBody).digest("hex"),
+        rawCallbackHash: event.rawPayloadHash,
+        signatureStatus: event.signatureStatus,
+        eventType: event.eventType,
+        providerEventDedupKey: event.providerEventDedupKey,
+      });
+
       const callbackBody: PaymentCallbackSignatureInput = {
         provider: event.provider,
         providerEventDedupKey: event.providerEventDedupKey,
@@ -953,8 +1036,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         currency: event.currency,
         merchantId: event.providerAccountRef ?? merchantId,
       };
-
-      return this.processPaymentCallback({
+      const callbackResult = await this.processPaymentCallback({
         body: {
           ...callbackBody,
           signature:
@@ -967,8 +1049,27 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         },
         rawPayloadHash: event.rawPayloadHash,
         signatureStatus: event.signatureStatus,
+        expectedMerchantId: event.providerAccountRef ?? merchantId,
         now: input.now,
       });
+
+      await updatePaymentLogCallbackOutcome(deps.db, {
+        provider: input.provider,
+        merchantOrderNo: event.merchantOrderNo,
+        callbackTime: input.now,
+        success: paymentLogCallbackSuccess(callbackResult.body),
+        processingStatus:
+          (callbackResult.body as { providerEvent?: { processingStatus?: string } }).providerEvent
+            ?.processingStatus ?? null,
+        failureCode:
+          (callbackResult.body as { providerEvent?: { failureCode?: string } }).providerEvent
+            ?.failureCode ?? null,
+        providerEventId:
+          (callbackResult.body as { providerEvent?: { id?: string } }).providerEvent?.id ?? null,
+        callbackResult: callbackResult.body,
+      });
+
+      return callbackResult;
     },
 
     async reconcilePaymentIntent(input: {
@@ -1359,6 +1460,7 @@ async function completePaymentIntentSubmission(
   input: {
     prepared: Extract<PreparedPaymentIntentSubmission, { kind: "created" }>;
     providerResult: CreateProviderPaymentIntentResult;
+    paymentLogRequestContext: PaymentLogRequestContext;
     now: Date;
   },
 ): Promise<PaymentIntentRow> {
@@ -1393,6 +1495,18 @@ async function completePaymentIntentSubmission(
         providerResult: input.providerResult.kind,
       },
       occurredAt: input.now,
+    });
+
+    await upsertPaymentLogRequest(db, {
+      organizationId: input.prepared.actor.organizationId,
+      workspaceId: input.prepared.actor.workspaceId,
+      userId: input.prepared.actor.actorId,
+      order: input.prepared.order,
+      intent,
+      providerResult: input.providerResult,
+      requestTime: input.paymentLogRequestContext.requestTime,
+      requestParams: input.paymentLogRequestContext.requestParams,
+      now: input.now,
     });
 
     await db.query("COMMIT");
@@ -2907,6 +3021,344 @@ function normalizeJson(value: Record<string, unknown> | string | null) {
     return {};
   }
   return typeof value === "string" ? JSON.parse(value) : value;
+}
+
+function paymentLogRechargeTitle(order: CallbackOrderJoinRow | undefined) {
+  if (!order) {
+    return null;
+  }
+  const snapshot = normalizeJson(order.product_snapshot_json);
+  return (
+    stringMetadata(snapshot, "displayName") ??
+    stringMetadata(snapshot, "code") ??
+    (order.product_type === "membership_plan"
+      ? "membership recharge"
+      : `credit package ${order.credits}`)
+  );
+}
+
+function paymentLogRechargeDescription(order: CallbackOrderJoinRow | undefined) {
+  if (!order) {
+    return null;
+  }
+  const snapshot = normalizeJson(order.product_snapshot_json);
+  return JSON.stringify({
+    orderNo: order.order_no,
+    productType: order.product_type,
+    productSnapshot: snapshot,
+    amountMinor: order.amount_minor,
+    currency: order.currency,
+    credits: order.credits,
+  });
+}
+
+async function upsertPaymentLogRequest(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    userId: string;
+    order: BillingOrderRow;
+    intent: PaymentIntentRow;
+    providerResult: CreateProviderPaymentIntentResult;
+    requestTime: Date;
+    requestParams: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  const requestParams = {
+    ...input.requestParams,
+    providerResultKind: input.providerResult.kind,
+    providerTradeId:
+      input.providerResult.kind === "submitted"
+        ? input.providerResult.providerTradeId ?? null
+        : null,
+    providerIntentId:
+      input.providerResult.kind === "submitted"
+        ? input.providerResult.providerIntentId ?? null
+        : null,
+    payAction:
+      input.providerResult.kind === "submitted"
+        ? input.providerResult.payAction
+        : input.providerResult.payAction ?? manualConfirmPayAction(input.intent, input.providerResult.failureCode),
+  };
+  await db.query(
+    `
+      INSERT INTO payment_logs (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        order_id,
+        payment_intent_id,
+        provider,
+        merchant_order_no,
+        provider_trade_id,
+        recharge_title,
+        recharge_description,
+        amount_minor,
+        currency,
+        request_time,
+        request_params_json,
+        request_headers_json,
+        raw_request_hash,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15::jsonb,
+        '{}'::jsonb,
+        $16,
+        $17,
+        $17
+      )
+      ON CONFLICT (provider, merchant_order_no) DO UPDATE SET
+        organization_id = COALESCE(payment_logs.organization_id, EXCLUDED.organization_id),
+        workspace_id = COALESCE(payment_logs.workspace_id, EXCLUDED.workspace_id),
+        user_id = COALESCE(payment_logs.user_id, EXCLUDED.user_id),
+        order_id = COALESCE(payment_logs.order_id, EXCLUDED.order_id),
+        payment_intent_id = COALESCE(payment_logs.payment_intent_id, EXCLUDED.payment_intent_id),
+        provider_trade_id = COALESCE(payment_logs.provider_trade_id, EXCLUDED.provider_trade_id),
+        recharge_title = COALESCE(payment_logs.recharge_title, EXCLUDED.recharge_title),
+        recharge_description = COALESCE(payment_logs.recharge_description, EXCLUDED.recharge_description),
+        amount_minor = EXCLUDED.amount_minor,
+        currency = EXCLUDED.currency,
+        request_time = LEAST(payment_logs.request_time, EXCLUDED.request_time),
+        request_params_json = EXCLUDED.request_params_json,
+        request_headers_json = COALESCE(payment_logs.request_headers_json, EXCLUDED.request_headers_json),
+        raw_request_hash = EXCLUDED.raw_request_hash,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      input.userId,
+      input.order.id,
+      input.intent.id,
+      input.intent.provider,
+      input.intent.merchant_order_no,
+      input.providerResult.kind === "submitted"
+        ? input.providerResult.providerTradeId ?? null
+        : null,
+      paymentLogRechargeTitle(input.order as CallbackOrderJoinRow),
+      paymentLogRechargeDescription(input.order as CallbackOrderJoinRow),
+      input.intent.amount_minor,
+      input.intent.currency,
+      input.requestTime,
+      JSON.stringify(requestParams),
+      hashJson(requestParams),
+      input.now,
+    ],
+  );
+}
+
+async function upsertPaymentLogCallbackReceipt(
+  db: SqlDatabase,
+  input: {
+    organizationId: string | null;
+    workspaceId: string;
+    userId: string | null;
+    orderId: string | null;
+    paymentIntentId: string | null;
+    provider: PaymentProvider;
+    merchantOrderNo: string;
+    providerTradeId: string;
+    rechargeTitle: string | null;
+    rechargeDescription: string | null;
+    amountMinor: number;
+    currency: string;
+    requestTime: Date;
+    callbackTime: Date;
+    requestParams: Record<string, unknown>;
+    callbackParams: Record<string, unknown>;
+    requestHeaders: Record<string, unknown>;
+    callbackHeaders: Record<string, unknown>;
+    rawRequestHash: string;
+    rawCallbackHash: string;
+    signatureStatus: SignatureStatus;
+    eventType: PaymentEventType;
+    providerEventDedupKey: string;
+  },
+) {
+  await db.query(
+    `
+      INSERT INTO payment_logs (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        order_id,
+        payment_intent_id,
+        provider,
+        merchant_order_no,
+        provider_trade_id,
+        recharge_title,
+        recharge_description,
+        amount_minor,
+        currency,
+        request_time,
+        request_params_json,
+        request_headers_json,
+        callback_time,
+        callback_params_json,
+        callback_headers_json,
+        callback_count,
+        success,
+        processing_status,
+        provider_event_dedup_key,
+        event_type,
+        signature_status,
+        raw_request_hash,
+        raw_callback_hash,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15::jsonb,
+        $16::jsonb,
+        $17,
+        $18::jsonb,
+        $19::jsonb,
+        1,
+        false,
+        'received',
+        $20,
+        $21,
+        $22,
+        $23,
+        $24,
+        $25,
+        $25
+      )
+      ON CONFLICT (provider, merchant_order_no) DO UPDATE SET
+        organization_id = COALESCE(payment_logs.organization_id, EXCLUDED.organization_id),
+        workspace_id = COALESCE(payment_logs.workspace_id, EXCLUDED.workspace_id),
+        user_id = COALESCE(payment_logs.user_id, EXCLUDED.user_id),
+        order_id = COALESCE(payment_logs.order_id, EXCLUDED.order_id),
+        payment_intent_id = COALESCE(payment_logs.payment_intent_id, EXCLUDED.payment_intent_id),
+        provider_trade_id = COALESCE(EXCLUDED.provider_trade_id, payment_logs.provider_trade_id),
+        recharge_title = COALESCE(payment_logs.recharge_title, EXCLUDED.recharge_title),
+        recharge_description = COALESCE(payment_logs.recharge_description, EXCLUDED.recharge_description),
+        amount_minor = EXCLUDED.amount_minor,
+        currency = EXCLUDED.currency,
+        request_time = LEAST(payment_logs.request_time, EXCLUDED.request_time),
+        request_params_json = COALESCE(payment_logs.request_params_json, EXCLUDED.request_params_json),
+        request_headers_json = COALESCE(payment_logs.request_headers_json, EXCLUDED.request_headers_json),
+        callback_time = EXCLUDED.callback_time,
+        callback_params_json = EXCLUDED.callback_params_json,
+        callback_headers_json = EXCLUDED.callback_headers_json,
+        callback_count = payment_logs.callback_count + 1,
+        processing_status = EXCLUDED.processing_status,
+        provider_event_dedup_key = COALESCE(EXCLUDED.provider_event_dedup_key, payment_logs.provider_event_dedup_key),
+        event_type = COALESCE(EXCLUDED.event_type, payment_logs.event_type),
+        signature_status = COALESCE(EXCLUDED.signature_status, payment_logs.signature_status),
+        raw_request_hash = COALESCE(payment_logs.raw_request_hash, EXCLUDED.raw_request_hash),
+        raw_callback_hash = EXCLUDED.raw_callback_hash,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      randomUUID(),
+      input.organizationId,
+      input.workspaceId,
+      input.userId,
+      input.orderId,
+      input.paymentIntentId,
+      input.provider,
+      input.merchantOrderNo,
+      input.providerTradeId,
+      input.rechargeTitle,
+      input.rechargeDescription,
+      input.amountMinor,
+      input.currency,
+      input.requestTime,
+      JSON.stringify(input.requestParams),
+      JSON.stringify(input.requestHeaders),
+      input.callbackTime,
+      JSON.stringify(input.callbackParams),
+      JSON.stringify(input.callbackHeaders),
+      input.providerEventDedupKey,
+      input.eventType,
+      input.signatureStatus,
+      input.rawRequestHash,
+      input.rawCallbackHash,
+      input.callbackTime,
+    ],
+  );
+}
+
+async function updatePaymentLogCallbackOutcome(
+  db: SqlDatabase,
+  input: {
+    provider: PaymentProvider;
+    merchantOrderNo: string;
+    callbackTime: Date;
+    success: boolean;
+    processingStatus: string | null;
+    failureCode: string | null;
+    providerEventId: string | null;
+    callbackResult: Record<string, unknown>;
+  },
+) {
+  await db.query(
+    `
+      UPDATE payment_logs
+      SET callback_time = $3,
+          success = $4,
+          processing_status = $5,
+          failure_code = $6,
+          provider_event_id = $7,
+          callback_result_json = $8::jsonb,
+          updated_at = $3
+      WHERE provider = $1
+        AND merchant_order_no = $2
+    `,
+    [
+      input.provider,
+      input.merchantOrderNo,
+      input.callbackTime,
+      input.success,
+      input.processingStatus,
+      input.failureCode,
+      input.providerEventId,
+      JSON.stringify(input.callbackResult),
+    ],
+  );
+}
+
+function paymentLogCallbackSuccess(body: Record<string, unknown>) {
+  const providerEvent = body.providerEvent as
+    | { eventType?: string; processingStatus?: string }
+    | undefined;
+  return providerEvent?.eventType === "payment_succeeded" && providerEvent?.processingStatus === "processed";
 }
 
 function mapCommerceError(error: unknown) {

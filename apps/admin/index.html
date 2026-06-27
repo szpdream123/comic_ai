@@ -193,6 +193,7 @@
 
       .grid { display: grid; gap: 14px; }
       .cards { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+      .dashboard-cards { grid-template-columns: repeat(4, minmax(180px, 1fr)); }
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -218,6 +219,310 @@
       .agreements-side-panel {
         display: grid;
         gap: 12px;
+      }
+      .resources-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .resources-list {
+        display: grid;
+        gap: 12px;
+      }
+      .resource-table-wrap {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #fff;
+      }
+      .resource-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+      .resource-table thead th {
+        background: #f7fafe;
+        color: #48617d;
+        font-size: 13px;
+        font-weight: 700;
+        padding: 12px 10px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+      }
+      .resource-table tbody td {
+        padding: 12px 10px;
+        border-bottom: 1px solid #edf2f8;
+        vertical-align: middle;
+      }
+      .resource-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .resource-table tbody tr:hover {
+        background: #f9fbff;
+      }
+      .resource-table tbody tr.active {
+        background: #eef4ff;
+      }
+      .resource-table .actions {
+        width: 168px;
+      }
+      .resource-table .preview-col {
+        width: 140px;
+      }
+      .resource-table .size-col {
+        width: 110px;
+      }
+      .resource-table .type-col {
+        width: 120px;
+      }
+      .resource-table .user-col {
+        width: 132px;
+      }
+      .resource-table .phone-col {
+        width: 146px;
+      }
+      .resource-table .time-col {
+        width: 168px;
+      }
+      .resource-thumb-btn {
+        width: 112px;
+        height: 76px;
+        padding: 0;
+        border: 1px solid #d7e3f4;
+        border-radius: 10px;
+        background: linear-gradient(180deg, #f8fbff, #eef4fb);
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        color: #6b7c90;
+      }
+      .resource-thumb-btn img,
+      .resource-thumb-btn video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .resource-thumb-label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .resource-link-cell {
+        min-width: 0;
+      }
+      .resource-link-primary {
+        font-weight: 700;
+        color: #17324f;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .resource-link-secondary {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        word-break: break-all;
+      }
+      .resource-row-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .resource-link-button {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--primary);
+        text-align: left;
+      }
+      .resource-link-button:hover {
+        text-decoration: underline;
+      }
+      .resource-card {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgba(36, 107, 254, .03), #fff);
+        transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      }
+      .resource-card:hover {
+        transform: translateY(-1px);
+        border-color: #bfd1ee;
+        box-shadow: 0 10px 24px rgba(18, 36, 61, .08);
+      }
+      .resource-card.active {
+        border-color: #7fb0ff;
+        box-shadow: 0 0 0 3px rgba(36, 107, 254, .12);
+      }
+      .resource-preview {
+        width: 120px;
+        height: 120px;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #eff5fc;
+        border: 1px solid #d9e6f7;
+        display: grid;
+        place-items: center;
+        color: #7b8aa2;
+      }
+      .resource-preview img,
+      .resource-preview video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .resource-meta {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+      .resource-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+      .resource-title strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .resource-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .resource-inspector {
+        display: grid;
+        gap: 12px;
+      }
+      .resource-inspector-preview {
+        min-height: 260px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f7fbff, #ffffff);
+        overflow: hidden;
+      }
+      .resource-inspector-preview img,
+      .resource-inspector-preview video {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: contain;
+        background: #0f172a;
+      }
+      .resource-inspector-empty {
+        min-height: 260px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--muted);
+        border: 1px dashed var(--line);
+        border-radius: 12px;
+        background: #fbfcfe;
+        padding: 18px;
+      }
+      .resource-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .resource-stat {
+        padding: 12px;
+        border: 1px solid #e2eaf4;
+        border-radius: 10px;
+        background: #fbfdff;
+      }
+      .resource-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 14px;
+        flex-wrap: wrap;
+      }
+      .resource-pagination .metric-note {
+        margin-right: 4px;
+      }
+      .resource-preview-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 16;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 28px;
+        background: rgba(8, 15, 29, .76);
+        backdrop-filter: blur(4px);
+      }
+      .resource-preview-dialog {
+        width: min(1100px, calc(100vw - 56px));
+        max-height: calc(100vh - 56px);
+        border-radius: 18px;
+        border: 1px solid rgba(214, 228, 246, .22);
+        background: #081221;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, .28);
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .resource-preview-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px 18px;
+        background: rgba(8, 18, 33, .92);
+        color: #e7eef8;
+        border-bottom: 1px solid rgba(214, 228, 246, .12);
+      }
+      .resource-preview-title {
+        min-width: 0;
+      }
+      .resource-preview-title strong {
+        display: block;
+        font-size: 15px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .resource-preview-title span {
+        display: block;
+        margin-top: 4px;
+        color: #9fb2c8;
+        font-size: 12px;
+        word-break: break-all;
+      }
+      .resource-preview-stage {
+        min-height: 420px;
+        max-height: calc(100vh - 136px);
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background:
+          radial-gradient(circle at top, rgba(36, 107, 254, .18), transparent 42%),
+          #081221;
+      }
+      .resource-preview-stage img,
+      .resource-preview-stage video {
+        max-width: 100%;
+        max-height: calc(100vh - 180px);
+        border-radius: 14px;
+        display: block;
+        object-fit: contain;
+        background: #020814;
+      }
+      .resource-preview-close {
+        border: 1px solid rgba(214, 228, 246, .18);
+        background: rgba(255, 255, 255, .04);
+        color: #fff;
       }
       .legal-document-status,
       .legal-document-type {
@@ -460,7 +765,7 @@
       .trend-bars {
         height: 156px;
         display: grid;
-        grid-template-columns: repeat(5, minmax(54px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
         gap: 10px;
         align-items: end;
         border: 1px solid var(--line);
@@ -1114,6 +1419,7 @@
           grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         }
         .form-grid { grid-template-columns: 1fr; }
+        .resource-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       }
 
       @media (max-width: 920px) {
@@ -1133,7 +1439,7 @@
           min-height: 320px;
         }
         .trend-bars {
-          grid-template-columns: repeat(5, minmax(42px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
           gap: 6px;
           padding: 10px;
         }
@@ -1204,6 +1510,7 @@
         prompts: "提示词管理",
         risks: "风控与审计",
         smsRecords: "短信记录",
+        resources: "资源管理",
         settings: "系统设置",
         account: "管理员账户",
       };
@@ -1272,14 +1579,37 @@
         smsRecords: [],
         smsRecordLoadError: "",
         smsRecordRange: "all",
+        resources: [],
+        resourceTotal: 0,
+        resourceStats: {
+          total: 0,
+          imageCount: 0,
+          videoCount: 0,
+          imageBytes: 0,
+          videoBytes: 0,
+        },
+        resourceLoadError: "",
+        resourceMediaFilter: "all",
+        resourceRangeFilter: "all",
+        resourceSelectedId: null,
+        resourcePreviewOpen: false,
+        resourceSearch: "",
+        resourcePage: 1,
+        resourcePageSize: 10,
         dashboard: {
           metrics: {
             generationCountToday: 0,
             generationSuccessRate: 0,
+            userCount: 0,
+            activeUserCountToday: 0,
             creditsConsumedToday: 0,
             paidOrdersToday: 0,
+            paidOrderAmountTotalMinor: 0,
+            paidOrderAmountMonthMinor: 0,
+            paidOrderAmountTodayMinor: 0,
             riskPendingCount: 0,
             failedTaskCount: 0,
+            activeMembershipCount: 0,
           },
           modelHealth: [],
           recentEvents: [],
@@ -1391,6 +1721,7 @@
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/sms-records")) return "smsRecords";
+        if (path.includes("/resources")) return "resources";
         if (path.includes("/settings") || path.includes("/admin-accounts")) return "settings";
         if (path.includes("/account")) return "account";
         return "dashboard";
@@ -1411,6 +1742,22 @@
             ? "http://127.0.0.1:4310"
             : window.location.origin;
         return new URL(path, origin).toString();
+      }
+
+      function storagePreviewUrl(item) {
+        return item?.previewUrl || item?.sourceUrl || item?.downloadUrl || "";
+      }
+
+      function resourceKindLabel(item) {
+        return item?.mediaKind === "video" || String(item?.contentType || "").startsWith("video/")
+          ? "视频"
+          : "图片";
+      }
+
+      function resourceKindTone(item) {
+        return item?.mediaKind === "video" || String(item?.contentType || "").startsWith("video/")
+          ? "warn"
+          : "blue";
       }
 
       async function api(path, options = {}) {
@@ -1666,21 +2013,22 @@
 
       function renderShell() {
         app.innerHTML = `
-          <div class="admin-shell">
-            <aside class="sidebar">
-              <div class="brand"><div class="brand-mark">管</div><span>后台管理</span></div>
-              <nav class="nav">
-                ${navButton("dashboard", "总览")}
-                ${navButton("models", "模型配置")}
-                ${navButton("users", "用户积分")}
-                ${navButton("membership", "会员权益")}
-                ${navButton("directRecharge", "直充积分")}
-                ${navButton("prompts", "提示词管理")}
-                ${navButton("risks", "风控审计")}
-                ${navButton("smsRecords", "短信记录")}
-                ${navButton("settings", "系统设置")}
-              </nav>
-            </aside>
+        <div class="admin-shell">
+          <aside class="sidebar">
+            <div class="brand"><div class="brand-mark">管</div><span>后台管理</span></div>
+            <nav class="nav">
+              ${navButton("dashboard", "总览")}
+              ${navButton("models", "模型配置")}
+              ${navButton("users", "用户积分")}
+              ${navButton("membership", "会员权益")}
+              ${navButton("directRecharge", "直充积分")}
+              ${navButton("prompts", "提示词管理")}
+              ${navButton("risks", "风控审计")}
+              ${navButton("smsRecords", "短信记录")}
+              ${navButton("resources", "资源管理")}
+              ${navButton("settings", "系统设置")}
+            </nav>
+          </aside>
             <section class="main">
               <header class="topbar">
                 <h2>${pages[state.page]}</h2>
@@ -2551,6 +2899,58 @@
         }
       }
 
+      async function loadResources() {
+        setPageLoading("resources", true);
+        try {
+          const params = new URLSearchParams({
+            page: String(Math.max(1, Number(state.resourcePage) || 1)),
+            pageSize: String(Number(state.resourcePageSize) || 10),
+            media: state.resourceMediaFilter || "all",
+            range: state.resourceRangeFilter || "all",
+          });
+          if (String(state.resourceSearch || "").trim()) {
+            params.set("keyword", String(state.resourceSearch || "").trim());
+          }
+          const [listResult, statsResult] = await Promise.all([
+            api(`/api/admin/resources?${params.toString()}`),
+            api(`/api/admin/resources/summary?media=${encodeURIComponent(state.resourceMediaFilter || "all")}&range=${encodeURIComponent(state.resourceRangeFilter || "all")}${String(state.resourceSearch || "").trim() ? `&keyword=${encodeURIComponent(String(state.resourceSearch || "").trim())}` : ""}`),
+          ]);
+          const statsPayload = statsResult?.data && typeof statsResult.data === "object"
+            ? statsResult.data
+            : statsResult;
+          state.resources = Array.isArray(listResult.data) ? listResult.data : [];
+          state.resourceTotal = Number(listResult.meta?.total || 0);
+          state.resourceStats = {
+            total: Number(statsPayload?.total || 0),
+            imageCount: Number(statsPayload?.imageCount || 0),
+            videoCount: Number(statsPayload?.videoCount || 0),
+            imageBytes: Number(statsPayload?.imageBytes || 0),
+            videoBytes: Number(statsPayload?.videoBytes || 0),
+          };
+          state.resourcePage = Math.max(1, Number(listResult.meta?.page || state.resourcePage || 1));
+          state.resourceLoadError = "";
+          if (!state.resourceSelectedId || !state.resources.some((item) => item.id === state.resourceSelectedId)) {
+            state.resourceSelectedId = state.resources[0]?.id || null;
+          }
+          clearPageForbidden("resources");
+        } catch (error) {
+          setPageForbidden("resources", error);
+          state.resourceLoadError = error.payload?.error?.message || "资源列表加载失败";
+          state.resources = [];
+          state.resourceTotal = 0;
+          state.resourceStats = {
+            total: 0,
+            imageCount: 0,
+            videoCount: 0,
+            imageBytes: 0,
+            videoBytes: 0,
+          };
+          state.resourceSelectedId = null;
+        } finally {
+          setPageLoading("resources", false);
+        }
+      }
+
       async function updateSmsRecordRange(value) {
         state.smsRecordRange = value || "all";
         await loadSmsRecords();
@@ -2651,6 +3051,7 @@
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           smsRecords: "/admin/sms-records",
+          resources: "/admin/resources",
           settings: "/admin/settings",
           account: "/admin/account",
         };
@@ -2676,6 +3077,7 @@
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "smsRecords") return smsRecordsPage();
+        if (state.page === "resources") return resourcesPage();
         if (state.page === "settings") return settingsPage();
         return accountPage();
       }
@@ -2683,9 +3085,15 @@
       function dashboardPage() {
         const metrics = state.dashboard.metrics;
         return `
-          <div class="grid cards">
+          <div class="grid dashboard-cards">
+            ${metric("用户统计", Number(metrics.userCount || 0).toLocaleString(), "平台注册用户")}
+            ${metric("活跃用户统计", Number(metrics.activeUserCountToday || 0).toLocaleString(), "今日前台有使用")}
+            ${metric("总订单金额统计", money(metrics.paidOrderAmountTotalMinor), "已支付订单累计")}
+            ${metric("月订单金额统计", money(metrics.paidOrderAmountMonthMinor), "本月已支付订单")}
+            ${metric("当天订单金额统计", money(metrics.paidOrderAmountTodayMinor), "今日已支付订单")}
+            ${metric("会员统计", Number(metrics.activeMembershipCount || 0).toLocaleString(), "当前有效会员")}
+            ${metric("积分消耗统计", Number(metrics.creditsConsumedToday || 0).toLocaleString(), "今日账本消耗")}
             ${metric("今日生成", Number(metrics.generationCountToday || 0).toLocaleString(), `成功率 ${percent(metrics.generationSuccessRate)}`)}
-            ${metric("消耗积分", Number(metrics.creditsConsumedToday || 0).toLocaleString(), "今日账本消耗")}
             ${metric("支付订单", Number(metrics.paidOrdersToday || 0).toLocaleString(), "今日已支付订单")}
             ${metric("风险待处理", Number(metrics.riskPendingCount || 0).toLocaleString(), `失败任务 ${Number(metrics.failedTaskCount || 0).toLocaleString()}`)}
           </div>
@@ -2722,9 +3130,14 @@
 
       function dashboardTrendHtml(metrics) {
         const series = [
+          { label: "用户", value: Number(metrics.userCount || 0), tone: "blue" },
+          { label: "活跃", value: Number(metrics.activeUserCountToday || 0), tone: "green" },
+          { label: "会员", value: Number(metrics.activeMembershipCount || 0), tone: "green" },
           { label: "生成", value: Number(metrics.generationCountToday || 0), tone: "blue" },
           { label: "积分", value: Number(metrics.creditsConsumedToday || 0), tone: "green" },
           { label: "订单", value: Number(metrics.paidOrdersToday || 0), tone: "blue" },
+          { label: "日金额", value: Math.round(Number(metrics.paidOrderAmountTodayMinor || 0) / 100), tone: "blue" },
+          { label: "月金额", value: Math.round(Number(metrics.paidOrderAmountMonthMinor || 0) / 100), tone: "blue" },
           { label: "风险", value: Number(metrics.riskPendingCount || 0), tone: "warn" },
           { label: "失败", value: Number(metrics.failedTaskCount || 0), tone: "warn" },
         ];
@@ -2835,6 +3248,13 @@
 
       function percent(value) {
         return `${(Number(value || 0) * 100).toFixed(1)}%`;
+      }
+
+      function money(amountMinor) {
+        return `¥${(Number(amountMinor || 0) / 100).toLocaleString("zh-CN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
       }
 
       const VIDEO_MODEL_CATEGORIES = [
@@ -3046,18 +3466,43 @@
         return { config, runtimeConfig, documentValue };
       }
 
+      function legalDocumentTypeChoices(selectedType = "") {
+        const builtInTypes = [
+          { value: "service", label: "用户服务协议" },
+          { value: "privacy", label: "隐私政策" },
+        ];
+        const selected = String(selectedType || "").trim();
+        const customOptions = state.legalDocuments
+          .map((item) => String(item.type || "").trim())
+          .filter((type, index, list) => type && !builtInTypes.some((option) => option.value === type) && list.indexOf(type) === index)
+          .map((type) => ({ value: type, label: type }));
+        const options = [...builtInTypes, ...customOptions];
+        if (selected && !options.some((option) => option.value === selected)) {
+          options.push({ value: selected, label: selected });
+        }
+        return options;
+      }
+
+      function legalDocumentTypeOptions(selectedType = "") {
+        return legalDocumentTypeChoices(selectedType)
+          .map((option) => `<option value="${escapeAttribute(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+          .join("");
+      }
+
       function normalizeLegalDocumentValue(configKey, value) {
         const config = legalDocumentConfigByKey(configKey);
         const fallbackTitle = config?.title || "协议文档";
         if (!value || typeof value !== "object" || Array.isArray(value)) {
           return {
             title: fallbackTitle,
+            type: config?.key === "legal.service_agreement" ? "service" : config?.key === "legal.privacy_policy" ? "privacy" : "",
             contentHtml: "<p>暂无协议内容。</p>",
             versionLabel: "2025-11-15",
           };
         }
         return {
           title: String(value.title || fallbackTitle).trim() || fallbackTitle,
+          type: String(value.type || (config?.key === "legal.service_agreement" ? "service" : config?.key === "legal.privacy_policy" ? "privacy" : "")).trim(),
           contentHtml: String(value.contentHtml || "<p>暂无协议内容。</p>").trim() || "<p>暂无协议内容。</p>",
           versionLabel: String(value.versionLabel || "2025-11-15").trim() || "2025-11-15",
         };
@@ -4811,6 +5256,204 @@
           <div class="metric-note">默认显示全部记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
           <div class="table-wrap dense"><table><thead><tr><th>时间</th><th>手机号</th><th>验证码</th><th>IP</th><th>短信内容</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>
         </section>`;
+      }
+
+      function formatBytes(value) {
+        const bytes = Number(value || 0);
+        if (!Number.isFinite(bytes) || bytes <= 0) return "-";
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+      }
+
+      function updateResourceMediaFilter(value) {
+        state.resourceMediaFilter = value || "all";
+        state.resourcePage = 1;
+        loadResources().then(renderShell);
+      }
+
+      function updateResourceRangeFilter(value) {
+        state.resourceRangeFilter = value || "all";
+        state.resourcePage = 1;
+        loadResources().then(renderShell);
+      }
+
+      function updateResourceSearch(value) {
+        state.resourceSearch = value || "";
+        state.resourcePage = 1;
+        loadResources().then(renderShell);
+      }
+
+      function setResourcePage(page) {
+        const nextPage = Math.max(1, Number(page) || 1);
+        state.resourcePage = nextPage;
+        loadResources().then(renderShell);
+      }
+
+      function selectResource(resourceId) {
+        state.resourceSelectedId = resourceId;
+        renderShell();
+      }
+
+      function previewResource(resourceId) {
+        const item = state.resources.find((entry) => entry.id === resourceId);
+        if (!item) return;
+        const previewUrl = storagePreviewUrl(item);
+        if (!previewUrl) {
+          showToast("当前资源没有可用预览链接");
+          return;
+        }
+        state.resourceSelectedId = resourceId;
+        state.resourcePreviewOpen = true;
+        renderShell();
+      }
+
+      function closeResourcePreview() {
+        if (!state.resourcePreviewOpen) return;
+        state.resourcePreviewOpen = false;
+        renderShell();
+      }
+
+      async function copyResourceUrl(url) {
+        if (!url) return;
+        await navigator.clipboard?.writeText(url).then(() => showToast("资源链接已复制")).catch(() => showToast("当前浏览器不支持自动复制"));
+      }
+
+      function openResourceUrl(url) {
+        if (!url) return;
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+
+      async function deleteResource(resourceId) {
+        const item = state.resources.find((entry) => entry.id === resourceId);
+        if (!item) return;
+        if (!window.confirm(`确认删除资源“${item.fileName || item.objectKey || item.id}”吗？删除后将从云存储和资源列表中移除。`)) {
+          return;
+        }
+        try {
+          await api(`/api/admin/resources/${encodeURIComponent(resourceId)}`, {
+            method: "DELETE",
+            headers: { "idempotency-key": `admin-ui-resource-delete-${resourceId}-${Date.now()}` },
+            body: JSON.stringify({ reason: "后台删除资源" }),
+          });
+          if (state.resourceSelectedId === resourceId) {
+            state.resourceSelectedId = null;
+          }
+          state.resourcePreviewOpen = false;
+          await loadResources();
+          renderShell();
+          showToast("资源已删除");
+        } catch (error) {
+          showToast(error.payload?.error?.message || "资源删除失败");
+        }
+      }
+
+      function resourcePreviewCell(item) {
+        const previewUrl = storagePreviewUrl(item);
+        const label = resourceKindLabel(item);
+        if (!previewUrl) {
+          return `<div class="resource-thumb-btn" style="cursor:default;"><span class="resource-thumb-label">暂无预览</span></div>`;
+        }
+        const inner = label === "视频"
+          ? `<video src="${escapeAttribute(previewUrl)}" muted playsinline preload="metadata"></video>`
+          : `<img src="${escapeAttribute(previewUrl)}" alt="${escapeAttribute(item.fileName || item.objectKey || "资源预览")}" loading="lazy" referrerpolicy="no-referrer" />`;
+        return `<button class="resource-thumb-btn" type="button" title="点击放大预览" onclick="event.stopPropagation();previewResource('${escapeAttribute(item.id)}')">${inner}</button>`;
+      }
+
+      function resourceTableRow(item) {
+        const previewUrl = storagePreviewUrl(item);
+        const active = state.resourceSelectedId === item.id ? "active" : "";
+        const fileLabel = item.fileName || item.objectKey || "未命名资源";
+        const linkValue = previewUrl || item.sourceUrl || item.downloadUrl || "";
+        return `<tr class="${active}" onclick="selectResource('${escapeAttribute(item.id)}')">
+          <td class="preview-col">${resourcePreviewCell(item)}</td>
+          <td class="resource-link-cell">
+            <button class="resource-link-button resource-link-primary" type="button" onclick="event.stopPropagation();selectResource('${escapeAttribute(item.id)}')">${escapeHtml(fileLabel)}</button>
+            <div class="resource-link-secondary">${escapeHtml(linkValue || `${item.bucket || "-"} / ${item.objectKey || "-"}`)}</div>
+          </td>
+          <td class="size-col">${formatBytes(item.sizeBytes)}</td>
+          <td class="type-col">
+            <div><span class="tag ${resourceKindTone(item)}">${resourceKindLabel(item)}</span></div>
+            <div class="metric-note" style="margin-top:4px;">${escapeHtml(item.contentType || "-")}</div>
+          </td>
+          <td class="user-col">${escapeHtml(item.actorDisplayName || "-")}</td>
+          <td class="phone-col">${escapeHtml(item.actorPhoneE164 || "-")}</td>
+          <td class="time-col">${escapeHtml(formatAdminDateTime(item.createdAt))}</td>
+          <td class="actions">
+            <div class="resource-row-actions">
+              <button class="icon-btn" type="button" title="打开原始链接" onclick="event.stopPropagation();openResourceUrl('${escapeAttribute(linkValue)}')">开</button>
+              <button class="icon-btn" type="button" title="复制链接" onclick="event.stopPropagation();copyResourceUrl('${escapeAttribute(linkValue)}')">复</button>
+              <button class="icon-btn danger" type="button" title="删除资源" onclick="event.stopPropagation();deleteResource('${escapeAttribute(item.id)}')" ${permissionAttrs("audit.read")}>删</button>
+            </div>
+          </td>
+        </tr>`;
+      }
+
+      function resourcePreviewModal() {
+        if (!state.resourcePreviewOpen) return "";
+        const selected = state.resources.find((item) => item.id === state.resourceSelectedId) || null;
+        if (!selected) return "";
+        const previewUrl = storagePreviewUrl(selected);
+        if (!previewUrl) return "";
+        const isVideo = resourceKindLabel(selected) === "视频";
+        const media = isVideo
+          ? `<video controls autoplay playsinline preload="metadata" src="${escapeAttribute(previewUrl)}"></video>`
+          : `<img src="${escapeAttribute(previewUrl)}" alt="${escapeAttribute(selected.fileName || selected.objectKey || "资源预览")}" referrerpolicy="no-referrer" />`;
+        return `<div class="resource-preview-modal" onclick="if(event.target===this) closeResourcePreview()">
+          <div class="resource-preview-dialog">
+            <div class="resource-preview-head">
+              <div class="resource-preview-title">
+                <strong>${escapeHtml(selected.fileName || selected.objectKey || "资源预览")}</strong>
+                <span>${escapeHtml(previewUrl)}</span>
+              </div>
+              <button class="btn resource-preview-close" type="button" onclick="closeResourcePreview()">关闭</button>
+            </div>
+            <div class="resource-preview-stage">${media}</div>
+          </div>
+        </div>`;
+      }
+
+      function resourcesPage() {
+        const items = Array.isArray(state.resources) ? state.resources : [];
+        const pageSize = Number(state.resourcePageSize) || 10;
+        const totalCount = Math.max(0, Number(state.resourceTotal) || 0);
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const currentPage = Math.min(Math.max(1, Number(state.resourcePage) || 1), totalPages);
+        state.resourcePage = currentPage;
+        const tableContent = items.length
+          ? `<div class="resource-table-wrap"><table class="resource-table"><thead><tr><th class="preview-col">图片/视频</th><th>链接</th><th class="size-col">大小</th><th class="type-col">类型</th><th class="user-col">用户</th><th class="phone-col">手机</th><th class="time-col">创建时间</th><th class="actions">操作</th></tr></thead><tbody>${items.map((item) => resourceTableRow(item)).join("")}</tbody></table></div>`
+          : `<div class="resource-inspector-empty">${state.resourceLoadError || "暂无资源"}</div>`;
+        const stats = state.resourceStats || {};
+        return `<div class="section-stack resources-layout">
+          <section class="card">
+            <div class="toolbar">
+              <div>
+                <h3 style="margin:0;">资源列表</h3>
+                <div class="metric-note">以列表形式集中查看图片和视频资源，支持放大预览、复制链接与删除。</div>
+              </div>
+              <div class="filters">
+                <input value="${escapeAttribute(state.resourceSearch || "")}" placeholder="搜索文件名 / 对象键 / 项目 / 上传人" oninput="updateResourceSearch(this.value)" />
+                <select onchange="updateResourceMediaFilter(this.value)">${resourceFilterOptions(state.resourceMediaFilter || "all", [{ value: "all", label: "全部资源" }, { value: "image", label: "图片" }, { value: "video", label: "视频" }])}</select>
+                <select onchange="updateResourceRangeFilter(this.value)">${resourceFilterOptions(state.resourceRangeFilter || "all", [{ value: "all", label: "全部时间" }, { value: "day", label: "今日" }, { value: "month", label: "本月" }])}</select>
+                <button class="btn ghost" onclick="loadResources().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="resource-stat-grid" style="margin-bottom:12px;">
+              <div class="resource-stat"><div class="metric-note">资源总数</div><div>${Number(stats.total || 0)}</div></div>
+              <div class="resource-stat"><div class="metric-note">图片总数</div><div>${Number(stats.imageCount || 0)}</div></div>
+              <div class="resource-stat"><div class="metric-note">视频总数</div><div>${Number(stats.videoCount || 0)}</div></div>
+              <div class="resource-stat"><div class="metric-note">图片占用</div><div>${formatBytes(Number(stats.imageBytes || 0))}</div></div>
+              <div class="resource-stat"><div class="metric-note">视频占用</div><div>${formatBytes(Number(stats.videoBytes || 0))}</div></div>
+            </div>
+            <div class="resources-list">${tableContent}</div>
+            ${totalCount ? `<div class="resource-pagination">
+              <span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${totalCount} 条</span>
+              <button class="btn ghost" type="button" onclick="setResourcePage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
+              <button class="btn ghost" type="button" onclick="setResourcePage(${currentPage + 1})" ${currentPage >= totalPages ? "disabled" : ""}>下一页</button>
+            </div>` : ""}
+          </section>
+        </div>${resourcePreviewModal()}`;
       }
 
       function riskTable(name, severity, status) {
@@ -7960,6 +8603,13 @@
         return options.map((option) => `<option value="${option.value}" ${option.value === selected ? "selected" : ""}>${option.label}</option>`).join("");
       }
 
+      function resourceFilterOptions(selected, entries) {
+        return entries.map((item) => {
+          const option = typeof item === "string" ? { value: item, label: item } : item;
+          return `<option value="${escapeAttribute(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>`;
+        }).join("");
+      }
+
       function escapeAttribute(value) {
         return escapeHtml(value).replaceAll('"', "&quot;");
       }
@@ -8233,7 +8883,7 @@
           ? state.legalDocuments.map((item) => {
               const statusClass = item.status === "enabled" ? "green legal-document-status" : "warn legal-document-status";
               const statusLabel = item.status === "enabled" ? "\u542f\u7528" : "\u505c\u7528";
-              const typeLabel = item.type === "service" ? "\u7528\u6237\u534f\u8bae" : "\u9690\u79c1\u534f\u8bae";
+              const typeLabel = item.type === "service" ? "\u7528\u6237\u534f\u8bae" : item.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : item.type || "-";
               const toggleLabel = item.status === "enabled" ? "\u505c\u7528" : "\u542f\u7528";
               const toggleAction = item.status === "enabled" ? "\u505c" : "\u542f";
               return `<tr>
@@ -8282,7 +8932,7 @@
               <div class="legal-document-card-head">
                 <div>
                   <h4>${escapeHtml(previewTitle)}</h4>
-                  <div class="metric-note">${selected ? `${selected.type === "service" ? "\u7528\u6237\u534f\u8bae" : "\u9690\u79c1\u534f\u8bae"} / ${selected.status === "enabled" ? "\u5f53\u524d\u542f\u7528" : "\u672a\u542f\u7528"}` : "\u70b9\u51fb\u8868\u683c\u4e2d\u7684\u9884\u89c8\u67e5\u770b\u8be6\u60c5"}</div>
+                  <div class="metric-note">${selected ? `${selected.type === "service" ? "\u7528\u6237\u534f\u8bae" : selected.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : escapeHtml(selected.type)} / ${selected.status === "enabled" ? "\u5f53\u524d\u542f\u7528" : "\u672a\u542f\u7528"}` : "\u70b9\u51fb\u8868\u683c\u4e2d\u7684\u9884\u89c8\u67e5\u770b\u8be6\u60c5"}</div>
                 </div>
               </div>
               ${selected ? `<div class="legal-document-surface agreement-rich-text">${previewHtml}</div>` : `<div class="legal-document-empty">\u6682\u65e0\u53ef\u9884\u89c8\u7684\u534f\u8bae\u6587\u6863</div>`}
@@ -8302,6 +8952,7 @@
         const defaultTitle = existing?.title || "";
         const defaultVersionLabel = existing?.versionLabel || "";
         const initialContentHtml = sanitizeRichTextHtml(existing?.document?.contentHtml || "");
+        const typeChoices = legalDocumentTypeChoices(defaultType);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel legal-document-drawer-panel">
@@ -8311,6 +8962,16 @@
           </div>
           <p style="color:var(--muted);line-height:1.7">\u652f\u6301\u65b0\u589e\u3001\u7f16\u8f91\u4e0d\u540c\u7248\u672c\u7684\u534f\u8bae\u5185\u5bb9\uff0c\u542f\u7528\u540e\u4f1a\u7acb\u5373\u540c\u6b65\u5230\u767b\u5f55\u9875\u3002</p>
           <form id="legal-document-form" class="legal-document-form">
+            <div class="form-grid">
+              <label class="field"><span>\u534f\u8bae\u540d\u79f0</span><input name="title" value="${escapeAttribute(defaultTitle)}" placeholder="\u8bf7\u8f93\u5165\u534f\u8bae\u540d\u79f0" required /></label>
+              <label class="field"><span>\u534f\u8bae\u7c7b\u578b</span>
+                <input id="legal-document-type-input" name="type" value="${escapeAttribute(defaultType)}" placeholder="\u4f8b\u5982\uff1aservice\u3001privacy\u3001recharge_terms" required />
+              </label>
+            </div>
+            <div class="legal-document-type-presets">
+              ${typeChoices.map((option) => `<button class="btn ghost" type="button" data-legal-type-preset="${escapeAttribute(option.value)}">${escapeHtml(option.label)}</button>`).join("")}
+            </div>
+            <p class="legal-document-note">\u53ef\u4ee5\u76f4\u63a5\u8f93\u5165\u65b0\u7684\u534f\u8bae\u7c7b\u578b\uff0c\u4e0d\u53d7\u9650\u4e8e\u4e0a\u65b9\u5feb\u6377\u9009\u9879\u3002</p>
             <div class="legal-document-toolbar">
               <div class="legal-document-toolbar-group">
                 <button class="btn ghost" type="button" data-legal-command="bold" data-legal-active-command="bold" title="\u52a0\u7c97">B</button>
@@ -8374,6 +9035,8 @@
         const preview = document.getElementById("legal-document-preview");
         const htmlInput = document.getElementById("legal-document-html");
         const error = document.getElementById("legal-document-error");
+        const titleInput = form.elements.namedItem("title");
+        const typeInput = form.elements.namedItem("type");
         let savedSelection = null;
 
         const saveSelection = () => {
@@ -8503,16 +9166,40 @@
         syncToolbarState();
         syncEditor();
 
+        const syncTypePresetState = () => {
+          const selectedType = String(typeInput?.value || "").trim();
+          drawer.querySelectorAll("[data-legal-type-preset]").forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.legalTypePreset === selectedType);
+          });
+        };
+
+        drawer.querySelectorAll("[data-legal-type-preset]").forEach((button) => {
+          button.addEventListener("click", () => {
+            if (!typeInput) return;
+            typeInput.value = button.dataset.legalTypePreset || "";
+            syncTypePresetState();
+            typeInput.focus();
+          });
+        });
+        typeInput?.addEventListener("input", syncTypePresetState);
+        syncTypePresetState();
+
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
+          const docType = String(typeInput?.value || "").trim();
+          const docTitle = String(titleInput?.value || "").trim();
+          if (!docType) {
+            error.textContent = "请输入协议类型";
+            return;
+          }
           syncEditor();
           await runAdminMutation(event.currentTarget, error, async () => {
             await api(existing ? `/api/admin/legal-documents/${encodeURIComponent(existing.id)}` : "/api/admin/legal-documents", {
               method: existing ? "PATCH" : "POST",
               headers: { "idempotency-key": `admin-ui-legal-document-${existing?.id || "new"}-${Date.now()}` },
               body: JSON.stringify({
-                type: defaultType,
-                title: defaultTitle,
+                type: docType || defaultType,
+                title: docTitle || defaultTitle,
                 contentHtml: htmlInput.value,
                 versionLabel: defaultVersionLabel,
                 reason: existing ? "\u66f4\u65b0\u534f\u8bae\u5185\u5bb9" : "\u65b0\u589e\u534f\u8bae\u5185\u5bb9",
@@ -8564,6 +9251,7 @@
         prompts: () => loadPromptManagement(),
         risks: () => loadRiskAudit(),
         smsRecords: () => loadSmsRecords(),
+        resources: () => loadResources(),
         agreements: () => loadLegalDocuments(),
         settings: () => loadSettings(),
         account: () => loadAdminSessions(),
@@ -8599,6 +9287,9 @@
       function preloadAdminShellData() {
         if (!state.loadedPages.settings && !state.loadingPromises.settings) {
           ensureAdminPageData("settings").catch(() => undefined);
+        }
+        if (!state.loadedPages.resources && !state.loadingPromises.resources) {
+          ensureAdminPageData("resources").catch(() => undefined);
         }
       }
 
@@ -8796,6 +9487,13 @@
       window.selectLegalDocument = selectLegalDocument;
       window.toggleLegalDocumentStatus = toggleLegalDocumentStatus;
       window.deleteLegalDocument = deleteLegalDocument;
+      window.selectResource = selectResource;
+      window.previewResource = previewResource;
+      window.closeResourcePreview = closeResourcePreview;
+      window.openResourceUrl = openResourceUrl;
+      window.copyResourceUrl = copyResourceUrl;
+      window.deleteResource = deleteResource;
+      window.setResourcePage = setResourcePage;
       window.openSecretReferenceDrawer = openSecretReferenceDrawer;
       window.probeSecretReference = probeSecretReference;
       window.deleteSecretReference = deleteSecretReference;
@@ -9061,6 +9759,42 @@
         };
       })();
       ADMIN_PAGE_LOADERS.community = loadCommunityBoard;
+
+      (function installResourceAdminPage() {
+        pages.resources = "资源管理";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/resources")) return "resources";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "resources") return previousNavigate(page);
+          state.page = "resources";
+          history.pushState(null, "", "/admin/resources");
+          renderShell();
+          ensureAdminPageData("resources").catch(() => undefined);
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="resources"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "resources";
+          button.innerHTML = "<span>资源管理</span>";
+          if (state.page === "resources") button.classList.add("active");
+          button.addEventListener("click", () => navigate("resources"));
+          nav.insertBefore(button, settingsButton);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "resources") return resourcesPage();
+          return previousRenderPage();
+        };
+      })();
+      ADMIN_PAGE_LOADERS.resources = loadResources;
 
       function parameterTemplateConfig() {
         return state.settings.configs.find((config) => config.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY) || {

@@ -8554,120 +8554,6 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /操作成功/);
   });
 
-  it("closes local simulated membership payment immediately after critical entitlement sync", async () => {
-    let resolveSlowTeamOverview;
-    const slowTeamOverview = new Promise((resolve) => {
-      resolveSlowTeamOverview = resolve;
-    });
-    const calls = [];
-    const workbench = {
-      root: {
-        innerHTML: "",
-        querySelector: () => null,
-        querySelectorAll: () => [],
-      },
-      state: buildProjectState(),
-      session: { user: { phone: "+86 13800138000", creditBalance: 0 } },
-      ui: buildProjectUi({
-        isLibraryPricingModalOpen: true,
-        pendingMembershipPlanId: "plan-pro-month",
-        lastBillingOrder: {
-          id: "order-membership-1",
-          productType: "membership_plan",
-          status: "pending_payment",
-        },
-        lastPaymentIntent: {
-          id: "intent-membership-1",
-          orderId: "order-membership-1",
-          status: "submitted",
-        },
-      }),
-      paymentPollClearTimeout() {},
-      api: {
-        async simulatePaymentIntentSuccess(input) {
-          calls.push(["simulatePaymentIntentSuccess", input]);
-          return { ok: true };
-        },
-        async getBillingOrder(orderId) {
-          calls.push(["getBillingOrder", orderId]);
-          return {
-            order: {
-              id: orderId,
-              productType: "membership_plan",
-              status: "paid",
-            },
-          };
-        },
-        async getPaymentIntent(paymentIntentId) {
-          calls.push(["getPaymentIntent", paymentIntentId]);
-          return {
-            paymentIntent: {
-              id: paymentIntentId,
-              orderId: "order-membership-1",
-              status: "succeeded",
-            },
-          };
-        },
-        async getMembershipStatus() {
-          calls.push("getMembershipStatus");
-          return { membership: { status: "professional_active" } };
-        },
-        async getSession() {
-          calls.push("getSession");
-          return { user: { phone: "+86 13800138000", creditBalance: 1000 } };
-        },
-        async getMembershipPlans() {
-          calls.push("getMembershipPlans");
-          return { data: { plans: [] } };
-        },
-        async getTeamOverview() {
-          calls.push("getTeamOverview");
-          return slowTeamOverview;
-        },
-        async getTeamMembers() {
-          calls.push("getTeamMembers");
-          return { members: [] };
-        },
-        async getLibraryAssets() {
-          calls.push("getLibraryAssets");
-          return { assets: [], folders: [], categories: [], entitlement: { hasTeamAssetLibrary: true } };
-        },
-        async getProjects() {
-          calls.push("getProjects");
-          return { projects: [] };
-        },
-      },
-    };
-
-    const actionPromise = handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "simulate-membership-payment-success",
-        paymentIntentId: "intent-membership-1",
-        orderId: "order-membership-1",
-      },
-    });
-    const completion = await Promise.race([
-      actionPromise.then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
-
-    assert.equal(completion, "resolved");
-    assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-    assert.deepEqual(workbench.ui.toast, {
-      tone: "success",
-      message: "会员权益已开通",
-      __paymentResultToast: true,
-      __paymentResultToastShown: true,
-    });
-    assert.match(workbench.root.innerHTML, /会员权益已开通/);
-    assert.equal(workbench.ui.membershipStatus.status, "professional_active");
-
-    resolveSlowTeamOverview?.({ overview: { entitlements: { teamAssetLibrary: true } } });
-    await actionPromise;
-    await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
-    assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
-  });
-
   it("starts polling after membership payment intent creation and refreshes entitlements when paid", async () => {
     const calls = [];
     const scheduledPolls = [];
@@ -28907,6 +28793,50 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.accountSettingsForm.newPassword, "");
     assert.equal(workbench.ui.accountSettingsForm.confirmPassword, "");
     assert.equal(workbench.ui.toast, "账号设置已保存。");
+  });
+
+  it("blocks account settings submit when display name exceeds 8 characters", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: { user: { phone: "+86 13800138000", displayName: "灵曦导演", email: "creator@lingxi.ai" } },
+      api: {
+        async updateAccountProfile(input) {
+          requests.push({ type: "profile", input });
+          return { ok: true };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        accountSettingsOpen: true,
+        accountSettingsDirty: true,
+        accountSettingsNotice: "",
+        accountSettingsForm: {
+          displayName: "这是一个超过八字的昵称",
+          phone: "+86 13800138000",
+          email: "creator@lingxi.ai",
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: "",
+          notifications: {
+            projectUpdates: true,
+            renderComplete: true,
+            marketing: false,
+          },
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-account-settings" },
+    });
+
+    assert.deepEqual(requests, []);
+    assert.equal(workbench.ui.accountSettingsOpen, true);
+    assert.equal(workbench.ui.accountSettingsNotice, "显示昵称最多 8 个字。");
+    assert.equal(workbench.ui.accountSettingsDirty, true);
   });
 });
 

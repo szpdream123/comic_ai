@@ -48,7 +48,6 @@ import { resolveMembershipGenerationPriority } from "../modules/membership/membe
 import {
   createCommercePaymentService,
   ensureDefaultCreditPackage,
-  signPaymentCallback,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
@@ -2719,11 +2718,52 @@ async function getOrganizationCreditBalance(
   return Number(row?.credit_balance_cached ?? 0);
 }
 
+async function resolveCreditBalanceScope(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  await ensurePersonalProjectWorkspaceAccess(db, userId);
+  const personalWorkspaceId = personalProjectWorkspaceId(userId);
+  const personalMembership = await queryOne<{
+    organization_id: string;
+    workspace_id: string;
+    membership_id: string;
+    role: string;
+  }>(
+    db,
+    `
+      SELECT organization_id, workspace_id, id AS membership_id, role
+      FROM memberships
+      WHERE user_id = $1
+        AND organization_id = $2
+        AND workspace_id = $3
+        AND status = 'active'
+      ORDER BY
+        CASE WHEN role = 'owner_admin' THEN 0 ELSE 1 END,
+        created_at ASC
+      LIMIT 1
+    `,
+    [userId, devOrganizationId, personalWorkspaceId],
+  );
+  if (personalMembership) {
+    return {
+      organizationId: personalMembership.organization_id,
+      workspaceId: personalMembership.workspace_id,
+    };
+  }
+
+  const scope = personalDevTenantScope(userId);
+  return {
+    organizationId: scope.organizationId,
+    workspaceId: scope.workspaceId,
+  };
+}
+
 async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
-  const scope = personalDevTenantScope(userId);
+  const scope = await resolveCreditBalanceScope(db, userId);
   const row = await queryOne<{
     available_credits: number | string | null;
     reserved_credits: number | string | null;
@@ -9434,6 +9474,8 @@ async function findAuthenticatedUser(
   };
 }
 
+const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
+
 async function updateAuthenticatedUserProfile(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -9460,11 +9502,14 @@ async function updateAuthenticatedUserProfile(
       body: { error: "display_name_required", message: "请输入显示昵称。" },
     };
   }
-  if ([...displayName].length > 40) {
+  if ([...displayName].length > ACCOUNT_DISPLAY_NAME_MAX_LENGTH) {
     return {
       ok: false,
       status: 400,
-      body: { error: "display_name_too_long", message: "显示昵称最多 40 个字符。" },
+      body: {
+        error: "display_name_too_long",
+        message: `显示昵称最多 ${ACCOUNT_DISPLAY_NAME_MAX_LENGTH} 个字。`,
+      },
     };
   }
 
@@ -12132,6 +12177,7 @@ export function createPhoneAuthDevServer(
           return writeJson(response, adminRoute.response);
         }
         const body = (await readJsonBody(request)) as {
+          type?: string;
           title?: string;
           contentHtml?: string;
           versionLabel?: string | null;
@@ -12142,6 +12188,7 @@ export function createPhoneAuthDevServer(
           response,
           await adminSettings.updateLegalDocument({
             id: decodeURIComponent(adminLegalDocumentPatchMatch[1]),
+            type: body.type == null ? undefined : String(body.type ?? ""),
             title: String(body.title ?? ""),
             contentHtml: String(body.contentHtml ?? ""),
             versionLabel: body.versionLabel ?? null,
@@ -12593,6 +12640,603 @@ export function createPhoneAuthDevServer(
             })),
           },
         });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/resources/summary") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+
+        const media = String(url.searchParams.get("media") ?? "all");
+        const range = String(url.searchParams.get("range") ?? "all");
+        const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+        const where: string[] = [
+          "so.status IN ('available', 'pending_upload', 'failed', 'delete_failed')",
+          "so.content_type IS NOT NULL",
+          "so.content_type <> ''",
+        ];
+        const params: Array<unknown> = [];
+        if (media === "image") {
+          where.push("so.content_type LIKE 'image/%'");
+        } else if (media === "video") {
+          where.push("so.content_type LIKE 'video/%'");
+        }
+        if (range === "day" || range === "month") {
+          const window = range === "day" ? shanghaiDayWindow(new Date()) : shanghaiMonthWindow(new Date());
+          params.push(window.start, window.end);
+          where.push(`so.created_at >= $${params.length - 1} AND so.created_at < $${params.length}`);
+        }
+        if (keyword) {
+          params.push(`%${keyword}%`);
+          const keywordParam = `$${params.length}`;
+          where.push(
+            `(
+              LOWER(COALESCE(pur.file_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.object_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.bucket, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.project_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.page_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.actor_display_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.actor_phone_e164, '')) LIKE ${keywordParam}
+            )`,
+          );
+        }
+
+        const totals = await queryOne<{
+          total_count: number | string;
+          image_count: number | string;
+          video_count: number | string;
+          image_bytes: number | string | null;
+          video_bytes: number | string | null;
+        }>(
+          db,
+          `
+            SELECT
+              COUNT(*)::bigint AS total_count,
+              COUNT(*) FILTER (WHERE so.content_type LIKE 'image/%')::bigint AS image_count,
+              COUNT(*) FILTER (WHERE so.content_type LIKE 'video/%')::bigint AS video_count,
+              COALESCE(SUM(so.size_bytes) FILTER (WHERE so.content_type LIKE 'image/%'), 0)::bigint AS image_bytes,
+              COALESCE(SUM(so.size_bytes) FILTER (WHERE so.content_type LIKE 'video/%'), 0)::bigint AS video_bytes
+            FROM storage_objects so
+            LEFT JOIN LATERAL (
+              SELECT *
+              FROM project_upload_records pur
+              WHERE pur.storage_object_id = so.id
+              ORDER BY pur.created_at DESC
+              LIMIT 1
+            ) pur ON TRUE
+            WHERE ${where.join(" AND ")}
+          `,
+          params,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            total: Number(totals?.total_count ?? 0),
+            imageCount: Number(totals?.image_count ?? 0),
+            videoCount: Number(totals?.video_count ?? 0),
+            imageBytes: Number(totals?.image_bytes ?? 0),
+            videoBytes: Number(totals?.video_bytes ?? 0),
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/resources") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+
+        const media = String(url.searchParams.get("media") ?? "all");
+        const range = String(url.searchParams.get("range") ?? "all");
+        const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 10), 1), 100);
+        const page = Math.max(Number(url.searchParams.get("page") ?? 1), 1);
+        const offset = (page - 1) * pageSize;
+        const where: string[] = [
+          "so.status IN ('available', 'pending_upload', 'failed', 'delete_failed')",
+          "so.content_type IS NOT NULL",
+          "so.content_type <> ''",
+        ];
+        const params: Array<unknown> = [];
+        if (media === "image") {
+          where.push("so.content_type LIKE 'image/%'");
+        } else if (media === "video") {
+          where.push("so.content_type LIKE 'video/%'");
+        }
+        if (range === "day" || range === "month") {
+          const window = range === "day" ? shanghaiDayWindow(new Date()) : shanghaiMonthWindow(new Date());
+          params.push(window.start, window.end);
+          where.push(`so.created_at >= $${params.length - 1} AND so.created_at < $${params.length}`);
+        }
+        if (keyword) {
+          params.push(`%${keyword}%`);
+          const keywordParam = `$${params.length}`;
+          where.push(
+            `(
+              LOWER(COALESCE(pur.file_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.object_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.bucket, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.project_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.page_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.actor_display_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.actor_phone_e164, '')) LIKE ${keywordParam}
+            )`,
+          );
+        }
+        const countParams = [...params];
+        params.push(pageSize, offset);
+        const rows = await db.query<{
+          id: string;
+          bucket: string;
+          object_key: string;
+          content_type: string;
+          size_bytes: number | string | null;
+          provider: string;
+          status: string;
+          created_at: Date;
+          project_id: string | null;
+          workspace_id: string | null;
+          project_name: string | null;
+          page_key: string | null;
+          page_url: string | null;
+          source_action: string | null;
+          file_name: string | null;
+          actor_display_name: string | null;
+          actor_phone_e164: string | null;
+          upload_status: string | null;
+          upload_created_at: Date | null;
+          upload_completed_at: Date | null;
+          public_url: string | null;
+        }>(
+          `
+            SELECT
+              so.id,
+              so.bucket,
+              so.object_key,
+              so.content_type,
+              so.size_bytes,
+              so.provider,
+              so.status,
+              so.created_at,
+              so.project_id,
+              so.workspace_id,
+              pur.project_name,
+              pur.page_key,
+              pur.page_url,
+              pur.source_action,
+              pur.file_name,
+              pur.actor_display_name,
+              pur.actor_phone_e164,
+              pur.status AS upload_status,
+              pur.created_at AS upload_created_at,
+              pur.completed_at AS upload_completed_at,
+              pur.public_url
+            FROM storage_objects so
+            LEFT JOIN LATERAL (
+              SELECT *
+              FROM project_upload_records pur
+              WHERE pur.storage_object_id = so.id
+              ORDER BY pur.created_at DESC
+              LIMIT 1
+            ) pur ON TRUE
+            WHERE ${where.join(" AND ")}
+            ORDER BY so.created_at DESC, so.id DESC
+            LIMIT $${params.length - 1}
+            OFFSET $${params.length}
+          `,
+          params,
+        );
+        const totalCount = Number(
+          (
+            await queryOne<{
+              total_count: number | string;
+            }>(
+              db,
+              `
+                SELECT COUNT(*)::bigint AS total_count
+                FROM storage_objects so
+                LEFT JOIN LATERAL (
+                  SELECT *
+                  FROM project_upload_records pur
+                  WHERE pur.storage_object_id = so.id
+                  ORDER BY pur.created_at DESC
+                  LIMIT 1
+                ) pur ON TRUE
+                WHERE ${where.join(" AND ")}
+              `,
+              countParams,
+            )
+          )?.total_count ?? 0,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: rows.rows.map((row) => {
+              const previewUrl =
+                row.public_url ||
+                buildStorageObjectPublicUrl(storageRuntime, {
+                  bucket: row.bucket,
+                  objectKey: row.object_key,
+                });
+              return {
+                id: row.id,
+                bucket: row.bucket,
+                objectKey: row.object_key,
+                contentType: row.content_type,
+                mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
+                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+                provider: row.provider,
+                status: row.status,
+                previewUrl,
+                sourceUrl: previewUrl,
+                downloadUrl: previewUrl,
+                projectId: row.project_id,
+                workspaceId: row.workspace_id,
+                projectName: row.project_name,
+                pageKey: row.page_key,
+                pageUrl: row.page_url,
+                sourceAction: row.source_action,
+                fileName: row.file_name,
+                actorDisplayName: row.actor_display_name,
+                actorPhoneE164: row.actor_phone_e164,
+                uploadStatus: row.upload_status,
+                createdAt: row.created_at.toISOString(),
+                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+              };
+            }),
+            meta: {
+              page,
+              pageSize,
+              total: totalCount,
+              totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+            },
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/creator/media-library/summary") {
+        const authenticated = await requireSessionFromRequest(db, request);
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthorized", message: "Please log in again." },
+          });
+        }
+
+        const media = String(url.searchParams.get("media") ?? "all");
+        const range = String(url.searchParams.get("range") ?? "all");
+        const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+        const where: string[] = [
+          "so.status IN ('available', 'pending_upload', 'failed', 'delete_failed')",
+          "so.content_type IS NOT NULL",
+          "so.content_type <> ''",
+          "(so.content_type LIKE 'image/%' OR so.content_type LIKE 'video/%')",
+          "(COALESCE(pur.actor_user_id, so.created_by_user_id) = $1 OR so.created_by_user_id = $1)",
+        ];
+        const params: Array<unknown> = [authenticated.user.id];
+        if (media === "image") {
+          where.push("so.content_type LIKE 'image/%'");
+        } else if (media === "video") {
+          where.push("so.content_type LIKE 'video/%'");
+        }
+        if (range === "day" || range === "month") {
+          const window = range === "day" ? shanghaiDayWindow(new Date()) : shanghaiMonthWindow(new Date());
+          params.push(window.start, window.end);
+          where.push(`so.created_at >= $${params.length - 1} AND so.created_at < $${params.length}`);
+        }
+        if (keyword) {
+          params.push(`%${keyword}%`);
+          const keywordParam = `$${params.length}`;
+          where.push(
+            `(
+              LOWER(COALESCE(pur.file_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.object_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.project_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.page_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.source_action, '')) LIKE ${keywordParam}
+            )`,
+          );
+        }
+
+        const totals = await queryOne<{
+          total_count: number | string;
+          image_count: number | string;
+          video_count: number | string;
+          image_bytes: number | string | null;
+          video_bytes: number | string | null;
+        }>(
+          db,
+          `
+            SELECT
+              COUNT(*)::bigint AS total_count,
+              COUNT(*) FILTER (WHERE so.content_type LIKE 'image/%')::bigint AS image_count,
+              COUNT(*) FILTER (WHERE so.content_type LIKE 'video/%')::bigint AS video_count,
+              COALESCE(SUM(so.size_bytes) FILTER (WHERE so.content_type LIKE 'image/%'), 0)::bigint AS image_bytes,
+              COALESCE(SUM(so.size_bytes) FILTER (WHERE so.content_type LIKE 'video/%'), 0)::bigint AS video_bytes
+            FROM storage_objects so
+            LEFT JOIN LATERAL (
+              SELECT *
+              FROM project_upload_records pur
+              WHERE pur.storage_object_id = so.id
+              ORDER BY pur.created_at DESC
+              LIMIT 1
+            ) pur ON TRUE
+            WHERE ${where.join(" AND ")}
+          `,
+          params,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            total: Number(totals?.total_count ?? 0),
+            imageCount: Number(totals?.image_count ?? 0),
+            videoCount: Number(totals?.video_count ?? 0),
+            imageBytes: Number(totals?.image_bytes ?? 0),
+            videoBytes: Number(totals?.video_bytes ?? 0),
+          },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/creator/media-library") {
+        const authenticated = await requireSessionFromRequest(db, request);
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthorized", message: "Please log in again." },
+          });
+        }
+
+        const media = String(url.searchParams.get("media") ?? "all");
+        const range = String(url.searchParams.get("range") ?? "all");
+        const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 12), 1), 100);
+        const page = Math.max(Number(url.searchParams.get("page") ?? 1), 1);
+        const offset = (page - 1) * pageSize;
+        const where: string[] = [
+          "so.status IN ('available', 'pending_upload', 'failed', 'delete_failed')",
+          "so.content_type IS NOT NULL",
+          "so.content_type <> ''",
+          "(so.content_type LIKE 'image/%' OR so.content_type LIKE 'video/%')",
+          "(COALESCE(pur.actor_user_id, so.created_by_user_id) = $1 OR so.created_by_user_id = $1)",
+        ];
+        const params: Array<unknown> = [authenticated.user.id];
+        if (media === "image") {
+          where.push("so.content_type LIKE 'image/%'");
+        } else if (media === "video") {
+          where.push("so.content_type LIKE 'video/%'");
+        }
+        if (range === "day" || range === "month") {
+          const window = range === "day" ? shanghaiDayWindow(new Date()) : shanghaiMonthWindow(new Date());
+          params.push(window.start, window.end);
+          where.push(`so.created_at >= $${params.length - 1} AND so.created_at < $${params.length}`);
+        }
+        if (keyword) {
+          params.push(`%${keyword}%`);
+          const keywordParam = `$${params.length}`;
+          where.push(
+            `(
+              LOWER(COALESCE(pur.file_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(so.object_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.project_name, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.page_key, '')) LIKE ${keywordParam}
+              OR LOWER(COALESCE(pur.source_action, '')) LIKE ${keywordParam}
+            )`,
+          );
+        }
+        const countParams = [...params];
+        params.push(pageSize, offset);
+        const rows = await db.query<{
+          id: string;
+          bucket: string;
+          object_key: string;
+          content_type: string;
+          size_bytes: number | string | null;
+          provider: string;
+          status: string;
+          created_at: Date;
+          project_id: string | null;
+          workspace_id: string | null;
+          project_name: string | null;
+          page_key: string | null;
+          page_url: string | null;
+          source_action: string | null;
+          file_name: string | null;
+          actor_display_name: string | null;
+          upload_status: string | null;
+          upload_created_at: Date | null;
+          upload_completed_at: Date | null;
+          public_url: string | null;
+        }>(
+          `
+            SELECT
+              so.id,
+              so.bucket,
+              so.object_key,
+              so.content_type,
+              so.size_bytes,
+              so.provider,
+              so.status,
+              so.created_at,
+              so.project_id,
+              so.workspace_id,
+              pur.project_name,
+              pur.page_key,
+              pur.page_url,
+              pur.source_action,
+              pur.file_name,
+              pur.actor_display_name,
+              pur.status AS upload_status,
+              pur.created_at AS upload_created_at,
+              pur.completed_at AS upload_completed_at,
+              pur.public_url
+            FROM storage_objects so
+            LEFT JOIN LATERAL (
+              SELECT *
+              FROM project_upload_records pur
+              WHERE pur.storage_object_id = so.id
+              ORDER BY pur.created_at DESC
+              LIMIT 1
+            ) pur ON TRUE
+            WHERE ${where.join(" AND ")}
+            ORDER BY so.created_at DESC, so.id DESC
+            LIMIT $${params.length - 1}
+            OFFSET $${params.length}
+          `,
+          params,
+        );
+        const totalCount = Number(
+          (
+            await queryOne<{
+              total_count: number | string;
+            }>(
+              db,
+              `
+                SELECT COUNT(*)::bigint AS total_count
+                FROM storage_objects so
+                LEFT JOIN LATERAL (
+                  SELECT *
+                  FROM project_upload_records pur
+                  WHERE pur.storage_object_id = so.id
+                  ORDER BY pur.created_at DESC
+                  LIMIT 1
+                ) pur ON TRUE
+                WHERE ${where.join(" AND ")}
+              `,
+              countParams,
+            )
+          )?.total_count ?? 0,
+        );
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: rows.rows.map((row) => {
+              const previewUrl =
+                row.public_url ||
+                buildStorageObjectPublicUrl(storageRuntime, {
+                  bucket: row.bucket,
+                  objectKey: row.object_key,
+                });
+              return {
+                id: row.id,
+                bucket: row.bucket,
+                objectKey: row.object_key,
+                contentType: row.content_type,
+                mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
+                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+                provider: row.provider,
+                status: row.status,
+                previewUrl,
+                sourceUrl: previewUrl,
+                downloadUrl: previewUrl,
+                projectId: row.project_id,
+                workspaceId: row.workspace_id,
+                projectName: row.project_name,
+                pageKey: row.page_key,
+                pageUrl: row.page_url,
+                sourceAction: row.source_action,
+                fileName: row.file_name,
+                actorDisplayName: row.actor_display_name,
+                uploadStatus: row.upload_status,
+                createdAt: row.created_at.toISOString(),
+                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+              };
+            }),
+            meta: {
+              page,
+              pageSize,
+              total: totalCount,
+              totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+            },
+          },
+        });
+      }
+
+      const adminResourceMatch = pathname.match(/^\/api\/admin\/resources\/([^/]+)$/);
+      if (request.method === "DELETE" && adminResourceMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+
+        const resourceId = decodeURIComponent(adminResourceMatch[1]);
+        const body = (await readJsonBody(request)) as { reason?: string };
+        const existing = await queryOne<{
+          id: string;
+          bucket: string;
+          object_key: string;
+          status: string;
+        }>(
+          db,
+          `
+            SELECT id, bucket, object_key, status
+            FROM storage_objects
+            WHERE id = $1
+            LIMIT 1
+          `,
+          [resourceId],
+        );
+        if (!existing) {
+          return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+        }
+
+        const deleted = await deleteStorageObjectRecord(db, {
+          storageObjectId: resourceId,
+          adapter: storageRuntime.adapter,
+          localObjectStore: storageRuntime.localObjectStore,
+          now: new Date(),
+        });
+        if (!deleted || deleted.status !== "deleted") {
+          return writeJson(response, envelopedError(500, "resource_delete_failed", "resource delete failed"));
+        }
+
+        await appendAuditEvent(db, {
+          organizationId: devOrganizationId,
+          workspaceId: devWorkspaceId,
+          actorUserId: null,
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          eventType: "admin.resource.deleted",
+          targetType: "storage_object",
+          targetId: resourceId,
+          reason: String(body.reason ?? "后台删除资源"),
+          sensitive: true,
+          metadata: {
+            bucket: existing.bucket,
+            objectKey: existing.object_key,
+            previousStatus: existing.status,
+            deletedStatus: deleted.status,
+            idempotencyKey,
+          },
+        });
+
+        return writeJson(response, enveloped(200, {
+          id: resourceId,
+          status: deleted.status,
+          deleted: true,
+        }));
       }
 
       if (request.method === "POST" && pathname === "/api/auth/code/request") {
@@ -13207,9 +13851,6 @@ export function createPhoneAuthDevServer(
             workspaceId: currentWorkspaceId,
             callbackSecret: devPaymentCallbackSecret,
             providerRegistry: devPaymentProviderRegistry,
-            providerCallbackBaseUrl: request.headers.host
-              ? `http://${request.headers.host}`
-              : undefined,
           });
           const orderResult = await membershipOrders.createMembershipOrder({
             user: { sessionToken: authenticated.sessionToken },
@@ -13264,9 +13905,6 @@ export function createPhoneAuthDevServer(
           workspaceId: currentWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
           providerRegistry: devPaymentProviderRegistry,
-          providerCallbackBaseUrl: request.headers.host
-            ? `http://${request.headers.host}`
-            : undefined,
         });
 
         if (request.method === "GET" && pathname === "/api/billing/packages") {
@@ -13283,59 +13921,6 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
-        }
-
-        if (
-          request.method === "POST" &&
-          pathname === "/api/billing/payment-intents/simulate-success"
-        ) {
-          const body = (await readJsonBody(request)) as {
-            paymentIntentId?: string | null;
-          };
-          const paymentIntentId = String(body.paymentIntentId ?? "").trim();
-          if (!paymentIntentId) {
-            return writeJson(response, {
-              status: 400,
-              body: { error: "payment_intent_id_required" },
-            });
-          }
-
-          const intentEnvelope = await commercePayment.getPaymentIntent({
-            user: { sessionToken: authenticated.sessionToken },
-            paymentIntentId,
-            now: new Date(),
-          });
-          if (intentEnvelope.status !== 200 || !("paymentIntent" in intentEnvelope.body)) {
-            return writeJson(response, intentEnvelope);
-          }
-
-          const intent = intentEnvelope.body.paymentIntent;
-          const callbackFacts = {
-            provider: intent.provider,
-            providerEventDedupKey: `local-simulated:${intent.provider}:${intent.merchantOrderNo}`,
-            merchantOrderNo: intent.merchantOrderNo,
-            providerTradeId: `local-simulated-trade:${intent.provider}:${intent.merchantOrderNo}`,
-            eventType: "payment_succeeded" as const,
-            amountMinor: intent.amountMinor,
-            currency: intent.currency,
-            merchantId: "comic-ai-dev-merchant",
-          };
-          const now = new Date();
-          const callbackResult = await commercePayment.processPaymentCallback({
-            body: {
-              ...callbackFacts,
-              signature: signPaymentCallback(callbackFacts, devPaymentCallbackSecret),
-            },
-            now,
-          });
-          await dispatchPaymentOutboxBatch(db, { now: new Date(), limit: 10 });
-          return writeJson(response, {
-            status: callbackResult.status,
-            body: {
-              simulated: true,
-              ...callbackResult.body,
-            },
-          });
         }
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);

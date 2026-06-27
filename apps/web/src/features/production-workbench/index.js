@@ -1,4 +1,4 @@
-﻿import {
+import {
   getProjectGallerySnapshot,
   renderProjectDetail,
   renderSingleEpisodeAiPreview,
@@ -41,7 +41,7 @@ import {
 } from "./canvas/canvas-state.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
-const MEMBERSHIP_PAYMENT_QR_TTL_MS = 15 * 60 * 1000;
+const MEMBERSHIP_PAYMENT_QR_TTL_MS = 10 * 60 * 1000;
 const MEMBERSHIP_PAYMENT_FAST_POLL_MS = 2000;
 const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
 const MEMBERSHIP_PAYMENT_FAST_WINDOW_MS = 60 * 1000;
@@ -63,6 +63,8 @@ const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
+const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
+const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
@@ -102,8 +104,8 @@ function validateAccountSettingsForm(form = {}, options = {}) {
   if (!displayName) {
     return "请输入显示昵称。";
   }
-  if ([...displayName].length > 40) {
-    return "显示昵称最多 40 个字符。";
+  if ([...displayName].length > ACCOUNT_DISPLAY_NAME_MAX_LENGTH) {
+    return `显示昵称最多 ${ACCOUNT_DISPLAY_NAME_MAX_LENGTH} 个字。`;
   }
 
   const email = String(form.email ?? "").trim();
@@ -953,6 +955,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       creditFrozenAt: null,
       creditFrozenUntil: null,
       creditLedgerMeta: null,
+      personalMediaLibraryLoading: false,
+      personalMediaLibraryError: "",
+      personalMediaLibraryRows: [],
+      personalMediaLibrarySummary: null,
+      personalMediaLibraryMeta: null,
+      personalMediaLibraryMediaFilter: "all",
+      personalMediaLibraryRangeFilter: "all",
+      personalMediaLibraryKeyword: "",
+      personalMediaLibraryKeywordDraft: "",
+      personalMediaLibraryPage: 1,
       communityPosts: initialCommunityData.posts,
       communityFeatures: initialCommunityData.features,
       communityComposerMenuOpen: false,
@@ -1805,6 +1817,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (target?.matches?.('[data-action="search-projects"]')) {
       workbench.projectSearchComposing = true;
     }
+    if (target?.matches?.('[data-action="search-personal-media-library"]')) {
+      workbench.personalMediaSearchComposing = true;
+    }
   });
 
   root.addEventListener("compositionend", (event) => {
@@ -1813,6 +1828,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.projectSearchComposing = false;
       workbench.ui.projectSearchDraft = target.value;
       scheduleProjectSearch(workbench, target.value);
+      return;
+    }
+    if (target?.matches?.('[data-action="search-personal-media-library"]')) {
+      workbench.personalMediaSearchComposing = false;
+      workbench.ui.personalMediaLibraryKeywordDraft = target.value;
+      schedulePersonalMediaSearch(workbench, target.value);
       return;
     }
     if (!target?.matches?.("[data-library-search-input]")) {
@@ -2337,6 +2358,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
+    if (target?.matches?.('[data-action="search-personal-media-library"]')) {
+      workbench.ui.personalMediaLibraryKeywordDraft = target.value;
+      workbench.ui.toast = "";
+      if (event.isComposing || workbench.personalMediaSearchComposing) {
+        return;
+      }
+      schedulePersonalMediaSearch(workbench, target.value);
+      return;
+    }
+
     if (target?.matches?.('[data-action="search-episode-asset-library"]')) {
       workbench.ui.episodeAssetLibraryQuery = target.value;
       workbench.ui.assetImportSelection = [];
@@ -2572,6 +2603,12 @@ async function refresh(workbench) {
       render(workbench);
     });
   }
+  if (visibleTab === "media-library") {
+    runLazyWorkbenchTask(workbench, "personal media library", async () => {
+      await loadPersonalMediaLibrarySurface(workbench);
+      render(workbench);
+    });
+  }
   if (isAssetLibrarySurface && shouldPrefetchReusableAssetLibrary(workbench)) {
     runLazyWorkbenchTask(workbench, "asset library", async () => {
       await syncAssetLibraryFromApi(workbench);
@@ -2675,6 +2712,12 @@ function scheduleLazySurfaceLoad(workbench) {
   if (visibleTab === "script") {
     runLazyWorkbenchTask(workbench, "script library", async () => {
       await refreshScriptLibraryIfAvailable(workbench);
+      render(workbench);
+    });
+  }
+  if (visibleTab === "media-library") {
+    runLazyWorkbenchTask(workbench, "personal media library", async () => {
+      await loadPersonalMediaLibrarySurface(workbench);
       render(workbench);
     });
   }
@@ -3311,31 +3354,6 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
   return false;
 }
 
-async function handleSimulatedMembershipPaymentStatus(workbench) {
-  if (isDirectRechargePaymentContext(workbench)) {
-    if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-      await finalizeSuccessfulCreditRechargePayment(workbench);
-      return true;
-    }
-
-    render(workbench, { preserveLibraryScroll: true });
-    return false;
-  }
-
-  if (!isMembershipBillingOrder(workbench.ui.lastBillingOrder)) {
-    stopMembershipPaymentWatcher(workbench);
-    return false;
-  }
-
-  if (isSucceededPaymentIntent(workbench.ui.lastPaymentIntent, workbench.ui.lastBillingOrder)) {
-    await finalizeSuccessfulMembershipPayment(workbench);
-    return true;
-  }
-
-  render(workbench, { preserveLibraryScroll: true });
-  return false;
-}
-
 async function finalizeSuccessfulMembershipPayment(workbench) {
   stopMembershipPaymentWatcher(workbench);
   stopMembershipPaymentCountdown(workbench);
@@ -3355,7 +3373,7 @@ async function finalizeSuccessfulCreditRechargePayment(workbench) {
   closeSuccessfulMembershipPaymentFlow(workbench);
   workbench.ui.busy = false;
   render(workbench, { preserveLibraryScroll: true });
-  await refreshSessionCreditBalance(workbench, { renderOnChange: false });
+  await refreshCreditPaymentCriticalSurfaces(workbench);
   workbench.ui.renderedPaymentResultToastMessage = "";
   workbench.ui.toast = { tone: "success", message: CREDIT_RECHARGE_PAYMENT_SUCCESS_TOAST };
   render(workbench, { preserveLibraryScroll: true });
@@ -3397,6 +3415,14 @@ async function refreshMembershipPaymentCriticalSurfaces(workbench) {
   await Promise.allSettled([
     syncMembershipSurface(workbench),
     refreshSessionCreditBalance(workbench, { renderOnChange: false }),
+    loadCreditLedger(workbench),
+  ]);
+}
+
+async function refreshCreditPaymentCriticalSurfaces(workbench) {
+  await Promise.allSettled([
+    refreshSessionCreditBalance(workbench, { renderOnChange: false }),
+    loadCreditLedger(workbench),
   ]);
 }
 
@@ -3441,34 +3467,6 @@ async function refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId
     paymentIntent: workbench.ui.lastPaymentIntent,
     payAction: workbench.ui.lastPaymentAction,
   };
-}
-
-function applySimulatedPaidPaymentResult(workbench, result, { orderId = "", paymentIntentId = "" } = {}) {
-  const order = result?.order ?? result?.data?.order ?? null;
-  if (String(order?.status ?? "") !== "paid") {
-    return false;
-  }
-
-  const previousOrder = workbench.ui.lastBillingOrder ?? {};
-  const previousIntent = workbench.ui.lastPaymentIntent ?? {};
-  const expectedOrderId = String(orderId || previousOrder.id || previousIntent.orderId || "");
-  if (expectedOrderId && String(order.id ?? "") !== expectedOrderId) {
-    return false;
-  }
-  const resolvedOrderId = order.id ?? previousOrder.id ?? previousIntent.orderId ?? orderId;
-  workbench.ui.lastBillingOrder = {
-    ...previousOrder,
-    ...order,
-    id: resolvedOrderId,
-    status: "paid",
-  };
-  workbench.ui.lastPaymentIntent = {
-    ...previousIntent,
-    id: previousIntent.id ?? paymentIntentId,
-    orderId: previousIntent.orderId ?? resolvedOrderId,
-    status: "succeeded",
-  };
-  return true;
 }
 
 function isMembershipBillingOrder(order) {
@@ -3821,7 +3819,8 @@ async function loadTeamSurface(workbench) {
 }
 
 function render(workbench, options = {}) {
-  globalThis.document?.body?.classList?.toggle?.("community-window-body", workbench.ui?.activeNavTab === "community");
+  const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
+  globalThis.document?.body?.classList?.toggle?.("community-window-body", isDetachedSurface);
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
@@ -4416,6 +4415,19 @@ function scheduleProjectSearch(workbench, value) {
   }, 500);
 }
 
+function schedulePersonalMediaSearch(workbench, value) {
+  if (workbench.personalMediaSearchTimer) {
+    clearTimeout(workbench.personalMediaSearchTimer);
+  }
+  workbench.personalMediaSearchTimer = setTimeout(() => {
+    workbench.personalMediaSearchTimer = null;
+    void applyPersonalMediaSearch(workbench, value).catch((error) => {
+      workbench.ui.personalMediaLibraryError = friendlyError(error) || "素材库加载失败。";
+      render(workbench);
+    });
+  }, 350);
+}
+
 async function applyProjectSearch(workbench, value) {
   if (workbench.projectSearchTimer) {
     clearTimeout(workbench.projectSearchTimer);
@@ -4440,6 +4452,21 @@ async function applyProjectSearch(workbench, value) {
   }
   render(workbench);
   restoreProjectSearchFocus(workbench.root);
+}
+
+async function applyPersonalMediaSearch(workbench, value) {
+  if (workbench.personalMediaSearchTimer) {
+    clearTimeout(workbench.personalMediaSearchTimer);
+    workbench.personalMediaSearchTimer = null;
+  }
+  const nextKeyword = String(value ?? "");
+  workbench.ui.personalMediaLibraryKeywordDraft = nextKeyword;
+  if (workbench.ui.personalMediaLibraryKeyword === nextKeyword) {
+    return;
+  }
+  workbench.ui.personalMediaLibraryKeyword = nextKeyword;
+  workbench.ui.personalMediaLibraryPage = 1;
+  await loadPersonalMediaLibrarySurface(workbench);
 }
 
 function cancelAssetLibrarySearch(workbench) {
@@ -4769,6 +4796,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-membership-payment",
     "refresh-credit-ledger",
     "open-community-page",
+    "open-personal-media-page",
     "open-community",
     "open-community-composer",
     "close-community-composer",
@@ -4811,6 +4839,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-personal-media-page") {
+    const currentUrl = globalThis.window?.location?.href;
+    const mediaLibraryUrl = typeof currentUrl === "string" && currentUrl
+      ? new URL("#media-library", currentUrl).toString()
+      : "#media-library";
+    globalThis.window?.open?.(mediaLibraryUrl, "_blank", "noopener");
+    return;
+  }
+
   if (action === "open-community") {
     workbench.ui.activeNavTab = "community";
     workbench.ui.projectPanelMode = "workspace";
@@ -4821,6 +4858,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     runLazyWorkbenchTask(workbench, "community board", async () => {
       await loadLingxiCommunityBoard(workbench);
     });
+    return;
+  }
+
+  if (action === "set-personal-media-filter") {
+    const field = String(target.dataset.field ?? "");
+    const value = String(target.dataset.value ?? "");
+    if (field === "media") {
+      workbench.ui.personalMediaLibraryMediaFilter = value || "all";
+    } else if (field === "range") {
+      workbench.ui.personalMediaLibraryRangeFilter = value || "all";
+    }
+    workbench.ui.personalMediaLibraryPage = 1;
+    render(workbench);
+    await loadPersonalMediaLibrarySurface(workbench);
+    return;
+  }
+
+  if (action === "change-personal-media-page") {
+    const nextPage = Number(target.dataset.page ?? workbench.ui.personalMediaLibraryPage ?? 1);
+    const totalPages = Math.max(1, Number(workbench.ui.personalMediaLibraryMeta?.totalPages ?? 1));
+    workbench.ui.personalMediaLibraryPage = Math.min(totalPages, Math.max(1, nextPage));
+    render(workbench);
+    await loadPersonalMediaLibrarySurface(workbench);
     return;
   }
 
@@ -6088,6 +6148,58 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "simulate-membership-payment-success") {
+    const paymentIntentId = target.dataset.paymentIntentId ?? workbench.ui.lastPaymentIntent?.id ?? "";
+    const orderId = target.dataset.orderId ?? workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
+    const paymentIntent = workbench.ui.lastPaymentIntent ?? null;
+    const billingOrder = workbench.ui.lastBillingOrder ?? null;
+    if (!paymentIntentId || !orderId || !paymentIntent || !billingOrder) {
+      workbench.ui.toast = "缺少支付单信息，请重新创建支付意图。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+    if (typeof workbench.api?.simulatePaymentCallback !== "function") {
+      workbench.ui.toast = "当前环境不支持本地模拟支付成功。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+    if (
+      (isMembershipBillingOrder(billingOrder) || isDirectRechargePaymentContext(workbench)) &&
+      !(await ensureMembershipPaymentLogin(workbench))
+    ) {
+      return;
+    }
+
+    await runAction(workbench, "正在模拟本地支付成功...", async () => {
+      await workbench.api.simulatePaymentCallback({
+        provider: String(paymentIntent.provider ?? workbench.ui.pendingMembershipPaymentProvider ?? "wechat_pay"),
+        providerEventDedupKey: `local-sim:${paymentIntentId}`,
+        merchantOrderNo: String(
+          paymentIntent.merchantOrderNo ??
+          paymentIntent.merchant_order_no ??
+          billingOrder.orderNo ??
+          billingOrder.order_no ??
+          paymentIntentId,
+        ),
+        providerTradeId: `local-sim-trade:${paymentIntentId}`,
+        eventType: "payment_succeeded",
+        amountMinor: Number(paymentIntent.amountMinor ?? paymentIntent.amount_minor ?? billingOrder.amountMinor ?? billingOrder.amount_minor ?? 0),
+        currency: String(paymentIntent.currency ?? billingOrder.currency ?? "CNY"),
+        merchantId: "comic-ai-dev-merchant",
+      });
+      await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
+      const isMembershipOrder = isMembershipBillingOrder(workbench.ui.lastBillingOrder);
+      const isDirectRechargeOrder = isDirectRechargePaymentContext(workbench);
+      if (isMembershipOrder || isDirectRechargeOrder) {
+        await handleRefreshedMembershipPaymentStatus(workbench);
+      } else {
+        workbench.ui.toast = "已模拟支付成功。";
+        render(workbench);
+      }
+    }, { successToast: null });
+    return;
+  }
+
   if (action === "regenerate-membership-payment-qr") {
     const membershipPlanId = target.dataset.planId ?? workbench.ui.pendingMembershipPlanId ?? "";
     const provider = target.dataset.provider ?? workbench.ui.pendingMembershipPaymentProvider ?? "wechat_pay";
@@ -6113,7 +6225,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (!paymentFlow) {
         return { skipSuccessToast: true };
       }
-      workbench.ui.toast = "已重新生成支付二维码，请在 15 分钟内完成支付。";
+      workbench.ui.toast = "已重新生成支付二维码，请在 10 分钟内完成支付。";
       return null;
     }, { successToast: "已重新生成支付二维码。" });
     return;
@@ -6145,7 +6257,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (!paymentFlow) {
         return { skipSuccessToast: true };
       }
-      workbench.ui.toast = "已重新生成支付二维码，请在 15 分钟内完成支付。";
+      workbench.ui.toast = "已重新生成支付二维码，请在 10 分钟内完成支付。";
       return null;
     }, { successToast: "已重新生成支付二维码。" });
     return;
@@ -6224,58 +6336,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.busy = false;
       if (!paymentHandled) {
         render(workbench);
-      }
-    }
-    return;
-  }
-
-  if (action === "simulate-membership-payment-success") {
-    const paymentIntentId = target.dataset.paymentIntentId ?? workbench.ui.lastPaymentIntent?.id ?? "";
-    const orderId = target.dataset.orderId ?? workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
-    if (!paymentIntentId || !orderId) {
-      workbench.ui.toast = "缺少支付单信息，请重新创建支付意图。";
-      render(workbench);
-      return;
-    }
-    if (!(await ensureMembershipPaymentLogin(workbench))) {
-      return;
-    }
-
-    stopMembershipPaymentWatcher(workbench);
-    workbench.ui.busy = true;
-    workbench.ui.toast = "正在模拟支付回调...";
-    const paymentFlowVersion = workbench.membershipPaymentFlowVersion;
-    const previousBillingOrder = workbench.ui.lastBillingOrder ? { ...workbench.ui.lastBillingOrder } : null;
-    const previousPaymentIntent = workbench.ui.lastPaymentIntent ? { ...workbench.ui.lastPaymentIntent } : null;
-    markMembershipPaymentSyncing(workbench, { orderId, paymentIntentId });
-    let paymentHandled = false;
-    try {
-      const simulatedPaymentResult = await workbench.api.simulatePaymentIntentSuccess({ paymentIntentId });
-      if (!isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
-        return;
-      }
-      if (!applySimulatedPaidPaymentResult(workbench, simulatedPaymentResult, { orderId, paymentIntentId })) {
-        await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
-        if (!isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
-          return;
-        }
-      }
-      const changedToPaid = await handleSimulatedMembershipPaymentStatus(workbench);
-      paymentHandled = changedToPaid;
-      if (!changedToPaid) {
-        workbench.ui.toast = "";
-      }
-    } catch (error) {
-      if (isCurrentMembershipPaymentFlow(workbench, paymentFlowVersion, { orderId, paymentIntentId })) {
-        workbench.ui.lastBillingOrder = previousBillingOrder;
-        workbench.ui.lastPaymentIntent = previousPaymentIntent;
-        workbench.ui.membershipPaymentSyncing = false;
-        workbench.ui.toast = `操作失败：${friendlyError(error)}`;
-      }
-    } finally {
-      workbench.ui.busy = false;
-      if (!paymentHandled) {
-        render(workbench, { preserveLibraryScroll: true });
       }
     }
     return;
@@ -25899,6 +25959,12 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = "episodes";
     return;
   }
+  if (token === "media-library") {
+    workbench.ui.activeNavTab = "media-library";
+    workbench.ui.projectPanelMode = "workspace";
+    workbench.ui.projectInteriorSection = "episodes";
+    return;
+  }
   if (token === "home" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
     workbench.ui.activeNavTab = token;
     if (token === "tools-canvas") {
@@ -29407,6 +29473,9 @@ function deriveInitialNavTab(hash) {
   if (token === "community") {
     return "community";
   }
+  if (token === "media-library") {
+    return "media-library";
+  }
   if (token === "home") {
     return "home";
   }
@@ -29514,6 +29583,62 @@ async function loadLingxiCommunityBoard(workbench) {
     const data = readLingxiCommunityData();
     workbench.ui.communityPosts = data.posts;
     workbench.ui.communityFeatures = data.features;
+  }
+}
+
+async function loadPersonalMediaLibrarySurface(workbench) {
+  if (
+    typeof workbench?.api?.getPersonalMediaLibrary !== "function" ||
+    typeof workbench?.api?.getPersonalMediaLibrarySummary !== "function"
+  ) {
+    workbench.ui.personalMediaLibraryError = "当前环境暂不支持个人素材库。";
+    workbench.ui.personalMediaLibraryLoading = false;
+    render(workbench);
+    return;
+  }
+  const requestId = (workbench.personalMediaLibraryRequestId ?? 0) + 1;
+  workbench.personalMediaLibraryRequestId = requestId;
+  workbench.ui.personalMediaLibraryLoading = true;
+  workbench.ui.personalMediaLibraryError = "";
+  render(workbench);
+  try {
+    const query = {
+      media: workbench.ui.personalMediaLibraryMediaFilter ?? "all",
+      range: workbench.ui.personalMediaLibraryRangeFilter ?? "all",
+      keyword: workbench.ui.personalMediaLibraryKeyword ?? "",
+    };
+    const [summary, payload] = await Promise.all([
+      workbench.api.getPersonalMediaLibrarySummary(query),
+      workbench.api.getPersonalMediaLibrary({
+        ...query,
+        page: workbench.ui.personalMediaLibraryPage ?? 1,
+        pageSize: PERSONAL_MEDIA_LIBRARY_PAGE_SIZE,
+      }),
+    ]);
+    if (workbench.personalMediaLibraryRequestId !== requestId) {
+      return;
+    }
+    workbench.ui.personalMediaLibrarySummary = summary ?? null;
+    workbench.ui.personalMediaLibraryRows = Array.isArray(payload?.data) ? payload.data : [];
+    workbench.ui.personalMediaLibraryMeta = payload?.meta ?? {
+      page: workbench.ui.personalMediaLibraryPage ?? 1,
+      pageSize: PERSONAL_MEDIA_LIBRARY_PAGE_SIZE,
+      total: workbench.ui.personalMediaLibraryRows.length,
+      totalPages: 1,
+    };
+  } catch (error) {
+    if (workbench.personalMediaLibraryRequestId !== requestId) {
+      return;
+    }
+    workbench.ui.personalMediaLibraryRows = [];
+    workbench.ui.personalMediaLibrarySummary = null;
+    workbench.ui.personalMediaLibraryMeta = null;
+    workbench.ui.personalMediaLibraryError = friendlyError(error) || "素材库加载失败。";
+  } finally {
+    if (workbench.personalMediaLibraryRequestId === requestId) {
+      workbench.ui.personalMediaLibraryLoading = false;
+      render(workbench);
+    }
   }
 }
 
@@ -31045,3 +31170,4 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
 export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
   return mapEpisodeAssetContracts(assets, kind);
 }
+

@@ -533,6 +533,45 @@ test("community hash route renders the shared community surface instead of the p
   assert.doesNotMatch(workbench.root.innerHTML, /全部项目/);
 });
 
+test("media library hash route renders the personal material surface", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.projectPanelMode = "library";
+  workbench.api = {
+    getPersonalMediaLibrarySummary: async () => ({
+      total: 2,
+      imageCount: 1,
+      videoCount: 1,
+      imageBytes: 1024,
+      videoBytes: 2048,
+    }),
+    getPersonalMediaLibrary: async () => ({
+      data: [
+        {
+          id: "media-1",
+          fileName: "角色定妆图.png",
+          mediaKind: "image",
+          previewUrl: "/uploads/mock-image.png",
+          projectName: "项目 A",
+          sourceAction: "upload",
+          sizeBytes: 1024,
+          createdAt: "2026-06-25T08:00:00.000Z",
+          downloadUrl: "/uploads/mock-image.png",
+        },
+      ],
+      meta: { page: 1, pageSize: 12, total: 1, totalPages: 1 },
+    }),
+  };
+
+  syncWorkbenchHashRouteForTest(workbench, "#media-library");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(workbench.ui.activeNavTab, "media-library");
+  assert.match(workbench.root.innerHTML, /素材库/);
+  assert.match(workbench.root.innerHTML, /角色定妆图\.png/);
+  assert.doesNotMatch(workbench.root.innerHTML, /全部项目/);
+});
+
 test("account community feedback action opens the community surface in a new page", async () => {
   const workbench = createWorkbench();
   const originalWindow = globalThis.window;
@@ -557,6 +596,33 @@ test("account community feedback action opens the community surface in a new pag
 
   assert.equal(opened.length, 1);
   assert.deepEqual(opened[0], ["http://localhost:5173/app.html#community", "_blank", "noopener"]);
+  assert.equal(workbench.ui.activeNavTab, "project");
+});
+
+test("account material library action opens the personal media surface in a new page", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const opened = [];
+  globalThis.window = {
+    location: { href: "http://localhost:5173/app.html#project" },
+    open: (...args) => opened.push(args),
+  };
+  workbench.ui.activeNavTab = "project";
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-personal-media-page" },
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+
+  assert.equal(opened.length, 1);
+  assert.deepEqual(opened[0], ["http://localhost:5173/app.html#media-library", "_blank", "noopener"]);
   assert.equal(workbench.ui.activeNavTab, "project");
 });
 

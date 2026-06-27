@@ -335,7 +335,7 @@ Provider callbacks are public HTTP endpoints authenticated by provider signature
 
 ```text
 POST /webhooks/payments/wechat-pay
-POST /webhooks/payments/alipay
+POST /api/payment-provider-callbacks/alipay
 ```
 
 ### 10.1 Callback Processing Pipeline
@@ -1044,7 +1044,7 @@ PC page create payment expected mapping:
 | `merchantOrderNo` | `out_trade_no` | Merchant order number; must match local `orders.order_no`. |
 | `description` | `subject` | Package purchase description, no sensitive user content. |
 | `amountMinor` | `total_amount` | Convert integer cents to decimal yuan string; exact rounding utility required. |
-| `notifyUrl` | `notify_url` | Must point to `/webhooks/payments/alipay`. |
+| `notifyUrl` | `notify_url` | Must point to `/api/payment-provider-callbacks/alipay`. |
 | `returnUrl` | `return_url` | Frontend UX only; does not grant credits. |
 | configured app ID | `app_id` | Secret/config only. |
 | fixed method | `method = alipay.trade.page.pay` | Must be verified against official domestic OpenAPI docs. |

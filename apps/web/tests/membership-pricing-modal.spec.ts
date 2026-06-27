@@ -129,6 +129,40 @@ test("renders real provider code urls as scannable qr svg when no qr image is re
   assert.doesNotMatch(html, /微信支付未返回真实二维码/);
 });
 
+test("renders standard qr svg markup for scannable wechat payment payloads", () => {
+  const html = renderPricingModal({
+    open: true,
+    paymentIntent: {
+      id: "intent-std-qr",
+      orderId: "order-std-qr",
+      provider: "wechat_pay",
+      status: "submitted",
+      amountMinor: 1,
+      currency: "CNY",
+      merchantOrderNo: "MO-STD-QR",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    },
+    paymentAction: {
+      kind: "qr_code",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-STD-QR",
+      amountMinor: 1,
+      currency: "CNY",
+      url: "weixin://wxpay/bizpayurl?pr=test-native-code",
+      codeUrl: "weixin://wxpay/bizpayurl?pr=test-native-code",
+    },
+    billingOrder: {
+      id: "order-std-qr",
+      status: "pending_payment",
+      productType: "membership_plan",
+    },
+  });
+
+  assert.match(html, /shape-rendering="crispEdges"/);
+  assert.match(html, /<path stroke="#14171d"/);
+  assert.doesNotMatch(html, /path fill="#14171d"/);
+});
+
 test("renders membership payment qr in a separate modal instead of the subscription layout", () => {
   const html = renderPricingModal({
     open: true,
@@ -177,18 +211,12 @@ test("renders membership payment qr in a separate modal instead of the subscript
   assert.match(html, /data-modal="membership-payment"/);
   assert.match(html, /aria-labelledby="membership-payment-title"/);
   assert.match(html, /library-team-payment-card/);
-  assert.match(html, /library-team-payment-flow/);
-  assert.match(html, /微信扫码支付/);
-  assert.match(html, /权益生效/);
   assert.match(html, /支付成功后自动开通，无需刷新页面/);
   assert.match(html, /微信支付未返回真实二维码/);
   assert.match(html, /请确认微信支付配置已启用/);
-  assert.match(html, /支付方式/);
-  assert.match(html, /微信支付/);
   assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
   assert.doesNotMatch(html, /刷新状态/);
   assert.doesNotMatch(html, /return-membership-plan-selection/);
-  assert.doesNotMatch(html, /请使用微信\/支付宝扫码支付/);
   assert.doesNotMatch(html, /渠道/);
   assert.doesNotMatch(paymentModal, /支付宝/);
   assert.doesNotMatch(subscriptionLayout, /library-team-payment-panel/);
@@ -824,10 +852,7 @@ test("renders Alipay copy when the payment intent uses Alipay", () => {
 
   const paymentModal = html.match(/<div class="library-team-modal-backdrop library-team-payment-modal-backdrop"[\s\S]*$/)?.[0] ?? "";
 
-  assert.match(paymentModal, /支付宝扫码支付/);
-  assert.match(paymentModal, /使用支付宝扫码完成付款/);
   assert.match(paymentModal, /支付宝未返回真实二维码/);
-  assert.match(paymentModal, /支付方式<\/dt><dd>支付宝/);
   assert.doesNotMatch(paymentModal, /微信扫码支付/);
 });
 

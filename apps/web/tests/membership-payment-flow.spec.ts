@@ -374,6 +374,86 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
   assert.match(workbench.root.innerHTML, /积分已到账/);
 });
 
+test("simulating a local payment success triggers the mock callback and closes the payment modal", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+    pricingModalTab: "credits",
+    pendingBillingPackageId: "pkg-direct-500",
+    membershipPaymentPolling: true,
+    lastBillingOrder: {
+      id: "order-credit-1",
+      productType: "credit_package",
+      status: "pending_payment",
+      amountMinor: 19900,
+      currency: "CNY",
+    },
+    lastPaymentIntent: {
+      id: "intent-credit-1",
+      orderId: "order-credit-1",
+      status: "submitted",
+      provider: "wechat_pay",
+      amountMinor: 19900,
+      currency: "CNY",
+      merchantOrderNo: "MO-LOCAL-SIM",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-LOCAL-SIM",
+    },
+  }, {
+    async simulatePaymentCallback(input) {
+      calls.push(["simulatePaymentCallback", input]);
+      return { acknowledged: true };
+    },
+    async getBillingOrder(orderId) {
+      calls.push(["getBillingOrder", orderId]);
+      return {
+        order: {
+          id: orderId,
+          productType: "credit_package",
+          status: "paid",
+        },
+      };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      calls.push(["getPaymentIntent", paymentIntentId]);
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-credit-1",
+          status: "succeeded",
+          provider: "wechat_pay",
+          amountMinor: 19900,
+          currency: "CNY",
+          merchantOrderNo: "MO-LOCAL-SIM",
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "simulate-membership-payment-success",
+      paymentIntentId: "intent-credit-1",
+      orderId: "order-credit-1",
+    },
+  });
+
+  assert.deepEqual(calls.map(([name]) => name), [
+    "simulatePaymentCallback",
+    "getBillingOrder",
+    "getPaymentIntent",
+  ]);
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+  assert.equal(workbench.ui.lastBillingOrder, null);
+  assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.equal(workbench.ui.lastPaymentAction, null);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "积分已到账" });
+});
+
 test("paid direct credit recharge shows the success toast on the tools canvas surface", async () => {
   const workbench = createWorkbench({
     activeNavTab: "tools",
@@ -752,382 +832,6 @@ test("paid membership payment closes the payment modal without forcing a page re
   assert.equal(workbench.ui.membershipPaymentPolling, false);
   assert.deepEqual(reloads, []);
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
-test("simulating a membership payment success runs callback then activates membership", async () => {
-  const calls = [];
-  const reloads = [];
-  const workbench = createWorkbench({
-    isLibraryPricingModalOpen: true,
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-    },
-    lastPaymentAction: {
-      kind: "mock_qr",
-      provider: "wechat_pay",
-    },
-    pendingMembershipPlanId: "plan-pro-month",
-    membershipPaymentPolling: true,
-  }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return { simulated: true, order: { id: "order-membership-1", status: "paid" } };
-    },
-    async getBillingOrder(orderId) {
-      calls.push(["getBillingOrder", orderId]);
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      calls.push(["getPaymentIntent", paymentIntentId]);
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-        },
-      };
-    },
-    async getMembershipPlans() {
-      calls.push("getMembershipPlans");
-      return { data: { plans: [] } };
-    },
-    async getMembershipStatus() {
-      calls.push("getMembershipStatus");
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
-    },
-    async getTeamOverview() {
-      calls.push("getTeamOverview");
-      return { overview: { entitlements: { teamAssetLibrary: true } } };
-    },
-    async getTeamMembers() {
-      calls.push("getTeamMembers");
-      return { members: [{ userId: "member-1" }] };
-    },
-  });
-  workbench.paymentPollClearTimeout = () => {
-    calls.push("paymentPollClearTimeout");
-  };
-  workbench.membershipPaymentPollTimer = { active: true };
-  workbench.requestPageRefreshAfterMembershipPaymentSuccess = () => {
-    reloads.push("reload");
-  };
-
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "simulate-membership-payment-success",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-
-  assert.deepEqual(calls, [
-    "paymentPollClearTimeout",
-    ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
-    "getMembershipPlans",
-    "getMembershipStatus",
-    "getTeamOverview",
-    "getTeamMembers",
-  ]);
-  assert.equal(workbench.ui.membershipStatus.status, "professional_active");
-  assert.equal(workbench.ui.membershipPaymentPolling, false);
-  assert.equal(workbench.membershipPaymentPollTimer, null);
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.pendingMembershipPlanId, "");
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.deepEqual(reloads, []);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
-test("simulating membership payment success shows syncing success state before refresh resolves", async () => {
-  const simulateDeferred = createDeferred();
-  const calls = [];
-  const workbench = createWorkbench({
-    isLibraryPricingModalOpen: true,
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-      provider: "wechat_pay",
-      amountMinor: 29900,
-      currency: "CNY",
-      merchantOrderNo: "MO-1",
-    },
-    lastPaymentAction: {
-      kind: "mock_qr",
-      provider: "wechat_pay",
-      merchantOrderNo: "MO-1",
-    },
-    pendingMembershipPlanId: "plan-pro-month",
-    membershipPaymentPolling: true,
-  }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return simulateDeferred.promise;
-    },
-    async getBillingOrder(orderId) {
-      calls.push(["getBillingOrder", orderId]);
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      calls.push(["getPaymentIntent", paymentIntentId]);
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-          provider: "wechat_pay",
-          amountMinor: 29900,
-          currency: "CNY",
-          merchantOrderNo: "MO-1",
-        },
-      };
-    },
-    async getMembershipPlans() {
-      calls.push("getMembershipPlans");
-      return { data: { plans: [] } };
-    },
-    async getMembershipStatus() {
-      calls.push("getMembershipStatus");
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
-    },
-    async getTeamOverview() {
-      calls.push("getTeamOverview");
-      return { overview: { entitlements: { teamAssetLibrary: true } } };
-    },
-    async getTeamMembers() {
-      calls.push("getTeamMembers");
-      return { members: [{ userId: "member-1" }] };
-    },
-  });
-  workbench.paymentPollClearTimeout = () => {
-    calls.push("paymentPollClearTimeout");
-  };
-  workbench.membershipPaymentPollTimer = { active: true };
-
-  const actionPromise = handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "simulate-membership-payment-success",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-  await Promise.resolve();
-
-  assert.equal(workbench.ui.membershipPaymentSyncing, true);
-  assert.equal(workbench.ui.membershipPaymentPolling, false);
-  assert.equal(workbench.ui.lastBillingOrder.status, "paid");
-  assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
-  assert.match(workbench.root.innerHTML, /data-payment-success-state/);
-  assert.match(workbench.root.innerHTML, /正在同步会员权益/);
-
-  simulateDeferred.resolve({ simulated: true, order: { id: "order-membership-1", status: "paid" } });
-  await actionPromise;
-
-  assert.equal(workbench.ui.membershipPaymentSyncing, false);
-  assert.equal(workbench.ui.membershipStatus.status, "professional_active");
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.pendingMembershipPlanId, "");
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
-test("simulated paid membership closes the payment modal before entitlement refresh resolves", async () => {
-  const membershipDeferred = createDeferred();
-  const membershipRefreshStarted = createDeferred();
-  const calls = [];
-  const workbench = createWorkbench({
-    isLibraryPricingModalOpen: true,
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-    },
-    lastPaymentAction: {
-      kind: "mock_qr",
-      provider: "wechat_pay",
-    },
-    pendingMembershipPlanId: "plan-pro-month",
-    membershipPaymentPolling: true,
-  }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return { simulated: true, order: { id: "order-membership-1", status: "paid" } };
-    },
-    async getBillingOrder(orderId) {
-      calls.push(["getBillingOrder", orderId]);
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      calls.push(["getPaymentIntent", paymentIntentId]);
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-        },
-      };
-    },
-    async getMembershipPlans() {
-      calls.push("getMembershipPlans");
-      return { data: { plans: [] } };
-    },
-    async getMembershipStatus() {
-      calls.push("getMembershipStatus");
-      membershipRefreshStarted.resolve();
-      return membershipDeferred.promise;
-    },
-    async getTeamOverview() {
-      calls.push("getTeamOverview");
-      return { overview: { entitlements: { teamAssetLibrary: true } } };
-    },
-    async getTeamMembers() {
-      calls.push("getTeamMembers");
-      return { members: [{ userId: "member-1" }] };
-    },
-  });
-
-  const actionPromise = handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "simulate-membership-payment-success",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-  await membershipRefreshStarted.promise;
-
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.membershipPaymentSyncing, false);
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.equal(workbench.ui.toast, "");
-  assert.doesNotMatch(workbench.root.innerHTML, /正在同步会员权益/);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-
-  membershipDeferred.resolve({
-    membership: {
-      status: "professional_active",
-      entitlements: { teamAssetLibrary: true },
-    },
-  });
-  await actionPromise;
-
-  assert.equal(workbench.ui.membershipStatus.status, "professional_active");
-  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
-  assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
-  assert.match(workbench.root.innerHTML, /会员权益已开通/);
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
-test("paid membership payment shows the success toast on the tools canvas surface", async () => {
-  const workbench = createWorkbench({
-    activeNavTab: "tools",
-    canvasProjectView: "detail",
-    membershipStatus: { status: "professional_active" },
-    isLibraryPricingModalOpen: true,
-    pendingMembershipPlanId: "plan-pro-month",
-    pendingMembershipPaymentProvider: "wechat_pay",
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-    },
-  }, {
-    async getBillingOrder(orderId) {
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-        },
-      };
-    },
-    async getMembershipPlans() {
-      return { data: { plans: [] } };
-    },
-    async getMembershipStatus() {
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
-    },
-  });
-
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "refresh-payment-intent",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-
-  assert.match(workbench.root.innerHTML, /canvas-workspace/);
-  assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
-  assert.match(workbench.root.innerHTML, /会员权益已开通/);
 });
 
 test("opening and closing the wallet clears the membership payment success toast", async () => {
@@ -1740,98 +1444,6 @@ test("pricing modal rerenders preserve the subscription modal scroll position", 
   assert.equal(root.modal.scrollTop, 260);
 });
 
-test("closing while simulated payment success is syncing keeps the payment modal closed", async () => {
-  const simulateDeferred = createDeferred();
-  const workbench = createWorkbench({
-    isLibraryPricingModalOpen: true,
-    pendingMembershipPlanId: "plan-pro-month",
-    pendingMembershipPaymentProvider: "wechat_pay",
-    membershipPaymentQrCreatedAt: new Date().toISOString(),
-    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-    membershipPaymentPolling: true,
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-      provider: "wechat_pay",
-      amountMinor: 29900,
-      currency: "CNY",
-    },
-    lastPaymentAction: {
-      kind: "mock_qr",
-      provider: "wechat_pay",
-    },
-  }, {
-    async simulatePaymentIntentSuccess() {
-      return simulateDeferred.promise;
-    },
-    async getBillingOrder(orderId) {
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-          provider: "wechat_pay",
-          amountMinor: 29900,
-          currency: "CNY",
-        },
-      };
-    },
-    async getMembershipStatus() {
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
-    },
-  });
-
-  const actionPromise = handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "simulate-membership-payment-success",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-  await Promise.resolve();
-
-  assert.equal(workbench.ui.busy, true);
-  assert.equal(workbench.ui.membershipPaymentSyncing, true);
-
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "close-membership-payment",
-    },
-  });
-
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-
-  simulateDeferred.resolve({ simulated: true });
-  await actionPromise;
-
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.equal(workbench.ui.membershipPaymentSyncing, false);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
 function createDeferred() {
   let resolve;
   let reject;
@@ -1943,3 +1555,4 @@ function buildProjectState() {
     exportPreview: null,
   };
 }
+

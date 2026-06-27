@@ -189,6 +189,23 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT amount_reserved, amount_consumed, status FROM credit_reservations WHERE task_id = $1",
         [imageTask.taskId],
       );
+      const uploadRecords = await db.query<{
+        actor_user_id: string | null;
+        actor_display_name: string | null;
+        actor_phone_e164: string | null;
+        source_action: string;
+        status: string;
+        public_url: string | null;
+        storage_object_id: string | null;
+      }>(
+        `
+          SELECT actor_user_id, actor_display_name, actor_phone_e164, source_action, status, public_url, storage_object_id
+          FROM project_upload_records
+          WHERE project_id = $1
+          ORDER BY created_at DESC
+        `,
+        [created.projectId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(imageTask.status, "queued");
@@ -224,6 +241,17 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 77);
       assert.equal(reservation.rows[0]?.status, "settled");
+      assert.equal(uploadRecords.rows.length, 1);
+      assert.equal(uploadRecords.rows[0]?.source_action, "generate_image");
+      assert.equal(uploadRecords.rows[0]?.status, "uploaded");
+      assert.match(uploadRecords.rows[0]?.public_url ?? "", /platform-storage\.example\.test/);
+      assert.equal(
+        uploadRecords.rows[0]?.storage_object_id,
+        completedSnapshot.rows[0]?.result_assets_json[0]?.storageObjectId ?? null,
+      );
+      assert.ok(uploadRecords.rows[0]?.actor_user_id);
+      assert.equal(uploadRecords.rows[0]?.actor_display_name, "用户13800138000");
+      assert.equal(uploadRecords.rows[0]?.actor_phone_e164, "13800138000");
     } finally {
       await server.close();
     }

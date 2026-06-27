@@ -317,15 +317,9 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
     return "";
   }
   const isCreditRechargeOrder = billingOrder?.productType === "credit_package" || Boolean(membershipPaymentState?.pendingBillingPackageId);
-  const selectedRechargePackage = isCreditRechargeOrder
-    ? context.directRechargePackages?.find((plan) => plan.packageId === (billingOrder?.creditPackageId ?? membershipPaymentState?.pendingBillingPackageId))
-    : null;
-  const selectedProduct = selectedRechargePackage ?? selectedPlan;
-  const amountLabel = selectedProduct?.price ?? formatAmount(paymentIntent?.amountMinor, paymentIntent?.currency);
   const status = creating ? "creating" : String(paymentIntent?.status ?? billingOrder?.status ?? "submitted");
   const provider = String(paymentIntent?.provider ?? paymentAction?.provider ?? membershipPaymentState?.provider ?? "wechat_pay");
   const providerName = paymentProviderName(provider);
-  const providerFlowName = paymentProviderFlowName(provider);
   const orderNo = paymentAction?.merchantOrderNo ?? paymentIntent?.merchantOrderNo ?? billingOrder?.orderNo ?? paymentIntent?.id ?? "-";
   const expiresAt = membershipPaymentState?.qrExpiresAt ?? paymentIntent?.expiresAt ?? null;
   const expired = isExpiredPayment(status, expiresAt);
@@ -336,19 +330,6 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
     allowLocalMockQr: shouldShowLocalPaymentSimulation(paymentIntent, billingOrder),
   });
   const showManualRefresh = paymentIntent ? shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succeeded }) : false;
-  const statusCopy = creating
-    ? "正在生成支付二维码"
-    : succeeded
-      ? syncing
-        ? isCreditRechargeOrder ? "支付成功，正在同步积分到账" : "支付成功，正在同步会员权益"
-        : isCreditRechargeOrder ? "支付成功，积分已到账" : "支付成功，会员权益已生效"
-    : expired
-      ? "二维码已失效，请重新生成"
-      : !agreementAccepted
-        ? "请先阅读并同意付费会员服务协议"
-        : membershipPaymentState?.polling
-          ? "等待支付中，正在自动确认"
-          : "等待扫码支付";
   const modalTitle = creating
     ? "正在生成支付二维码"
     : succeeded
@@ -392,20 +373,6 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
                   realPaymentAction,
                   providerName,
                 })}
-            <div class="library-team-payment-summary">
-              <div class="library-team-payment-total">
-                <span>订单金额</span>
-                <strong>${escapeHtml(amountLabel)}</strong>
-              </div>
-              ${selectedProduct ? renderSelectedPlanDigest(selectedProduct) : ""}
-              <p class="library-team-payment-status">${escapeHtml(statusCopy)}</p>
-              ${renderPaymentFlow({ succeeded, expired, providerFlowName, isCreditRechargeOrder })}
-              <dl class="library-team-payment-meta">
-                <div><dt>订单</dt><dd>${escapeHtml(orderNo)}</dd></div>
-                <div><dt>状态</dt><dd>${escapeHtml(paymentStatusLabel(status, billingOrder?.status))}</dd></div>
-                <div><dt>支付方式</dt><dd>${escapeHtml(providerName)}</dd></div>
-              </dl>
-            </div>
           </section>
           ${renderPaymentActions({
             billingOrder,
@@ -508,28 +475,6 @@ function renderPaymentAgreementBlockedState(orderNo) {
   `;
 }
 
-function renderPaymentFlow({ succeeded, expired, providerFlowName, isCreditRechargeOrder = false }) {
-  return `
-    <ol class="library-team-payment-flow" aria-label="支付流程">
-      <li class="is-active">
-        <span>1</span>
-        <strong>${escapeHtml(providerFlowName)}扫码支付</strong>
-        <small>使用${escapeHtml(providerFlowName)}扫码完成付款</small>
-      </li>
-      <li class="${succeeded ? "is-active" : expired ? "is-muted" : ""}">
-        <span>2</span>
-        <strong>自动确认</strong>
-        <small>系统轮询支付结果</small>
-      </li>
-      <li class="${succeeded ? "is-active" : ""}">
-        <span>3</span>
-        <strong>${escapeHtml(isCreditRechargeOrder ? "积分到账" : "权益生效")}</strong>
-        <small>${escapeHtml(isCreditRechargeOrder ? "增加钱包积分" : "解锁会员权益")}</small>
-      </li>
-    </ol>
-  `;
-}
-
 function renderPaymentActions({
   billingOrder,
   expired,
@@ -591,15 +536,6 @@ function shouldShowLocalPaymentSimulation(paymentIntent, billingOrder) {
     return false;
   }
   return /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(window.location.host ?? "");
-}
-
-function renderSelectedPlanDigest(plan) {
-  return `
-    <div class="library-team-selected-plan">
-      <span>${escapeHtml(plan.name)}</span>
-      <strong>${escapeHtml(plan.price)}</strong>
-    </div>
-  `;
 }
 
 function shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succeeded }) {
@@ -805,31 +741,70 @@ function isScannablePaymentCodePayload(value) {
 function renderPaymentQrSvg(payload) {
   try {
     const matrix = createPaymentQrMatrix(payload);
-    const quietZone = 4;
-    const viewBoxSize = matrix.size + quietZone * 2;
-    const cells = [];
-    for (let row = 0; row < matrix.size; row += 1) {
-      for (let col = 0; col < matrix.size; col += 1) {
-        if (matrix.get(row, col)) {
-          cells.push(`M${col + quietZone} ${row + quietZone}h1v1h-1z`);
-        }
-      }
-    }
+    const margin = 4;
+    const size = matrix.size + margin * 2;
     return `
       <svg
         class="library-team-payment-qr-svg"
-        viewBox="0 0 ${viewBoxSize} ${viewBoxSize}"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 ${size} ${size}"
         role="img"
         aria-label="支付二维码"
         focusable="false"
+        shape-rendering="crispEdges"
       >
-        <rect width="${viewBoxSize}" height="${viewBoxSize}" fill="#ffffff"></rect>
-        <path fill="#14171d" d="${cells.join(" ")}"></path>
+        <path fill="#ffffff" d="M0 0h${size}v${size}H0z"></path>
+        <path stroke="#14171d" d="${paymentQrPath(matrix, margin)}"></path>
       </svg>
     `;
   } catch {
     return "";
   }
+}
+
+function paymentQrPath(matrix, margin) {
+  let path = "";
+  let moveBy = 0;
+  let newRow = false;
+  let lineLength = 0;
+
+  for (let index = 0; index < matrix.size * matrix.size; index += 1) {
+    const col = index % matrix.size;
+    const row = Math.floor(index / matrix.size);
+
+    if (!col && !newRow) {
+      newRow = true;
+    }
+
+    if (matrix.get(row, col)) {
+      lineLength += 1;
+
+      if (!(index > 0 && col > 0 && matrix.get(row, col - 1))) {
+        path += newRow
+          ? paymentQrSvgCommand("M", col + margin, row + margin + 0.5)
+          : paymentQrSvgCommand("m", moveBy, 0);
+        moveBy = 0;
+        newRow = false;
+      }
+
+      if (!(col + 1 < matrix.size && matrix.get(row, col + 1))) {
+        path += paymentQrSvgCommand("h", lineLength);
+        lineLength = 0;
+      }
+    } else {
+      moveBy += 1;
+    }
+  }
+
+  return path;
+}
+
+function paymentQrSvgCommand(command, x, y) {
+  let text = `${command}${x}`;
+  if (typeof y !== "undefined") {
+    text += ` ${y}`;
+  }
+  return text;
 }
 
 function createPaymentQrMatrix(payload) {
@@ -1428,3 +1403,4 @@ function isExpiredPayment(status, expiresAt) {
   const expires = expiresAt ? new Date(expiresAt) : null;
   return Boolean(expires && Number.isFinite(expires.getTime()) && expires.getTime() <= Date.now());
 }
+
