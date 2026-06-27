@@ -56,6 +56,7 @@ function createWorkbench(overrides = {}) {
       libraryEntitlement: {
         hasTeamAssetLibrary: true,
       },
+      membershipStatus: { status: "professional_active" },
       teamAssetLocalUploads: {
         character: [],
         scene: [],
@@ -194,10 +195,67 @@ describe("team asset local uploads", () => {
     assert.equal(workbench.ui.toast, "");
   });
 
+  it("blocks team uploads when membership is inactive even if entitlement payload is stale", async () => {
+    const { workbench, uploadCalls } = createWorkbench({
+      ui: {
+        membershipStatus: { status: "expired" },
+      },
+    });
+
+    await handleTeamAssetLocalUploadFiles(workbench, "character", [
+      { name: "hero.png", type: "image/png", size: 1536, lastModified: 1 },
+    ]);
+
+    assert.equal(uploadCalls.length, 0);
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+    assert.equal(workbench.ui.toast, "团队资产库为会员权益，开通后才能上传素材。");
+    assert.deepEqual(workbench.ui.teamAssetLocalUploads.character, []);
+  });
+
+  it("keeps the team asset library entry visible when membership is inactive", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      membershipStatus: { status: "expired" },
+      libraryEntitlement: {
+        hasTeamAssetLibrary: true,
+      },
+    });
+
+    assert.match(html, /官方资产库/);
+    assert.match(html, /团队资产库/);
+    assert.match(html, /data-asset-scope="team"/);
+  });
+
+  it("shows the locked team asset library instead of team assets when membership is inactive", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "team",
+      membershipStatus: { status: "expired" },
+      libraryCategory: "character",
+      libraryEntitlement: {
+        hasTeamAssetLibrary: true,
+      },
+      libraryAssets: [{
+        id: "team-hero",
+        name: "团队主角",
+        category: "character",
+        folder: "团队角色",
+        previewUrl: "data:image/png;base64,team-hero",
+      }],
+    });
+
+    assert.match(html, /团队资产库/);
+    assert.match(html, /立即开通/);
+    assert.doesNotMatch(html, /团队主角/);
+    assert.doesNotMatch(html, /data-action="pick-team-asset-local-upload"/);
+  });
+
   it("hides upload controls when team asset library membership is locked", () => {
     const html = renderLibraryTeam({
       route: "assets",
       assetScope: "team",
+      membershipStatus: { status: "professional_active" },
       libraryCategory: "character",
       libraryEntitlement: {
         hasTeamAssetLibrary: false,
@@ -224,6 +282,7 @@ describe("team asset local uploads", () => {
     const html = renderLibraryTeam({
       route: "assets",
       assetScope: "team",
+      membershipStatus: { status: "professional_active" },
       libraryCategory: "character",
       libraryFolder: "国内仿真人-现代都市",
       libraryFolders: ["国内仿真人-现代都市", "国内仿真人-东方古代"],

@@ -1873,6 +1873,7 @@ async function resolveLibraryEntitlement(
         AND entitlement_key = 'team_asset_library'
         AND status = 'active'
         AND source IS DISTINCT FROM 'payment'
+        AND source IS DISTINCT FROM 'dev_seed'
         AND (expires_at IS NULL OR expires_at > $2)
       UNION ALL
       SELECT period.id::text AS id

@@ -2480,6 +2480,27 @@ body:has(.library-team-asset-detail-overlay),
   text-align: center;
 }
 
+.team-page .library-team-owner-row td {
+  background: rgba(222, 209, 255, 0.045);
+  color: #f5f0ff;
+}
+
+.team-page .library-team-owner-row strong,
+.team-page .library-team-role-legacy span {
+  display: block;
+  color: #ffffff;
+}
+
+.team-page .library-team-owner-row small,
+.team-page .library-team-role-legacy small,
+.team-page .library-team-muted {
+  display: block;
+  margin-top: 4px;
+  color: #9ba0b2;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .team-page .library-team-table-wrap th:first-child,
 .team-page .library-team-table-wrap td:first-child {
   width: 62px;
@@ -2492,6 +2513,16 @@ body:has(.library-team-asset-detail-overlay),
   border: 1px solid rgba(222, 209, 255, 0.24);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.02);
+}
+
+.team-page .library-team-row-check.is-locked {
+  border-color: rgba(222, 209, 255, 0.42);
+  background: rgba(222, 209, 255, 0.14);
+}
+
+.team-page .team-credit-panel .library-team-filterbar {
+  align-items: end;
+  justify-content: space-between;
 }
 
 .team-page .team-member-section .library-team-empty-state {

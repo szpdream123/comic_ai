@@ -8730,16 +8730,21 @@ async function ensurePersonalProjectWorkspaceAccess(
   userId: string,
 ) {
   const workspaceId = personalProjectWorkspaceId(userId);
+  const existingWorkspace = await queryOne<{ organization_id: string }>(
+    db,
+    "SELECT organization_id FROM workspaces WHERE id = $1",
+    [workspaceId],
+  );
+  const organizationId = existingWorkspace?.organization_id ?? devOrganizationId;
 
   await db.query(
     `
       INSERT INTO organizations (id, name, status)
       VALUES ($1, 'Comic AI Studio', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET name = EXCLUDED.name,
-          status = 'active'
+      SET status = 'active'
     `,
-    [devOrganizationId],
+    [organizationId],
   );
   await repairDevOrganizationLegacyCreditLots(db);
 
@@ -8749,7 +8754,7 @@ async function ensurePersonalProjectWorkspaceAccess(
       VALUES ($1, $2, 'Personal Project Workspace', 'active')
       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
     `,
-    [workspaceId, devOrganizationId],
+    [workspaceId, organizationId],
   );
   await db.query(
     `
@@ -8758,7 +8763,7 @@ async function ensurePersonalProjectWorkspaceAccess(
       ON CONFLICT (organization_id, workspace_id, user_id)
       DO UPDATE SET role = 'owner_admin', status = 'active'
     `,
-    [randomUUID(), devOrganizationId, workspaceId, userId],
+    [randomUUID(), organizationId, workspaceId, userId],
   );
 }
 
