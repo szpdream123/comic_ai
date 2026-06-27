@@ -32,6 +32,7 @@ test("entitled solo professional account renders team setup instead of an active
 
   assert.match(html, /创建第一个成员账号/);
   assert.match(html, /已获得团队协作资格/);
+  assert.doesNotMatch(html, />创建第一个成员账号</);
   assert.doesNotMatch(html, /data-action="open-team-dashboard"/);
   assert.doesNotMatch(html, /专业版已开通/);
 });
@@ -142,6 +143,7 @@ test("active professional membership status unlocks team management while overvi
   assert.match(html, /创建第一个成员账号/);
   assert.match(html, /已获得团队协作资格/);
   assert.match(html, /data-action="open-team-member-create"/);
+  assert.doesNotMatch(html, />创建第一个成员账号</);
   assert.doesNotMatch(html, /开通专业版/);
 });
 

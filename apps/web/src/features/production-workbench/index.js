@@ -2927,6 +2927,48 @@ function hasActiveMembershipAccess(workbench) {
   return isActiveMembershipStatus(workbench.ui?.membershipStatus);
 }
 
+function hasActiveProfessionalTeamMemberAccess(workbench) {
+  const membershipStatus = workbench.ui?.membershipStatus;
+  const status = String(
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "",
+  );
+  const currentTier = String(
+    membershipStatus?.currentTier ??
+    membershipStatus?.membership?.currentTier ??
+    membershipStatus?.subscription?.currentTier ??
+    "",
+  );
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    {};
+  const hasActiveMembership = isActiveMembershipStatus(membershipStatus);
+  const isProfessionalActive = status === "professional_active" || (hasActiveMembership && currentTier === "professional");
+  return hasActiveMembership && isProfessionalActive && entitlements?.teamMemberManagement === true;
+}
+
+function resolveTeamMemberCreateRemainingSeats(workbench, overview) {
+  const seats = overview?.seats ?? {};
+  const membershipStatus = workbench.ui?.membershipStatus;
+  const membershipSeatLimit = Number(
+    membershipStatus?.team?.seatLimit ??
+    membershipStatus?.membership?.team?.seatLimit ??
+    membershipStatus?.subscription?.team?.seatLimit ??
+    0,
+  );
+  const limit = Math.max(
+    Number(seats.limit ?? seats.total ?? 0),
+    Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
+  );
+  const used = Number(seats.used ?? 0);
+  const remaining = Number(seats.remaining ?? (limit > 0 ? Math.max(0, limit - used) : 0));
+  return limit > 0 ? Math.max(0, limit - used) : remaining;
+}
+
 function hasActiveTeamAssetLibraryAccess(workbench) {
   if (workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary !== true) {
     return false;
@@ -6607,24 +6649,27 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-team-member-create") {
     const overview = workbench.ui.teamOverview;
-    if (!hasActiveMembershipAccess(workbench) || overview?.entitlements?.teamMemberManagement !== true) {
+    const hasMembershipTeamAccess = hasActiveProfessionalTeamMemberAccess(workbench);
+    const hasOverviewTeamAccess = overview?.entitlements?.teamMemberManagement === true;
+    if (!hasActiveMembershipAccess(workbench) || (!hasOverviewTeamAccess && !hasMembershipTeamAccess)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
       return;
     }
-    if (Number(overview?.seats?.remaining ?? 0) <= 0) {
+    if (resolveTeamMemberCreateRemainingSeats(workbench, overview) <= 0) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "团队席位已满，扩容后才能继续创建成员账号。";
       render(workbench);
       return;
     }
-    if (overview?.permissions?.canCreateMember === false) {
+    if (overview?.permissions?.canCreateMember === false && !hasMembershipTeamAccess) {
       workbench.ui.toast = "当前账号没有创建成员权限，请联系主账号或团队管理员。";
       render(workbench);
       return;
     }
+    workbench.ui.isLibraryPricingModalOpen = false;
     workbench.ui.isTeamMemberCreateOpen = true;
     workbench.ui.teamMemberCreateNotice = "";
     workbench.ui.teamTemporaryPassword = "";
