@@ -70,6 +70,16 @@ function renderBatchStyleSvg(art) {
   return svgByArt[art] ?? svgByArt.portrait;
 }
 
+function isActiveMembershipStatus(membershipStatus) {
+  const status = String(
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "",
+  );
+  return status === "experience_active" || status === "professional_active";
+}
+
 export function renderEpisodeWorkbench({
   episodeId = "",
   episodeTitle = "",
@@ -131,6 +141,8 @@ export function renderEpisodeWorkbench({
   episodeWorkbenchContext = null,
   projectOtherAssetMediaType = "video",
   projectDetail = null,
+  membershipStatus = null,
+  teamAssetLibraryEnabled = false,
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
   const storyboardVisibleMediaTabs = STORYBOARD_MEDIA_TABS;
@@ -162,6 +174,8 @@ export function renderEpisodeWorkbench({
     prop: mergeAssetGroup(assetLibrary.prop ?? []),
   };
   const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
+  const canShowTeamAssetLibrary = isActiveMembershipStatus(membershipStatus);
+  const canUseTeamAssetLibrary = canShowTeamAssetLibrary && teamAssetLibraryEnabled === true;
   const normalizedStoryboards = storyboards.length
     ? normalizeStoryboardIndices(storyboards)
     : [];
@@ -259,6 +273,7 @@ export function renderEpisodeWorkbench({
                   normalizedActiveAssetTab,
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
+                  canShowTeamAssetLibrary,
                 )
               : renderStoryboardWorkspace(
                   normalizedStoryboards,
@@ -429,6 +444,8 @@ export function renderEpisodeWorkbench({
             folder: episodeAssetLibraryFolder,
             query: episodeAssetLibraryQuery,
             selection: assetImportSelection,
+            teamAssetLibraryVisible: canShowTeamAssetLibrary,
+            teamAssetLibraryEnabled: canUseTeamAssetLibrary,
           })
         : ""}
     </section>
@@ -471,6 +488,7 @@ function renderAssetWorkspace(
   activeAssetTab,
   selectedEpisodeCardId,
   selectedEpisodeAssetIds,
+  canShowTeamAssetLibrary = false,
 ) {
   const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const groups = {
@@ -489,8 +507,7 @@ function renderAssetWorkspace(
           <div class="episode-replica-asset-tabs">
             ${ASSET_TABS.map((tab) => `<button class="${tab.id === normalizedActiveAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
           </div>
-          <div class="episode-replica-asset-actions right">
-            <button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">团队资产库</button>
+          <div class="episode-replica-asset-actions right">            ${canShowTeamAssetLibrary ? `<button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">团队资产库</button>` : ""}
             <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">项目资产库</button>
           </div>
         </div>
@@ -532,8 +549,10 @@ function renderEpisodeAssetLibraryModal({
   folder = "",
   query = "",
   selection = [],
+  teamAssetLibraryVisible = false,
+  teamAssetLibraryEnabled = false,
 } = {}) {
-  const normalizedScope = scope === "team" ? "team" : "official";
+  const normalizedScope = scope === "team" && teamAssetLibraryVisible ? "team" : "official";
   const normalizedCategory = ["character", "scene", "prop"].includes(category) ? category : "character";
   const folders = [
     "国内仿真人-现代都市",
@@ -561,7 +580,7 @@ function renderEpisodeAssetLibraryModal({
         <header class="episode-library-modal-head">
           <nav class="episode-library-scope-tabs" aria-label="资产库范围">
             <button class="${normalizedScope === "official" ? "is-active" : ""}" type="button" data-action="switch-episode-asset-library-scope" data-library-scope="official">官方资产库</button>
-            <button class="${normalizedScope === "team" ? "is-active" : ""}" type="button" data-action="switch-episode-asset-library-scope" data-library-scope="team">团队资产库 <small>团队复用</small></button>
+            ${teamAssetLibraryVisible ? `<button class="${normalizedScope === "team" ? "is-active" : ""}" type="button" data-action="switch-episode-asset-library-scope" data-library-scope="team">团队资产库 <small>团队复用</small></button>` : ""}
           </nav>
           <nav class="episode-library-category-tabs" aria-label="资产分类">
             ${renderEpisodeLibraryCategoryTab("character", "角色", normalizedCategory)}
@@ -597,14 +616,16 @@ function renderEpisodeAssetLibraryModal({
                 <input type="search" placeholder="搜索角色、场景、道具" value="${escapeAttr(query)}" data-action="search-episode-asset-library" />
               </label>
             </div>
-            <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
-              ${assets.length ? assets.map((asset) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, selectedIds.has(asset.id))).join("") : `
-                <div class="episode-library-empty">
-                  <strong>暂无匹配资产</strong>
-                  <span>换个分类、文件夹或关键词再试。</span>
-                </div>
-              `}
-            </div>
+            ${normalizedScope === "team" && !teamAssetLibraryEnabled ? renderEpisodeTeamLibraryLocked() : `
+              <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
+                ${assets.length ? assets.map((asset) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, selectedIds.has(asset.id))).join("") : `
+                  <div class="episode-library-empty">
+                    <strong>暂无匹配资产</strong>
+                    <span>换个分类、文件夹或关键词再试。</span>
+                  </div>
+                `}
+              </div>
+            `}
           </section>
         </div>
         <footer class="episode-library-modal-footer">

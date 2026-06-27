@@ -691,11 +691,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       projectOtherAssetMediaType: "audio",
       projectMembers: [],
       projectStats: null,
+      teamPanelTab: "members",
       teamMemberSearchQuery: "",
       teamMemberRoleFilter: "all",
       teamMemberStatusFilter: "all",
+      teamCreditOperationFilter: "all",
+      teamCreditSearchQuery: "",
+      teamCreditDateShortcut: "近7天",
       teamDashboardTab: "member-consumption",
+      teamDashboardDateRange: "today",
       teamDashboardDateShortcut: "今天",
+      teamDashboardSearchQuery: "",
       teamDashboardRoleFilter: "all",
       teamDashboardStatusFilter: "all",
       selectedDashboardMemberId: null,
@@ -2221,6 +2227,24 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('[data-action="search-team-members"]')) {
       workbench.ui.teamMemberSearchQuery = target.value;
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="search-team-credit-ledger"]')) {
+      workbench.ui.teamCreditSearchQuery = target.value;
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="set-team-credit-operation-filter"]')) {
+      workbench.ui.teamCreditOperationFilter = target.value || "all";
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.('[data-action="search-team-dashboard-members"]')) {
+      workbench.ui.teamDashboardSearchQuery = target.value;
       render(workbench);
       return;
     }
@@ -6391,6 +6415,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "set-team-panel-tab") {
+    workbench.ui.teamPanelTab = target.dataset.teamPanelTab === "credits" ? "credits" : "members";
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "set-team-credit-date-shortcut") {
+    workbench.ui.teamCreditDateShortcut = target.dataset.teamCreditDateShortcut ?? "近7天";
+    workbench.ui.toast = "";
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
   if (action === "reset-team-member-filters") {
     workbench.ui.teamMemberSearchQuery = "";
     workbench.ui.teamMemberRoleFilter = "all";
@@ -6683,7 +6721,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.createMemberModal = {
       open: true,
       phone: "",
-      role: "creator",
+      role: "director",
+      memberGroupId: "",
       note: "",
       notice: "",
     };
@@ -6709,7 +6748,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       open: true,
       id: member.id,
       phone: member.phone ?? "",
-      role: member.role ?? "creator",
+      role: member.role ?? "director",
+      memberGroupId: member.memberGroupId ?? member.memberGroup ?? "",
       note: member.note ?? "",
       status: member.status ?? "enabled",
       notice: "",
@@ -6726,7 +6766,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-create-member-phone") {
     workbench.ui.createMemberModal = {
-      ...(workbench.ui.createMemberModal ?? { open: true, role: "creator", note: "", notice: "" }),
+      ...(workbench.ui.createMemberModal ?? { open: true, role: "director", memberGroupId: "", note: "", notice: "" }),
       phone: target.value,
       notice: "",
     };
@@ -6736,16 +6776,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "change-create-member-role") {
     workbench.ui.createMemberModal = {
       ...(workbench.ui.createMemberModal ?? { open: true, phone: "", note: "", notice: "" }),
-      role: target.value || "creator",
+      role: normalizeTeamMemberBusinessRole(target.value),
       notice: "",
     };
     render(workbench);
     return;
   }
 
+  if (action === "change-create-member-group") {
+    workbench.ui.createMemberModal = {
+      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", role: "director", note: "", notice: "" }),
+      memberGroupId: target.value ?? "",
+      notice: "",
+    };
+    return;
+  }
+
   if (action === "change-create-member-note") {
     workbench.ui.createMemberModal = {
-      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", role: "creator", notice: "" }),
+      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", role: "director", memberGroupId: "", notice: "" }),
       note: target.value,
       notice: "",
     };
@@ -6755,16 +6804,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "change-edit-member-role") {
     workbench.ui.editMemberModal = {
       ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", note: "", status: "enabled", notice: "" }),
-      role: target.value || "creator",
+      role: normalizeTeamMemberBusinessRole(target.value),
       notice: "",
     };
     render(workbench);
     return;
   }
 
+  if (action === "change-edit-member-group") {
+    workbench.ui.editMemberModal = {
+      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", role: "director", note: "", status: "enabled", notice: "" }),
+      memberGroupId: target.value ?? "",
+      notice: "",
+    };
+    return;
+  }
+
   if (action === "change-edit-member-note") {
     workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", role: "creator", status: "enabled", notice: "" }),
+      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", role: "director", memberGroupId: "", status: "enabled", notice: "" }),
       note: target.value,
       notice: "",
     };
@@ -6787,7 +6845,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await runAction(workbench, "正在创建成员账号...", async () => {
       const response = await workbench.api.createProjectMember(projectId, {
         phone: draft.phone ?? "",
-        role: draft.role ?? "creator",
+        role: normalizeTeamMemberBusinessRole(draft.role),
+        memberGroupId: draft.memberGroupId ?? "",
         note: draft.note ?? "",
       });
       workbench.ui.createMemberModal = null;
@@ -6834,7 +6893,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
     await runAction(workbench, "正在保存成员信息...", async () => {
       const response = await workbench.api.updateProjectMember(projectId, draft.id, {
-        role: draft.role ?? "creator",
+        role: normalizeTeamMemberBusinessRole(draft.role),
+        memberGroupId: draft.memberGroupId ?? "",
         note: draft.note ?? "",
       });
       workbench.ui.editMemberModal = {
@@ -29254,6 +29314,16 @@ const TEAM_DASHBOARD_DATE_RANGES = new Set([
   "last-month",
   "year",
 ]);
+const TEAM_MEMBER_BUSINESS_ROLES = new Set([
+  "admin",
+  "group_admin",
+  "director_plus",
+  "animator_plus",
+  "director",
+  "animator",
+  "screenwriter",
+  "editor",
+]);
 
 function statusForAction(action) {
   return (
@@ -29360,6 +29430,12 @@ function teamErrorMessage(value) {
   }
   if (text.includes("team_permission_denied")) {
     return "当前账号没有团队管理权限，请联系管理员。";
+  }
+  if (text.includes("team_project_scope_violation")) {
+    return "只能分配当前账号可管理范围内的项目。";
+  }
+  if (text.includes("team_group_scope_violation")) {
+    return "只能管理当前成员组内的成员。";
   }
   if (text.includes("billing_required")) {
     return "该团队能力需要开通专业版后使用。";
@@ -29807,6 +29883,11 @@ function normalizeTeamDashboardTab(tab) {
 function normalizeTeamDashboardDateRange(range) {
   const normalizedRange = String(range ?? "");
   return TEAM_DASHBOARD_DATE_RANGES.has(normalizedRange) ? normalizedRange : "today";
+}
+
+function normalizeTeamMemberBusinessRole(role) {
+  const normalizedRole = String(role ?? "");
+  return TEAM_MEMBER_BUSINESS_ROLES.has(normalizedRole) ? normalizedRole : "director";
 }
 
 function deriveInitialTeamDashboardTab(hash) {

@@ -321,6 +321,23 @@ export function renderAssetLibraryPage(context = {}) {
   return renderOfficialTeamLibrary({ ...context, assetScope });
 }
 
+function hasUsableTeamAssetLibraryEntitlement(context = {}) {
+  if (context.libraryEntitlement?.hasTeamAssetLibrary !== true) {
+    return false;
+  }
+  return isActiveMembershipStatus(context.membershipStatus);
+}
+
+function isActiveMembershipStatus(membershipStatus) {
+  const status = String(
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "",
+  );
+  return status === "experience_active" || status === "professional_active";
+}
+
 export function validateTeamAssetLocalUploadFile(category, file) {
   const config = teamLocalUploadConfigs[category];
   if (!config) {
@@ -352,7 +369,7 @@ export function validateTeamAssetLocalUploadFile(category, file) {
 }
 
 function renderOfficialTeamLibrary(context) {
-  const assetScope = context.assetScope ?? "official";
+  const assetScope = context.assetScope === "team" ? "team" : "official";
   const categories =
     assetScope === "team" ? teamCategories : normalizeCategories(context.libraryCategories);
   const requestedCategory = context.libraryCategory ?? categories[0]?.id ?? "character";
@@ -369,8 +386,7 @@ function renderOfficialTeamLibrary(context) {
     query,
     Boolean(context.libraryFolder),
   );
-  const teamLocked =
-    assetScope === "team" && context.libraryEntitlement?.hasTeamAssetLibrary !== true;
+  const teamLocked = assetScope === "team" && !hasUsableTeamAssetLibraryEntitlement(context);
   const canUseTeamLocalUploads = assetScope === "team" && !teamLocked;
   const localUploads =
     canUseTeamLocalUploads ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
@@ -760,7 +776,7 @@ function renderLockedTeamPanel() {
 function renderAssetScopeTabs(assetScope, options = {}) {
   const scopes = [
     ["official", "官方资产库"],
-    ["team", "团队资产库", "团队复用"],
+    ...(options.teamEnabled === false ? [] : [["team", "团队资产库", "团队复用"]]),
   ];
 
   return `

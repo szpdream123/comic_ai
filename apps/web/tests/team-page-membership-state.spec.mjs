@@ -18,6 +18,16 @@ test("entitled solo professional account renders team setup instead of an active
       },
     },
     members: [],
+    membershipStatus: {
+      status: "professional_active",
+      currentTier: "professional",
+      entitlements: {
+        teamMemberManagement: true,
+      },
+      team: {
+        seatLimit: 50,
+      },
+    },
   });
 
   assert.match(html, /创建第一个成员账号/);
@@ -49,11 +59,52 @@ test("professional account with members renders the active team dashboard entry"
         status: "enabled",
       },
     ],
+    membershipStatus: {
+      status: "professional_active",
+      currentTier: "professional",
+      entitlements: {
+        teamMemberManagement: true,
+        teamDashboard: true,
+      },
+      team: {
+        seatLimit: 50,
+      },
+    },
   });
 
   assert.match(html, /data-action="open-team-dashboard"/);
   assert.match(html, /专业版已开通/);
   assert.match(html, /创建成员账号/);
+});
+
+test("overview entitlement alone does not unlock team creation for a non-member account", () => {
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: false, memberCount: 0 },
+      seats: { used: 0, limit: 50, remaining: 50 },
+      credits: { allocatable: 1200 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members: [],
+    membershipStatus: {
+      status: "none",
+      currentTier: null,
+      entitlements: {
+        teamMemberManagement: false,
+      },
+    },
+  });
+
+  assert.match(html, /data-action="open-pricing"/);
+  assert.match(html, /开通专业版/);
+  assert.doesNotMatch(html, /data-action="open-team-member-create"/);
+  assert.doesNotMatch(html, /已获得团队协作资格/);
 });
 
 test("active professional membership status unlocks team management while overview is stale", () => {
