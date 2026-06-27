@@ -6970,8 +6970,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
-    if (workbench.ui.singleEpisodeAiPreview?.status === "loading") {
+    if (workbench.ui.singleEpisodeAiChecking || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
       cancelSingleEpisodeAiPreviewRequest(workbench);
+      workbench.ui.singleEpisodeAiChecking = false;
       workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
     }
     if (nextTab === "community") {
@@ -9208,6 +9209,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-single-episode-modal") {
     cancelSingleEpisodeAiPreviewRequest(workbench);
+    workbench.ui.singleEpisodeAiChecking = false;
     resetSingleEpisodeModalState(workbench);
     render(workbench);
     return;
@@ -9215,6 +9217,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-ai-storyboard-preview") {
     cancelSingleEpisodeAiPreviewRequest(workbench);
+    workbench.ui.singleEpisodeAiChecking = false;
     workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
     render(workbench);
     return;
@@ -9320,7 +9323,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isScriptModalOpen = false;
       workbench.ui.scriptManualDraft = nextScript;
     }
-    workbench.ui.singleEpisodeAiPreview = {
+    const createLoadingPreviewState = () => ({
       status: "loading",
       source: isManualScriptAnalysis ? "manual-script-analysis" : "single-episode-storyboard",
       sourceScript: nextScript,
@@ -9344,11 +9347,27 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       livePreviewTables: null,
       liveDisplayTables: null,
       activeStage: "script",
-    };
+    });
+    if (isManualScriptAnalysis) {
+      workbench.ui.singleEpisodeAiPreview = createLoadingPreviewState();
+    } else {
+      workbench.ui.singleEpisodeAiChecking = true;
+      workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+      showWorkbenchToast(workbench, "正在分析中，请稍候...", { tone: "success" });
+    }
     render(workbench);
+    const ensureStoryboardPreviewLoading = () => {
+      if (isManualScriptAnalysis || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
+        return;
+      }
+      workbench.ui.singleEpisodeAiChecking = false;
+      workbench.ui.toast = "";
+      workbench.ui.singleEpisodeAiPreview = createLoadingPreviewState();
+    };
+    let abortController = null;
     try {
       cancelSingleEpisodeAiPreviewRequest(workbench);
-      const abortController = new AbortController();
+      abortController = new AbortController();
       workbench.singleEpisodeAiPreviewAbortController = abortController;
       const previewInput = {
         scriptText: nextScript,
@@ -9363,11 +9382,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         for await (const event of previewStream(projectId, previewInput, {
           signal: abortController.signal,
         })) {
+          const eventName = resolveSingleEpisodeAiPreviewStreamEventName(event);
           if (abortController.signal.aborted) {
             if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
               workbench.singleEpisodeAiPreviewAbortController = null;
             }
             return;
+          }
+          if (!isManualScriptAnalysis && eventName !== "error") {
+            ensureStoryboardPreviewLoading();
           }
           try {
             const completedPreview = applySingleEpisodeAiPreviewStreamEvent(workbench, event, {
@@ -9378,7 +9401,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             }
             renderSingleEpisodeAiPreviewProgress(workbench);
           } catch (error) {
-            const eventName = resolveSingleEpisodeAiPreviewStreamEventName(event);
             if (eventName === "error") {
               throw error;
             }
@@ -9406,10 +9428,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.singleEpisodeAiPreviewAbortController = null;
       }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      ensureStoryboardPreviewLoading();
       const finalizedPreview = finalizeSingleEpisodeAiPreviewData(
         preview,
         workbench.ui.singleEpisodeAiPreview,
       );
+      workbench.ui.singleEpisodeAiChecking = false;
       workbench.ui.singleEpisodeAiPreview = {
         status: "ready",
         source: workbench.ui.singleEpisodeAiPreview.source,
@@ -9477,12 +9501,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
           render(workbench);
         }
+        workbench.ui.singleEpisodeAiChecking = false;
         return;
       }
       if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
         workbench.singleEpisodeAiPreviewAbortController = null;
       }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      if (!isManualScriptAnalysis && workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
+        workbench.ui.singleEpisodeAiChecking = false;
+        workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+        showWorkbenchToast(workbench, friendlyError(error), { tone: "error" });
+        render(workbench);
+        return;
+      }
+      workbench.ui.singleEpisodeAiChecking = false;
       workbench.ui.singleEpisodeAiPreview = {
         status: "error",
         source: workbench.ui.singleEpisodeAiPreview.source,
@@ -14510,6 +14543,7 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
   workbench.ui.singleEpisodeLookPanel = "";
+  workbench.ui.singleEpisodeAiChecking = false;
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
@@ -15419,6 +15453,7 @@ function resetSingleEpisodeModalState(workbench) {
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
   workbench.ui.singleEpisodeLookPanel = "";
+  workbench.ui.singleEpisodeAiChecking = false;
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
 }
@@ -29335,6 +29370,7 @@ function modelGenerationErrorMessage(value) {
   return (
     {
       generation_membership_required: "有效会员已过期或未开通，请先开通会员。",
+      membership_required: "请先开通会员。",
       model_reference_limit_exceeded: "参考素材数量超出模型限制",
       model_reference_not_found: "参考素材不存在或无权访问",
       model_reference_unavailable: "参考素材尚未准备好，请重新选择",

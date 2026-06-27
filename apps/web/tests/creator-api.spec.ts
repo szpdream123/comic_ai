@@ -368,6 +368,7 @@ test("ai storyboard preview uses a 180 second request timeout", async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview");
   assert.equal(timers[0], 180000);
+  assert.equal(typeof calls[0].options.headers["idempotency-key"], "string");
 });
 
 test("commit ai storyboard preview targets the project preview commit route", async () => {
@@ -436,6 +437,73 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
     globalThis.setTimeout = previousSetTimeout;
     globalThis.clearTimeout = previousClearTimeout;
   }
+});
+
+test("streaming ai storyboard preview surfaces backend error details", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 403,
+    text: async () => JSON.stringify({
+      errorCode: "membership_required",
+      message: "请充值会员。",
+      requestId: "req-1",
+      details: { plan: "none" },
+    }),
+  });
+
+  try {
+    const { creatorApiTestHooks } = await import("../src/shared/creator-api.js");
+    await assert.rejects(
+      async () => {
+        for await (const _event of creatorApiTestHooks.postJsonSse("/api/stream", {})) {
+          // consume stream
+        }
+      },
+      (error) => {
+        assert.equal(error.message, "请充值会员。");
+        assert.equal(error.errorCode, "membership_required");
+        assert.equal(error.status, 403);
+        assert.equal(error.requestId, "req-1");
+        assert.deepEqual(error.details, { plan: "none" });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("streaming ai storyboard preview requests include an idempotency key header", async () => {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  const encoded = new TextEncoder().encode('data: {"type":"complete"}\n\n');
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      body: stream,
+    };
+  };
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    for await (const _event of creatorApi.createAiStoryboardPreviewStream("project/1", { scriptText: "x", packages: {} })) {
+      // consume stream
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/ai-storyboard-preview?stream=1");
+  assert.equal(typeof calls[0].options.headers["idempotency-key"], "string");
 });
 
 test("generation queue job ops targets the admin ops queue job endpoint with idempotency", async () => {

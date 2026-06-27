@@ -992,6 +992,7 @@ function creditLedgerSourceLabel(row = {}, metadata = {}) {
   const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
   const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
   const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
   if (targetType === "canvas") {
     if (mediaType === "video") {
       return "画布视频生成";
@@ -999,6 +1000,9 @@ function creditLedgerSourceLabel(row = {}, metadata = {}) {
     return "画布图片生成";
   }
   if (sourceType === "episode_generation_task") {
+    if (mediaType === "text" || taskType.includes("script") || taskType.includes("storyboard_preview")) {
+      return "剧本生成";
+    }
     return mediaType === "video" ? "分镜视频生成" : "分镜图片生成";
   }
   if (sourceType === "payment_order") {
@@ -1051,8 +1055,12 @@ function translateCreditLedgerReason(reason, metadata = {}) {
   const normalized = String(reason ?? "").trim().toLowerCase();
   const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
   const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
   if (!normalized) {
     return "";
+  }
+  if (normalized === "script generation") {
+    return "剧本生成积分扣减";
   }
   if (normalized === "image generation") {
     return targetType === "canvas" ? "画布图片生成" : "图片生成";
@@ -1060,11 +1068,17 @@ function translateCreditLedgerReason(reason, metadata = {}) {
   if (normalized === "video generation") {
     return targetType === "canvas" ? "画布视频生成" : "视频生成";
   }
+  if (normalized === "reservation allocation consumed" && (mediaType === "text" || taskType.includes("script") || taskType.includes("storyboard_preview"))) {
+    return "剧本生成积分扣减";
+  }
   if (normalized === "reservation allocation released") {
     return mediaType === "video" ? "视频生成积分返还" : "图片生成积分返还";
   }
   if (normalized === "reservation allocation consumed") {
     return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
+  }
+  if ((normalized.includes("reservation") || normalized.includes("reserve")) && (mediaType === "text" || taskType.includes("script") || taskType.includes("storyboard_preview"))) {
+    return "剧本生成积分扣减";
   }
   if (normalized.includes("reservation") || normalized.includes("reserve")) {
     return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
@@ -2252,6 +2266,7 @@ function renderSingleEpisodeModal(ui) {
   const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
   const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
+  const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -2267,6 +2282,15 @@ function renderSingleEpisodeModal(ui) {
           <textarea id="single-episode-script-input" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(ui.singleEpisodeScript ?? "")}</textarea>
           <span class="single-episode-count">${[...(ui.singleEpisodeScript ?? "")].length}/5000</span>
         </label>
+        ${isCheckingAiStoryboard ? `
+          <div class="single-episode-checking" role="status" aria-live="polite">
+            <span class="single-episode-checking-spinner" aria-hidden="true"></span>
+            <div>
+              <strong>正在分析中</strong>
+              <small>正在读取会员与积分校验结果，通过后会自动开始 AI 分镜生成。</small>
+            </div>
+          </div>
+        ` : ""}
         <div class="single-episode-toolbar single-episode-toolbar-replica">
           <div class="single-episode-toolbar-left">
             <div class="single-episode-look-controls">
@@ -2281,8 +2305,8 @@ function renderSingleEpisodeModal(ui) {
             </div>
             </div>
           <div class="single-episode-actions">
-            <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode">创建空白章节</button>
-            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode">${escapeHtml(aiStoryboardActionLabel)}</button>
+            <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>创建空白章节</button>
+            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
@@ -7571,7 +7595,6 @@ function renderGlobalStatusbar(session, options = {}) {
               <strong>客服热线：4000-300624</strong>
             </button>
             <button class="popover-menu-item" type="button" role="menuitem">在线客服</button>
-            <button class="popover-menu-item" type="button" role="menuitem">专属服务支持</button>
           </div>
         </div>
         <div class="statusbar-popover-wrap">
@@ -7583,15 +7606,8 @@ function renderGlobalStatusbar(session, options = {}) {
               <strong>${escapeHtml(accountCard.primaryText)}</strong>
               <span>${escapeHtml(accountCard.secondaryText)}</span>
             </div>
-            <button class="popover-menu-item" type="button" role="menuitem">我的订阅</button>
-            <button class="popover-menu-item" type="button" role="menuitem">订单开票</button>
-            <button class="popover-menu-item" type="button" role="menuitem">合伙人中心</button>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
-            <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
-            <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
-            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-personal-media-page">素材库</button>
-            <button class="popover-menu-item" type="button" role="menuitem">专属服务支持</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>
         </div>
