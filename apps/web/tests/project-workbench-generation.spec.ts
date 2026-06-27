@@ -8452,6 +8452,47 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-action="open-create-member"/);
   });
 
+  it("opens team member creation from active professional membership when overview is stale", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 0, used: 0, remaining: 0 },
+          permissions: { canCreateMember: true },
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.isTeamMemberCreateOpen, true);
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+    assert.equal(workbench.ui.toast, "");
+  });
+
   it("opens membership pricing and creates a membership payment order", async () => {
     const calls = [];
     const workbench = {

@@ -323,7 +323,7 @@ function resolveCreateMemberState(overview) {
     action: overview?.prototypeFrontend === true ? "open-create-member" : "open-team-member-create",
     message: "",
     badgeLabel: teamActivated ? "团队已启用" : "可开启",
-    buttonLabel: teamActivated ? "创建成员账号" : "创建第一个成员账号",
+    buttonLabel: "创建成员账号",
     secondaryLabel: teamActivated ? "创建成员账号" : "开启团队协作",
     statusText: teamActivated ? "可创建成员账号" : "已获得团队协作资格，尚未创建成员",
   };
@@ -1008,7 +1008,7 @@ function renderTeamGate(createState) {
           <h2>已获得团队协作资格</h2>
           <p>当前仍按个人专业版使用。创建第一个成员账号后，再开启团队成员管理、项目范围分配和团队数据看板。</p>
         </div>
-        <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>创建第一个成员账号</button>
+        <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>创建成员账号</button>
       </section>
     `;
   }
