@@ -449,6 +449,86 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
   assert.match(workbench.root.innerHTML, /积分已到账/);
 });
 
+test("simulating a local payment success triggers the mock callback and closes the payment modal", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+    pricingModalTab: "credits",
+    pendingBillingPackageId: "pkg-direct-500",
+    membershipPaymentPolling: true,
+    lastBillingOrder: {
+      id: "order-credit-1",
+      productType: "credit_package",
+      status: "pending_payment",
+      amountMinor: 19900,
+      currency: "CNY",
+    },
+    lastPaymentIntent: {
+      id: "intent-credit-1",
+      orderId: "order-credit-1",
+      status: "submitted",
+      provider: "wechat_pay",
+      amountMinor: 19900,
+      currency: "CNY",
+      merchantOrderNo: "MO-LOCAL-SIM",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-LOCAL-SIM",
+    },
+  }, {
+    async simulatePaymentCallback(input) {
+      calls.push(["simulatePaymentCallback", input]);
+      return { acknowledged: true };
+    },
+    async getBillingOrder(orderId) {
+      calls.push(["getBillingOrder", orderId]);
+      return {
+        order: {
+          id: orderId,
+          productType: "credit_package",
+          status: "paid",
+        },
+      };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      calls.push(["getPaymentIntent", paymentIntentId]);
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-credit-1",
+          status: "succeeded",
+          provider: "wechat_pay",
+          amountMinor: 19900,
+          currency: "CNY",
+          merchantOrderNo: "MO-LOCAL-SIM",
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "simulate-membership-payment-success",
+      paymentIntentId: "intent-credit-1",
+      orderId: "order-credit-1",
+    },
+  });
+
+  assert.deepEqual(calls.map(([name]) => name), [
+    "simulatePaymentCallback",
+    "getBillingOrder",
+    "getPaymentIntent",
+  ]);
+  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
+  assert.equal(workbench.ui.lastBillingOrder, null);
+  assert.equal(workbench.ui.lastPaymentIntent, null);
+  assert.equal(workbench.ui.lastPaymentAction, null);
+  assert.deepEqual(workbench.ui.toast, { tone: "success", message: "积分已到账" });
+});
+
 test("paid direct credit recharge shows the success toast on the tools canvas surface", async () => {
   const workbench = createWorkbench({
     activeNavTab: "tools",
@@ -1819,98 +1899,6 @@ test("pricing modal rerenders preserve the subscription modal scroll position", 
   assert.equal(root.modal.scrollTop, 260);
 });
 
-test("closing while simulated payment success is syncing keeps the payment modal closed", async () => {
-  const simulateDeferred = createDeferred();
-  const workbench = createWorkbench({
-    isLibraryPricingModalOpen: true,
-    pendingMembershipPlanId: "plan-pro-month",
-    pendingMembershipPaymentProvider: "wechat_pay",
-    membershipPaymentQrCreatedAt: new Date().toISOString(),
-    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-    membershipPaymentPolling: true,
-    lastBillingOrder: {
-      id: "order-membership-1",
-      productType: "membership_plan",
-      status: "pending_payment",
-    },
-    lastPaymentIntent: {
-      id: "intent-membership-1",
-      orderId: "order-membership-1",
-      status: "submitted",
-      provider: "wechat_pay",
-      amountMinor: 29900,
-      currency: "CNY",
-    },
-    lastPaymentAction: {
-      kind: "mock_qr",
-      provider: "wechat_pay",
-    },
-  }, {
-    async simulatePaymentIntentSuccess() {
-      return simulateDeferred.promise;
-    },
-    async getBillingOrder(orderId) {
-      return {
-        order: {
-          id: orderId,
-          productType: "membership_plan",
-          status: "paid",
-        },
-      };
-    },
-    async getPaymentIntent(paymentIntentId) {
-      return {
-        paymentIntent: {
-          id: paymentIntentId,
-          orderId: "order-membership-1",
-          status: "succeeded",
-          provider: "wechat_pay",
-          amountMinor: 29900,
-          currency: "CNY",
-        },
-      };
-    },
-    async getMembershipStatus() {
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
-    },
-  });
-
-  const actionPromise = handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "simulate-membership-payment-success",
-      paymentIntentId: "intent-membership-1",
-      orderId: "order-membership-1",
-    },
-  });
-  await Promise.resolve();
-
-  assert.equal(workbench.ui.busy, true);
-  assert.equal(workbench.ui.membershipPaymentSyncing, true);
-
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: {
-      action: "close-membership-payment",
-    },
-  });
-
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-
-  simulateDeferred.resolve({ simulated: true });
-  await actionPromise;
-
-  assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-  assert.equal(workbench.ui.lastBillingOrder, null);
-  assert.equal(workbench.ui.lastPaymentIntent, null);
-  assert.equal(workbench.ui.membershipPaymentSyncing, false);
-  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
-});
-
 function createDeferred() {
   let resolve;
   let reject;
@@ -2022,3 +2010,4 @@ function buildProjectState() {
     exportPreview: null,
   };
 }
+

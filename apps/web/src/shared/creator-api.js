@@ -311,6 +311,42 @@ function postJsonWithIdempotency(url, body, options = {}) {
   });
 }
 
+const LOCAL_PAYMENT_CALLBACK_SECRET = "dev-payment-secret";
+
+function paymentCallbackSignatureBase(input) {
+  return [
+    input.provider,
+    input.providerEventDedupKey,
+    input.merchantOrderNo,
+    input.providerTradeId,
+    input.eventType,
+    input.amountMinor,
+    input.currency,
+    input.merchantId,
+  ].join("|");
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function signPaymentCallback(input, secret = LOCAL_PAYMENT_CALLBACK_SECRET) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error("payment_callback_crypto_unavailable");
+  }
+  const encoder = new TextEncoder();
+  const key = await subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await subtle.sign("HMAC", key, encoder.encode(paymentCallbackSignatureBase(input)));
+  return bytesToHex(new Uint8Array(signature));
+}
+
 let cosBrowserSdkPromise = null;
 
 export const defaultUploadLimits = {
@@ -826,6 +862,44 @@ export const creatorApi = {
     return fetchJson(path, { dedupeKey: `GET ${path}` });
   },
 
+  getPersonalMediaLibrarySummary(input = {}) {
+    const params = new URLSearchParams();
+    if (input.media) {
+      params.set("media", input.media);
+    }
+    if (input.range) {
+      params.set("range", input.range);
+    }
+    const keyword = String(input.keyword ?? "").trim();
+    if (keyword) {
+      params.set("keyword", keyword);
+    }
+    const query = params.toString();
+    const path = `/api/creator/media-library/summary${query ? `?${query}` : ""}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
+  getPersonalMediaLibrary(input = {}) {
+    const params = new URLSearchParams();
+    if (input.media) {
+      params.set("media", input.media);
+    }
+    if (input.range) {
+      params.set("range", input.range);
+    }
+    const keyword = String(input.keyword ?? "").trim();
+    if (keyword) {
+      params.set("keyword", keyword);
+    }
+    const page = Number(input.page ?? 1);
+    params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
+    const pageSize = Number(input.pageSize ?? 12);
+    params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 12));
+    const query = params.toString();
+    const path = `/api/creator/media-library${query ? `?${query}` : ""}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
   updateProjectAsset(assetId, input) {
     return patchJson(`/api/creator/assets/${encodeURIComponent(assetId)}`, input);
   },
@@ -1115,8 +1189,32 @@ export const creatorApi = {
     });
   },
 
-  simulatePaymentIntentSuccess(input) {
-    return postJson("/api/billing/payment-intents/simulate-success", input);
+  async simulatePaymentCallback(input) {
+    const merchantOrderNo = String(input?.merchantOrderNo ?? "").trim();
+    if (!merchantOrderNo) {
+      throw new Error("payment_callback_merchant_order_no_required");
+    }
+    const provider = String(input?.provider ?? "wechat_pay");
+    const providerTradeId = String(
+      input?.providerTradeId ?? `local-sim-trade:${merchantOrderNo}`,
+    );
+    const body = {
+      provider,
+      providerEventDedupKey: String(
+        input?.providerEventDedupKey ?? `local-sim:${merchantOrderNo}:${providerTradeId}`,
+      ),
+      merchantOrderNo,
+      providerTradeId,
+      eventType: String(input?.eventType ?? "payment_succeeded"),
+      amountMinor: Number(input?.amountMinor ?? 0),
+      currency: String(input?.currency ?? "CNY"),
+      merchantId: String(input?.merchantId ?? "comic-ai-dev-merchant"),
+    };
+    const signature = await signPaymentCallback(body);
+    return postJson("/api/billing/payment-callback/mock", {
+      ...body,
+      signature,
+    });
   },
 
   requestEnterpriseContact(input, options = {}) {

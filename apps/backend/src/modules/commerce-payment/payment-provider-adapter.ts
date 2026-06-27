@@ -10,6 +10,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
+import QRCode from "qrcode";
 
 export type PaymentProvider = "paylab" | "wechat_pay" | "alipay";
 
@@ -594,6 +595,7 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
           currency: input.currency,
           url: codeUrl,
           codeUrl,
+          qrCodeImage: await createQrCodeImageDataUrl(codeUrl),
           expiresAt: input.expiresAt.toISOString(),
         },
       };
@@ -818,6 +820,7 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
           currency: input.currency,
           url: qrCode,
           codeUrl: qrCode,
+          qrCodeImage: await createQrCodeImageDataUrl(qrCode),
           expiresAt: input.expiresAt.toISOString(),
         },
       };
@@ -928,6 +931,21 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
       };
     },
   };
+}
+
+async function createQrCodeImageDataUrl(value: string) {
+  try {
+    return await QRCode.toDataURL(value, {
+      errorCorrectionLevel: "M",
+      margin: 4,
+      color: {
+        dark: "#14171d",
+        light: "#ffffff",
+      },
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 function hashJson(value: unknown) {

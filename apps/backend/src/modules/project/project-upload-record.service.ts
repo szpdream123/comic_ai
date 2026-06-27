@@ -57,6 +57,21 @@ interface ProjectUploadRecordRow {
   completed_at: Date | null;
 }
 
+interface ProjectUploadRecordDetailsRow extends ProjectUploadRecordRow {
+  workspace_id: string | null;
+  project_id: string | null;
+  actor_user_id: string | null;
+  actor_display_name: string | null;
+  actor_phone_e164: string | null;
+  project_name: string | null;
+  file_name: string;
+  object_key: string | null;
+  bucket: string | null;
+  provider: string | null;
+  content_type: string | null;
+  size_bytes: number | string | null;
+}
+
 export async function createProjectUploadRecord(
   db: SqlDatabase,
   input: Omit<ProjectUploadRecord, "id" | "createdAt" | "completedAt"> & {
@@ -158,6 +173,123 @@ export async function completeProjectUploadRecord(
     ],
   );
   return row ? projectUploadRecordFromRow(row) : null;
+}
+
+export async function ensureProjectUploadRecordForStorageObject(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    storageObjectId: string;
+    pageKey: string;
+    pageUrl?: string | null;
+    sourceAction: string;
+    publicUrl?: string | null;
+    status?: string;
+    errorMessage?: string | null;
+    now: Date;
+  },
+) {
+  const existing = await queryOne<ProjectUploadRecordRow>(
+    db,
+    `
+      SELECT *
+      FROM project_upload_records
+      WHERE organization_id = $1
+        AND storage_object_id = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [input.organizationId, input.storageObjectId],
+  );
+  if (existing) {
+    return projectUploadRecordFromRow(existing);
+  }
+
+  const details = await queryOne<ProjectUploadRecordDetailsRow>(
+    db,
+    `
+      SELECT
+        so.organization_id,
+        so.workspace_id,
+        so.project_id,
+        so.id AS storage_object_id,
+        NULL::uuid AS upload_session_id,
+        so.created_by_user_id AS actor_user_id,
+        u.display_name AS actor_display_name,
+        u.phone_e164 AS actor_phone_e164,
+        p.name AS project_name,
+        split_part(so.object_key, '/', array_length(string_to_array(so.object_key, '/'), 1)) AS file_name,
+        so.object_key,
+        so.bucket,
+        so.provider,
+        so.content_type,
+        so.size_bytes,
+        so.id,
+        $3::text AS page_key,
+        $4::text AS page_url,
+        $5::text AS source_action,
+        $6::text AS public_url,
+        $7::text AS status,
+        $8::text AS error_message,
+        $9::timestamptz AS created_at,
+        NULL::timestamptz AS completed_at
+      FROM storage_objects so
+      LEFT JOIN users u
+        ON u.id = so.created_by_user_id
+      LEFT JOIN projects p
+        ON p.organization_id = so.organization_id
+       AND p.id = so.project_id
+      WHERE so.organization_id = $1
+        AND so.id = $2
+      LIMIT 1
+    `,
+    [
+      input.organizationId,
+      input.storageObjectId,
+      input.pageKey,
+      input.pageUrl ?? null,
+      input.sourceAction,
+      input.publicUrl ?? null,
+      input.status ?? "uploaded",
+      input.errorMessage ?? null,
+      input.now,
+    ],
+  );
+  if (!details) {
+    return null;
+  }
+
+  return createProjectUploadRecord(db, {
+    organizationId: details.organization_id,
+    workspaceId: details.workspace_id,
+    projectId: details.project_id,
+    storageObjectId: details.storage_object_id,
+    uploadSessionId: null,
+    actorUserId: details.actor_user_id,
+    actorDisplayName: details.actor_display_name,
+    actorPhoneE164: details.actor_phone_e164,
+    projectName: details.project_name,
+    pageKey: input.pageKey,
+    pageUrl: input.pageUrl ?? null,
+    sourceAction: input.sourceAction,
+    fileName: normalizeGeneratedFileName(details.file_name),
+    objectKey: details.object_key,
+    bucket: details.bucket,
+    provider: details.provider,
+    contentType: details.content_type,
+    sizeBytes: details.size_bytes === null ? null : Number(details.size_bytes),
+    publicUrl: input.publicUrl ?? null,
+    status: input.status ?? "uploaded",
+    errorMessage: input.errorMessage ?? null,
+    now: input.now,
+  });
+}
+
+function normalizeGeneratedFileName(fileName: string) {
+  return fileName.replace(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-/i,
+    "",
+  );
 }
 
 function projectUploadRecordFromRow(row: ProjectUploadRecordRow): ProjectUploadRecord {

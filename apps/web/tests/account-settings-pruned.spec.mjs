@@ -42,6 +42,7 @@ test("account settings drawer omits email and notification sections", () => {
   assert.doesNotMatch(drawerHtml, /创作结果通知/);
   assert.match(drawerHtml, /绑定手机号/);
   assert.match(drawerHtml, /修改密码/);
+  assert.match(drawerHtml, /maxlength="8"/);
 });
 
 test("account settings drawer promotes success toast above the overlay", () => {

@@ -29039,6 +29039,50 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.accountSettingsForm.confirmPassword, "");
     assert.equal(workbench.ui.toast, "账号设置已保存。");
   });
+
+  it("blocks account settings submit when display name exceeds 8 characters", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: { user: { phone: "+86 13800138000", displayName: "灵曦导演", email: "creator@lingxi.ai" } },
+      api: {
+        async updateAccountProfile(input) {
+          requests.push({ type: "profile", input });
+          return { ok: true };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        accountSettingsOpen: true,
+        accountSettingsDirty: true,
+        accountSettingsNotice: "",
+        accountSettingsForm: {
+          displayName: "这是一个超过八字的昵称",
+          phone: "+86 13800138000",
+          email: "creator@lingxi.ai",
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: "",
+          notifications: {
+            projectUpdates: true,
+            renderComplete: true,
+            marketing: false,
+          },
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-account-settings" },
+    });
+
+    assert.deepEqual(requests, []);
+    assert.equal(workbench.ui.accountSettingsOpen, true);
+    assert.equal(workbench.ui.accountSettingsNotice, "显示昵称最多 8 个字。");
+    assert.equal(workbench.ui.accountSettingsDirty, true);
+  });
 });
 
 describe("storyboard state", () => {

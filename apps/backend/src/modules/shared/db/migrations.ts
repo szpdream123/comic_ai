@@ -28,6 +28,17 @@ export async function applySqlMigrations(db: SqlDatabase, rootDir = process.cwd(
   }
 }
 
+export async function applySqlMigration(
+  db: SqlDatabase,
+  rootDir = process.cwd(),
+  migrationName: string,
+) {
+  const migrationDir = join(rootDir, "packages", "db", "migrations");
+  const migrationPath = join(migrationDir, migrationName);
+  const sql = await readFile(migrationPath, "utf8");
+  await executeMigration(db, sql);
+}
+
 async function executeMigration(db: SqlDatabase, migration: string) {
   const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
   if (typeof exec === "function") {

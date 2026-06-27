@@ -102,7 +102,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(intentResponse.status, 200);
       assert.equal(intentResponse.body.paymentIntent.status, "submitted");
       assert.equal(intentResponse.body.paymentIntent.amountMinor, 9900);
-      assert.equal(intentResponse.body.paymentIntent.expiresAt, "2026-05-21T08:16:00.000Z");
+      assert.equal(intentResponse.body.paymentIntent.expiresAt, "2026-05-21T08:11:00.000Z");
       assert.equal(intentResponse.body.payAction.kind, "mock_qr");
 
       const callbackBody = {
@@ -202,6 +202,74 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(replay.kind, "duplicate");
       assert.equal(ledgerCountAfterConsumer.rows[0]?.count, 1);
       assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("accepts verified wechat callbacks signed with the real merchant id", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const ownerSession = await seedCommerceFixture(db);
+      const service = createCommercePaymentService({
+        db,
+        workspaceId,
+        callbackSecret,
+        merchantId: "1712062184",
+      });
+
+      const orderResponse = await service.createBillingOrder({
+        user: { sessionToken: ownerSession.token },
+        body: { creditPackageId: packageId },
+        idempotencyKey: "order-key-real-merchant-id",
+        now: new Date("2026-05-21T08:04:00.000Z"),
+      });
+      const intentResponse = await service.createPaymentIntent({
+        user: { sessionToken: ownerSession.token },
+        body: {
+          orderId: orderResponse.body.order.id,
+          provider: "wechat_pay",
+          productMode: "native_qr",
+        },
+        idempotencyKey: "intent-key-real-merchant-id",
+        now: new Date("2026-05-21T08:05:00.000Z"),
+      });
+      const callbackBody = {
+        provider: "wechat_pay" as const,
+        providerEventDedupKey: "wechat-notify-real-merchant-id",
+        merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
+        providerTradeId: "wx-trade-real-merchant-id",
+        eventType: "payment_succeeded" as const,
+        amountMinor: intentResponse.body.paymentIntent.amountMinor,
+        currency: "CNY",
+        merchantId: "1712062184",
+      };
+
+      const callbackResponse = await service.processPaymentCallback({
+        body: {
+          ...callbackBody,
+          signature: signPaymentCallback(callbackBody, callbackSecret),
+        },
+        now: new Date("2026-05-21T08:06:00.000Z"),
+      });
+
+      const orderRows = await db.query<{ status: string; paid_at: Date | null }>(
+        "SELECT status, paid_at FROM billing_orders WHERE id = $1",
+        [orderResponse.body.order.id],
+      );
+      const intentRows = await db.query<{ status: string; succeeded_at: Date | null }>(
+        "SELECT status, succeeded_at FROM payment_intents WHERE id = $1",
+        [intentResponse.body.paymentIntent.id],
+      );
+
+      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.body.providerEvent.processingStatus, "processed");
+      assert.equal(callbackResponse.body.order?.status, "paid");
+      assert.equal(orderRows.rows[0]?.status, "paid");
+      assert.notEqual(orderRows.rows[0]?.paid_at, null);
+      assert.equal(intentRows.rows[0]?.status, "succeeded");
+      assert.notEqual(intentRows.rows[0]?.succeeded_at, null);
     } finally {
       await db.close();
     }

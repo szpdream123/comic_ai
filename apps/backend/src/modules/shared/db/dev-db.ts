@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
-import { applySqlMigrations } from "./migrations.ts";
+import { applySqlMigration, applySqlMigrations } from "./migrations.ts";
 
 export interface DevDatabase extends SqlDatabase {
   close(): Promise<void>;
@@ -169,29 +169,37 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   await ensurePaymentProviderConstraints(db);
+  await ensureFoundationBaseSchema(db);
+  await ensureAdminManagementBaseSchema(db);
 
   if (!(await tableExists(db, "sms_send_records"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0009_sms_send_records_backfill.sql" });
+    await applySqlMigration(db, process.cwd(), "0009_sms_send_records_backfill.sql");
+  } else if (
+    !(await columnExists(db, "sms_send_records", "verification_code")) ||
+    !(await columnExists(db, "sms_send_records", "sms_content")) ||
+    !(await columnExists(db, "sms_send_records", "ip_address"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0045_sms_send_records_audit_fields.sql");
   }
 
   if (!(await columnExists(db, "users", "wechat_openid"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0024_wechat_login_user_fields.sql" });
+    await applySqlMigration(db, process.cwd(), "0024_wechat_login_user_fields.sql");
   }
 
   if (!(await tableExists(db, "storage_upload_sessions"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0002_storage_uploads.sql" });
+    await applySqlMigration(db, process.cwd(), "0002_storage_uploads.sql");
   }
 
   if ((await tableExists(db, "scripts")) && !(await columnExists(db, "scripts", "deleted_at"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0023_script_card_metadata.sql" });
+    await applySqlMigration(db, process.cwd(), "0023_script_card_metadata.sql");
   }
 
   if (!(await tableExists(db, "script_reader_sections"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0022_script_reader_sections.sql" });
+    await applySqlMigration(db, process.cwd(), "0022_script_reader_sections.sql");
   }
 
   if (!(await tableExists(db, "episode_generation_drafts"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0004_episode_workbench_hardening.sql" });
+    await applySqlMigration(db, process.cwd(), "0004_episode_workbench_hardening.sql");
   } else if (
     (await episodeGenerationDraftColumnsExist(db)) &&
     ((await uniqueConstraintForColumnsExists(db, "episode_generation_drafts", [
@@ -212,11 +220,11 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (!(await tableExists(db, "episode_asset_conversation_threads"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0005_episode_asset_conversations.sql" });
+    await applySqlMigration(db, process.cwd(), "0005_episode_asset_conversations.sql");
   }
 
   if (!(await tableExists(db, "project_upload_records"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0006_project_upload_records.sql" });
+    await applySqlMigration(db, process.cwd(), "0006_project_upload_records.sql");
   }
 
   if (
@@ -224,19 +232,19 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "ai_model_dispatch_policies")) ||
     !(await tableExists(db, "ai_model_config_revisions"))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0007_ai_model_configs.sql" });
+    await applySqlMigration(db, process.cwd(), "0007_ai_model_configs.sql");
   } else {
     if (!(await seedanceModelConfigsCurrent(db))) {
-      await applySqlMigrations(db, process.cwd(), { fromName: "0020_seedance_video_model_configs.sql" });
+      await applySqlMigration(db, process.cwd(), "0020_seedance_video_model_configs.sql");
     }
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
-      await applySqlMigrations(db, process.cwd(), { fromName: "0021_aliyun_bailian_happyhorse_video_model.sql" });
+      await applySqlMigration(db, process.cwd(), "0021_aliyun_bailian_happyhorse_video_model.sql");
     }
     if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
-      await applySqlMigrations(db, process.cwd(), { fromName: "0025_jimeng_image_model_configs.sql" });
+      await applySqlMigration(db, process.cwd(), "0025_jimeng_image_model_configs.sql");
     }
     if (!(await gptImageReferenceModelConfigsCurrent(db))) {
-      await applySqlMigrations(db, process.cwd(), { fromName: "0027_gpt_image_reference_model_config.sql" });
+      await applySqlMigration(db, process.cwd(), "0027_gpt_image_reference_model_config.sql");
     }
     await ensureHappyHorseResolutionConfig(db);
     await ensureVideoModelCategories(db);
@@ -244,7 +252,11 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   await ensureMembershipPriorityModelMetadata(db);
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0008_ai_generation_task_snapshots.sql" });
+    await applySqlMigration(db, process.cwd(), "0008_ai_generation_task_snapshots.sql");
+  }
+
+  if (!(await tableExists(db, "user_model_request_logs"))) {
+    await applySqlMigration(db, process.cwd(), "0041_user_model_request_logs.sql");
   }
 
   if (
@@ -290,7 +302,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await constraintExists(db, "membership_periods", "membership_periods_order_fk")) ||
     !(await constraintExists(db, "credit_lots", "credit_lots_grant_ledger_entry_fk"))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0016_membership_subscription_payment.sql" });
+    await applySqlMigration(db, process.cwd(), "0016_membership_subscription_payment.sql");
   }
 
   if (
@@ -299,11 +311,11 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await columnExists(db, "credit_packages", "sort_order")) ||
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "transfer_in"))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0041_credit_recharge_center.sql" });
+    await applySqlMigration(db, process.cwd(), "0041_credit_recharge_center.sql");
   }
 
   if (!(await constraintAllowsNumericValue(db, "membership_plans", "membership_plans_seat_limit_check", "seat_limit", 0))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0042_membership_plan_zero_seats.sql" });
+    await applySqlMigration(db, process.cwd(), "0042_membership_plan_zero_seats.sql");
   }
 
   if (
@@ -320,7 +332,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
       "full_flow_agent",
     ))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0043_membership_entitlement_keys.sql" });
+    await applySqlMigration(db, process.cwd(), "0043_membership_entitlement_keys.sql");
   }
 
   if (
@@ -329,22 +341,22 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "freeze")) ||
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "restore"))
   ) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0044_credit_direct_recharge_wallet_freeze.sql" });
+    await applySqlMigration(db, process.cwd(), "0044_credit_direct_recharge_wallet_freeze.sql");
   }
 
   if (!(await tableExists(db, "storyboard_prompt_packages"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0011_storyboard_prompt_management.sql" });
+    await applySqlMigration(db, process.cwd(), "0011_storyboard_prompt_management.sql");
   } else {
     if (!(await columnExists(db, "storyboard_prompt_packages", "cover_image_url"))) {
       await db.query("ALTER TABLE storyboard_prompt_packages ADD COLUMN cover_image_url text NULL");
     }
     if (await needsStoryboardPromptCleanup(db)) {
-      await applySqlMigrations(db, process.cwd(), { fromName: "0017_remove_deprecated_prompt_categories.sql" });
+      await applySqlMigration(db, process.cwd(), "0017_remove_deprecated_prompt_categories.sql");
     }
   }
 
   if (!(await tableExists(db, "image_prompt_styles"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0012_image_prompt_styles.sql" });
+    await applySqlMigration(db, process.cwd(), "0012_image_prompt_styles.sql");
   } else {
     if (!(await columnExists(db, "image_prompt_styles", "cover_image_url"))) {
       await db.query("ALTER TABLE image_prompt_styles ADD COLUMN cover_image_url text NULL");
@@ -361,26 +373,190 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (!(await tableExists(db, "character_prompt_templates"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0014_character_prompt_templates.sql" });
+    await applySqlMigration(db, process.cwd(), "0014_character_prompt_templates.sql");
   }
 
   if (!(await tableExists(db, "scene_prompt_templates"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0015_scene_prompt_templates.sql" });
+    await applySqlMigration(db, process.cwd(), "0015_scene_prompt_templates.sql");
   }
 
   if (!(await tableExists(db, "shot_prompt_templates"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0016_shot_prompt_templates.sql" });
+    await applySqlMigration(db, process.cwd(), "0016_shot_prompt_templates.sql");
   }
 
   if (!(await tableExists(db, "prop_prompt_templates"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0018_prop_prompt_templates.sql" });
+    await applySqlMigration(db, process.cwd(), "0018_prop_prompt_templates.sql");
   }
 
   if (!(await tableExists(db, "creator_canvas_projects"))) {
-    await applySqlMigrations(db, process.cwd(), { fromName: "0026_creator_canvas_projects.sql" });
+    await applySqlMigration(db, process.cwd(), "0026_creator_canvas_projects.sql");
   } else {
     await ensureStandaloneCanvasProjectSchema(db);
   }
+}
+
+async function ensureAdminManagementBaseSchema(db: SqlDatabase) {
+  if (await tableExists(db, "admin_accounts")) {
+    if (!(await columnExists(db, "admin_accounts", "failed_login_count"))) {
+      await db.query("ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS failed_login_count integer NOT NULL DEFAULT 0");
+    }
+    if (!(await columnExists(db, "admin_accounts", "locked_until"))) {
+      await db.query("ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS locked_until timestamptz NULL");
+    }
+  } else {
+    await db.query(`
+      CREATE TABLE admin_accounts (
+        id uuid PRIMARY KEY,
+        user_id uuid NULL REFERENCES users(id),
+        login_name text NOT NULL UNIQUE,
+        password_hash text NOT NULL,
+        display_name text NOT NULL,
+        status text NOT NULL DEFAULT 'active',
+        failed_login_count integer NOT NULL DEFAULT 0,
+        locked_until timestamptz NULL,
+        remark text NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CHECK (status IN ('active', 'disabled', 'archived'))
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS admin_accounts_status_login_idx
+        ON admin_accounts (status, login_name)
+    `);
+  }
+
+  if (!(await tableExists(db, "admin_account_roles"))) {
+    await db.query(`
+      CREATE TABLE admin_account_roles (
+        id uuid PRIMARY KEY,
+        admin_account_id uuid NOT NULL REFERENCES admin_accounts(id),
+        role_code text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (admin_account_id, role_code),
+        CHECK (role_code IN (
+          'super_admin',
+          'ops_admin',
+          'model_admin',
+          'finance_admin',
+          'support_admin',
+          'audit_viewer'
+        ))
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS admin_account_roles_account_idx
+        ON admin_account_roles (admin_account_id, role_code)
+    `);
+  }
+
+  if (!(await tableExists(db, "admin_auth_sessions"))) {
+    await db.query(`
+      CREATE TABLE admin_auth_sessions (
+        id uuid PRIMARY KEY,
+        admin_account_id uuid NOT NULL REFERENCES admin_accounts(id),
+        session_token_hash text NOT NULL UNIQUE,
+        ip_address text NULL,
+        user_agent text NULL,
+        expires_at timestamptz NOT NULL,
+        revoked_at timestamptz NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS admin_auth_sessions_account_expiry_idx
+        ON admin_auth_sessions (admin_account_id, expires_at, revoked_at)
+    `);
+  }
+
+  if (!(await tableExists(db, "runtime_config_entries"))) {
+    await db.query(`
+      CREATE TABLE runtime_config_entries (
+        key text PRIMARY KEY,
+        value_json jsonb NOT NULL,
+        value_type text NOT NULL,
+        scope text NOT NULL DEFAULT 'global',
+        description text NULL,
+        updated_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CHECK (value_type IN ('string', 'number', 'boolean', 'json', 'string_array')),
+        CHECK (scope IN ('global', 'admin', 'creator', 'model', 'billing', 'risk'))
+      )
+    `);
+  }
+
+  if (!(await tableExists(db, "runtime_config_revisions"))) {
+    await db.query(`
+      CREATE TABLE runtime_config_revisions (
+        id uuid PRIMARY KEY,
+        config_key text NOT NULL,
+        previous_value_json jsonb NULL,
+        next_value_json jsonb NOT NULL,
+        changed_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+        reason text NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS runtime_config_revisions_key_created_idx
+        ON runtime_config_revisions (config_key, created_at DESC)
+    `);
+  }
+
+  if (!(await tableExists(db, "admin_secret_references"))) {
+    await db.query(`
+      CREATE TABLE admin_secret_references (
+        id uuid PRIMARY KEY,
+        secret_ref text NOT NULL UNIQUE,
+        env_name text NOT NULL UNIQUE,
+        purpose text NOT NULL,
+        provider_name text NULL,
+        status text NOT NULL DEFAULT 'unknown',
+        last_checked_at timestamptz NULL,
+        created_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CHECK (status IN ('configured', 'missing', 'unknown'))
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS admin_secret_references_env_status_idx
+        ON admin_secret_references (env_name, status)
+    `);
+  }
+
+  if (!(await tableExists(db, "ai_model_config_revisions")) && (await tableExists(db, "ai_model_configs"))) {
+    await db.query(`
+      CREATE TABLE ai_model_config_revisions (
+        id uuid PRIMARY KEY,
+        model_config_id uuid NOT NULL REFERENCES ai_model_configs(id),
+        snapshot_json jsonb NOT NULL,
+        changed_by_admin_id uuid NULL REFERENCES admin_accounts(id),
+        reason text NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS ai_model_config_revisions_model_created_idx
+        ON ai_model_config_revisions (model_config_id, created_at DESC)
+    `);
+  }
+}
+
+async function ensureFoundationBaseSchema(db: SqlDatabase) {
+  if (
+    (await tableExists(db, "login_challenges")) &&
+    (await tableExists(db, "auth_sessions")) &&
+    (await tableExists(db, "sms_send_records")) &&
+    (await tableExists(db, "storage_objects")) &&
+    (await tableExists(db, "provider_requests")) &&
+    (await tableExists(db, "billing_orders")) &&
+    (await tableExists(db, "projects"))
+  ) {
+    return;
+  }
+
+  await applySqlMigration(db, process.cwd(), "0001_foundation.sql");
 }
 
 async function ensureStandaloneCanvasProjectSchema(db: SqlDatabase) {

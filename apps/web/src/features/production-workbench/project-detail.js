@@ -19,6 +19,7 @@ import {
   resolveCanvasNodeTemplates,
 } from "./canvas/canvas-state.js";
 
+const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
@@ -583,6 +584,16 @@ export function renderProjectDetail(context = {}) {
     `;
   }
 
+  if (activeNavTab === "media-library") {
+    return `
+      <section class="production-community-window production-media-library-window">
+        ${renderCommunityWindowHeader(session, { title: "素材库" })}
+        ${renderPersonalMediaLibraryPage({ ui, session })}
+        ${renderWorkspaceStatusToast(ui.toast, "community-window-toast")}
+      </section>
+    `;
+  }
+
   if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
     const workspaceContent = renderPageBoundary("项目工作台", activeNavTab, () => `
       ${renderProjectInteriorShell({ state, ui, detailState })}
@@ -764,18 +775,19 @@ function renderGlobalPricingModal(ui = {}) {
   `;
 }
 
-function renderCommunityWindowHeader(session = {}) {
+function renderCommunityWindowHeader(session = {}, options = {}) {
   const accountLabel = resolveStatusbarAccountLabel(session);
   const phoneLabel = String(session?.user?.phone ?? "").trim() || "未绑定手机号";
+  const title = String(options.title ?? "灵曦社区").trim() || "灵曦社区";
   return `
-    <header class="community-window-header" aria-label="灵曦社区顶部栏">
+    <header class="community-window-header" aria-label="${escapeAttr(title)}顶部栏">
       <div class="community-window-brand">
         <span class="statusbar-n-mark" aria-hidden="true">灵</span>
         <div>
           <strong>灵曦剧场</strong>
         </div>
       </div>
-      <div class="community-window-title">灵曦社区</div>
+      <div class="community-window-title">${escapeHtml(title)}</div>
       <div class="community-window-actions">
         <div class="community-window-account">
           <button class="community-window-avatar" type="button" aria-haspopup="dialog" aria-label="查看当前登录用户">
@@ -1166,12 +1178,28 @@ function formatLedgerDate(value) {
   });
 }
 
+function formatBytes(value) {
+  const bytes = Number(value ?? 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let index = 0;
+  let current = bytes;
+  while (current >= 1024 && index < units.length - 1) {
+    current /= 1024;
+    index += 1;
+  }
+  const digits = current >= 10 || index === 0 ? 0 : 1;
+  return `${current.toFixed(digits)} ${units[index]}`;
+}
+
 function renderAccountSettingsDrawer(ui = {}, session = {}) {
   if (!ui.accountSettingsOpen) {
     return "";
   }
 
-  const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session);
+  const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session, ui.membershipStatus ?? null);
   const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
   const dirty = ui.accountSettingsDirty === true;
   const saving = ui.busy && ui.accountSettingsOpen;
@@ -1209,7 +1237,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
             <input
               type="text"
               value="${escapeAttr(form.displayName)}"
-              maxlength="40"
+              maxlength="${ACCOUNT_DISPLAY_NAME_MAX_LENGTH}"
               placeholder="请输入显示昵称"
               data-action="change-account-settings-field"
               data-field="displayName"
@@ -1294,7 +1322,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
   `;
 }
 
-function normalizeAccountSettingsForm(form = {}, session = {}) {
+function normalizeAccountSettingsForm(form = {}, session = {}, membershipStatus = null) {
   const user = session?.user ?? {};
   const notifications = form.notifications ?? {};
   return {
@@ -1309,7 +1337,7 @@ function normalizeAccountSettingsForm(form = {}, session = {}) {
       renderComplete: notifications.renderComplete !== false,
       marketing: notifications.marketing === true,
     },
-    planLabel: String(form.planLabel ?? user.planLabel ?? "当前方案 · 创作者版"),
+    planLabel: resolveMembershipPlanLabel(membershipStatus),
   };
 }
 
@@ -1339,6 +1367,22 @@ function formatMembershipDate(value) {
   return `${year}/${month}/${day}`;
 }
 
+function resolveMembershipPlanLabel(membershipStatus = null) {
+  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "").trim();
+  const endAt =
+    membershipStatus?.currentPeriodEndAt ??
+    membershipStatus?.membership?.currentPeriodEndAt ??
+    null;
+  const dateLabel = formatMembershipDate(endAt);
+  if (status === "professional_active") {
+    return `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`;
+  }
+  if (status === "experience_active") {
+    return `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`;
+  }
+  return "当前套餐：未开通";
+}
+
 function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   const user = session.user ?? {};
   const displayName = String(user.displayName ?? user.nickname ?? "").trim();
@@ -1354,18 +1398,18 @@ function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   if (status === "professional_active") {
     return {
       primaryText,
-      secondaryText: `专业版会员${dateLabel ? ` · 有效期至 ${dateLabel}` : ""}`,
+      secondaryText: `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
     };
   }
   if (status === "experience_active") {
     return {
       primaryText,
-      secondaryText: `体验版会员${dateLabel ? ` · 有效期至 ${dateLabel}` : ""}`,
+      secondaryText: `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
     };
   }
   return {
     primaryText,
-    secondaryText: "升级专业版，创建协作团队",
+    secondaryText: "当前套餐：未开通",
   };
 }
 
@@ -5301,6 +5345,145 @@ function renderCommunityPage({ ui, session }) {
   `;
 }
 
+function renderPersonalMediaLibraryPage({ ui = {}, session = {} }) {
+  const summary = ui.personalMediaLibrarySummary ?? {};
+  const rows = Array.isArray(ui.personalMediaLibraryRows) ? ui.personalMediaLibraryRows : [];
+  const pagination = ui.personalMediaLibraryMeta ?? { page: 1, pageSize: 12, total: rows.length, totalPages: 1 };
+  const loading = ui.personalMediaLibraryLoading === true;
+  const error = String(ui.personalMediaLibraryError ?? "").trim();
+  const keyword = String(ui.personalMediaLibraryKeywordDraft ?? ui.personalMediaLibraryKeyword ?? "");
+  const media = String(ui.personalMediaLibraryMediaFilter ?? "all");
+  const range = String(ui.personalMediaLibraryRangeFilter ?? "all");
+  const accountLabel = resolveStatusbarAccountLabel(session);
+  const page = Math.max(1, Number(pagination.page ?? 1));
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? 1));
+  return `
+    <section class="community-page personal-media-page" aria-label="素材库">
+      <section class="community-hero personal-media-hero">
+        <div>
+          <p class="community-eyebrow">My Media Library</p>
+          <h1>素材库</h1>
+          <p>集中查看你自己上传或生成的图片与视频素材，和管理端列表类似，但只展示当前账号的个人内容。</p>
+        </div>
+        <aside class="community-hero-panel">
+          <small>当前账号</small>
+          <strong>${escapeHtml(accountLabel)}</strong>
+          <span>${escapeHtml(String(summary.total ?? rows.length))} 项个人素材</span>
+        </aside>
+      </section>
+
+      <section class="personal-media-summary">
+        ${renderPersonalMediaStatCard("全部素材", String(summary.total ?? 0), "图片与视频总量")}
+        ${renderPersonalMediaStatCard("图片", String(summary.imageCount ?? 0), formatBytes(summary.imageBytes))}
+        ${renderPersonalMediaStatCard("视频", String(summary.videoCount ?? 0), formatBytes(summary.videoBytes))}
+      </section>
+
+      <section class="personal-media-panel">
+        <div class="personal-media-toolbar">
+          <label class="personal-media-search">
+            <span>搜索</span>
+            <input type="search" value="${escapeAttr(keyword)}" placeholder="搜索文件名、项目名、来源动作" data-action="search-personal-media-library" />
+          </label>
+          <div class="personal-media-chip-group" role="tablist" aria-label="媒体类型">
+            ${renderPersonalMediaFilterButton("all", "全部", media, "set-personal-media-filter", "media")}
+            ${renderPersonalMediaFilterButton("image", "图片", media, "set-personal-media-filter", "media")}
+            ${renderPersonalMediaFilterButton("video", "视频", media, "set-personal-media-filter", "media")}
+          </div>
+          <div class="personal-media-chip-group" role="tablist" aria-label="时间范围">
+            ${renderPersonalMediaFilterButton("all", "全部时间", range, "set-personal-media-filter", "range")}
+            ${renderPersonalMediaFilterButton("day", "今日", range, "set-personal-media-filter", "range")}
+            ${renderPersonalMediaFilterButton("month", "本月", range, "set-personal-media-filter", "range")}
+          </div>
+        </div>
+
+        ${error ? `<div class="personal-media-feedback error" role="alert">素材库加载失败：${escapeHtml(error)}</div>` : ""}
+        ${loading ? `<div class="personal-media-feedback loading">正在加载你的素材库...</div>` : ""}
+
+        <div class="personal-media-list">
+          ${
+            rows.length
+              ? rows.map((row) => renderPersonalMediaRow(row)).join("")
+              : !loading
+              ? `<article class="community-empty"><strong>还没有个人素材</strong><span>你上传或生成的图片、视频会在这里自动汇总。</span></article>`
+              : ""
+          }
+        </div>
+        ${rows.length ? `
+          <div class="personal-media-pagination">
+            <button type="button" data-action="change-personal-media-page" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>上一页</button>
+            <span>第 ${page} / ${totalPages} 页</span>
+            <button type="button" data-action="change-personal-media-page" data-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>下一页</button>
+          </div>
+        ` : ""}
+      </section>
+    </section>
+  `;
+}
+
+function renderPersonalMediaStatCard(label, value, hint) {
+  return `
+    <article class="personal-media-stat-card">
+      <small>${escapeHtml(label)}</small>
+      <strong>${escapeHtml(String(value ?? "0"))}</strong>
+      <span>${escapeHtml(String(hint ?? "-"))}</span>
+    </article>
+  `;
+}
+
+function renderPersonalMediaFilterButton(value, label, currentValue, action, field) {
+  const active = value === currentValue;
+  return `
+    <button
+      class="personal-media-chip${active ? " is-active" : ""}"
+      type="button"
+      role="tab"
+      aria-selected="${active ? "true" : "false"}"
+      data-action="${escapeAttr(action)}"
+      data-field="${escapeAttr(field)}"
+      data-value="${escapeAttr(value)}"
+    >${escapeHtml(label)}</button>
+  `;
+}
+
+function renderPersonalMediaRow(row = {}) {
+  const previewUrl = resolvePreferredPreviewUrl(row.previewUrl, row.sourceUrl, row.downloadUrl);
+  const mediaKind = String(row.mediaKind ?? "").trim() === "video" ? "video" : "image";
+  const fileName = String(row.fileName ?? row.objectKey ?? "未命名素材").trim() || "未命名素材";
+  const projectName = String(row.projectName ?? "").trim();
+  const sourceAction = String(row.sourceAction ?? "").trim();
+  const createdAt = formatLedgerDate(row.createdAt);
+  const sizeLabel = formatBytes(row.sizeBytes);
+  return `
+    <article class="personal-media-row">
+      <div class="personal-media-preview ${mediaKind}">
+        ${
+          previewUrl
+            ? mediaKind === "video"
+              ? `<video src="${escapeAttr(resolveApiUrl(previewUrl))}" muted playsinline preload="metadata"></video><i>▶</i>`
+              : `<img src="${escapeAttr(resolveApiUrl(previewUrl))}" alt="${escapeAttr(fileName)}" />`
+            : `<span>${mediaKind === "video" ? "视频" : "图片"}</span>`
+        }
+      </div>
+      <div class="personal-media-meta">
+        <div class="personal-media-title-line">
+          <strong>${escapeHtml(fileName)}</strong>
+          <span class="personal-media-kind ${mediaKind}">${mediaKind === "video" ? "视频" : "图片"}</span>
+        </div>
+        <div class="personal-media-subline">
+          <span>${escapeHtml(projectName || "未关联项目")}</span>
+          <span>${escapeHtml(sourceAction || "个人素材")}</span>
+          <span>${escapeHtml(sizeLabel)}</span>
+          <time>${escapeHtml(createdAt)}</time>
+        </div>
+      </div>
+      <div class="personal-media-actions">
+        ${previewUrl ? `<a href="${escapeAttr(resolveApiUrl(previewUrl))}" target="_blank" rel="noreferrer">查看</a>` : ""}
+        ${row.downloadUrl ? `<a href="${escapeAttr(resolveApiUrl(row.downloadUrl))}" target="_blank" rel="noreferrer">下载</a>` : ""}
+      </div>
+    </article>
+  `;
+}
+
 function sortCommunityPosts(posts = []) {
   return [...posts].sort((left, right) => getCommunityPostSortTime(right) - getCommunityPostSortTime(left));
 }
@@ -7407,7 +7590,7 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem">水印设置</button>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item" type="button" role="menuitem">更新日志</button>
-            <button class="popover-menu-item" type="button" role="menuitem">政策广场</button>
+            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-personal-media-page">素材库</button>
             <button class="popover-menu-item" type="button" role="menuitem">专属服务支持</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>

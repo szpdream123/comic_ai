@@ -601,6 +601,227 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("serves storage media resources to logged-in admins", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const organizationId = "91000000-0000-4000-8000-000000000001";
+    const workspaceId = "92000000-0000-4000-8000-000000000001";
+
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Resource Test Org', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Resource Test Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [workspaceId, organizationId],
+    );
+
+    await db.query(
+      `
+        INSERT INTO storage_objects (
+          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
+          size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
+          deleted_at, metadata_json, created_by_user_id, created_at
+        ) VALUES
+          ('60000000-0000-4000-8000-000000000101', $1, $2, NULL, 'creator-test', 'AIManhuaDrama/20260625/test-image.png', 'image/png', 12345, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000102', $1, $2, NULL, 'creator-test', 'AIManhuaDrama/20260625/test-video.mp4', 'video/mp4', 67890, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
+      `,
+      [organizationId, workspaceId],
+    );
+    await db.query(
+      `
+        INSERT INTO project_upload_records (
+          id, organization_id, workspace_id, project_id, storage_object_id, upload_session_id,
+          actor_user_id, actor_display_name, actor_phone_e164, project_name, page_key, page_url,
+          source_action, file_name, object_key, bucket, provider, content_type, size_bytes,
+          public_url, status, error_message, created_at, completed_at
+        ) VALUES
+          ('70000000-0000-4000-8000-000000000101', $1, $2, NULL, '60000000-0000-4000-8000-000000000101', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-image', 'test-image.png', 'AIManhuaDrama/20260625/test-image.png', 'creator-test', 'creator-dev', 'image/png', 12345, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-image.png', 'uploaded', NULL, now(), now()),
+          ('70000000-0000-4000-8000-000000000102', $1, $2, NULL, '60000000-0000-4000-8000-000000000102', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-video', 'test-video.mp4', 'AIManhuaDrama/20260625/test-video.mp4', 'creator-test', 'creator-dev', 'video/mp4', 67890, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-video.mp4', 'uploaded', NULL, now(), now())
+      `,
+      [organizationId, workspaceId],
+    );
+
+    try {
+      const [response, summaryResponse] = await Promise.all([
+        fetch(`${server.origin}/api/admin/resources?page=1&pageSize=10&media=all&range=all`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/admin/resources/summary?media=all&range=all`, {
+          headers: { cookie },
+        }),
+      ]);
+      const payload = await response.json();
+      const summaryPayload = await summaryResponse.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(summaryResponse.status, 200);
+      assert.equal(payload.data.length, 2);
+      assert.equal(payload.meta.page, 1);
+      assert.equal(payload.meta.pageSize, 10);
+      assert.equal(payload.meta.total, 2);
+      assert.equal(payload.meta.totalPages, 1);
+      assert.equal(summaryPayload.total, 2);
+      assert.equal(summaryPayload.imageCount, 1);
+      assert.equal(summaryPayload.videoCount, 1);
+      assert.equal(summaryPayload.imageBytes, 12345);
+      assert.equal(summaryPayload.videoBytes, 67890);
+      assert.equal(payload.data[0].mediaKind, "image");
+      assert.equal(payload.data[1].mediaKind, "video");
+      assert.match(payload.data[0].previewUrl, /\/uploads\/storage\/creator-test\//);
+      assert.match(payload.data[1].previewUrl, /\/uploads\/storage\/creator-test\//);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("filters resource summary independently from the paged resource list", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const organizationId = "91000000-0000-4000-8000-000000000021";
+    const workspaceId = "92000000-0000-4000-8000-000000000021";
+
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Resource Summary Org', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Resource Summary Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [workspaceId, organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO storage_objects (
+          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
+          size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
+          deleted_at, metadata_json, created_by_user_id, created_at
+        ) VALUES
+          ('60000000-0000-4000-8000-000000000201', $1, $2, NULL, 'creator-test', 'summary/image-a.png', 'image/png', 100, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000202', $1, $2, NULL, 'creator-test', 'summary/video-a.mp4', 'video/mp4', 200, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000203', $1, $2, NULL, 'creator-test', 'summary/image-b.png', 'image/png', 300, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
+      `,
+      [organizationId, workspaceId],
+    );
+
+    try {
+      const [listResponse, summaryResponse] = await Promise.all([
+        fetch(`${server.origin}/api/admin/resources?page=1&pageSize=1&media=image&range=all&keyword=summary`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/admin/resources/summary?media=image&range=all&keyword=summary`, {
+          headers: { cookie },
+        }),
+      ]);
+      const listPayload = await listResponse.json();
+      const summaryPayload = await summaryResponse.json();
+
+      assert.equal(listResponse.status, 200);
+      assert.equal(summaryResponse.status, 200);
+      assert.equal(listPayload.data.length, 1);
+      assert.equal(listPayload.meta.total, 2);
+      assert.equal(summaryPayload.total, 2);
+      assert.equal(summaryPayload.imageCount, 2);
+      assert.equal(summaryPayload.videoCount, 0);
+      assert.equal(summaryPayload.imageBytes, 400);
+      assert.equal(summaryPayload.videoBytes, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("deletes storage media resources for logged-in admins", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const organizationId = "91000000-0000-4000-8000-000000000011";
+    const workspaceId = "92000000-0000-4000-8000-000000000011";
+    const storageObjectId = "60000000-0000-4000-8000-000000000111";
+
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Delete Resource Org', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Delete Resource Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [workspaceId, organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO storage_objects (
+          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
+          size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
+          deleted_at, metadata_json, created_by_user_id, created_at
+        ) VALUES (
+          $1, $2, $3, NULL, 'creator-test', 'AIManhuaDrama/20260625/delete-image.png', 'image/png',
+          24576, NULL, 'creator-dev', 'available', NULL, NULL, now(),
+          NULL, '{}'::jsonb, NULL, now()
+        )
+      `,
+      [storageObjectId, organizationId, workspaceId],
+    );
+
+    try {
+      const response = await fetch(`${server.origin}/api/admin/resources/${storageObjectId}`, {
+        method: "DELETE",
+        headers: {
+          cookie,
+          "content-type": "application/json",
+          "idempotency-key": `test-resource-delete-${randomUUID()}`,
+        },
+        body: JSON.stringify({ reason: "test delete resource" }),
+      });
+      const payload = await response.json();
+      const storageObject = await db.query<{ status: string }>(
+        `
+          SELECT status
+          FROM storage_objects
+          WHERE id = $1
+        `,
+        [storageObjectId],
+      );
+      const audit = await db.query<{ event_type: string }>(
+        `
+          SELECT event_type
+          FROM audit_events
+          WHERE target_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [storageObjectId],
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.deleted, true);
+      assert.equal(storageObject.rows[0]?.status, "deleted");
+      assert.equal(audit.rows[0]?.event_type, "admin.resource.deleted");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves operator model templates and validates drafts through backend rules", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
@@ -3197,6 +3418,72 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("allows admins to rename legal documents and create custom document types", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-create-custom-type",
+          cookie,
+        },
+        body: JSON.stringify({
+          type: "subscription_terms",
+          title: "订阅条款",
+          contentHtml: "<h1>订阅条款</h1><p>自定义协议类型。</p>",
+          versionLabel: "2026-06-26",
+          reason: "create custom legal document type",
+        }),
+      });
+      const createPayload = await createResponse.json();
+
+      const patchResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-update-custom-type",
+          cookie,
+        },
+        body: JSON.stringify({
+          type: "membership_terms",
+          title: "会员条款",
+          contentHtml: "<h1>会员条款</h1><p>更新后的自定义协议。</p>",
+          versionLabel: "2026-06-27",
+          reason: "rename custom legal document and change type",
+        }),
+      });
+      const patchPayload = await patchResponse.json();
+
+      const listResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.data.type, "subscription_terms");
+      assert.equal(createPayload.data.title, "订阅条款");
+
+      assert.equal(patchResponse.status, 200);
+      assert.equal(patchPayload.data.type, "membership_terms");
+      assert.equal(patchPayload.data.title, "会员条款");
+      assert.equal(patchPayload.data.document.versionLabel, "2026-06-27");
+
+      assert.ok(
+        listPayload.data.documents.some(
+          (document: { id: string; type: string; title: string }) =>
+            document.id === createPayload.data.id &&
+            document.type === "membership_terms" &&
+            document.title === "会员条款",
+        ),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("normalizes legacy default legal document ids to stable uuids so updates keep working", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
@@ -5240,10 +5527,16 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(overviewResponse.status, 200);
       assert.equal(typeof overviewPayload.data.metrics.generationCountToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.generationSuccessRate, "number");
+      assert.equal(typeof overviewPayload.data.metrics.userCount, "number");
+      assert.equal(typeof overviewPayload.data.metrics.activeUserCountToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.creditsConsumedToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.paidOrdersToday, "number");
+      assert.equal(typeof overviewPayload.data.metrics.paidOrderAmountTotalMinor, "number");
+      assert.equal(typeof overviewPayload.data.metrics.paidOrderAmountMonthMinor, "number");
+      assert.equal(typeof overviewPayload.data.metrics.paidOrderAmountTodayMinor, "number");
       assert.equal(typeof overviewPayload.data.metrics.riskPendingCount, "number");
       assert.equal(typeof overviewPayload.data.metrics.failedTaskCount, "number");
+      assert.equal(typeof overviewPayload.data.metrics.activeMembershipCount, "number");
       assert.ok(overviewPayload.data.modelHealth.length >= 2);
       assert.equal(modelHealthResponse.status, 200);
       assert.deepEqual(modelHealthPayload.data, overviewPayload.data.modelHealth);

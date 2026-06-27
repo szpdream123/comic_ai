@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { settleReservationAllocation } from "../credit-billing/credit-ledger.service.ts";
 import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
+import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -321,6 +322,16 @@ export async function finalizeGptImageArtifactJob(
     });
     return { status: "failed", failureCode };
   }
+
+  await ensureProjectUploadRecordForStorageObject(db, {
+    organizationId: row.organization_id,
+    storageObjectId: persisted.storageObjectId,
+    pageKey: "project",
+    sourceAction: "generate_image",
+    publicUrl: persisted.previewUrl,
+    status: "uploaded",
+    now: input.now,
+  });
 
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,

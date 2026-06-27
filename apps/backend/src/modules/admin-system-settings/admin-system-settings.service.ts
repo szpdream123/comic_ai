@@ -299,7 +299,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     const nextDocument: LegalDocumentRecord = {
       id: randomUUID(),
       type,
-      title: input.title.trim() || publicLegalDocumentTitle(type),
+      title: input.title.trim() || publicLegalDocumentTitle(type) || "协议文档",
       contentHtml: input.contentHtml.trim() || defaultLegalDocumentContent(type),
       versionLabel: input.versionLabel?.trim() || null,
       status: "disabled",
@@ -336,6 +336,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
   async function updateLegalDocument(input: {
     id: string;
+    type?: string;
     title: string;
     contentHtml: string;
     versionLabel?: string | null;
@@ -359,10 +360,15 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     if (!target) {
       return error(404, "legal_document_not_found", "legal document not found");
     }
+    const nextType = input.type == null ? target.type : normalizeLegalDocumentTypeInput(input.type);
+    if (!nextType) {
+      return error(400, "legal_document_type_invalid", "legal document type is invalid");
+    }
     const nextDocuments = documents.map((document) =>
       document.id === documentId
         ? {
             ...document,
+            type: nextType,
             title: input.title.trim() || document.title,
             contentHtml: input.contentHtml.trim() || document.contentHtml,
             versionLabel: input.versionLabel?.trim() || null,
@@ -1650,17 +1656,21 @@ function publicLegalDocumentTitle(type: LegalDocumentType) {
 }
 
 function defaultLegalDocumentContent(type: LegalDocumentType) {
-  return defaultLegalDocumentValue(publicLegalDocumentKeyByType(type)).contentHtml;
+  if (type === "service" || type === "privacy") {
+    return defaultLegalDocumentValue(publicLegalDocumentKeyByType(type)).contentHtml;
+  }
+  return "<p>暂无协议内容。</p>";
 }
 
 function nextLegalDocumentSortOrder(documents: LegalDocumentRecord[], type: LegalDocumentType) {
   const typeDocuments = documents.filter((document) => document.type === type);
   const maxSortOrder = typeDocuments.reduce((max, document) => Math.max(max, Number(document.sortOrder || 0)), 0);
-  return maxSortOrder + 100 || (type === "service" ? 100 : 200);
+  return maxSortOrder + 100 || (type === "service" ? 100 : type === "privacy" ? 200 : 300);
 }
 
 function normalizeLegalDocumentTypeInput(type: string): LegalDocumentType | null {
-  return type === "service" || type === "privacy" ? type : null;
+  const normalized = String(type ?? "").trim();
+  return normalized || null;
 }
 
 async function readLegalDocumentsFromDb(db: SqlDatabase, now: Date) {

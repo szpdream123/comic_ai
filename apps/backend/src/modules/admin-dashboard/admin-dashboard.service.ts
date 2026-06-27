@@ -47,9 +47,13 @@ export function createAdminDashboardService(deps: { db: SqlDatabase }) {
 
 async function loadMetrics(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string; dayStart: Date },
+  input: { organizationId: string; workspaceId: string; dayStart: Date; now: Date },
 ) {
-  const [tasks, credits, orders, risks] = await Promise.all([
+  const monthStart = new Date(input.now);
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  const [tasks, users, activeUsers, credits, orders, risks, memberships] = await Promise.all([
     db.query<{
       total: number | string;
       succeeded: number | string;
@@ -67,6 +71,21 @@ async function loadMetrics(
       `,
       [input.organizationId, input.workspaceId, input.dayStart],
     ),
+    db.query<{ total: number | string }>(
+      `
+        SELECT count(*)::int AS total
+        FROM users
+      `,
+    ),
+    db.query<{ active: number | string }>(
+      `
+        SELECT count(DISTINCT user_id)::int AS active
+        FROM auth_sessions
+        WHERE status = 'active'
+          AND last_seen_at >= $1
+      `,
+      [input.dayStart],
+    ),
     db.query<{ consumed: number | string }>(
       `
         SELECT COALESCE(sum(consumed_delta), 0)::int AS consumed
@@ -76,15 +95,24 @@ async function loadMetrics(
       `,
       [input.organizationId, input.dayStart],
     ),
-    db.query<{ paid: number | string }>(
+    db.query<{
+      paid: number | string;
+      amount_total_minor: number | string;
+      amount_month_minor: number | string;
+      amount_today_minor: number | string;
+    }>(
       `
-        SELECT count(*)::int AS paid
+        SELECT
+          count(*) FILTER (WHERE paid_at >= $2)::int AS paid,
+          COALESCE(sum(amount_minor), 0)::bigint AS amount_total_minor,
+          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $3), 0)::bigint AS amount_month_minor,
+          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $2), 0)::bigint AS amount_today_minor
         FROM billing_orders
         WHERE organization_id = $1
           AND status = 'paid'
-          AND paid_at >= $2
+          AND paid_at IS NOT NULL
       `,
-      [input.organizationId, input.dayStart],
+      [input.organizationId, input.dayStart, monthStart],
     ),
     db.query<{ pending: number | string }>(
       `
@@ -95,6 +123,17 @@ async function loadMetrics(
       `,
       [input.organizationId],
     ),
+    db.query<{ active: number | string }>(
+      `
+        SELECT count(*)::int AS active
+        FROM membership_periods
+        WHERE organization_id = $1
+          AND status = 'active'
+          AND period_start_at <= $2
+          AND period_end_at > $2
+      `,
+      [input.organizationId, input.now],
+    ),
   ]);
 
   const total = Number(tasks.rows[0]?.total ?? 0);
@@ -103,10 +142,16 @@ async function loadMetrics(
   return {
     generationCountToday: total,
     generationSuccessRate: total ? Number((succeeded / total).toFixed(4)) : 0,
+    userCount: Number(users.rows[0]?.total ?? 0),
+    activeUserCountToday: Number(activeUsers.rows[0]?.active ?? 0),
     creditsConsumedToday: Number(credits.rows[0]?.consumed ?? 0),
     paidOrdersToday: Number(orders.rows[0]?.paid ?? 0),
+    paidOrderAmountTotalMinor: Number(orders.rows[0]?.amount_total_minor ?? 0),
+    paidOrderAmountMonthMinor: Number(orders.rows[0]?.amount_month_minor ?? 0),
+    paidOrderAmountTodayMinor: Number(orders.rows[0]?.amount_today_minor ?? 0),
     riskPendingCount: Number(risks.rows[0]?.pending ?? 0),
     failedTaskCount: failed,
+    activeMembershipCount: Number(memberships.rows[0]?.active ?? 0),
   };
 }
 

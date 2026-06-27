@@ -20,8 +20,11 @@ export const legalDocumentConfigs = {
   },
 } as const;
 
-export type LegalDocumentType =
+export type BuiltInLegalDocumentType =
   (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["type"];
+export type LegalDocumentType = string;
+export type BuiltInLegalDocumentKey =
+  (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"];
 
 export interface LegalDocumentValue {
   title: string;
@@ -41,20 +44,20 @@ export interface LegalDocumentRecord extends LegalDocumentValue {
 
 const defaultVersionLabel = "2025-11-15";
 
-const seedTextByType: Record<LegalDocumentType, string> = {
+const seedTextByType: Record<BuiltInLegalDocumentType, string> = {
   service: readSeedText("../../../../web/legal/service-agreement.txt"),
   privacy: readSeedText("../../../../web/legal/privacy-policy.txt"),
 };
 
 const legalConfigByType = Object.values(legalDocumentConfigs).reduce<
-  Record<LegalDocumentType, (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]>
+  Record<BuiltInLegalDocumentType, (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]>
 >((accumulator, config) => {
   accumulator[config.type] = config;
   return accumulator;
-}, {} as Record<LegalDocumentType, (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]>);
+}, {} as Record<BuiltInLegalDocumentType, (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]>);
 
 export function defaultLegalDocumentValue(
-  key: (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+  key: BuiltInLegalDocumentKey,
 ): LegalDocumentValue {
   const config = Object.values(legalDocumentConfigs).find((item) => item.key === key);
   const type = config?.type ?? "service";
@@ -65,8 +68,20 @@ export function defaultLegalDocumentValue(
   };
 }
 
+export function defaultLegalDocumentValueForType(type: LegalDocumentType): LegalDocumentValue {
+  const config = legalConfigByType[type as BuiltInLegalDocumentType];
+  if (config) {
+    return defaultLegalDocumentValue(config.key);
+  }
+  return {
+    title: "协议文档",
+    contentHtml: "<p>暂无协议内容。</p>",
+    versionLabel: defaultVersionLabel,
+  };
+}
+
 export function emptyLegalDocumentValue(
-  key: (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+  key: BuiltInLegalDocumentKey,
 ): LegalDocumentValue {
   const config = Object.values(legalDocumentConfigs).find((item) => item.key === key);
   return {
@@ -96,7 +111,7 @@ export function defaultLegalDocuments(now = new Date()): LegalDocumentRecord[] {
 }
 
 export function normalizeLegalDocumentValue(
-  key: (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"],
+  key: BuiltInLegalDocumentKey,
   value: unknown,
 ): LegalDocumentValue {
   const fallback = defaultLegalDocumentValue(key);
@@ -178,15 +193,15 @@ export function legalDocumentTypeFromLegacyKey(key: string): LegalDocumentType |
   return null;
 }
 
-export function publicLegalDocumentKeyByType(type: LegalDocumentType) {
+export function publicLegalDocumentKeyByType(type: BuiltInLegalDocumentType) {
   return legalConfigByType[type].key;
 }
 
-export function publicLegalDocumentTitleByType(type: LegalDocumentType) {
+export function publicLegalDocumentTitleByType(type: BuiltInLegalDocumentType) {
   return legalConfigByType[type].title;
 }
 
-export function buildPublicLegalDocument(type: LegalDocumentType, document: LegalDocumentRecord | null) {
+export function buildPublicLegalDocument(type: BuiltInLegalDocumentType, document: LegalDocumentRecord | null) {
   const config = legalConfigByType[type];
   const fallback = emptyLegalDocumentValue(config.key);
   return {
@@ -238,8 +253,7 @@ function normalizeLegalDocumentRecord(item: unknown, index: number, now: Date): 
   if (!type) {
     return null;
   }
-  const config = legalConfigByType[type];
-  const fallback = defaultLegalDocumentValue(config.key);
+  const fallback = defaultLegalDocumentValueForType(type);
   const timestamp = now.toISOString();
   return {
     id: normalizeDocumentId(record.id, type),
@@ -256,10 +270,8 @@ function normalizeLegalDocumentRecord(item: unknown, index: number, now: Date): 
 }
 
 function normalizeLegalDocumentType(value: unknown): LegalDocumentType | null {
-  if (value === "service" || value === "privacy") {
-    return value;
-  }
-  return null;
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
 }
 
 function ensureLegalDocumentCoverage(documents: LegalDocumentRecord[], now: Date) {
@@ -293,18 +305,14 @@ function ensureLegalDocumentCoverage(documents: LegalDocumentRecord[], now: Date
   const dedupedEnabled = ensured
     .sort(compareLegalDocuments)
     .map((document) => ({ ...document }));
-  for (const type of ["service", "privacy"] as const) {
-    let enabledFound = false;
-    for (const document of dedupedEnabled) {
-      if (document.deleted || document.type !== type) continue;
-      if (document.status === "enabled" && !enabledFound) {
-        enabledFound = true;
-        continue;
-      }
-      if (document.status === "enabled") {
-        document.status = "disabled";
-      }
+  const enabledSeen = new Set<string>();
+  for (const document of dedupedEnabled) {
+    if (document.deleted || document.status !== "enabled") continue;
+    if (enabledSeen.has(document.type)) {
+      document.status = "disabled";
+      continue;
     }
+    enabledSeen.add(document.type);
   }
 
   return dedupedEnabled.sort(compareLegalDocuments);
@@ -321,9 +329,14 @@ function compareLegalDocuments(left: LegalDocumentRecord, right: LegalDocumentRe
 }
 
 function buildDefaultDocumentId(type: LegalDocumentType) {
-  return type === "service"
-    ? "00000000-0000-4000-8000-000000000101"
-    : "00000000-0000-4000-8000-000000000102";
+  if (type === "service") {
+    return "00000000-0000-4000-8000-000000000101";
+  }
+  if (type === "privacy") {
+    return "00000000-0000-4000-8000-000000000102";
+  }
+  const normalized = String(type || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized ? `legal-document-${normalized}` : "legal-document";
 }
 
 function normalizeVersionLabel(value: unknown, fallback: string | null) {

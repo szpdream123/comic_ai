@@ -180,7 +180,7 @@ describe("payment provider adapters", () => {
       appId: "ali-test",
       merchantPrivateKey: testPrivateKey,
       alipayPublicKey: testPublicKey,
-      notifyUrl: "https://example.test/api/pay/alipay/notify",
+      notifyUrl: "https://example.test/api/payment-provider-callbacks/alipay",
     });
 
     assert.deepEqual(wechat.buildAckResponse("accepted"), {
@@ -193,7 +193,7 @@ describe("payment provider adapters", () => {
     });
   });
 
-  it("returns WeChat Native code_url without server-side qr image rendering", async () => {
+  it("returns WeChat Native code_url with server-side qr image rendering", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({
         code_url: "weixin://wxpay/bizpayurl?pr=test-native-code",
@@ -231,10 +231,10 @@ describe("payment provider adapters", () => {
     assert.equal(result.kind, "submitted");
     assert.equal(result.payAction.kind, "qr_code");
     assert.equal(result.payAction.codeUrl, "weixin://wxpay/bizpayurl?pr=test-native-code");
-    assert.equal(result.payAction.qrCodeImage, undefined);
+    assert.match(result.payAction.qrCodeImage ?? "", /^data:image\/png;base64,/);
   });
 
-  it("returns Alipay precreate qr_code without server-side qr image rendering", async () => {
+  it("returns Alipay precreate qr_code with server-side qr image rendering", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({
         alipay_trade_precreate_response: {
@@ -255,7 +255,7 @@ describe("payment provider adapters", () => {
       appId: "ali-test",
       merchantPrivateKey: testPrivateKey,
       alipayPublicKey: testPublicKey,
-      notifyUrl: "https://example.test/api/pay/alipay/notify",
+      notifyUrl: "https://example.test/api/payment-provider-callbacks/alipay",
       gatewayUrl: "https://alipay.example.test/gateway.do",
     });
 
@@ -274,7 +274,7 @@ describe("payment provider adapters", () => {
     assert.equal(result.kind, "submitted");
     assert.equal(result.payAction.kind, "qr_code");
     assert.equal(result.payAction.codeUrl, "https://qr.alipay.com/test-alipay-code");
-    assert.equal(result.payAction.qrCodeImage, undefined);
+    assert.match(result.payAction.qrCodeImage ?? "", /^data:image\/png;base64,/);
   });
 
 });

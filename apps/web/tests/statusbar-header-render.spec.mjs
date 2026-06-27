@@ -57,7 +57,7 @@ test("global statusbar account card shows phone and keeps upgrade prompt without
   const card = extractAccountPopoverCard(html);
 
   assert.match(card, /\+86 13800138000/);
-  assert.match(card, /\u5347\u7ea7\u4e13\u4e1a\u7248\uff0c\u521b\u5efa\u534f\u4f5c\u56e2\u961f/);
+  assert.match(card, /当前套餐：未开通/);
 });
 
 test("home hero renders cinematic starfield layers for the AI short drama studio", () => {
@@ -101,7 +101,7 @@ test("global statusbar account card prefers nickname and shows experience member
 
   assert.match(card, /\u65b0\u5bfc\u6f14\u6635\u79f0/);
   assert.doesNotMatch(card, /13800138000<\/strong>/);
-  assert.match(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
+  assert.match(card, /当前套餐：体验版/);
   assert.match(card, /2026\/06\/27/);
 });
 
@@ -121,9 +121,8 @@ test("global statusbar account card shows professional membership before experie
 
   const card = extractAccountPopoverCard(html);
 
-  assert.match(card, /\u4e13\u4e1a\u7248\u4f1a\u5458/);
+  assert.match(card, /当前套餐：专业版/);
   assert.match(card, /2026\/07\/08/);
-  assert.doesNotMatch(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
 });
 
 test("global statusbar account card does not show stale membership tier after expiry", () => {
@@ -144,7 +143,54 @@ test("global statusbar account card does not show stale membership tier after ex
 
   assert.doesNotMatch(card, /\u4e13\u4e1a\u7248\u4f1a\u5458/);
   assert.doesNotMatch(card, /\u4f53\u9a8c\u7248\u4f1a\u5458/);
-  assert.match(card, /\u5347\u7ea7\u4e13\u4e1a\u7248\uff0c\u521b\u5efa\u534f\u4f5c\u56e2\u961f/);
+  assert.match(card, /当前套餐：未开通/);
+});
+
+test("account settings hero shows the current membership plan label", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", displayName: "新导演昵称" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      accountSettingsOpen: true,
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        currentPeriodEndAt: "2026-07-08T08:00:00.000Z",
+      },
+      accountSettingsForm: {
+        displayName: "新导演昵称",
+        phone: "+86 13800138000",
+      },
+    },
+  });
+
+  const drawer = html.slice(html.indexOf("account-settings-drawer"));
+
+  assert.match(drawer, /当前套餐：专业版/);
+  assert.match(drawer, /2026\/07\/08/);
+});
+
+test("account settings hero shows not opened when membership is absent", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", displayName: "新导演昵称" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      accountSettingsOpen: true,
+      membershipStatus: { status: "none" },
+      accountSettingsForm: {
+        displayName: "新导演昵称",
+        phone: "+86 13800138000",
+      },
+    },
+  });
+
+  const drawer = html.slice(html.indexOf("account-settings-drawer"));
+
+  assert.match(drawer, /当前套餐：未开通/);
 });
 
 test("global statusbar renders the compact handbook commerce and icon actions", () => {
@@ -200,6 +246,7 @@ test("global statusbar account menu exposes the community feedback entry", () =>
   });
 
   assert.match(html, /data-action="open-community-page">社区反馈<\/button>/);
+  assert.match(html, /data-action="open-personal-media-page">素材库<\/button>/);
 });
 
 test("global statusbar shows the current account credit balance in wallet only", () => {

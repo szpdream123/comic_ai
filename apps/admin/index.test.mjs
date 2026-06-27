@@ -17,6 +17,7 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
     "模型配置",
     "用户积分",
     "风控审计",
+    "资源管理",
     "系统设置",
     "短信记录",
     "管理员账户",
@@ -53,6 +54,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/audit-events",
     "/api/admin/exports/audit-events.csv",
     "/api/admin/sms-records",
+    "/api/admin/resources",
+    "/api/admin/resources/summary",
     "/api/admin/storyboard-prompt/packages",
     "/api/admin/image-prompt/styles",
     "/api/admin/secret-references",
@@ -117,6 +120,32 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "riskStatus=",
     "risk.export",
     "smsRecords",
+    "resources",
+    "resourceMediaFilter",
+    "resourceRangeFilter",
+    "loadResources",
+    "resourcesPage",
+    "resourceTable",
+    "resourceTableRow",
+    "resourcePreviewOpen",
+    "resourcePreviewModal",
+    "resourcePage",
+    "resourcePageSize",
+    "resourceTotal",
+    "resourceStats",
+    "setResourcePage",
+    "previewResource",
+    "deleteResource",
+    "copyResourceUrl",
+    "openResourceUrl",
+    "用户",
+    "手机",
+    "资源总数",
+    "图片占用",
+    "视频占用",
+    "resources/summary",
+    "上一页",
+    "下一页",
     "smsRecordRange",
     "loadSmsRecords",
     "updateSmsRecordRange",
@@ -180,6 +209,17 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "归档账户",
   ]) {
     assert.match(script, new RegExp(escapeRegExp(dynamicCall)));
+  }
+
+  for (const contract of [
+    "listResult.data",
+    "listResult.meta?.total",
+    "const statsPayload = statsResult?.data && typeof statsResult.data === \"object\"",
+    "statsPayload?.imageBytes",
+    'const params = new URLSearchParams({\n            page: String(Math.max(1, Number(state.resourcePage) || 1)),\n            pageSize: String(Number(state.resourcePageSize) || 10),',
+    "params.set(\"keyword\"",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
   }
 
   new vm.Script(script);
@@ -943,6 +983,20 @@ test("admin shell exposes a standalone agreement management menu and list workfl
   }
 });
 
+test("admin agreement editor allows custom type entry and submits current input value", () => {
+  for (const contract of [
+    'id="legal-document-type-input"',
+    "data-legal-type-preset",
+    "legalDocumentTypeChoices(defaultType)",
+    "legal-document-type-presets",
+    "placeholder=\"\\u4f8b\\u5982\\uff1aservice\\u3001privacy\\u3001recharge_terms\"",
+    "typeInput?.value",
+    "syncTypePresetState",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin agreement editor exposes a richer toolbar and preserves selection for formatting", () => {
   for (const contract of [
     'data-legal-command="underline"',
@@ -1088,6 +1142,18 @@ test("admin dashboard exposes trend feedback and partial refresh copy", () => {
     "dashboardTrendHtml",
     "trend-bars",
     "总览趋势",
+    "用户统计",
+    "活跃用户统计",
+    "总订单金额统计",
+    "月订单金额统计",
+    "当天订单金额统计",
+    "会员统计",
+    "积分消耗统计",
+    "paidOrderAmountTotalMinor",
+    "paidOrderAmountMonthMinor",
+    "paidOrderAmountTodayMinor",
+    "activeMembershipCount",
+    "money(",
     "刷新总览",
     "总览已刷新",
     "模型健康已刷新",
