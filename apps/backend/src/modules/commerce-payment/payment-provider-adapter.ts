@@ -199,6 +199,35 @@ export function createStaticPaymentProviderRegistry(
   };
 }
 
+function createLazyPaymentProviderRegistry(
+  factories: Partial<Record<PaymentProvider, () => PaymentProviderAdapter>>,
+): PaymentProviderRegistry {
+  const cache: Partial<Record<PaymentProvider, PaymentProviderAdapter>> = {};
+
+  return {
+    get(provider) {
+      const cached = cache[provider];
+      if (cached) {
+        return cached;
+      }
+      const factory = factories[provider];
+      if (!factory) {
+        return undefined;
+      }
+      const adapter = factory();
+      cache[provider] = adapter;
+      return adapter;
+    },
+    require(provider) {
+      const adapter = this.get(provider);
+      if (!adapter) {
+        throw new PaymentProviderError("provider_not_enabled");
+      }
+      return adapter;
+    },
+  };
+}
+
 export function createDefaultPaymentProviderRegistry(): PaymentProviderRegistry {
   return createStaticPaymentProviderRegistry({
     wechat_pay: createLocalProviderAdapter("wechat_pay"),
@@ -210,11 +239,11 @@ export function createEnvPaymentProviderRegistry(
   env: Record<string, string | undefined> = process.env,
 ): PaymentProviderRegistry {
   const useRealProviders = resolvePaymentProviderMode(env) === "real";
-  return createStaticPaymentProviderRegistry({
-    wechat_pay: useRealProviders && envFlag(env.WECHAT_PAY_ENABLED)
+  return createLazyPaymentProviderRegistry({
+    wechat_pay: () => useRealProviders && envFlag(env.WECHAT_PAY_ENABLED)
       ? createWechatPayAdapter(readWechatPayConfigFromEnv(env))
       : createLocalProviderAdapter("wechat_pay"),
-    alipay: useRealProviders && envFlag(env.ALIPAY_ENABLED)
+    alipay: () => useRealProviders && envFlag(env.ALIPAY_ENABLED)
       ? createAlipayAdapter(readAlipayConfigFromEnv(env))
       : createLocalProviderAdapter("alipay"),
   });
