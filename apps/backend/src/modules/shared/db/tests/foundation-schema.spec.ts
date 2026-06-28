@@ -47,6 +47,10 @@ describe("foundation schema", () => {
         "team_project_ownerships",
         "team_credit_adjustments",
         "team_plan_limits",
+        "team_members",
+        "team_member_projects",
+        "team_member_auth_sessions",
+        "team_member_project_records",
       ]) {
         assert.ok(tables.includes(table), `expected ${table} table`);
       }
@@ -113,6 +117,33 @@ describe("foundation schema", () => {
       assert.ok(userColumns.includes("invite_code"));
       assert.ok(userIndexes.includes("users_invite_code_key"));
       assert.equal(generator.rows[0]?.definition.includes("nextval('user_invite_code_seq'"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("adds unique team account suffixes to users", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userColumns = await listColumnNames(db, "users");
+      const userIndexes = await listIndexNames(db, "users");
+
+      assert.ok(userColumns.includes("team_account_suffix"));
+      assert.ok(userIndexes.includes("users_team_account_suffix_key"));
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, team_account_suffix, status)
+          VALUES ('00000000-0000-4000-8000-000000000901', '13800138901', 'a7k9x2', 'active')
+        `,
+      );
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO users (id, phone_e164, team_account_suffix, status)
+            VALUES ('00000000-0000-4000-8000-000000000902', '13800138902', 'a7k9x2', 'active')
+          `,
+        ),
+      );
     } finally {
       await db.close();
     }
@@ -219,6 +250,398 @@ describe("foundation schema", () => {
         "created_at",
         "updated_at",
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("models simple user-owned team members and project visibility", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      assert.deepEqual(await listColumnNames(db, "team_members"), [
+        "id",
+        "user_id",
+        "member_account",
+        "member_account_suffix",
+        "member_login_account",
+        "member_name",
+        "member_password_hash",
+        "member_credits",
+        "status",
+        "disabled_at",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+      ]);
+      assert.deepEqual(await listColumnNames(db, "team_member_projects"), [
+        "id",
+        "member_id",
+        "user_id",
+        "project_id",
+        "created_at",
+      ]);
+
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES
+            ('00000000-0000-4000-8000-000000000001', '13800138000', 'active'),
+            ('00000000-0000-4000-8000-000000000002', '13800138001', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status)
+          VALUES ('10000000-0000-4000-8000-000000000001', 'Simple Team Org', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES (
+            '20000000-0000-4000-8000-000000000001',
+            '10000000-0000-4000-8000-000000000001',
+            'Simple Team Workspace',
+            'active'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            aspect_ratio,
+            resolution,
+            phase,
+            created_by_user_id
+          )
+          VALUES (
+            '40000000-0000-4000-8000-000000000001',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            'Assigned Project',
+            '9:16',
+            '1080p',
+            'script_input',
+            '00000000-0000-4000-8000-000000000001'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            member_credits
+          )
+          VALUES (
+            '50000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            'director001',
+            'u185715',
+            'director001@u185715',
+            'Director One',
+            'scrypt:v1:member:safe-hash',
+            100
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_projects (id, member_id, user_id, project_id)
+          VALUES (
+            '51000000-0000-4000-8000-000000000001',
+            '50000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            '40000000-0000-4000-8000-000000000001'
+          )
+        `,
+      );
+
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO team_member_projects (id, member_id, user_id, project_id)
+            VALUES (
+              '51000000-0000-4000-8000-000000000002',
+              '50000000-0000-4000-8000-000000000001',
+              '00000000-0000-4000-8000-000000000002',
+              '40000000-0000-4000-8000-000000000001'
+            )
+          `,
+        ),
+      );
+      await assert.rejects(
+        db.query(
+          `
+            UPDATE team_members
+            SET status = 'archived'
+            WHERE id = '50000000-0000-4000-8000-000000000001'
+          `,
+        ),
+      );
+
+      await db.query(
+        `
+          UPDATE team_members
+          SET status = 'deleted',
+              deleted_at = '2026-06-27T00:00:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000001'
+        `,
+      );
+      const assignmentCount = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM team_member_projects
+          WHERE member_id = '50000000-0000-4000-8000-000000000001'
+        `,
+      );
+      assert.equal(assignmentCount.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("models simple team member login sessions and project records", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      assert.deepEqual(await listColumnNames(db, "team_member_auth_sessions"), [
+        "id",
+        "auth_session_id",
+        "user_id",
+        "member_id",
+        "status",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+        "created_at",
+      ]);
+      assert.deepEqual(await listColumnNames(db, "team_member_project_records"), [
+        "id",
+        "user_id",
+        "member_id",
+        "project_id",
+        "record_type",
+        "record_status",
+        "record_title",
+        "record_detail_json",
+        "source_table",
+        "source_id",
+        "created_at",
+      ]);
+
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES
+            ('00000000-0000-4000-8000-000000000001', '13800138000', 'active'),
+            ('00000000-0000-4000-8000-000000000002', '13800138001', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status)
+          VALUES ('10000000-0000-4000-8000-000000000001', 'Simple Team Org', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES (
+            '20000000-0000-4000-8000-000000000001',
+            '10000000-0000-4000-8000-000000000001',
+            'Simple Team Workspace',
+            'active'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO projects (
+            id,
+            organization_id,
+            workspace_id,
+            name,
+            aspect_ratio,
+            resolution,
+            phase,
+            created_by_user_id
+          )
+          VALUES
+            (
+              '40000000-0000-4000-8000-000000000001',
+              '10000000-0000-4000-8000-000000000001',
+              '20000000-0000-4000-8000-000000000001',
+              'Assigned Project',
+              '9:16',
+              '1080p',
+              'script_input',
+              '00000000-0000-4000-8000-000000000001'
+            ),
+            (
+              '40000000-0000-4000-8000-000000000002',
+              '10000000-0000-4000-8000-000000000001',
+              '20000000-0000-4000-8000-000000000001',
+              'Unassigned Project',
+              '9:16',
+              '1080p',
+              'script_input',
+              '00000000-0000-4000-8000-000000000001'
+            )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO auth_sessions (
+            id,
+            user_id,
+            status,
+            session_token_hash,
+            session_token_hash_version,
+            expires_at
+          )
+          VALUES (
+            '60000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            'active',
+            'hashed-session-token',
+            1,
+            '2026-07-01T00:00:00.000Z'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            member_credits
+          )
+          VALUES (
+            '50000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            'director001',
+            'u185715',
+            'director001@u185715',
+            'Director One',
+            'scrypt:v1:member:safe-hash',
+            100
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_projects (id, member_id, user_id, project_id)
+          VALUES (
+            '51000000-0000-4000-8000-000000000001',
+            '50000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            '40000000-0000-4000-8000-000000000001'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_auth_sessions (
+            id,
+            auth_session_id,
+            user_id,
+            member_id,
+            status,
+            expires_at
+          )
+          VALUES (
+            '61000000-0000-4000-8000-000000000001',
+            '60000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            '50000000-0000-4000-8000-000000000001',
+            'active',
+            '2026-07-01T00:00:00.000Z'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_project_records (
+            id,
+            user_id,
+            member_id,
+            project_id,
+            record_type,
+            record_status,
+            record_title
+          )
+          VALUES (
+            '62000000-0000-4000-8000-000000000001',
+            '00000000-0000-4000-8000-000000000001',
+            '50000000-0000-4000-8000-000000000001',
+            '40000000-0000-4000-8000-000000000001',
+            'project_view',
+            'recorded',
+            'Viewed assigned project'
+          )
+        `,
+      );
+
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO team_member_auth_sessions (
+              id,
+              auth_session_id,
+              user_id,
+              member_id,
+              status,
+              expires_at
+            )
+            VALUES (
+              '61000000-0000-4000-8000-000000000002',
+              '60000000-0000-4000-8000-000000000001',
+              '00000000-0000-4000-8000-000000000002',
+              '50000000-0000-4000-8000-000000000001',
+              'active',
+              '2026-07-01T00:00:00.000Z'
+            )
+          `,
+        ),
+      );
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO team_member_project_records (
+              id,
+              user_id,
+              member_id,
+              project_id,
+              record_type,
+              record_status,
+              record_title
+            )
+            VALUES (
+              '62000000-0000-4000-8000-000000000002',
+              '00000000-0000-4000-8000-000000000001',
+              '50000000-0000-4000-8000-000000000001',
+              '40000000-0000-4000-8000-000000000002',
+              'project_view',
+              'recorded',
+              'Viewed unassigned project'
+            )
+          `,
+        ),
+      );
     } finally {
       await db.close();
     }

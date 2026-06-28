@@ -26,6 +26,9 @@ describe("login page shell", () => {
     assert.match(html, /id="phone-login-panel"/);
     assert.match(html, /id="password-login-panel"[^>]*hidden/);
     assert.match(html, /id="password-login-form"/);
+    assert.match(html, /name="accountType"/);
+    assert.match(html, /value="team_member"/);
+    assert.match(html, /子账户/);
     assert.match(html, /id="account-input"/);
     assert.match(html, /id="password-input"/);
     assert.match(html, /id="password-visibility-toggle"/);
@@ -40,6 +43,10 @@ describe("login page shell", () => {
     assert.match(js, /passwordInput\.type = isPasswordVisible \? "text" : "password"/);
     assert.match(js, /passwordLoginForm\?\.addEventListener\("submit"/);
     assert.match(js, /\/api\/auth\/password\/login/);
+    assert.match(js, /\/api\/auth\/team-member\/password\/login/);
+    assert.match(js, /function readJsonResponse\(response\)/);
+    assert.match(js, /子账户登录接口未启动，请重启本地服务/);
+    assert.match(js, /function selectedPasswordAccountType\(\)/);
     assert.match(js, /accountInput\?\.value\?\.trim\(\)/);
     assert.match(js, /#phone-remember-input/);
     assert.match(js, /#password-remember-input/);
@@ -57,6 +64,7 @@ describe("login page shell", () => {
     assert.match(css, /border-bottom/);
     assert.match(css, /\.auth-mode-panel\[hidden\]/);
     assert.match(css, /\.password-form/);
+    assert.match(css, /\.account-type-switch/);
   });
 
   it("loads backend-managed agreements, requires consent, and opens rich-text documents in a modal", async () => {

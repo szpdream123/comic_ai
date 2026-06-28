@@ -370,7 +370,7 @@ function renderOfficialTeamLibrary(context) {
     Boolean(context.libraryFolder),
   );
   const teamLocked =
-    assetScope === "team" && context.libraryEntitlement?.hasTeamAssetLibrary !== true;
+    assetScope === "team" && !hasTeamAssetLibraryAccess(context);
   const canUseTeamLocalUploads = assetScope === "team" && !teamLocked;
   const localUploads =
     canUseTeamLocalUploads ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
@@ -426,6 +426,34 @@ function renderOfficialTeamLibrary(context) {
       })}
     </section>
   `;
+}
+
+function hasTeamAssetLibraryAccess(context = {}) {
+  const membershipStatus = context.membershipStatus ?? null;
+  const overview = context.overview ?? context.teamOverview ?? null;
+  const entitlement = context.libraryEntitlement ?? null;
+  const status =
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "";
+  const tier =
+    membershipStatus?.currentTier ??
+    membershipStatus?.membership?.currentTier ??
+    membershipStatus?.subscription?.currentTier ??
+    "";
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    {};
+  return (
+    entitlement?.hasTeamAssetLibrary === true ||
+    overview?.entitlements?.teamAssetLibrary === true ||
+    entitlements?.teamAssetLibrary === true ||
+    status === "professional_active" ||
+    tier === "professional"
+  );
 }
 
 const ASSET_LIBRARY_PAGE_SIZE = 18;

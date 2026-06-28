@@ -167,7 +167,7 @@ export function createCreditRechargeCenterService(deps: {
           targetOrganizationId: team.id,
           amount,
           sourceId: transferId,
-          reason: "transfer personal credits to team pool",
+          reason: "个人积分转入团队积分池",
           createdByUserId: actor.actorId,
           metadata: {
             sourceOrganizationId: actor.organizationId,

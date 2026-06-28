@@ -1042,6 +1042,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
 
   async function listUserCreditLedger(input: {
     userId: string;
+    page?: number;
     pageSize?: number;
     organizationId?: string | null;
     workspaceId?: string | null;
@@ -1053,8 +1054,18 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
+    const page = Math.max(1, Number(input.page ?? 1));
     const ledgerScope = ledgerScopeForTarget(target);
-    const fetchLimit = Math.min(300, pageSize * 4);
+    const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
+    const totalResult = await deps.db.query<LedgerRow>(
+      `
+        SELECT *
+        FROM credit_ledger_entries
+        WHERE ${ledgerScope.sql}
+        ORDER BY created_at DESC, id ASC
+      `,
+      ledgerScope.params,
+    );
     const result = await deps.db.query<LedgerRow>(
       `
         SELECT *
@@ -1065,12 +1076,20 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       `,
       [...ledgerScope.params, fetchLimit],
     );
-    const rows = coalesceUserCreditLedgerRows(result.rows).slice(0, pageSize);
+    const totalRows = coalesceUserCreditLedgerRows(totalResult.rows);
+    const start = (page - 1) * pageSize;
+    const rows = coalesceUserCreditLedgerRows(result.rows).slice(start, start + pageSize);
     const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
       data: rows.map(ledgerFromRow),
+      accountType: resolveCreditAccountType(target),
       summary,
-      meta: { total: rows.length },
+      meta: {
+        total: totalRows.length,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalRows.length / pageSize)),
+      },
     };
   }
 
@@ -1231,6 +1250,7 @@ interface UserCreditTargetRow {
   organization_name: string | null;
   workspace_id: string | null;
   membership_id: string;
+  membership_role: string | null;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -1242,7 +1262,10 @@ interface UserCreditTarget {
   organizationName: string | null;
   workspaceId: string | null;
   membershipId: string;
+  membershipRole: string | null;
   teamProfileId: string | null;
+  teamRole: string | null;
+  teamGroupId: string | null;
   createdByUserId: string | null;
 }
 
@@ -1266,6 +1289,7 @@ interface LedgerRow {
   source_id: string;
   reason: string;
   metadata_json: unknown;
+  user_id: string | null;
   created_at: Date | string;
 }
 
@@ -1378,8 +1402,11 @@ async function findUserCreditTarget(
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
+        m.role AS membership_role,
         o.name AS organization_name,
         tp.id AS team_profile_id,
+        tp.business_role AS team_role,
+        tp.member_group_id AS team_group_id,
         tp.created_by_user_id
       FROM users u
       JOIN memberships m ON m.user_id = u.id
@@ -1411,7 +1438,10 @@ async function findUserCreditTarget(
     organizationName: row.organization_name,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
+    membershipRole: row.membership_role,
     teamProfileId: row.team_profile_id,
+    teamRole: row.team_role,
+    teamGroupId: row.team_group_id,
     createdByUserId: row.created_by_user_id,
   };
 }
@@ -1447,6 +1477,50 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
         AND ledger_workflow.created_by_user_id = $1::uuid
     )
   )`;
+  if (target.membershipRole === "owner_admin" || target.teamRole === "admin" || target.teamRole === "group_admin") {
+    const groupFilter = target.membershipRole === "owner_admin"
+      ? ""
+      : "AND ledger_profile.member_group_id IS NOT DISTINCT FROM $6::uuid";
+    const managedMemberFilter = `(
+      ${targetFilter}
+      OR EXISTS (
+        SELECT 1
+        FROM memberships ledger_member
+        JOIN team_member_profiles ledger_profile
+          ON ledger_profile.membership_id = ledger_member.id
+        LEFT JOIN credit_reservations managed_reservation
+          ON managed_reservation.organization_id = credit_ledger_entries.organization_id
+         AND managed_reservation.id = credit_ledger_entries.reservation_id
+        WHERE (
+            ledger_member.user_id = credit_ledger_entries.user_id
+            OR ledger_member.user_id::text = credit_ledger_entries.metadata_json->>'targetUserId'
+            OR ledger_member.id::text = credit_ledger_entries.metadata_json->>'targetMembershipId'
+            OR ledger_member.user_id = credit_ledger_entries.created_by_user_id
+            OR ledger_member.user_id = managed_reservation.user_id
+            OR ledger_member.user_id::text = managed_reservation.metadata_json->>'targetUserId'
+            OR ledger_member.id::text = managed_reservation.metadata_json->>'targetMembershipId'
+            OR ledger_member.user_id = managed_reservation.created_by_user_id
+          )
+          AND ledger_profile.organization_id = $4::uuid
+          AND ledger_profile.workspace_id = $5::uuid
+          ${groupFilter}
+      )
+    )`;
+    return {
+      sql: managedMemberFilter,
+      params: target.membershipRole === "owner_admin"
+        ? [target.userId, target.userId, target.membershipId, target.organizationId, target.workspaceId]
+        : [
+            target.userId,
+            target.userId,
+            target.membershipId,
+            target.organizationId,
+            target.workspaceId,
+            target.teamGroupId,
+          ],
+      limitParamIndex: target.membershipRole === "owner_admin" ? 6 : 7,
+    };
+  }
   return {
     sql: targetFilter,
     params: [target.userId, target.userId, target.membershipId],
@@ -1461,6 +1535,16 @@ function isMemberWalletTarget(target: UserCreditTarget) {
 function isPersonalCreditOwnerTarget(target: UserCreditTarget) {
   return target.organizationName === PERSONAL_CREDIT_ORGANIZATION_NAME
     && !target.teamProfileId;
+}
+
+function resolveCreditAccountType(target: UserCreditTarget): "管理员账户" | "子账户" | "普通账户" {
+  if (target.membershipRole === "owner_admin" || target.teamRole === "admin" || target.teamRole === "group_admin") {
+    return "管理员账户";
+  }
+  if (target.membershipRole === "sub_account" || target.teamRole) {
+    return "子账户";
+  }
+  return "普通账户";
 }
 
 function isWritableCreditTarget(target: UserCreditTarget) {
@@ -1688,8 +1772,50 @@ function ledgerFromRow(row: LedgerRow) {
     sourceId: row.source_id,
     reason: row.reason,
     metadata: normalizeJson(row.metadata_json),
+    content: creditLedgerContentLabel(row),
+    userId: row.user_id,
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function creditLedgerContentLabel(row: LedgerRow) {
+  const metadata = normalizeJson(row.metadata_json);
+  const reason = String(row.reason ?? "").trim();
+  const sourceType = String(row.source_type ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  const scenario = String(metadata.adjustmentScenario ?? "").trim();
+  const packageName = String(metadata.packageName ?? metadata.package_name ?? metadata.planName ?? metadata.plan_name ?? "").trim();
+  const credits = Number(row.amount ?? 0);
+  const text = [sourceType, reason, mediaType, taskType, metadata.modelCode, metadata.providerOperation]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (sourceType === "payment_order") {
+    return packageName ? `充值${packageName}套餐增加积分` : `充值${Number.isFinite(credits) ? `${credits}积分套餐` : "套餐"}增加积分`;
+  }
+  if (sourceType === "membership_gift") {
+    return "会员赠送积分";
+  }
+  if (sourceType.includes("admin")) {
+    if (scenario === "promotion" || scenario === "recharge_bonus") return "活动增加积分";
+    return row.entry_type === "consume" ? "手动扣减积分" : "手动增加积分";
+  }
+  if (text.includes("storyboard")) {
+    return row.entry_type === "release" ? "AI分镜生成返还积分" : "生AI分镜扣减";
+  }
+  if (text.includes("script") || mediaType === "text") {
+    return row.entry_type === "release" ? "生成剧本返还积分" : "生成剧本扣减";
+  }
+  if (text.includes("video") || mediaType === "video") {
+    return row.entry_type === "release" ? "生视频返还积分" : "生视频扣减";
+  }
+  if (text.includes("image") || mediaType === "image") {
+    return row.entry_type === "release" ? "生图返还积分" : "生图扣减";
+  }
+  if (row.entry_type === "grant") return "增加积分";
+  if (row.entry_type === "release") return "任务返还积分";
+  return row.entry_type === "consume" || row.entry_type === "reservation" ? "任务扣减积分" : "积分变动";
 }
 
 function modelRequestLogFromRow(

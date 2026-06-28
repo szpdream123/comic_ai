@@ -144,13 +144,24 @@
             hidden
           >
             <form id="password-login-form" class="login-form password-form">
+              <div class="account-type-switch" role="radiogroup" aria-label="账号类型">
+                <label class="account-type-option">
+                  <input type="radio" name="accountType" value="user" checked />
+                  <span>主账号</span>
+                </label>
+                <label class="account-type-option">
+                  <input type="radio" name="accountType" value="team_member" />
+                  <span>子账户</span>
+                </label>
+              </div>
+
               <label class="field">
                 <span class="sr-only">账号</span>
                 <input
                   id="account-input"
                   name="account"
                   type="text"
-                  placeholder="请输入手机号/邮箱"
+                  placeholder="请输入手机号"
                   autocomplete="username"
                 />
               </label>

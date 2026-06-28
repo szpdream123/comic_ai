@@ -1276,7 +1276,22 @@ function requireCreditReason(reason: string | null | undefined): string {
   if (!normalized) {
     throw new CreditReasonRequiredError();
   }
-  return normalized;
+  return normalizeCreditLedgerReason(normalized);
+}
+
+function normalizeCreditLedgerReason(reason: string): string {
+  const normalized = reason.trim().toLowerCase();
+  if (!normalized) {
+    return reason.trim();
+  }
+  const aliases: Record<string, string> = {
+    "membership period gifted credits": "会员赠送积分",
+    "wallet freeze removed and credits released": "会员续费解冻积分",
+    "membership lapsed wallet frozen": "会员到期冻结积分",
+    "membership frozen credits expired": "会员冻结积分过期失效",
+    "credit lot expired": "积分批次过期失效",
+  };
+  return aliases[normalized] ?? reason.trim();
 }
 
 function assertAllocationReplayMatches(

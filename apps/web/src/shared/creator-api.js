@@ -689,8 +689,12 @@ export const creatorApi = {
   },
 
   getCreditLedger(options = {}) {
-    const pageSize = Number(options.pageSize ?? 50);
+    const page = Number(options.page ?? 1);
+    const pageSize = Number(options.pageSize ?? 10);
     const params = new URLSearchParams();
+    if (Number.isFinite(page) && page > 0) {
+      params.set("page", String(Math.max(1, Math.round(page))));
+    }
     if (Number.isFinite(pageSize) && pageSize > 0) {
       params.set("pageSize", String(Math.min(100, Math.round(pageSize))));
     }
@@ -726,6 +730,10 @@ export const creatorApi = {
     return postJsonWithIdempotency("/api/creator/team/members", input, {
       action: "team.member.create",
     });
+  },
+
+  updateTeamMember(memberId, input) {
+    return patchJson(`/api/creator/team/members/${encodeURIComponent(memberId)}`, input);
   },
 
   createProject(input) {

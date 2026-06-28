@@ -246,6 +246,7 @@ const phoneRememberInput = document.querySelector("#phone-remember-input");
 const accountInput = document.querySelector("#account-input");
 const passwordInput = document.querySelector("#password-input");
 const passwordRememberInput = document.querySelector("#password-remember-input");
+const accountTypeInputs = document.querySelectorAll('input[name="accountType"]');
 const passwordVisibilityToggle = document.querySelector("#password-visibility-toggle");
 const passwordLoginButton = document.querySelector("#password-login-button");
 const agreementsSection = document.querySelector(".agreements-section");
@@ -542,6 +543,35 @@ function authErrorMessage(payload, fallback) {
   return errorCopy[payload?.error] ?? fallback;
 }
 
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function selectedPasswordAccountType() {
+  const selected = [...accountTypeInputs].find((input) => input.checked);
+  return selected?.value === "team_member" ? "team_member" : "user";
+}
+
+function updatePasswordAccountHint() {
+  if (!accountInput) {
+    return;
+  }
+  const isTeamMember = selectedPasswordAccountType() === "team_member";
+  accountInput.placeholder = isTeamMember
+    ? "请输入子账户，例如 director001@u185715"
+    : "请输入手机号";
+  accountInput.inputMode = isTeamMember ? "text" : "numeric";
+  accountInput.autocomplete = isTeamMember ? "username" : "tel";
+}
+
 function updateRequestCodeButton() {
   if (!requestCodeButton) {
     return;
@@ -722,6 +752,13 @@ passwordLoginTab?.addEventListener("click", () => {
   setAuthMode("password");
 });
 
+accountTypeInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    updatePasswordAccountHint();
+    setStatus("");
+  });
+});
+
 agreementsCheckbox?.addEventListener("change", () => {
   if (agreementsCheckbox.checked) {
     hideAgreementError();
@@ -769,10 +806,18 @@ passwordLoginForm?.addEventListener("submit", async (event) => {
   const account = accountInput?.value?.trim() ?? "";
   const password = passwordInput?.value ?? "";
   const remember = passwordRememberInput?.checked !== false;
-  if (/^\+86/.test(account)) {
+  const accountType = selectedPasswordAccountType();
+  const isTeamMemberLogin = accountType === "team_member";
+  if (!isTeamMemberLogin && /^\+86/.test(account)) {
     passwordLoginButton.disabled = false;
     setStatus("请输入11位手机号，且不要带 +86");
     showGlobalToast("error", "密码登录失败", "请输入11位手机号，且不要带 +86");
+    return;
+  }
+  if (isTeamMemberLogin && !account.includes("@")) {
+    passwordLoginButton.disabled = false;
+    setStatus("请输入完整子账户登录账号");
+    showGlobalToast("error", "子账户登录失败", "请输入管理员创建时生成的完整账号");
     return;
   }
   passwordLoginButton.disabled = true;
@@ -781,34 +826,51 @@ passwordLoginForm?.addEventListener("submit", async (event) => {
   let loginResponse;
   let loginPayload;
   try {
-    loginResponse = await fetch(resolveApiUrl("/api/auth/password/login"), {
+    loginResponse = await fetch(resolveApiUrl(
+      isTeamMemberLogin
+        ? "/api/auth/team-member/password/login"
+        : "/api/auth/password/login",
+    ), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ account, password, remember }),
       credentials: "include",
     });
-    loginPayload = await loginResponse.json();
+    loginPayload = await readJsonResponse(loginResponse);
   } catch {
     passwordLoginButton.disabled = false;
-    setStatus("密码登录失败");
-    showGlobalToast("error", "密码登录失败", "网络连接异常，请稍后再试");
+    setStatus(isTeamMemberLogin ? "子账户登录失败" : "密码登录失败");
+    showGlobalToast("error", isTeamMemberLogin ? "子账户登录失败" : "密码登录失败", "网络连接异常，请稍后再试");
     return;
   }
 
   if (!loginResponse.ok) {
     passwordLoginButton.disabled = false;
-    const message =
-      loginPayload?.error === "invalid_phone"
+    const message = isTeamMemberLogin
+      ? loginPayload?.error === "team_member_disabled"
+        ? "子账户已被禁用"
+        : loginPayload?.error === "team_member_deleted"
+          ? "子账户已被删除"
+          : loginPayload?.error === "user_disabled"
+            ? "管理员账号已被禁用"
+            : loginResponse.status === 404
+              ? "子账户登录接口未启动，请重启本地服务"
+            : "子账户或密码不正确"
+      : loginPayload?.error === "invalid_phone"
         ? "请输入正确的手机号"
         : loginPayload?.error === "user_disabled"
           ? "账号已被禁用"
+          : loginResponse.status === 404
+            ? "密码登录接口未启动，请重启本地服务"
           : "账号或密码不正确";
     setStatus(message);
-    showGlobalToast("error", "密码登录失败", message);
+    showGlobalToast("error", isTeamMemberLogin ? "子账户登录失败" : "密码登录失败", message);
     return;
   }
 
-  const loginMessage = `登录成功：${loginPayload.user.phone}`;
+  const loginMessage = isTeamMemberLogin
+    ? `登录成功：${loginPayload.memberName || loginPayload.memberLoginAccount}`
+    : `登录成功：${loginPayload.user.phone}`;
   setStatus(loginMessage);
   showGlobalToast("success", "登录成功", loginMessage);
 
@@ -835,6 +897,7 @@ socialButtons.forEach((btn) => {
   });
 });
 
+updatePasswordAccountHint();
 updateAgreementActionState();
 
 await loadSession();

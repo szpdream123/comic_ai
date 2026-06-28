@@ -2251,18 +2251,18 @@ body:has(.library-team-asset-detail-overlay),
 .team-page {
   --library-team-accent: #9b5cff;
   --library-team-accent-strong: #ded1ff;
-  padding: 14px 28px 28px;
+  padding: 14px 16px 16px;
 }
 
 .team-page .library-team-shell {
-  max-width: 1560px;
-  gap: 22px;
+  max-width: none;
+  gap: 14px;
 }
 
 .team-page .team-ops-hero {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 370px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
-  min-height: 170px;
+  min-height: 96px;
   padding: 0;
   overflow: hidden;
   border-color: rgba(188, 165, 255, 0.24);
@@ -2275,34 +2275,26 @@ body:has(.library-team-asset-detail-overlay),
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 26px;
+  gap: 16px;
   min-width: 0;
-  padding: 34px 36px;
+  padding: 18px 28px;
 }
 
 .team-page .team-ops-hero-copy h1 {
   grid-column: 1;
   margin: 0;
   color: #f3efff;
-  font-size: 26px;
-  line-height: 1.25;
+  font-size: 22px;
+  line-height: 1;
+  white-space: nowrap;
   text-shadow: 0 10px 30px rgba(151, 95, 255, 0.32);
-}
-
-.team-page .team-ops-hero-copy p {
-  grid-column: 1;
-  max-width: 760px;
-  margin: 8px 0 0;
-  color: #c9c3dd;
-  font-size: 14px;
-  line-height: 1.65;
 }
 
 .team-page .team-ops-hero-cta {
   grid-column: 2;
-  grid-row: 1 / span 2;
-  min-width: 210px;
-  min-height: 52px;
+  grid-row: 1;
+  min-width: 180px;
+  min-height: 42px;
   border: 0;
   border-radius: 8px;
   background: #eadcff;
@@ -2310,43 +2302,9 @@ body:has(.library-team-asset-detail-overlay),
   font-weight: 800;
 }
 
-.team-page .team-ops-dashboard-card {
-  display: grid;
-  align-content: center;
-  gap: 12px;
-  min-height: 170px;
-  padding: 28px 36px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    radial-gradient(circle at 74% 28%, rgba(155, 92, 255, 0.58), transparent 44%),
-    linear-gradient(115deg, rgba(29, 31, 42, 0.84), rgba(37, 35, 56, 0.94));
-}
-
-.team-page .team-ops-dashboard-card strong {
-  color: #f2efff;
-  font-size: 25px;
-  line-height: 1.2;
-}
-
-.team-page .team-ops-dashboard-card span {
-  color: #bfc0cd;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.team-page .team-ops-dashboard-card .library-team-button {
-  width: fit-content;
-  min-height: 42px;
-  border-radius: 8px;
-  border-color: rgba(222, 209, 255, 0.34);
-  background: rgba(222, 209, 255, 0.13);
-  color: #f5f0ff;
-}
-
 .team-page .team-member-section {
   display: grid;
   gap: 20px;
-  min-height: 560px;
   padding: 22px 22px 10px;
   border-color: rgba(255, 255, 255, 0.08);
   background: #17181f;
@@ -2451,14 +2409,142 @@ body:has(.library-team-asset-detail-overlay),
   font-weight: 850;
 }
 
+.team-page .team-member-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.team-page .team-member-resource-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 220px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: #23242c;
+}
+
+.team-page .team-member-resource-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #dfe4f2;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.team-page .team-member-resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 236px;
+  overflow: auto;
+}
+
+.team-page .team-member-resource-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #2a2b33;
+  color: #edf0f8;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.team-page .team-member-resource-item.is-selected {
+  border-color: rgba(148, 72, 255, 0.55);
+  background: rgba(148, 72, 255, 0.14);
+}
+
+.team-page .team-member-resource-item.is-derived {
+  opacity: 0.92;
+}
+
+.team-page .team-member-resource-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #9348ff;
+}
+
+.team-page .team-member-resource-list-selectable .team-member-resource-item {
+  cursor: pointer;
+}
+
+.team-page .team-member-resource-empty {
+  margin: 0;
+  color: #9ea5b8;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.team-page .team-member-resource-hint {
+  margin: 10px 0 0;
+  color: #9ea5b8;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .team-page .library-team-table-wrap {
-  min-height: 420px;
   border-color: rgba(255, 255, 255, 0.08);
   background: #181920;
 }
 
+.team-page .team-member-section {
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  align-content: start;
+}
+
+.team-page .team-member-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 2px 0;
+  color: #aab0c2;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.team-page .team-member-pagination-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-page .team-member-pagination-actions span {
+  min-width: 56px;
+  text-align: center;
+}
+
+.team-page .team-member-pagination-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #2a2b36;
+  color: #edf0f8;
+  font-weight: 800;
+}
+
+.team-page .team-member-pagination-actions button:disabled {
+  opacity: 0.42;
+}
+
 .team-page .team-member-section .library-team-table-wrap table {
   min-width: 1120px;
+}
+
+.team-page.is-team-activated .library-team-table-wrap {
+  min-height: 0;
 }
 
 .team-page .library-team-table-wrap th {
@@ -2482,7 +2568,10 @@ body:has(.library-team-asset-detail-overlay),
 
 .team-page .library-team-table-wrap th:first-child,
 .team-page .library-team-table-wrap td:first-child {
-  width: 62px;
+  width: 104px;
+  min-width: 104px;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
 .team-page .library-team-row-check {
@@ -2497,7 +2586,7 @@ body:has(.library-team-asset-detail-overlay),
 .team-page .team-member-section .library-team-empty-state {
   grid-template-columns: 1fr;
   justify-items: center;
-  min-height: 340px;
+  min-height: 220px;
   max-width: none;
   margin: 0;
   border: 0;
@@ -2530,6 +2619,11 @@ body:has(.library-team-asset-detail-overlay),
 .team-page .library-team-operations-band,
 .team-page .library-team-policy-panel {
   display: none;
+}
+
+.team-page.is-team-activated .library-team-operations-band,
+.team-page.is-team-activated .library-team-policy-panel {
+  display: grid;
 }
 
 .library-team-dashboard-panel {
@@ -2717,13 +2811,65 @@ body:has(.library-team-asset-detail-overlay),
 }
 
 .library-team-member-modal {
-  width: min(100%, 720px);
+  display: grid;
+  width: min(100%, 920px);
+  max-height: min(92vh, 760px);
+  overflow: auto;
 }
 
 .library-team-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-lg, 16px);
+}
+
+.library-team-account-input-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline, #212327);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.library-team-account-input-group input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+}
+
+.library-team-account-input-group strong {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--library-team-accent-strong);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.library-team-login-account-preview {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(93, 214, 191, 0.18);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(93, 214, 191, 0.07);
+}
+
+.library-team-login-account-preview span {
+  color: var(--color-muted, #8d929a);
+  font-size: 12px;
+}
+
+.library-team-login-account-preview code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-ink, #ffffff);
+  font-size: 14px;
 }
 
 .library-team-secret-note,

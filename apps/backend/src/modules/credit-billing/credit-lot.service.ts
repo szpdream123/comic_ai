@@ -379,7 +379,7 @@ export async function expireAvailableCreditLotsInTransaction(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, ($4::int * -1), 0, 0, 'credit_lot_expiry', $5, 'credit lot expired', $6::jsonb, $3, $7)
+        VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, ($4::int * -1), 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
         ON CONFLICT (organization_id, source_type, source_id, entry_type)
         DO NOTHING
         RETURNING id
@@ -485,7 +485,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, 'membership lapsed wallet frozen', $4::jsonb, NULL, $5)
+      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, '会员到期冻结积分', $4::jsonb, NULL, $5)
       ON CONFLICT (organization_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -577,7 +577,7 @@ export async function restoreOrganizationWalletCreditsInTransaction(
   }
   const sourceType = input.sourceType ?? "membership_wallet_restore";
   const sourceId = input.sourceId ?? randomUUID();
-  const reason = input.reason ?? "membership renewed wallet restored";
+  const reason = input.reason ?? "会员续费解冻积分";
 
   const ledger = await queryOne<{ id: string }>(
     db,
@@ -712,7 +712,7 @@ export async function expireFrozenWalletCreditsInTransaction(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, 'membership frozen credits expired', $4::jsonb, NULL, $5)
+        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, '会员冻结积分过期失效', $4::jsonb, NULL, $5)
         ON CONFLICT (organization_id, source_type, source_id, entry_type)
         DO NOTHING
         RETURNING id

@@ -20,7 +20,7 @@ test("entitled solo professional account renders team setup instead of an active
     members: [],
   });
 
-  assert.match(html, /创建第一个成员账号/);
+  assert.match(html, /创建子账户/);
   assert.match(html, /已获得团队协作资格/);
   assert.doesNotMatch(html, /data-action="open-team-dashboard"/);
   assert.doesNotMatch(html, /专业版已开通/);
@@ -53,7 +53,68 @@ test("professional account with members renders the active team dashboard entry"
 
   assert.match(html, /data-action="open-team-dashboard"/);
   assert.match(html, /专业版已开通/);
-  assert.match(html, /创建成员账号/);
+  assert.match(html, /创建子账户/);
+  assert.doesNotMatch(html, /团队成员管理已开通/);
+});
+
+test("team member list paginates at 10 rows per page", () => {
+  const members = Array.from({ length: 12 }, (_, index) => ({
+    id: `member-${index + 1}`,
+    memberAccount: `member${index + 1}`,
+    memberLoginAccount: `member${index + 1}@team`,
+    memberName: `成员 ${index + 1}`,
+    memberCredits: index + 1,
+    status: "enabled",
+  }));
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: true, memberCount: 12 },
+      seats: { used: 12, limit: 50, remaining: 38 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members,
+  });
+
+  assert.match(html, /共 12 条/);
+  assert.match(html, /1 \/ 2/);
+  assert.match(html, /成员 10/);
+  assert.doesNotMatch(html, /member11@team/);
+});
+
+test("team member list renders the selected page", () => {
+  const members = Array.from({ length: 12 }, (_, index) => ({
+    id: `member-${index + 1}`,
+    memberAccount: `member${index + 1}`,
+    memberLoginAccount: `member${index + 1}@team`,
+    memberName: `成员 ${index + 1}`,
+    memberCredits: index + 1,
+    status: "enabled",
+  }));
+  const html = renderLibraryTeam({
+    route: "team",
+    memberPage: 2,
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: true, memberCount: 12 },
+      seats: { used: 12, limit: 50, remaining: 38 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members,
+  });
+
+  assert.match(html, /2 \/ 2/);
+  assert.match(html, /成员 11/);
+  assert.doesNotMatch(html, /成员 10/);
 });
 
 test("active professional membership status unlocks team management while overview is stale", () => {
@@ -88,7 +149,7 @@ test("active professional membership status unlocks team management while overvi
     },
   });
 
-  assert.match(html, /创建第一个成员账号/);
+  assert.match(html, /创建子账户/);
   assert.match(html, /已获得团队协作资格/);
   assert.match(html, /data-action="open-team-member-create"/);
   assert.doesNotMatch(html, /开通专业版/);
@@ -129,6 +190,26 @@ test("active professional membership overrides stale team create permission", ()
   assert.match(html, /data-action="open-team-member-create"/);
   assert.doesNotMatch(html, /去开通/);
   assert.doesNotMatch(html, /当前账号没有创建成员权限/);
+});
+
+test("team member create modal safely ignores null state", () => {
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: true, memberCount: 1 },
+      seats: { used: 1, limit: 50, remaining: 49 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members: [],
+    createMemberModal: null,
+  });
+
+  assert.doesNotMatch(html, /data-modal="team-member-create"/);
 });
 
 test("experience membership without team entitlement opens the existing professional pricing flow", () => {

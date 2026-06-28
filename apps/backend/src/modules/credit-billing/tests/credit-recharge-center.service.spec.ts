@@ -222,7 +222,7 @@ async function seedRechargeFixture(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800199001', 'active')
+      VALUES ($1, '13800199001', 'active')
     `,
     [userId],
   );

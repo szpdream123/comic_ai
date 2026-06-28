@@ -8456,6 +8456,240 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-action="open-create-member"/);
   });
 
+  it("does not show the missing entitlement notice when professional membership is active but team overview is stale", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.isTeamMemberCreateOpen, true);
+    assert.equal(workbench.ui.teamMemberCreateNotice, "");
+  });
+
+  it("preloads assignable resources when opening the team member create modal", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {
+        async getProjects() {
+          calls.push("getProjects");
+          return {
+            projects: [{ id: "project-1", name: "整体测试项目", createdAt: "2026-06-28T00:00:00.000Z" }],
+            pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
+          };
+        },
+        async getWorkspaceScripts() {
+          calls.push("getWorkspaceScripts");
+          return {
+            scripts: [{ id: "script-1", title: "整体测试项目剧本", projectId: "project-1" }],
+          };
+        },
+        async getCanvasProjects() {
+          calls.push("getCanvasProjects");
+          return {
+            projects: [{ id: "canvas-1", title: "整体测试项目画布", projectId: "project-1", createdAt: "2026/06/28", status: "草稿" }],
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.deepEqual(calls, ["getProjects", "getWorkspaceScripts", "getCanvasProjects"]);
+    assert.equal(workbench.ui.projectLibrary.length, 1);
+    assert.equal(workbench.ui.scriptLibraryRecords.length, 1);
+    assert.equal(workbench.ui.canvasProjects.length, 1);
+    assert.equal(workbench.ui.canvasProjects[0].projectId, "project-1");
+
+    const unfilteredHtml = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+
+    assert.match(unfilteredHtml, /整体测试项目剧本/);
+    assert.match(unfilteredHtml, /整体测试项目画布/);
+
+    workbench.ui.teamMemberDraft = {
+      ...workbench.ui.teamMemberDraft,
+      projectIds: ["project-1"],
+    };
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+
+    assert.match(html, /整体测试项目剧本/);
+    assert.match(html, /整体测试项目画布/);
+  });
+
+  it("does not report seat limit when membership seats are available but overview seats are stale", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 0, used: 0, remaining: 0 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.teamMemberCreateNotice, "");
+  });
+
+  it("submits selected scripts and canvases by auto-including their owning projects", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        scriptLibraryRecords: [
+          { id: "script-1", title: "御魂之前-第一卷", projectId: "project-1" },
+        ],
+        canvasProjects: [
+          { id: "canvas-1", title: "画布项目 委屈", projectId: "project-2", createdAt: "2026/06/28", status: "草稿" },
+        ],
+        teamMemberDraft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: ["script-1"],
+          canvasIds: ["canvas-1"],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "temp-pass-1" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.deepEqual(createCalls[0].projectIds.sort(), ["project-1", "project-2"]);
+  });
+
   it("opens membership pricing and creates a membership payment order", async () => {
     const calls = [];
     const workbench = {
@@ -15841,6 +16075,26 @@ describe("production workbench project tab", () => {
     assert.match(html, /创建画布/);
     assert.doesNotMatch(html, /canvas-workspace/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
+  });
+
+  it("hides canvas creation for team member sessions", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [],
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /全部画布\(0\)/);
+    assert.match(html, /请等待管理员分配/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
+    assert.doesNotMatch(html, /创建画布/);
+    assert.doesNotMatch(html, /开通会员后创建画布/);
+    assert.doesNotMatch(html, /data-action="toggle-canvas-project-menu"/);
   });
 
   it("does not render gallery node totals", () => {

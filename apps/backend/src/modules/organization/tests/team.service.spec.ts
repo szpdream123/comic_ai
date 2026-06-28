@@ -64,22 +64,26 @@ describe("team service", { concurrency: false }, () => {
         password_hash: string | null;
         phone_e164: string | null;
         email: string | null;
+        team_account_suffix: string | null;
       }>(
         `
-          SELECT users.password_hash, users.phone_e164, users.email
+          SELECT users.password_hash, users.phone_e164, users.email, owner.team_account_suffix
           FROM users
           JOIN memberships ON memberships.user_id = users.id
+          CROSS JOIN users owner
           WHERE memberships.id = $1
+            AND owner.id = $2
         `,
-        [result.member.membershipId],
+        [result.member.membershipId, ownerUserId],
       );
 
       assert.match(users.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
       assert.notEqual(users.rows[0]?.password_hash, result.temporaryPassword);
       assert.equal(users.rows[0]?.phone_e164, null);
+      assert.match(users.rows[0]?.team_account_suffix ?? "", /^[a-z0-9]{6}$/);
       assert.equal(
         users.rows[0]?.email,
-        "director001.20000000000040008000000000000001@team.local",
+        `director001@${users.rows[0]?.team_account_suffix}.team.local`,
       );
     } finally {
       await db.close();
@@ -422,9 +426,15 @@ describe("team service", { concurrency: false }, () => {
         actor: ownerActor(),
         now,
       });
+      const secondOverview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
 
       assert.equal(overview.entitlements.teamMemberManagement, true);
       assert.equal(overview.seats.used, 0);
+      assert.match(overview.teamAccountSuffix, /^[a-z0-9]{6}$/);
+      assert.equal(secondOverview.teamAccountSuffix, overview.teamAccountSuffix);
       assert.deepEqual(overview.team, {
         activated: false,
         memberCount: 0,

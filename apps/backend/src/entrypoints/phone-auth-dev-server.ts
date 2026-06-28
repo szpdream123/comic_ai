@@ -61,6 +61,7 @@ import {
   requestPersistentLoginCode,
   revokePersistentAuthSession,
   verifyPersistentPasswordLogin,
+  verifyPersistentTeamMemberPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
 import { createAuthSession } from "../modules/identity/session.service.ts";
@@ -95,11 +96,12 @@ import {
 } from "../modules/project/project-upload-record.service.ts";
 import { createEpisodeForProject, listEpisodesForProject } from "../modules/project/episode-record.service.ts";
 import {
+  assertCapability,
   AuthorizationError,
   type ActorContext,
   resolveActorContext,
 } from "../modules/organization/actor-context.service.ts";
-import { queryOne } from "../modules/shared/db/sql.ts";
+import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
 import { createDevDb } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError } from "../modules/shared/idempotency/idempotency.service.ts";
@@ -351,6 +353,14 @@ interface AuthenticatedUser {
   id: string;
   phone: string | null;
   displayName?: string | null;
+  actorType?: "user" | "team_member";
+  teamMember?: {
+    id: string;
+    memberAccount: string;
+    memberLoginAccount: string;
+    memberName: string;
+    memberCredits: number;
+  } | null;
   creditBalance: number;
   displayCreditBalance: number;
   availableCredits: number;
@@ -1042,8 +1052,24 @@ function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
 
 async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; userId: string },
+  input: { organizationId: string; userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
+  const params: unknown[] = [input.organizationId, input.userId, `${standaloneCanvasRunProjectNamePrefix}%`];
+  const teamMemberVisibilitySql = input.teamMemberId
+    ? `
+        AND project_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM team_member_projects visible
+          WHERE visible.user_id = $2
+            AND visible.member_id = $4
+            AND visible.project_id = creator_canvas_projects.project_id
+        )
+      `
+    : "";
+  if (input.teamMemberId) {
+    params.push(input.teamMemberId);
+  }
   const result = await db.query<CanvasProjectRow>(
     `
       SELECT
@@ -1071,9 +1097,10 @@ async function listCanvasProjects(
           )
         )
         AND deleted_at IS NULL
+        ${teamMemberVisibilitySql}
       ORDER BY created_at ASC, id ASC
     `,
-    [input.organizationId, input.userId, `${standaloneCanvasRunProjectNamePrefix}%`],
+    params,
   );
   return result.rows.map(canvasProjectFromRow);
 }
@@ -1124,8 +1151,24 @@ async function createCanvasProjectRecord(
 
 async function findCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; userId: string; projectId: string },
+  input: { organizationId: string; userId: string; projectId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord | null> {
+  const params: unknown[] = [input.organizationId, input.userId, input.projectId, `${standaloneCanvasRunProjectNamePrefix}%`];
+  const teamMemberVisibilitySql = input.teamMemberId
+    ? `
+        AND project_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM team_member_projects visible
+          WHERE visible.user_id = $2
+            AND visible.member_id = $5
+            AND visible.project_id = creator_canvas_projects.project_id
+        )
+      `
+    : "";
+  if (input.teamMemberId) {
+    params.push(input.teamMemberId);
+  }
   const row = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -1147,9 +1190,10 @@ async function findCanvasProjectRecord(
           )
         )
         AND deleted_at IS NULL
+        ${teamMemberVisibilitySql}
       LIMIT 1
     `,
-    [input.organizationId, input.userId, input.projectId, `${standaloneCanvasRunProjectNamePrefix}%`],
+    params,
   );
   return row ? canvasProjectFromRow(row) : null;
 }
@@ -1682,6 +1726,405 @@ function parsePositiveInt(value: string | null, fallback: number, max: number) {
     return fallback;
   }
   return Math.min(Math.floor(parsed), max);
+}
+
+interface TeamMemberCreditLedgerRow {
+  id: string;
+  organization_id: string;
+  reservation_id: string | null;
+  allocation_id: string | null;
+  entry_type: string;
+  amount: number | string;
+  available_delta: number | string;
+  reserved_delta: number | string;
+  consumed_delta: number | string;
+  source_type: string;
+  source_id: string;
+  reason: string;
+  metadata_json: unknown;
+  user_id: string | null;
+  created_at: Date | string;
+  member_account: string | null;
+  member_login_account: string | null;
+  member_name: string | null;
+}
+
+interface AdminCreatorCreditLedgerRow {
+  id: string;
+  organization_id: string;
+  reservation_id: string | null;
+  allocation_id: string | null;
+  entry_type: string;
+  amount: number | string;
+  available_delta: number | string;
+  reserved_delta: number | string;
+  consumed_delta: number | string;
+  source_type: string;
+  source_id: string;
+  reason: string;
+  metadata_json: unknown;
+  user_id: string | null;
+  created_at: Date | string;
+  account_type: string;
+  account_label: string | null;
+  account_id: string | null;
+}
+
+async function listSimpleTeamMemberCreditLedger(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    memberId: string;
+    page: number;
+    pageSize: number;
+  },
+) {
+  const member = await queryOne<{
+    id: string;
+    member_credits: number | string;
+  }>(
+    db,
+    `
+      SELECT id, member_credits
+      FROM team_members
+      WHERE user_id = $1
+        AND id = $2
+        AND status = 'active'
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.userId, input.memberId],
+  );
+  if (!member) {
+    return { data: [], accountType: "子账户", summary: buildEmptyTeamMemberCreditSummary(), meta: { total: 0 } };
+  }
+
+  const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
+  const page = Math.max(1, Number(input.page ?? 1));
+  const offset = (page - 1) * pageSize;
+  const totalResult = await queryOne<{ count: number | string }>(
+    db,
+    `
+      SELECT COUNT(*) AS count
+      FROM credit_ledger_entries ledger
+      JOIN team_members member
+        ON member.user_id = $1
+       AND member.id = $2
+      WHERE (
+          ledger.user_id = $1
+          OR ledger.user_id = $2::uuid
+        )
+        AND ledger.metadata_json->>'memberId' = $2
+        AND ledger.source_type IN (
+          'team_member_credit_allocation',
+          'team_member_credit_deduction',
+          'team_member_generation_task',
+          'team_member_generation_refund'
+        )
+    `,
+    [input.userId, input.memberId],
+  );
+  const result = await db.query<TeamMemberCreditLedgerRow>(
+    `
+      SELECT
+        ledger.id,
+        ledger.organization_id,
+        ledger.reservation_id,
+        ledger.allocation_id,
+        ledger.entry_type,
+        ledger.amount,
+        ledger.available_delta,
+        ledger.reserved_delta,
+        ledger.consumed_delta,
+        ledger.source_type,
+        ledger.source_id,
+        ledger.reason,
+        ledger.metadata_json,
+        ledger.user_id,
+        ledger.created_at,
+        member.member_account,
+        member.member_login_account,
+        member.member_name
+      FROM credit_ledger_entries ledger
+      JOIN team_members member
+        ON member.user_id = $1
+       AND member.id = $2
+      WHERE (
+          ledger.user_id = $1
+          OR ledger.user_id = $2::uuid
+        )
+        AND ledger.metadata_json->>'memberId' = $2
+        AND ledger.source_type IN (
+          'team_member_credit_allocation',
+          'team_member_credit_deduction',
+          'team_member_generation_task',
+          'team_member_generation_refund'
+        )
+      ORDER BY ledger.created_at DESC, ledger.id ASC
+      LIMIT $3
+      OFFSET $4
+    `,
+    [input.userId, input.memberId, pageSize, offset],
+  );
+  const rows = result.rows.map(teamMemberLedgerFromRow);
+  const totalConsumedCredits = rows
+    .filter((row) => Number(row.availableDelta ?? 0) < 0)
+    .reduce((sum, row) => sum + Math.abs(Number(row.availableDelta ?? 0)), 0);
+  const memberCredits = Number(member.member_credits ?? 0);
+  return {
+    data: rows,
+    accountType: "子账户",
+    summary: {
+      balanceScope: "team_member",
+      displayAvailableCredits: memberCredits,
+      displayCreditBalance: memberCredits,
+      displayReservedCredits: 0,
+      frozenCredits: 0,
+      totalConsumedCredits,
+    },
+    meta: {
+      total: Number(totalResult?.count ?? rows.length),
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(Number(totalResult?.count ?? rows.length) / pageSize)),
+    },
+  };
+}
+
+function buildEmptyTeamMemberCreditSummary() {
+  return {
+    balanceScope: "team_member",
+    displayAvailableCredits: 0,
+    displayCreditBalance: 0,
+    displayReservedCredits: 0,
+    frozenCredits: 0,
+    totalConsumedCredits: 0,
+  };
+}
+
+function teamMemberLedgerFromRow(row: TeamMemberCreditLedgerRow) {
+  const metadata = normalizeRecordJson(row.metadata_json);
+  const sourceType = String(row.source_type ?? "");
+  const amount = Number(row.amount ?? 0);
+  const availableDelta = Number(row.available_delta ?? 0);
+  const accountLabel = resolveCreditLedgerAccountLabel({
+    accountType: "subaccount",
+    accountLabel: row.member_login_account,
+    memberName: row.member_name,
+    memberAccount: row.member_account,
+  });
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    reservationId: row.reservation_id,
+    allocationId: row.allocation_id,
+    entryType: availableDelta < 0 ? "consume" : "grant",
+    amount,
+    availableDelta,
+    reservedDelta: 0,
+    consumedDelta: availableDelta < 0 ? Math.abs(amount) : 0,
+    sourceType,
+    sourceId: row.source_id,
+    reason: row.reason,
+    metadata,
+    accountType: "subaccount",
+    accountLabel,
+    accountId: String(metadata.memberId ?? ""),
+    content:
+      sourceType === "team_member_credit_deduction"
+        ? "主账号扣减积分"
+        : sourceType === "team_member_generation_task"
+          ? "生成任务消耗积分"
+          : sourceType === "team_member_generation_refund"
+            ? "生成失败返还积分"
+            : "主账号分配积分",
+    userId: row.user_id,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+async function listCreatorAdminCreditLedger(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    organizationId: string;
+    workspaceId: string | null;
+    page: number;
+    pageSize: number;
+    baseLedger: {
+      data?: unknown[];
+      accountType?: string;
+      summary?: unknown;
+      meta?: unknown;
+    };
+  },
+) {
+  const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
+  const page = Math.max(1, Number(input.page ?? 1));
+  const offset = (page - 1) * pageSize;
+  const totalResult = await queryOne<{ count: number | string }>(
+    db,
+    `
+      SELECT COUNT(*) AS count
+      FROM credit_ledger_entries ledger
+      LEFT JOIN team_members member
+        ON member.user_id = $1
+       AND member.deleted_at IS NULL
+       AND (
+          member.id::text = ledger.metadata_json->>'memberId'
+          OR member.id::text = ledger.metadata_json->>'targetUserId'
+          OR member.id = ledger.user_id
+        )
+      WHERE ledger.organization_id = $2
+        AND (
+          ledger.user_id = $1
+          OR ledger.created_by_user_id = $1
+          OR member.id IS NOT NULL
+        )
+        AND (
+          $3::uuid IS NULL
+          OR ledger.metadata_json->>'workspaceId' IS NULL
+          OR ledger.metadata_json->>'workspaceId' = $3::text
+        )
+    `,
+    [input.userId, input.organizationId, input.workspaceId],
+  );
+  const result = await db.query<AdminCreatorCreditLedgerRow>(
+    `
+      SELECT
+        ledger.id,
+        ledger.organization_id,
+        ledger.reservation_id,
+        ledger.allocation_id,
+        ledger.entry_type,
+        ledger.amount,
+        ledger.available_delta,
+        ledger.reserved_delta,
+        ledger.consumed_delta,
+        ledger.source_type,
+        ledger.source_id,
+        ledger.reason,
+        ledger.metadata_json,
+        ledger.user_id,
+        ledger.created_at,
+        CASE WHEN member.id IS NULL THEN 'owner' ELSE 'subaccount' END AS account_type,
+        CASE
+          WHEN member.id IS NULL THEN '主账户'
+          ELSE COALESCE(NULLIF(member.member_login_account, ''), NULLIF(member.member_name, ''), NULLIF(member.member_account, ''), '子账户')
+        END AS account_label,
+        member.id AS account_id
+      FROM credit_ledger_entries ledger
+      LEFT JOIN team_members member
+        ON member.user_id = $1
+       AND member.deleted_at IS NULL
+       AND (
+          member.id::text = ledger.metadata_json->>'memberId'
+          OR member.id::text = ledger.metadata_json->>'targetUserId'
+          OR member.id = ledger.user_id
+        )
+      WHERE ledger.organization_id = $2
+        AND (
+          ledger.user_id = $1
+          OR ledger.created_by_user_id = $1
+          OR member.id IS NOT NULL
+        )
+        AND (
+          $3::uuid IS NULL
+          OR ledger.metadata_json->>'workspaceId' IS NULL
+          OR ledger.metadata_json->>'workspaceId' = $3::text
+        )
+      ORDER BY ledger.created_at DESC, ledger.id ASC
+      LIMIT $4
+      OFFSET $5
+    `,
+    [input.userId, input.organizationId, input.workspaceId, pageSize, offset],
+  );
+  const total = Number(totalResult?.count ?? 0);
+  return {
+    ...input.baseLedger,
+    accountType: input.baseLedger.accountType ?? "管理员账户",
+    data: result.rows.map(adminCreatorLedgerFromRow),
+    meta: {
+      ...((input.baseLedger.meta && typeof input.baseLedger.meta === "object") ? input.baseLedger.meta : {}),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
+  };
+}
+
+function adminCreatorLedgerFromRow(row: AdminCreatorCreditLedgerRow) {
+  const metadata = normalizeRecordJson(row.metadata_json);
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    reservationId: row.reservation_id,
+    allocationId: row.allocation_id,
+    entryType: row.entry_type,
+    amount: Number(row.amount ?? 0),
+    availableDelta: Number(row.available_delta ?? 0),
+    reservedDelta: Number(row.reserved_delta ?? 0),
+    consumedDelta: Number(row.consumed_delta ?? 0),
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    reason: row.reason,
+    metadata,
+    accountType: row.account_type === "subaccount" ? "subaccount" : "owner",
+    accountLabel: resolveCreditLedgerAccountLabel({
+      accountType: row.account_type,
+      accountLabel: row.account_label,
+      memberName: metadata.memberName,
+      memberAccount: metadata.memberAccount,
+    }),
+    accountId: row.account_id,
+    content: creditLedgerContentFromEntry(row, metadata),
+    userId: row.user_id,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function creditLedgerContentFromEntry(
+  row: Pick<AdminCreatorCreditLedgerRow, "source_type" | "reason">,
+  metadata: Record<string, unknown>,
+) {
+  const explicit = String(metadata.content ?? "").trim();
+  if (explicit) return explicit;
+  const sourceType = String(row.source_type ?? "").trim();
+  if (sourceType === "team_member_credit_allocation") return "主账号分配积分";
+  if (sourceType === "team_member_credit_deduction") return "主账号扣减积分";
+  if (sourceType === "team_member_generation_task") return "AI分镜积分消耗";
+  if (sourceType === "team_member_generation_refund") return "生成失败返还积分";
+  if (sourceType === "credit_wallet_transfer") return "个人积分转入团队积分池";
+  return normalizeLedgerReasonToChinese(row.reason) || "积分变动";
+}
+
+function normalizeLedgerReasonToChinese(reason: unknown) {
+  const text = String(reason ?? "").trim();
+  if (!text) return "";
+  const aliases: Record<string, string> = {
+    "membership period gifted credits": "会员赠送积分",
+    "wallet freeze removed and credits released": "会员续费解冻积分",
+    "membership lapsed wallet frozen": "会员到期冻结积分",
+    "membership frozen credits expired": "会员冻结积分过期失效",
+    "credit lot expired": "积分批次过期失效",
+    "transfer personal credits to team pool": "个人积分转入团队积分池",
+  };
+  return aliases[text.toLowerCase()] ?? text;
+}
+
+function resolveCreditLedgerAccountLabel(input: {
+  accountType?: unknown;
+  accountLabel?: unknown;
+  memberName?: unknown;
+  memberAccount?: unknown;
+}) {
+  const explicit = String(input.accountLabel ?? "").trim();
+  if (explicit) return explicit;
+  if (String(input.accountType ?? "") === "subaccount") {
+    return String(input.memberName ?? input.memberAccount ?? "子账户").trim() || "子账户";
+  }
+  return "主账户";
 }
 
 function parseRuntimePositiveInt(value: string | undefined, fallback: number, max: number) {
@@ -2320,6 +2763,7 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     workspaceId: string | null;
     projectId: string;
     createdByUserId: string;
+    teamMemberId?: string | null;
     idempotencyKey: string;
     promptPreview: string;
     modelConfig?: AiModelConfigRecord;
@@ -2335,6 +2779,7 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
   const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
   const metadata = {
     targetUserId: input.createdByUserId,
+    memberId: input.teamMemberId ?? undefined,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
     modelCode,
@@ -2361,6 +2806,230 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     metadata,
     now: input.now,
   });
+}
+
+async function reserveAndConsumeSimpleTeamMemberCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    workspaceId: string | null;
+    projectId: string;
+    teamMemberId: string;
+    idempotencyKey: string;
+    promptPreview: string;
+    modelConfig?: AiModelConfigRecord;
+    now: Date;
+  },
+) {
+  const amount = generationCostFromModelConfig(0, input.modelConfig);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  const member = await queryOne<{ member_credits: number | string }>(
+    db,
+    `
+      SELECT member_credits
+      FROM team_members
+      WHERE id = $1
+        AND status = 'active'
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.teamMemberId],
+  );
+  const availableCredits = Number(member?.member_credits ?? 0);
+  if (availableCredits < amount) {
+    throw new InsufficientCreditsError();
+  }
+  const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+  const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
+  const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
+  const metadata = {
+    targetUserId: input.teamMemberId,
+    memberId: input.teamMemberId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    modelCode,
+    modelLabel,
+    mediaType: "text",
+    kind: "text",
+    taskType: "ai_storyboard_preview",
+    operation: "ai_storyboard_preview",
+    billingEvent: "consumed",
+    outcome: "consumed",
+    promptPreview: input.promptPreview,
+  };
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        UPDATE team_members
+        SET member_credits = member_credits - $2,
+            updated_at = $3
+        WHERE id = $1
+          AND status = 'active'
+          AND deleted_at IS NULL
+          AND member_credits >= $2
+      `,
+      [input.teamMemberId, amount, input.now],
+    );
+    const updated = await queryOne<{ member_credits: number | string }>(
+      db,
+      `
+        SELECT member_credits
+        FROM team_members
+        WHERE id = $1
+          AND status = 'active'
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+      [input.teamMemberId],
+    );
+    if (!updated || Number(updated.member_credits ?? 0) < 0) {
+      throw new InsufficientCreditsError();
+    }
+
+    const reservationId = uuidFromIdempotencyKey(input.idempotencyKey);
+    await queryOne<{ id: string }>(
+      db,
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          user_id,
+          reservation_id,
+          allocation_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+          $1, $2, $3, NULL, NULL, 'consume', $4, 0, 0, $4,
+          'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
+        )
+        RETURNING id
+      `,
+      [
+        randomUUID(),
+        input.organizationId,
+        input.teamMemberId,
+        amount,
+        reservationId,
+        "成员生成消耗积分",
+        JSON.stringify(metadata),
+        input.now,
+      ],
+    );
+
+    await db.query("COMMIT");
+    return {
+      reservation: {
+        id: reservationId,
+        organizationId: input.organizationId,
+        userId: input.teamMemberId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        workflowId: null,
+        taskId: null,
+        amountTotal: amount,
+        amountReserved: 0,
+        amountConsumed: amount,
+        amountReleased: 0,
+        status: "settled" as const,
+        sourceType: "team_member_generation_task",
+        sourceId: reservationId,
+        reason: "成员生成消耗积分",
+        metadata,
+        createdByUserId: input.teamMemberId,
+        createdAt: input.now,
+        updatedAt: input.now,
+      },
+    };
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+async function releaseSimpleTeamMemberCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    organizationId: string;
+    teamMemberId: string;
+    amount: number;
+    sourceId: string;
+    reason: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return null;
+  }
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        UPDATE team_members
+        SET member_credits = member_credits + $3,
+            updated_at = $4
+        WHERE id = $1
+          AND status <> 'deleted'
+      `,
+      [input.teamMemberId, input.amount, input.amount, input.now],
+    );
+    await queryOne<{ id: string }>(
+      db,
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          user_id,
+          reservation_id,
+          allocation_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, $3, $8)
+        RETURNING id
+      `,
+      [
+        randomUUID(),
+        input.organizationId,
+        input.teamMemberId,
+        input.amount,
+        input.sourceId,
+        input.reason,
+        JSON.stringify({
+          ...input.metadata,
+          memberId: input.teamMemberId,
+        }),
+        input.now,
+      ],
+    );
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 async function hasActiveGenerationMembership(
@@ -2858,6 +3527,40 @@ async function getUserCreditBalance(
   };
 }
 
+async function getSimpleTeamMemberCreditBalance(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    memberId: string;
+  },
+) {
+  const row = await queryOne<{
+    member_credits: number | string;
+  }>(
+    db,
+    `
+      SELECT member_credits
+      FROM team_members
+      WHERE user_id = $1
+        AND id = $2
+        AND status = 'active'
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [input.userId, input.memberId],
+  );
+  const availableCredits = Number(row?.member_credits ?? 0);
+  return {
+    availableCredits,
+    creditBalance: availableCredits,
+    displayCreditBalance: availableCredits,
+    reservedCredits: 0,
+    frozenCredits: 0,
+    creditFrozenAt: null,
+    creditFrozenUntil: null,
+  };
+}
+
 async function getEpisodeContext(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -2909,11 +3612,17 @@ async function getEpisodeContext(
     return null;
   }
 
+  const credit = actor.teamMember
+    ? await getSimpleTeamMemberCreditBalance(db, {
+        userId: input.userId,
+        memberId: actor.teamMember.id,
+      })
+    : await getUserCreditBalance(db, input.userId);
   return {
     actor,
     episode,
     project,
-    ...(await getUserCreditBalance(db, input.userId)),
+    ...credit,
     userId: input.userId,
   };
 }
@@ -4756,10 +5465,15 @@ async function createEpisodeGenerationTask(
     fallbackQueueName: fallbackSubmitQueueName,
   });
   if (estimatedCost > 0) {
-    const hasMembership = await hasActiveGenerationMembership(db, {
-      organizationId: context.actor.organizationId,
-      now: input.now,
-    });
+    const hasMembership = context.actor.teamMember
+      ? await hasActiveGenerationMembership(db, {
+          organizationId: context.actor.organizationId,
+          now: input.now,
+        })
+      : await hasActiveGenerationMembership(db, {
+          organizationId: context.actor.organizationId,
+          now: input.now,
+        });
     if (!hasMembership) {
       throw new GenerationMembershipRequiredError();
     }
@@ -4796,7 +5510,7 @@ async function createEpisodeGenerationTask(
       }
     : modelExecution.parameters;
   const generationPriority = await resolveMembershipGenerationPriority(db, {
-    organizationId: context.actor.organizationId,
+    userId: context.actor.actorId,
     modelCode: requestedModelCode,
     now: input.now,
   });
@@ -4820,6 +5534,7 @@ async function createEpisodeGenerationTask(
     audioEnabled: Boolean(input.body.audioEnabled),
     musicEnabled: Boolean(input.body.musicEnabled),
     lipSyncEnabled: Boolean(input.body.lipSyncEnabled),
+    teamMemberId: context.actor.teamMember?.id ?? null,
     ...generationPrioritySnapshot,
   };
   const store = new SqlIdempotencyRecordStore(db);
@@ -4891,6 +5606,7 @@ async function createEpisodeGenerationTask(
   const task = workflow.tasks[0]!;
   const baseBillingMetadata = {
     targetUserId: context.userId,
+    memberId: context.actor.teamMember?.id ?? undefined,
     targetMembershipId: context.actor.membershipId,
     taskId: task.id,
     workflowId: workflow.workflow.id,
@@ -4931,26 +5647,142 @@ async function createEpisodeGenerationTask(
     [task.id, started.record.id, input.idempotencyKey],
   );
 
-  const reservation = await reserveCredits(db, {
-    organizationId: context.actor.organizationId,
-    userId: context.userId,
-    workspaceId: context.actor.workspaceId,
-    projectId: context.project.id,
-    workflowId: workflow.workflow.id,
-    taskId: task.id,
-    amount: estimatedCost,
-    sourceType: "episode_generation_task",
-    sourceId: task.id,
-    reason: `${input.kind} generation`,
-    metadata: buildGenerationBillingMetadata({
-      ...baseBillingMetadata,
-      billingEvent: "reserved",
-      outcome: "reserved",
-      settledAt: input.now,
-    }),
-    createdByUserId: context.userId,
-    now: input.now,
-  });
+  const teamMemberId = context.actor.teamMember?.id ?? null;
+  let creditReservationId: string | null = null;
+  let creditSummary: Record<string, unknown> = {};
+  if (teamMemberId) {
+    const consumedAt = input.now;
+    const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    const member = await queryOne<{ member_credits: number | string }>(
+      db,
+      `
+        SELECT member_credits
+        FROM team_members
+        WHERE id = $1
+          AND user_id = $2
+          AND status = 'active'
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+      [teamMemberId, context.userId],
+    );
+    const availableCredits = Number(member?.member_credits ?? 0);
+    if (availableCredits < estimatedCost) {
+      throw new InsufficientCreditsError();
+    }
+    await db.query("BEGIN");
+    try {
+      await db.query(
+        `
+          UPDATE team_members
+          SET member_credits = member_credits - $2,
+              updated_at = $3
+          WHERE id = $1
+            AND user_id = $4
+            AND status = 'active'
+            AND deleted_at IS NULL
+            AND member_credits >= $2
+        `,
+        [teamMemberId, estimatedCost, consumedAt, context.userId],
+      );
+      const updated = await queryOne<{ member_credits: number | string }>(
+        db,
+        `
+          SELECT member_credits
+          FROM team_members
+          WHERE id = $1
+            AND user_id = $2
+            AND status = 'active'
+            AND deleted_at IS NULL
+          LIMIT 1
+        `,
+        [teamMemberId, context.userId],
+      );
+      if (!updated || Number(updated.member_credits ?? 0) < 0) {
+        throw new InsufficientCreditsError();
+      }
+      await queryOne<{ id: string }>(
+        db,
+        `
+          INSERT INTO credit_ledger_entries (
+            id,
+            organization_id,
+            user_id,
+            reservation_id,
+            allocation_id,
+            entry_type,
+            amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
+            reason,
+            metadata_json,
+            created_by_user_id,
+            created_at
+          )
+          VALUES (
+            $1, $2, $3, NULL, NULL, 'consume', $4, 0, 0, $4,
+            'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
+          )
+          RETURNING id
+        `,
+        [
+          randomUUID(),
+          context.actor.organizationId,
+          context.userId,
+          estimatedCost,
+          sourceId,
+          `${input.kind} generation`,
+          JSON.stringify(buildGenerationBillingMetadata({
+            ...baseBillingMetadata,
+            memberId: teamMemberId,
+            billingEvent: "consumed",
+            outcome: "consumed",
+            settledAt: consumedAt,
+          })),
+          consumedAt,
+        ],
+      );
+      await db.query("COMMIT");
+      creditSummary = {
+        consumed: estimatedCost,
+        settledAt: consumedAt.toISOString(),
+        memberId: teamMemberId,
+        sourceId,
+      };
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  } else {
+    const reservation = await reserveCredits(db, {
+      organizationId: context.actor.organizationId,
+      userId: context.userId,
+      workspaceId: context.actor.workspaceId,
+      projectId: context.project.id,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      amount: estimatedCost,
+      sourceType: "episode_generation_task",
+      sourceId: task.id,
+      reason: `${input.kind} generation`,
+      metadata: buildGenerationBillingMetadata({
+        ...baseBillingMetadata,
+        billingEvent: "reserved",
+        outcome: "reserved",
+        settledAt: input.now,
+      }),
+      createdByUserId: context.userId,
+      now: input.now,
+    });
+    creditReservationId = reservation.reservation.id;
+    creditSummary = {
+      reservationId: reservation.reservation.id,
+      reserved: estimatedCost,
+    };
+  }
 
   await upsertQueuedGenerationTaskSnapshot(db, {
     organizationId: context.actor.organizationId,
@@ -4962,7 +5794,7 @@ async function createEpisodeGenerationTask(
     workflowId: workflow.workflow.id,
     taskId: task.id,
     modelConfigId: modelConfig?.id ?? null,
-    creditReservationId: reservation.reservation.id,
+    creditReservationId,
     modelCode: requestedModelCode,
     mediaType: input.kind,
     taskMode: modelExecution.taskMode,
@@ -4974,13 +5806,41 @@ async function createEpisodeGenerationTask(
       targetId: snapshotTargetId,
       ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
       referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+      teamMemberId,
     },
-    creditSummary: {
-      reservationId: reservation.reservation.id,
-      reserved: estimatedCost,
-    },
+    creditSummary,
     now: input.now,
   });
+
+  const reservation = creditReservationId
+    ? { reservation: { id: creditReservationId } }
+    : null;
+
+  const refundTeamMemberGenerationCredits = async (input: {
+    reason: string;
+    failureCode?: string;
+    providerRequestId?: string | null;
+    now: Date;
+  }) => {
+    if (!teamMemberId || creditReservationId) {
+      return;
+    }
+    await releaseSimpleTeamMemberCredits(db, {
+      organizationId: context.actor.organizationId,
+      teamMemberId,
+      amount: estimatedCost,
+      sourceId: task.id,
+      reason: input.reason,
+      metadata: {
+        ...baseBillingMetadata,
+        memberId: teamMemberId,
+        taskId: task.id,
+        ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+        ...(input.providerRequestId ? { providerRequestId: input.providerRequestId } : {}),
+      },
+      now: input.now,
+    });
+  };
 
   if (shouldUseBullMQDispatch) {
     await appendGenerationTaskCreatedOutboxEvent(db, {
@@ -5144,26 +6004,28 @@ async function createEpisodeGenerationTask(
         now: input.now,
       });
       await aggregateWorkflowStatus(db, workflow.workflow.id);
-      await settleReservationAllocation(db, {
-        reservationId: reservation.reservation.id,
-        allocationKey: "gpt-image-2-result",
-        amount: estimatedCost,
-        outcome: "consumed",
-        taskId: task.id,
-        attemptId: claim.attempt.id,
-        providerRequestId,
-        metadata: buildGenerationBillingMetadata({
-          ...baseBillingMetadata,
-          attemptId: claim.attempt.id,
-          billingEvent: "consumed",
+      if (reservation) {
+        await settleReservationAllocation(db, {
+          reservationId: reservation.reservation.id,
+          allocationKey: "gpt-image-2-result",
+          amount: estimatedCost,
           outcome: "consumed",
-          provider: providerLabel,
+          taskId: task.id,
+          attemptId: claim.attempt.id,
           providerRequestId,
-          externalRequestId: submitted.request.externalRequestId,
-          settledAt: input.now,
-        }),
-        now: input.now,
-      });
+          metadata: buildGenerationBillingMetadata({
+            ...baseBillingMetadata,
+            attemptId: claim.attempt.id,
+            billingEvent: "consumed",
+            outcome: "consumed",
+            provider: providerLabel,
+            providerRequestId,
+            externalRequestId: submitted.request.externalRequestId,
+            settledAt: input.now,
+          }),
+          now: input.now,
+        });
+      }
       await markGenerationTaskSnapshotSucceeded(db, {
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -5208,27 +6070,36 @@ async function createEpisodeGenerationTask(
         now: input.now,
       });
       await aggregateWorkflowStatus(db, workflow.workflow.id);
-      await settleReservationAllocation(db, {
-        reservationId: reservation.reservation.id,
-        allocationKey: failureCode,
-        amount: estimatedCost,
-        outcome: "released",
-        taskId: task.id,
-        attemptId: claim.attempt.id,
-        providerRequestId,
-        metadata: buildGenerationBillingMetadata({
-          ...baseBillingMetadata,
-          attemptId: claim.attempt.id,
-          billingEvent: "released",
+      if (reservation) {
+        await settleReservationAllocation(db, {
+          reservationId: reservation.reservation.id,
+          allocationKey: failureCode,
+          amount: estimatedCost,
           outcome: "released",
-          provider: modelConfig?.providerName || requestSnapshot.model || "image-provider",
+          taskId: task.id,
+          attemptId: claim.attempt.id,
           providerRequestId,
+          metadata: buildGenerationBillingMetadata({
+            ...baseBillingMetadata,
+            attemptId: claim.attempt.id,
+            billingEvent: "released",
+            outcome: "released",
+            provider: modelConfig?.providerName || requestSnapshot.model || "image-provider",
+            providerRequestId,
+            failureCode,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            settledAt: input.now,
+          }),
+          now: input.now,
+        });
+      } else {
+        await refundTeamMemberGenerationCredits({
+          reason: `${input.kind} generation失败返还积分`,
           failureCode,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          settledAt: input.now,
-        }),
-        now: input.now,
-      });
+          providerRequestId,
+          now: input.now,
+        });
+      }
       await markGenerationTaskSnapshotFailed(db, {
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -5444,23 +6315,25 @@ async function createEpisodeGenerationTask(
     now: input.now,
   });
   await aggregateWorkflowStatus(db, workflow.workflow.id);
-  await settleReservationAllocation(db, {
-    reservationId: reservation.reservation.id,
-    allocationKey: "mock-result",
-    amount: estimatedCost,
-    outcome: "consumed",
-    taskId: task.id,
-    attemptId: claim.attempt.id,
-    metadata: buildGenerationBillingMetadata({
-      ...baseBillingMetadata,
-      attemptId: claim.attempt.id,
-      billingEvent: "consumed",
+  if (reservation) {
+    await settleReservationAllocation(db, {
+      reservationId: reservation.reservation.id,
+      allocationKey: "mock-result",
+      amount: estimatedCost,
       outcome: "consumed",
-      provider: "mock",
-      settledAt: input.now,
-    }),
-    now: input.now,
-  });
+      taskId: task.id,
+      attemptId: claim.attempt.id,
+      metadata: buildGenerationBillingMetadata({
+        ...baseBillingMetadata,
+        attemptId: claim.attempt.id,
+        billingEvent: "consumed",
+        outcome: "consumed",
+        provider: "mock",
+        settledAt: input.now,
+      }),
+      now: input.now,
+    });
+  }
   await markGenerationTaskSnapshotSucceeded(db, {
     taskId: task.id,
     attemptId: claim.attempt.id,
@@ -9464,7 +10337,51 @@ async function findAuthenticatedUser(
   if (!user || user.status !== "active") {
     return undefined;
   }
+  const teamMemberSession = await queryOne<{
+    member_id: string;
+    member_account: string;
+    member_login_account: string;
+    member_name: string;
+    member_credits: number | string;
+    member_session_status: "active" | "revoked" | "expired";
+    member_session_expires_at: Date | string;
+    member_status: "active" | "disabled" | "deleted";
+  }>(
+    db,
+    `
+      SELECT
+        member_session.member_id,
+        member.member_account,
+        member.member_login_account,
+        member.member_name,
+        member.member_credits,
+        member_session.status AS member_session_status,
+        member_session.expires_at AS member_session_expires_at,
+        member.status AS member_status
+      FROM team_member_auth_sessions member_session
+      JOIN team_members member
+        ON member.id = member_session.member_id
+       AND member.user_id = member_session.user_id
+      WHERE member_session.auth_session_id = $1
+        AND member_session.user_id = $2
+      LIMIT 1
+    `,
+    [session.id, user.id],
+  );
+  if (
+    teamMemberSession &&
+    (
+      teamMemberSession.member_session_status !== "active" ||
+      new Date(teamMemberSession.member_session_expires_at).getTime() <= now.getTime() ||
+      teamMemberSession.member_status !== "active"
+    )
+  ) {
+    return undefined;
+  }
   const credit = await getUserCreditBalance(db, user.id);
+  const effectiveCredits = teamMemberSession
+    ? Number(teamMemberSession.member_credits ?? 0)
+    : credit.availableCredits;
 
   return {
     sessionToken,
@@ -9472,13 +10389,23 @@ async function findAuthenticatedUser(
       id: user.id,
       phone: user.phone_e164,
       displayName: user.display_name,
-      creditBalance: credit.creditBalance,
-      displayCreditBalance: credit.displayCreditBalance,
-      availableCredits: credit.availableCredits,
-      reservedCredits: credit.reservedCredits,
-      frozenCredits: credit.frozenCredits,
-      creditFrozenAt: credit.creditFrozenAt,
-      creditFrozenUntil: credit.creditFrozenUntil,
+      actorType: teamMemberSession ? "team_member" : "user",
+      teamMember: teamMemberSession
+        ? {
+            id: teamMemberSession.member_id,
+            memberAccount: teamMemberSession.member_account,
+            memberLoginAccount: teamMemberSession.member_login_account,
+            memberName: teamMemberSession.member_name,
+            memberCredits: Number(teamMemberSession.member_credits ?? 0),
+          }
+        : null,
+      creditBalance: effectiveCredits,
+      displayCreditBalance: effectiveCredits,
+      availableCredits: effectiveCredits,
+      reservedCredits: teamMemberSession ? 0 : credit.reservedCredits,
+      frozenCredits: teamMemberSession ? 0 : credit.frozenCredits,
+      creditFrozenAt: teamMemberSession ? null : credit.creditFrozenAt,
+      creditFrozenUntil: teamMemberSession ? null : credit.creditFrozenUntil,
     },
   };
 }
@@ -9489,6 +10416,7 @@ async function updateAuthenticatedUserProfile(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     userId: string;
+    teamMemberId?: string;
     displayName: string;
     now: Date;
   },
@@ -9499,6 +10427,7 @@ async function updateAuthenticatedUserProfile(
         id: string;
         phone: string | null;
         displayName: string | null;
+        teamMember?: AuthenticatedUser["teamMember"];
       };
     }
   | { ok: false; status: number; body: { error: string; message: string } }
@@ -9518,6 +10447,52 @@ async function updateAuthenticatedUserProfile(
       body: {
         error: "display_name_too_long",
         message: `显示昵称最多 ${ACCOUNT_DISPLAY_NAME_MAX_LENGTH} 个字。`,
+      },
+    };
+  }
+
+  if (input.teamMemberId) {
+    const updated = await queryOne<{
+      id: string;
+      member_account: string;
+      member_login_account: string;
+      member_name: string;
+      member_credits: number | string;
+    }>(
+      db,
+      `
+        UPDATE team_members
+        SET member_name = $3,
+            updated_at = $4
+        WHERE user_id = $1
+          AND id = $2
+          AND status = 'active'
+        RETURNING id, member_account, member_login_account, member_name, member_credits
+      `,
+      [input.userId, input.teamMemberId, displayName, input.now],
+    );
+
+    if (!updated) {
+      return {
+        ok: false,
+        status: 404,
+        body: { error: "team_member_not_found", message: "当前子账户不存在或已停用。" },
+      };
+    }
+
+    return {
+      ok: true,
+      user: {
+        id: input.userId,
+        phone: null,
+        displayName: updated.member_name,
+        teamMember: {
+          id: updated.id,
+          memberAccount: updated.member_account,
+          memberLoginAccount: updated.member_login_account,
+          memberName: updated.member_name,
+          memberCredits: Number(updated.member_credits ?? 0),
+        },
       },
     };
   }
@@ -9560,6 +10535,7 @@ async function changeAuthenticatedUserPassword(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     userId: string;
+    teamMemberId?: string;
     currentPassword: string;
     newPassword: string;
     now: Date;
@@ -9587,6 +10563,57 @@ async function changeAuthenticatedUserPassword(
       status: 400,
       body: { error: "new_password_too_short", message: "新密码至少需要 8 位。" },
     };
+  }
+
+  if (input.teamMemberId) {
+    const member = await queryOne<{
+      id: string;
+      member_password_hash: string;
+    }>(
+      db,
+      `
+        SELECT id, member_password_hash
+        FROM team_members
+        WHERE user_id = $1
+          AND id = $2
+          AND status = 'active'
+        LIMIT 1
+      `,
+      [input.userId, input.teamMemberId],
+    );
+    if (!member) {
+      return {
+        ok: false,
+        status: 404,
+        body: { error: "team_member_not_found", message: "当前子账户不存在或已停用。" },
+      };
+    }
+
+    const validCurrentPassword = await verifyTeamCredential({
+      password: currentPassword,
+      passwordHash: member.member_password_hash,
+    });
+    if (!validCurrentPassword) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "invalid_current_password", message: "当前密码不正确。" },
+      };
+    }
+
+    const nextPasswordHash = await createUserPasswordHash(newPassword);
+    await db.query(
+      `
+        UPDATE team_members
+        SET member_password_hash = $3,
+            updated_at = $4
+        WHERE user_id = $1
+          AND id = $2
+      `,
+      [input.userId, input.teamMemberId, nextPasswordHash, input.now],
+    );
+
+    return { ok: true };
   }
 
   const user = await queryOne<{
@@ -9693,6 +10720,7 @@ async function hasActiveOrganizationEntitlement(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     organizationId: string;
+    userId?: string | null;
     entitlementKey: string;
     now: Date;
   },
@@ -9706,9 +10734,18 @@ async function hasActiveOrganizationEntitlement(
         AND entitlement_key = $2
         AND status = 'active'
         AND (expires_at IS NULL OR expires_at > $3)
+      UNION ALL
+      SELECT membership.user_id::text AS id
+      FROM memberships membership
+      WHERE membership.organization_id = $1
+        AND membership.user_id = $4
+        AND membership.status = 'active'
+        AND membership.membership_tier = 'professional'
+        AND membership.expires_at > $3
+        AND $2 IN ('team_member_management', 'team_asset_library', 'team_dashboard')
       LIMIT 1
     `,
-    [input.organizationId, input.entitlementKey, input.now],
+    [input.organizationId, input.entitlementKey, input.now, input.userId ?? null],
   );
 
   return Boolean(entitlement);
@@ -13467,6 +14504,59 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "POST" && pathname === "/api/auth/team-member/password/login") {
+        const body = (await readJsonBody(request)) as {
+          account: string;
+          password: string;
+          remember?: boolean;
+        };
+        const now = new Date();
+        const verified = await verifyPersistentTeamMemberPasswordLogin(db, {
+          account: String(body.account ?? ""),
+          password: String(body.password ?? ""),
+          now,
+          remember: body.remember !== false,
+        });
+
+        if (verified.kind !== "verified") {
+          const status =
+            verified.kind === "user_disabled" ||
+            verified.kind === "team_member_disabled" ||
+            verified.kind === "team_member_deleted"
+              ? 403
+              : 401;
+          return writeJson(response, {
+            status,
+            body: { error: verified.kind },
+          });
+        }
+
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            actorType: "team_member",
+            userId: verified.user.id,
+            memberId: verified.member.id,
+            memberAccount: verified.member.memberAccount,
+            memberLoginAccount: verified.member.memberLoginAccount,
+            memberName: verified.member.memberName,
+            user: {
+              id: verified.user.id,
+              phone: verified.user.phone,
+              displayName: verified.user.displayName ?? null,
+            },
+            teamMember: verified.member,
+            session: {
+              id: verified.session.id,
+              expiresAt: verified.session.expiresAt.toISOString(),
+            },
+          },
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+        });
+      }
+
       if (request.method === "POST" && pathname === "/api/auth/password/login") {
         const body = (await readJsonBody(request)) as {
           account: string;
@@ -13567,6 +14657,7 @@ export function createPhoneAuthDevServer(
         };
         const updated = await updateAuthenticatedUserProfile(db, {
           userId: authenticated.user.id,
+          teamMemberId: authenticated.user.teamMember?.id,
           displayName: String(body.displayName ?? ""),
           now: new Date(),
         });
@@ -13583,6 +14674,7 @@ export function createPhoneAuthDevServer(
             user: {
               ...authenticated.user,
               displayName: updated.user.displayName,
+              teamMember: updated.user.teamMember ?? authenticated.user.teamMember,
             },
           },
         });
@@ -13607,6 +14699,7 @@ export function createPhoneAuthDevServer(
         };
         const changed = await changeAuthenticatedUserPassword(db, {
           userId: authenticated.user.id,
+          teamMemberId: authenticated.user.teamMember?.id,
           currentPassword: String(body.currentPassword ?? ""),
           newPassword: String(body.newPassword ?? ""),
           now: new Date(),
@@ -14102,6 +15195,7 @@ export function createPhoneAuthDevServer(
           if (isTeamAssetUploadPurpose(body.purpose)) {
             const hasTeamAssetLibrary = await hasActiveOrganizationEntitlement(db, {
               organizationId: actor.organizationId,
+              userId: actor.actorId,
               entitlementKey: "team_asset_library",
               now: new Date(),
             });
@@ -14961,7 +16055,12 @@ export function createPhoneAuthDevServer(
           request.method === "GET" &&
           pathname === "/api/generation-config"
         ) {
-          const credit = await getUserCreditBalance(db, authenticated.user.id);
+          const credit = authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id
+            ? await getSimpleTeamMemberCreditBalance(db, {
+                userId: authenticated.user.id,
+                memberId: authenticated.user.teamMember.id,
+              })
+            : await getUserCreditBalance(db, authenticated.user.id);
           const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
           return writeJson(
             response,
@@ -15086,7 +16185,7 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(202, error.code, "request is still processing"));
             }
             if (error instanceof InsufficientCreditsError) {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值。"));
+              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请联系管理员分配积分。"));
             }
             if (error instanceof GenerationMembershipRequiredError) {
               return writeJson(response, envelopedError(403, error.code, error.message));
@@ -15625,15 +16724,42 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
+          if (authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id) {
+            return writeJson(response, {
+              status: 200,
+              body: await listSimpleTeamMemberCreditLedger(db, {
+                userId: authenticated.user.id,
+                memberId: authenticated.user.teamMember.id,
+                page: Number(url.searchParams.get("page") ?? 1),
+                pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+              }),
+            });
+          }
           const adminUsers = createAdminUserService({ db });
           const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
+          const page = Number(url.searchParams.get("page") ?? 1);
+          const pageSize = Number(url.searchParams.get("pageSize") ?? 50);
+          const ledgerPage = Math.max(1, page);
+          const ledgerPageSize = Math.min(100, Math.max(1, pageSize));
+          const baseLedger = await adminUsers.listUserCreditLedger({
+            userId: authenticated.user.id,
+            organizationId: billingScope.organizationId,
+            workspaceId: billingScope.workspaceId,
+            page: ledgerPage,
+            pageSize: ledgerPageSize,
+          });
+          if ("status" in baseLedger && Number(baseLedger.status) >= 400) {
+            return writeJson(response, baseLedger);
+          }
           return writeJson(response, {
             status: 200,
-            body: await adminUsers.listUserCreditLedger({
+            body: await listCreatorAdminCreditLedger(db, {
               userId: authenticated.user.id,
               organizationId: billingScope.organizationId,
               workspaceId: billingScope.workspaceId,
-              pageSize: Number(url.searchParams.get("pageSize") ?? 50),
+              page: ledgerPage,
+              pageSize: ledgerPageSize,
+              baseLedger,
             }),
           });
         }
@@ -15641,11 +16767,15 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/team/members") {
           const body = (await readJsonBody(request)) as {
             teamAccount?: string | null;
+            memberAccount?: string | null;
             displayName?: string | null;
+            memberName?: string | null;
+            password?: string | null;
             businessRole?: string | null;
             memberGroupId?: string | null;
             projectIds?: string[] | null;
             initialCredits?: number | null;
+            memberCredits?: number | null;
             remark?: string | null;
           };
           return writeJson(
@@ -15661,6 +16791,29 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const teamMemberMatch = pathname.match(/^\/api\/creator\/team\/members\/([^/]+)$/);
+        if (request.method === "PATCH" && teamMemberMatch) {
+          const body = (await readJsonBody(request)) as {
+            memberName?: string | null;
+            status?: "active" | "disabled" | "deleted" | null;
+            creditAdjustmentType?: "increase" | "deduct" | null;
+            creditAmount?: number | null;
+            remark?: string | null;
+          };
+          return writeJson(
+            response,
+            await teamCreatorApplication.updateTeamMember({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              memberId: decodeURIComponent(teamMemberMatch[1] ?? ""),
+              body,
+              now: new Date(),
+            }),
+          );
+        }
+
         if (request.method === "GET" && pathname === "/api/creator/state") {
           const stateResponse = await creatorApplication.getState({
             user: {
@@ -15668,7 +16821,17 @@ export function createPhoneAuthDevServer(
               sessionToken: authenticated.sessionToken,
             },
           });
-          const credit = await getUserCreditBalance(db, authenticated.user.id);
+          const credit = authenticated.user.actorType === "team_member"
+            ? {
+                creditBalance: authenticated.user.creditBalance,
+                displayCreditBalance: authenticated.user.displayCreditBalance,
+                availableCredits: authenticated.user.availableCredits,
+                reservedCredits: authenticated.user.reservedCredits,
+                frozenCredits: authenticated.user.frozenCredits,
+                creditFrozenAt: authenticated.user.creditFrozenAt,
+                creditFrozenUntil: authenticated.user.creditFrozenUntil,
+              }
+            : await getUserCreditBalance(db, authenticated.user.id);
           return writeJson(
             response,
             {
@@ -15801,7 +16964,7 @@ export function createPhoneAuthDevServer(
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
-            capability: request.method === "POST" ? capabilities.projectCreate : capabilities.projectView,
+            capability: request.method === "POST" ? undefined : capabilities.projectView,
             now: new Date(),
           });
           if (!actor.workspaceId) {
@@ -15810,6 +16973,7 @@ export function createPhoneAuthDevServer(
           const ownedProjects = await listCanvasProjects(db, {
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
+            teamMemberId: actor.teamMember?.id,
           });
 
           if (request.method === "GET") {
@@ -15819,6 +16983,10 @@ export function createPhoneAuthDevServer(
           }
 
           if (request.method === "POST") {
+            if (actor.teamMember) {
+              return writeJson(response, envelopedError(403, "team_member_canvas_create_forbidden", "team member cannot create canvas projects"));
+            }
+            assertCapability(actor, capabilities.projectCreate);
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const nextIndex = ownedProjects.length + 1;
             const project = await createCanvasProjectRecord(db, {
@@ -15854,6 +17022,7 @@ export function createPhoneAuthDevServer(
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
             projectId: canvasProjectId,
+            teamMemberId: actor.teamMember?.id,
           });
           if (!project) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
@@ -15919,6 +17088,7 @@ export function createPhoneAuthDevServer(
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
             projectId,
+            teamMemberId: actor.teamMember?.id,
           });
 
           if (!project) {
@@ -15926,6 +17096,9 @@ export function createPhoneAuthDevServer(
           }
 
           if (request.method === "PATCH") {
+            if (actor.teamMember) {
+              return writeJson(response, envelopedError(403, "team_member_canvas_manage_forbidden", "team member cannot manage canvas projects"));
+            }
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const updated = await updateCanvasProjectRecord(db, {
               organizationId: actor.organizationId,
@@ -15945,6 +17118,9 @@ export function createPhoneAuthDevServer(
           }
 
           if (request.method === "DELETE") {
+            if (actor.teamMember) {
+              return writeJson(response, envelopedError(403, "team_member_canvas_manage_forbidden", "team member cannot manage canvas projects"));
+            }
             await deleteCanvasProjectRecord(db, {
               organizationId: actor.organizationId,
               userId: authenticated.user.id,
@@ -16330,20 +17506,34 @@ export function createPhoneAuthDevServer(
           const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
           const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
           const scriptModelConfig = await findActiveScriptGenerationModelConfig(db);
-          await reserveAndConsumeAiStoryboardPreviewCredits(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? null,
-            projectId,
-            createdByUserId: authenticated.user.id,
-            idempotencyKey,
-            promptPreview: scriptText.slice(0, 200),
-            modelConfig: scriptModelConfig,
-            now: new Date(),
-          });
+          if (actor.teamMember) {
+            await reserveAndConsumeSimpleTeamMemberCredits(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId ?? null,
+              projectId,
+              teamMemberId: actor.teamMember.id,
+              idempotencyKey,
+              promptPreview: scriptText.slice(0, 200),
+              modelConfig: scriptModelConfig,
+              now: new Date(),
+            });
+          } else {
+            await reserveAndConsumeAiStoryboardPreviewCredits(db, {
+              organizationId: actor.organizationId,
+              workspaceId: actor.workspaceId ?? null,
+              projectId,
+              createdByUserId: authenticated.user.id,
+              idempotencyKey,
+              promptPreview: scriptText.slice(0, 200),
+              modelConfig: scriptModelConfig,
+              now: new Date(),
+            });
+          }
 
           const previewInput = {
             projectId,
             createdByUserId: authenticated.user.id,
+            teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
             packages: {
               genrePrompt,
@@ -16398,6 +17588,20 @@ export function createPhoneAuthDevServer(
               stopHeartbeat();
               abortController.cleanup();
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+                if (actor.teamMember) {
+                  await releaseSimpleTeamMemberCredits(db, {
+                    organizationId: actor.organizationId,
+                    teamMemberId: actor.teamMember.id,
+                    amount: generationCostFromModelConfig(0, scriptModelConfig),
+                    sourceId: idempotencyKey,
+                    reason: "剧本预览失败返还积分",
+                    metadata: {
+                      taskType: "ai_storyboard_preview",
+                      promptPreview: scriptText.slice(0, 200),
+                    },
+                    now: new Date(),
+                  });
+                }
                 writeSseData(response, {
                   type: "error",
                   error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
@@ -16408,18 +17612,44 @@ export function createPhoneAuthDevServer(
             return;
           }
 
-          const preview = await previewService.generatePreview(previewInput);
-          return writeJson(response, enveloped(200, {
-            ...preview,
-            selectedPackages: {
-              genre: { id: genrePackage.id, name: genrePackage.name },
-              emotion: { id: emotionPackage.id, name: emotionPackage.name },
-              taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
-            },
-          }));
+          try {
+            const preview = await previewService.generatePreview(previewInput);
+            return writeJson(response, enveloped(200, {
+              ...preview,
+              selectedPackages: {
+                genre: { id: genrePackage.id, name: genrePackage.name },
+                emotion: { id: emotionPackage.id, name: emotionPackage.name },
+                taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
+              },
+            }));
+          } catch (error) {
+            if (actor.teamMember) {
+              await releaseSimpleTeamMemberCredits(db, {
+                organizationId: actor.organizationId,
+                teamMemberId: actor.teamMember.id,
+                amount: generationCostFromModelConfig(0, scriptModelConfig),
+                sourceId: idempotencyKey,
+                reason: "剧本预览失败返还积分",
+                metadata: {
+                  taskType: "ai_storyboard_preview",
+                  promptPreview: scriptText.slice(0, 200),
+                },
+                now: new Date(),
+              });
+            }
+            throw error;
+          }
         }
 
         if (request.method === "POST" && pathname === "/api/creator/scripts/import-document") {
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now: new Date(),
+          });
+          if (actor.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_script_import_forbidden", "team member cannot import workspace scripts"));
+          }
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
             return writeIdempotencyKeyRequired(response);

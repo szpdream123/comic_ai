@@ -479,12 +479,61 @@ test("admin user credit ledger keeps subaccount ledger scoped to the target user
       [undefined, undefined, "correction", "compensation"],
     );
     assert.deepEqual(
+      result.data.map((entry) => entry.content),
+      ["任务返还积分", "生图扣减", "手动扣减积分", "手动增加积分"],
+    );
+    assert.equal(result.accountType, "子账户");
+    assert.deepEqual(
       result.data
         .filter((entry) => ["credit_reservation", "credit_reservation_allocation"].includes(entry.sourceType))
         .filter((entry) => ["reservation", "consume"].includes(entry.entryType))
         .map((entry) => entry.reservationId),
       ["97000000-0000-4000-8000-000000002002"],
     );
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger lets team admins see their managed subaccount ledger", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002002",
+      pageSize: 20,
+    });
+
+    assert.deepEqual(
+      result.data.map((entry) => entry.sourceType),
+      ["credit_reservation_allocation", "credit_reservation", "admin_manual_deduct", "admin_manual_grant"],
+    );
+    assert.deepEqual(
+      result.data.map((entry) => entry.userId),
+      [null, null, null, null],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user credit ledger lets owner accounts see all subaccount ledger", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+
+    const result = await service.listUserCreditLedger({
+      userId: "93000000-0000-4000-8000-000000002001",
+      pageSize: 20,
+    });
+
+    assert.ok(result.data.some((entry) => entry.metadata.adjustmentScenario === "compensation"));
+    assert.ok(result.data.some((entry) => entry.sourceType === "credit_reservation"));
   } finally {
     await db.close();
   }
@@ -706,8 +755,8 @@ test("admin user credit ledger includes membership gift grants for the owner acc
       pageSize: 20,
     });
 
-    assert.equal(result.data[0]?.sourceType, "membership_gift");
-    assert.equal(result.data[0]?.amount, 30);
+    const membershipGift = result.data.find((entry) => entry.sourceType === "membership_gift");
+    assert.equal(membershipGift?.amount, 30);
   } finally {
     await db.close();
   }

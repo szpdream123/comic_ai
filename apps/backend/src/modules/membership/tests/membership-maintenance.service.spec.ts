@@ -111,9 +111,9 @@ describe("membership maintenance", { concurrency: false }, () => {
         now: new Date("2026-06-08T08:00:01.000Z"),
         limit: 50,
       });
-      const subscription = await db.query<{ status: string; current_tier: string | null }>(
-        "SELECT status, current_tier FROM organization_membership_subscriptions WHERE organization_id = $1",
-        [organizationId],
+      const subscription = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
+        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        [organizationId, userId],
       );
       const period = await db.query<{ status: string }>(
         "SELECT status FROM membership_periods WHERE id = $1",
@@ -137,8 +137,8 @@ describe("membership maintenance", { concurrency: false }, () => {
 
       assert.equal(result.expiredMembershipCount, 1);
       assert.equal(result.expiredCreditAmount, 0);
-      assert.equal(subscription.rows[0]?.status, "expired");
-      assert.equal(subscription.rows[0]?.current_tier, null);
+      assert.equal(subscription.rows[0]?.membership_tier, "none");
+      assert.equal(subscription.rows[0]?.expires_at, null);
       assert.equal(period.rows[0]?.status, "expired");
       assert.equal(entitlement.rows[0]?.status, "expired");
       assert.equal(lot.rows[0]?.available_amount, 120);
@@ -202,7 +202,7 @@ async function seedProfessionalPeriod(
     priorityRules: { modelFamilies: ["seedance"] },
     displayMetadata: {},
   };
-  await db.query("INSERT INTO users (id, phone_e164, status) VALUES ($1, '+8613800738001', 'active')", [
+  await db.query("INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138001', 'active')", [
     userId,
   ]);
   await db.query(
@@ -245,16 +245,6 @@ async function seedProfessionalPeriod(
   );
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id, organization_id, status, current_tier, current_period_start_at, current_period_end_at,
-        latest_order_id, created_at, updated_at
-      )
-      VALUES ($1, $2, 'professional_active', 'professional', $3, $4, $5, $3, $3)
-    `,
-    [randomUUID(), organizationId, now, input.periodEndAt, orderId],
-  );
-  await db.query(
-    `
       INSERT INTO membership_periods (
         id, organization_id, order_id, plan_id, tier, period_start_at, period_end_at,
         gift_credits, plan_snapshot_json, status, created_at, updated_at
@@ -270,6 +260,40 @@ async function seedProfessionalPeriod(
       input.periodEndAt,
       planSnapshot.giftCredits,
       JSON.stringify(planSnapshot),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        role,
+        status,
+        membership_tier,
+        purchase_at,
+        expires_at,
+        gift_credits,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, NULL, $3, 'owner_admin', 'active', 'professional', $4, $5, $6, $4, $4)
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET
+        membership_tier = EXCLUDED.membership_tier,
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        gift_credits = EXCLUDED.gift_credits,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      randomUUID(),
+      organizationId,
+      userId,
+      now,
+      input.periodEndAt,
+      planSnapshot.giftCredits,
     ],
   );
 
@@ -297,7 +321,7 @@ async function seedProfessionalPeriod(
         available_delta, reserved_delta, consumed_delta, source_type, source_id,
         reason, metadata_json, created_by_user_id, created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, 'seed membership gift lot', '{}'::jsonb, $5, $6)
+      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, $5, $6)
     `,
     [grantLedgerEntryId, organizationId, input.availableCredits, periodId, userId, now],
   );
@@ -382,13 +406,13 @@ async function seedRenewedProfessionalPeriod(
   );
   await db.query(
     `
-      UPDATE organization_membership_subscriptions
-      SET current_period_end_at = $2,
-          latest_order_id = $3,
+      UPDATE memberships
+      SET expires_at = $2,
           updated_at = $1
-      WHERE organization_id = $4
+      WHERE organization_id = $3
+        AND user_id = $4
     `,
-    [input.periodStartAt, input.periodEndAt, renewalOrderId, organizationId],
+    [input.periodStartAt, input.periodEndAt, organizationId, userId],
   );
 
   return renewalPeriodId;

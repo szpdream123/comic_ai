@@ -8,8 +8,10 @@ import {
   requestPersistentLoginCode,
   revokePersistentAuthSession,
   verifyPersistentPasswordLogin,
+  verifyPersistentTeamMemberPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../persistent-auth.service.ts";
+import { createUserPasswordHash } from "../team-account-credentials.service.ts";
 
 describe("persistent phone auth", { concurrency: false }, () => {
   it("stores only challenge and session hashes while returning plaintext only to the caller", async () => {
@@ -302,6 +304,141 @@ describe("persistent phone auth", { concurrency: false }, () => {
         verified.kind === "verified" ? verified.session.expiresAt.toISOString() : "",
         "2026-06-12T10:00:00.000Z",
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates an administrator session with team member context for member password login", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const passwordHash = await createUserPasswordHash("member-secret");
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES ('00000000-0000-4000-8000-000000000004', '18571521875', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            status
+          )
+          VALUES (
+            '10000000-0000-4000-8000-000000000004',
+            '00000000-0000-4000-8000-000000000004',
+            'director001',
+            'u185715',
+            'director001@u185715',
+            '导演一号',
+            $1,
+            'active'
+          )
+        `,
+        [passwordHash],
+      );
+
+      const verified = await verifyPersistentTeamMemberPasswordLogin(db, {
+        account: "DIRECTOR001@U185715",
+        password: "member-secret",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+        remember: false,
+      });
+      const users = await db.query("SELECT id FROM users");
+      const sessions = await db.query<{ user_id: string }>("SELECT user_id FROM auth_sessions");
+      const memberSessions = await db.query<{
+        user_id: string;
+        member_id: string;
+        status: string;
+      }>("SELECT user_id, member_id, status FROM team_member_auth_sessions");
+
+      assert.equal(verified.kind, "verified");
+      assert.equal(
+        verified.kind === "verified" ? verified.user.id : "",
+        "00000000-0000-4000-8000-000000000004",
+      );
+      assert.equal(
+        verified.kind === "verified" ? verified.member.memberLoginAccount : "",
+        "director001@u185715",
+      );
+      assert.equal(users.rows.length, 1);
+      assert.equal(sessions.rows[0]?.user_id, "00000000-0000-4000-8000-000000000004");
+      assert.equal(memberSessions.rows[0]?.member_id, "10000000-0000-4000-8000-000000000004");
+      assert.equal(memberSessions.rows[0]?.status, "active");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects disabled and deleted team member password login", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const passwordHash = await createUserPasswordHash("member-secret");
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, status)
+          VALUES ('00000000-0000-4000-8000-000000000005', '18571521876', 'active')
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            status
+          )
+          VALUES
+            (
+              '10000000-0000-4000-8000-000000000005',
+              '00000000-0000-4000-8000-000000000005',
+              'director002',
+              'u185716',
+              'director002@u185716',
+              '导演二号',
+              $1,
+              'disabled'
+            ),
+            (
+              '10000000-0000-4000-8000-000000000006',
+              '00000000-0000-4000-8000-000000000005',
+              'director003',
+              'u185716',
+              'director003@u185716',
+              '导演三号',
+              $1,
+              'deleted'
+            )
+        `,
+        [passwordHash],
+      );
+
+      const disabled = await verifyPersistentTeamMemberPasswordLogin(db, {
+        account: "director002@u185716",
+        password: "member-secret",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+      });
+      const deleted = await verifyPersistentTeamMemberPasswordLogin(db, {
+        account: "director003@u185716",
+        password: "member-secret",
+        now: new Date("2026-06-11T10:00:00.000Z"),
+      });
+      const sessions = await db.query("SELECT id FROM auth_sessions");
+
+      assert.equal(disabled.kind, "team_member_disabled");
+      assert.equal(deleted.kind, "team_member_deleted");
+      assert.equal(sessions.rows.length, 0);
     } finally {
       await db.close();
     }

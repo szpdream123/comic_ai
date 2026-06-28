@@ -31,17 +31,19 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         now: new Date("2026-06-08T08:05:00.000Z"),
       });
 
-      const subscription = await db.query<{
-        status: string;
-        current_tier: string | null;
-        current_period_end_at: Date | string | null;
+      const membership = await db.query<{
+        membership_tier: string | null;
+        purchase_at: Date | string | null;
+        expires_at: Date | string | null;
+        gift_credits: number;
       }>(
         `
-          SELECT status, current_tier, current_period_end_at
-          FROM organization_membership_subscriptions
+          SELECT membership_tier, purchase_at, expires_at, gift_credits
+          FROM memberships
           WHERE organization_id = $1
+            AND user_id = $2
         `,
-        [organizationId],
+        [organizationId, userId],
       );
       const entitlements = await db.query<{ entitlement_key: string; status: string }>(
         `
@@ -64,12 +66,10 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       assert.equal(result.period.tier, "professional");
       assert.equal(result.period.periodStartAt, "2026-06-08T08:00:00.000Z");
       assert.equal(result.period.periodEndAt, "2026-07-08T08:00:00.000Z");
-      assert.equal(subscription.rows[0]?.status, "professional_active");
-      assert.equal(subscription.rows[0]?.current_tier, "professional");
-      assert.equal(
-        new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
-        "2026-07-08T08:00:00.000Z",
-      );
+      assert.equal(membership.rows[0]?.membership_tier, "professional");
+      assert.equal(new Date(membership.rows[0]!.purchase_at!).toISOString(), "2026-06-08T08:00:00.000Z");
+      assert.equal(new Date(membership.rows[0]!.expires_at!).toISOString(), "2026-07-08T08:00:00.000Z");
+      assert.equal(membership.rows[0]?.gift_credits, 51000);
       assert.deepEqual(entitlements.rows, [
         { entitlement_key: "priority_generation", status: "active" },
         { entitlement_key: "team_asset_library", status: "active" },
@@ -225,9 +225,9 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         now: new Date("2026-06-10T08:00:00.000Z"),
       });
 
-      const subscription = await db.query<{ current_tier: string; current_period_end_at: Date | string }>(
-        "SELECT current_tier, current_period_end_at FROM organization_membership_subscriptions WHERE organization_id = $1",
-        [organizationId],
+      const membership = await db.query<{ membership_tier: string; expires_at: Date | string }>(
+        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        [organizationId, userId],
       );
       const professionalEntitlements = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')",
@@ -243,11 +243,8 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       );
 
       assert.equal(secondResult.kind, "applied");
-      assert.equal(subscription.rows[0]?.current_tier, "experience");
-      assert.equal(
-        new Date(subscription.rows[0]!.current_period_end_at).toISOString(),
-        "2026-06-22T08:00:00.000Z",
-      );
+      assert.equal(membership.rows[0]?.membership_tier, "experience");
+      assert.equal(new Date(membership.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
       assert.equal(professionalEntitlements.rows[0]?.count, 0);
       assert.equal(limits.rows[0]?.count, 0);
       assert.equal(new Date(giftLot.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
@@ -289,13 +286,12 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         now: new Date("2026-06-09T08:05:00.000Z"),
       });
 
-      const subscription = await db.query<{
-        status: string;
-        current_tier: string | null;
-        current_period_end_at: Date | string | null;
+      const membership = await db.query<{
+        membership_tier: string | null;
+        expires_at: Date | string | null;
       }>(
-        "SELECT status, current_tier, current_period_end_at FROM organization_membership_subscriptions WHERE organization_id = $1",
-        [organizationId],
+        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        [organizationId, userId],
       );
       const activeProfessionalEntitlements = await db.query<{ count: number }>(
         `
@@ -317,12 +313,8 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         `,
         [organizationId],
       );
-      assert.equal(subscription.rows[0]?.status, "professional_active");
-      assert.equal(subscription.rows[0]?.current_tier, "professional");
-      assert.equal(
-        new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
-        "2026-07-08T08:00:00.000Z",
-      );
+      assert.equal(membership.rows[0]?.membership_tier, "professional");
+      assert.equal(new Date(membership.rows[0]!.expires_at!).toISOString(), "2026-07-08T08:00:00.000Z");
       assert.equal(activeProfessionalEntitlements.rows[0]?.count, 3);
       assert.deepEqual(
         periods.rows.map((period) => ({
@@ -398,13 +390,16 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       });
       await db.query(
         `
-          UPDATE organization_membership_subscriptions
-          SET status = 'experience_active',
-              current_tier = 'experience',
-              current_period_end_at = '2026-06-16T08:00:00.000Z'
+          UPDATE memberships
+          SET membership_tier = 'experience',
+              purchase_at = '2026-06-10T08:00:00.000Z',
+              expires_at = '2026-06-16T08:00:00.000Z',
+              gift_credits = 800,
+              updated_at = '2026-06-10T08:00:00.000Z'
           WHERE organization_id = $1
+            AND user_id = $2
         `,
-        [organizationId],
+        [organizationId, userId],
       );
       await db.query(
         `
@@ -422,13 +417,12 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         now: new Date("2026-06-10T08:05:00.000Z"),
       });
 
-      const subscription = await db.query<{
-        status: string;
-        current_tier: string | null;
-        current_period_end_at: Date | string | null;
+      const membership = await db.query<{
+        membership_tier: string | null;
+        expires_at: Date | string | null;
       }>(
-        "SELECT status, current_tier, current_period_end_at FROM organization_membership_subscriptions WHERE organization_id = $1",
-        [organizationId],
+        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        [organizationId, userId],
       );
       const periods = await db.query<{ tier: string; status: string }>(
         `
@@ -451,12 +445,8 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         [organizationId, new Date("2026-06-10T08:05:00.000Z")],
       );
 
-      assert.equal(subscription.rows[0]?.status, "professional_active");
-      assert.equal(subscription.rows[0]?.current_tier, "professional");
-      assert.equal(
-        new Date(subscription.rows[0]!.current_period_end_at!).toISOString(),
-        "2026-07-08T08:00:00.000Z",
-      );
+      assert.equal(membership.rows[0]?.membership_tier, "professional");
+      assert.equal(new Date(membership.rows[0]!.expires_at!).toISOString(), "2026-07-08T08:00:00.000Z");
       assert.deepEqual(periods.rows, [
         { tier: "experience", status: "active" },
         { tier: "professional", status: "active" },
@@ -745,7 +735,7 @@ async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) 
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800338001', 'active')
+      VALUES ($1, '13800338001', 'active')
       ON CONFLICT (id) DO NOTHING
     `,
     [userId],
@@ -765,6 +755,44 @@ async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) 
       ON CONFLICT (id) DO NOTHING
     `,
     [workspaceId, organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        role,
+        status,
+        membership_tier,
+        purchase_at,
+        expires_at,
+        gift_credits,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '80000000-0000-4000-8000-000000030001',
+        $1,
+        $2,
+        $3,
+        'owner_admin',
+        'active',
+        NULL,
+        NULL,
+        NULL,
+        0,
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET
+        role = EXCLUDED.role,
+        status = EXCLUDED.status,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [organizationId, workspaceId, userId],
   );
 }
 

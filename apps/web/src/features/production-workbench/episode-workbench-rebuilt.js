@@ -638,8 +638,7 @@ function renderEpisodeTeamLibraryLocked() {
   return `
     <section class="episode-library-team-locked">
       <div class="episode-library-lock-icon" aria-hidden="true">✦</div>
-      <strong>团队资产库为专业版会员权益，开通后使用该功能。</strong>
-      <button type="button" data-action="open-pricing">立即开通</button>
+      <strong>请等待管理员分配</strong>
     </section>
   `;
 }

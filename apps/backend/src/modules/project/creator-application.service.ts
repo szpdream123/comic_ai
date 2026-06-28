@@ -9,6 +9,7 @@ import { operationNames, type OperationName } from "../../../../../packages/cont
 import type { TeamBusinessRole } from "../organization/team-roles.ts";
 import {
   createTeamMember as createTeamMemberRecord,
+  ensureUserTeamAccountSuffix,
   getTeamOverview as getTeamOverviewRecord,
   listTeamMembers as listTeamMemberRecords,
   TeamServiceError,
@@ -3806,6 +3807,7 @@ async function getLimitedTeamOverview(
       canManageAll: false,
       canManageGroup: false,
     },
+    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, actor.actorId),
   };
 }
 

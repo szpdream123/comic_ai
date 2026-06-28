@@ -289,7 +289,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
             const packageMetadata = normalizeJson(creditPackage.metadata_json);
             if (packageMetadata.kind === "direct_recharge") {
               const hasActiveMembership = await hasActiveMembershipSubscription(deps.db, {
-                organizationId: actor.organizationId,
+                userId: actor.actorId,
                 now: input.now,
               });
               if (!hasActiveMembership) {
@@ -2257,19 +2257,19 @@ async function findActivePackage(
 
 async function hasActiveMembershipSubscription(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string; now: Date },
 ) {
   const row = await queryOne<{ id: string }>(
     db,
     `
-      SELECT organization_id AS id
-      FROM organization_membership_subscriptions
-      WHERE organization_id = $1
-        AND status IN ('experience_active', 'professional_active')
-        AND current_period_end_at > $2
+      SELECT user_id AS id
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId, input.now],
   );
   return Boolean(row);
 }

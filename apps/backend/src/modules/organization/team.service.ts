@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
@@ -85,7 +85,8 @@ export async function createTeamMember(
   const userId = randomUUID();
   const membershipId = randomUUID();
   const profileId = randomUUID();
-  const virtualEmail = buildTeamAccountEmail(normalizedTeamAccount, workspaceId);
+  const teamAccountSuffix = await ensureUserTeamAccountSuffix(db, input.actor.actorId);
+  const virtualEmail = buildTeamAccountEmail(normalizedTeamAccount, teamAccountSuffix);
 
   await runInTransaction(db, async () => {
     await lockOrganizationForTeamMutation(db, input.actor.organizationId);
@@ -322,6 +323,7 @@ export async function getTeamOverview(
       ),
     },
     permissions: resolveTeamOverviewPermissions(input.actor),
+    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, input.actor.actorId),
   };
 }
 
@@ -820,8 +822,59 @@ function normalizeTeamAccount(teamAccount: string) {
   return normalizeRequiredText(teamAccount).toLowerCase();
 }
 
-function buildTeamAccountEmail(teamAccount: string, workspaceId: string) {
-  return `${teamAccount}.${workspaceId.replaceAll("-", "")}@team.local`;
+function buildTeamAccountEmail(teamAccount: string, teamAccountSuffix: string) {
+  return `${teamAccount}@${teamAccountSuffix}.team.local`;
+}
+
+export async function ensureUserTeamAccountSuffix(db: SqlDatabase, userId: string) {
+  const existing = await queryOne<{ team_account_suffix: string | null }>(
+    db,
+    `
+      SELECT team_account_suffix
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [userId],
+  );
+  const currentSuffix = normalizeTeamAccountSuffix(existing?.team_account_suffix);
+  if (currentSuffix) {
+    return currentSuffix;
+  }
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const suffix = generateTeamAccountSuffix();
+    const updated = await queryOne<{ team_account_suffix: string }>(
+      db,
+      `
+        UPDATE users
+        SET team_account_suffix = $2
+        WHERE id = $1
+          AND team_account_suffix IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM users
+            WHERE team_account_suffix = $2
+          )
+        RETURNING team_account_suffix
+      `,
+      [userId, suffix],
+    );
+    if (updated?.team_account_suffix) {
+      return updated.team_account_suffix;
+    }
+  }
+
+  throw new TeamServiceError("team_member_input_invalid");
+}
+
+function generateTeamAccountSuffix() {
+  return randomBytes(4).toString("base64url").replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 6).padEnd(6, "0");
+}
+
+function normalizeTeamAccountSuffix(value: unknown) {
+  const suffix = normalizeRequiredText(value).toLowerCase();
+  return /^[a-z0-9]{6}$/.test(suffix) ? suffix : "";
 }
 
 function normalizeInitialCredits(value: unknown) {

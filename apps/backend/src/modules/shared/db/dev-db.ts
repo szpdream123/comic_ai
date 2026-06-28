@@ -342,6 +342,37 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (
+    !(await columnExists(db, "memberships", "membership_tier")) ||
+    !(await columnExists(db, "memberships", "purchase_at")) ||
+    !(await columnExists(db, "memberships", "expires_at")) ||
+    !(await columnExists(db, "memberships", "gift_credits"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0052_user_membership_subscription.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_members")) ||
+    !(await tableExists(db, "team_member_projects"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0053_simple_team_members.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_member_auth_sessions")) ||
+    !(await tableExists(db, "team_member_project_records"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0054_simple_team_member_access.sql");
+  }
+
+  if (
+    !(await columnExists(db, "users", "team_account_suffix")) ||
+    !(await constraintExists(db, "users", "users_team_account_suffix_format_check")) ||
+    !(await indexExists(db, "users_team_account_suffix_key"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0055_user_team_account_suffix.sql");
+  }
+
+  if (
     !(await columnExists(db, "organizations", "credit_frozen_cached")) ||
     !(await columnExists(db, "credit_lots", "status")) ||
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "freeze")) ||

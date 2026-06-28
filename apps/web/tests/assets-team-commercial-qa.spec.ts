@@ -2352,17 +2352,38 @@ describe("Worker C team management surfaces", () => {
         role: "creator",
         note: "storyboard-collab",
         notice: "member-create-notice",
+        draft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          projectIds: ["project-1"],
+        },
+        availableProjects: [
+          { id: "project-1", name: "整体测试项目" },
+          { id: "project-2", name: "测试9" },
+        ],
+        availableScripts: [
+          { id: "script-1", title: "整体测试项目剧本", projectId: "project-1" },
+          { id: "script-2", title: "测试9剧本", projectId: "project-2" },
+        ],
+        availableCanvases: [
+          { id: "canvas-1", title: "整体测试项目画布", projectId: "project-1" },
+          { id: "canvas-2", title: "测试9画布", projectId: "project-2" },
+        ],
       },
     });
 
-    assert.match(html, /data-modal="create-member"/);
-    assertHasAction(html, "close-create-member");
-    assertHasAction(html, "change-create-member-phone");
-    assertHasAction(html, "change-create-member-role");
-    assertHasAction(html, "change-create-member-note");
-    assertHasAction(html, "submit-create-member");
-    assertIncludesText(html, "13800138002");
-    assertIncludesText(html, "storyboard-collab");
+    assert.match(html, /data-modal="team-member-create"/);
+    assertHasAction(html, "close-team-member-create");
+    assertHasAction(html, "submit-team-member-create");
+    assertHasAction(html, "toggle-team-member-project");
+    assertIncludesText(html, "项目");
+    assertIncludesText(html, "剧本");
+    assertIncludesText(html, "画布");
+    assertIncludesText(html, "整体测试项目");
+    assertIncludesText(html, "整体测试项目剧本");
+    assertIncludesText(html, "整体测试项目画布");
+    assert.doesNotMatch(html, /测试9剧本/);
+    assert.doesNotMatch(html, /测试9画布/);
   });
 
   it("renders the edit member modal from the team page context", () => {

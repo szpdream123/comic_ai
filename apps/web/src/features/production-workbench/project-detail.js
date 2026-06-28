@@ -20,7 +20,7 @@ import {
 } from "./canvas/canvas-state.js";
 
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
-const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
+const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 10;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_VIDEO_GENERATION_MODES = [
@@ -843,25 +843,23 @@ function renderCreditLedgerDrawer(ui = {}) {
   const summary = ui.creditLedgerSummary ?? {};
   const loading = ui.creditLedgerLoading === true;
   const error = String(ui.creditLedgerError ?? "").trim();
+  const pagination = normalizeCreditLedgerPagination(ui, rows.length);
   return `
     <div class="credit-ledger-backdrop" data-action="close-credit-ledger" aria-hidden="true"></div>
     <aside class="credit-ledger-drawer" role="dialog" aria-modal="true" aria-labelledby="credit-ledger-title">
       <header class="credit-ledger-header">
-        <div>
-          <p class="credit-ledger-kicker">Credit Ledger</p>
+        <div class="credit-ledger-header-copy">
           <h2 id="credit-ledger-title">积分明细</h2>
-          <p>每一次充值、生成扣减与返还都会记录在这里。</p>
+          <p>每一次积分变动都会记录在这里。</p>
         </div>
-        <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+        <div class="credit-ledger-header-actions">
+          <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+        </div>
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
-      <div class="credit-ledger-toolbar">
-        <span>${escapeHtml(String(ui.creditLedgerMeta?.total ?? rows.length))} 条最近记录</span>
-        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
-      </div>
       ${error ? `<p class="credit-ledger-notice error">${escapeHtml(error)}</p>` : ""}
       <div class="credit-ledger-scroll">
         ${loading && !rows.length ? renderCreditLedgerLoadingRows() : ""}
@@ -876,7 +874,9 @@ function renderCreditLedgerDrawer(ui = {}) {
             <thead>
               <tr>
                 <th>时间</th>
+                <th>账户</th>
                 <th>类型</th>
+                <th>内容</th>
                 <th>积分变化</th>
               </tr>
             </thead>
@@ -886,7 +886,36 @@ function renderCreditLedgerDrawer(ui = {}) {
           </table>
         ` : ""}
       </div>
+      ${renderCreditLedgerPagination(pagination, loading)}
     </aside>
+  `;
+}
+
+function normalizeCreditLedgerPagination(ui = {}, currentCount = 0) {
+  const meta = ui.creditLedgerMeta && typeof ui.creditLedgerMeta === "object" ? ui.creditLedgerMeta : {};
+  const pageSize = Math.max(1, Number(meta.pageSize ?? 10));
+  const total = Math.max(0, Number(meta.total ?? currentCount));
+  const reportedTotalPages = Math.max(1, Number(meta.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const requestedPage = Math.max(1, Number(meta.page ?? ui.creditLedgerPage ?? 1));
+  const hasPossibleNextPage = currentCount >= pageSize;
+  const totalPages = Math.max(reportedTotalPages, hasPossibleNextPage ? requestedPage + 1 : requestedPage);
+  const page = Math.min(totalPages, requestedPage);
+  return { page, pageSize, total, totalPages, hasPossibleNextPage };
+}
+
+function renderCreditLedgerPagination(pagination, loading = false) {
+  const canPrev = pagination.page > 1 && !loading;
+  const canNext = (pagination.page < pagination.totalPages || pagination.hasPossibleNextPage) && !loading;
+  return `
+    <footer class="credit-ledger-pagination" aria-label="积分明细分页">
+      <span>共 ${escapeHtml(String(pagination.total))} 条</span>
+      <div class="credit-ledger-page-actions">
+        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
+        <button type="button" data-action="change-credit-ledger-page" data-page="${escapeAttr(String(pagination.page - 1))}" ${canPrev ? "" : "disabled"}>上一页</button>
+        <strong>${escapeHtml(String(pagination.page))} / ${escapeHtml(String(pagination.totalPages))}</strong>
+        <button type="button" data-action="change-credit-ledger-page" data-page="${escapeAttr(String(pagination.page + 1))}" ${canNext ? "" : "disabled"}>下一页</button>
+      </div>
+    </footer>
   `;
 }
 
@@ -904,7 +933,9 @@ function renderCreditLedgerRow(row = {}) {
   return `
     <tr>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
+      <td><span class="credit-ledger-account ${escapeAttr(entry.accountTone)}">${escapeHtml(entry.accountLabel)}</span></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
+      <td><span class="credit-ledger-content">${escapeHtml(entry.content)}</span></td>
       <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
@@ -934,12 +965,15 @@ function normalizeCreditLedgerEntry(row = {}) {
   const content = promptPreview ? `内容：${promptPreview}` : "";
   const failure = creditLedgerFailureLabel(failureCode, errorMessage);
   const result = creditLedgerResultLabel({ event, failure });
+  const accountType = String(row.accountType ?? metadata.accountType ?? "").trim().toLowerCase();
+  const accountLabel = resolveCreditLedgerAccountLabel(row, metadata);
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
   const description = failure
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
   const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
   return {
-    label: creditType.label,
+    label: sourceType === "team_member_credit_allocation" ? "分配" : creditType.label,
     tone: creditType.tone,
     valueTone: creditType.valueTone,
     displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
@@ -947,6 +981,9 @@ function normalizeCreditLedgerEntry(row = {}) {
     availableDelta: signedDelta,
     createdAt: row.createdAt,
     taskId: task || String(row.sourceId ?? "").trim(),
+    accountTone: accountType === "subaccount" ? "subaccount" : "owner",
+    accountLabel,
+    content: translateCreditLedgerContent(row, metadata, title),
     title,
     detail: description,
     result,
@@ -959,6 +996,9 @@ function normalizeCreditLedgerType(type, signedDelta) {
     return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
   }
   if (type === "reservation" || type === "reserve") {
+    if (signedDelta < 0) {
+      return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
+    }
     return { label: "预占", tone: "reserve", valueTone: "reserve", displayAsAbsolute: false };
   }
   if (type === "release") {
@@ -1084,6 +1124,38 @@ function translateCreditLedgerReason(reason, metadata = {}) {
     return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
   }
   return reason;
+}
+
+function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  if (sourceType === "team_member_credit_allocation") {
+    return "主账号分配积分";
+  }
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  if (
+    sourceType === "team_member_credit_deduction" ||
+    sourceType === "team_member_generation_task" ||
+    (sourceType === "episode_generation_task" && (taskType.includes("storyboard_preview") || taskType.includes("ai_storyboard")))
+  ) {
+    return "AI分镜积分消耗";
+  }
+  if (sourceType === "team_member_generation_refund") {
+    return "AI分镜失败返还";
+  }
+  const explicit = String(row.content ?? metadata.content ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  return fallback || "积分变动";
+}
+
+function resolveCreditLedgerAccountLabel(row = {}, metadata = {}) {
+  const explicit = String(row.accountLabel ?? metadata.accountLabel ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const accountType = String(row.accountType ?? metadata.accountType ?? "").trim().toLowerCase();
+  return accountType === "subaccount" ? "子账户" : "主账户";
 }
 
 function creditLedgerFailureLabel(code, message) {
@@ -1361,9 +1433,14 @@ function resolveAccountSettingsAvatarLabel(form, session = {}) {
 }
 
 function resolveStatusbarAccountLabel(session = {}) {
-  const displayName = String(session?.user?.displayName ?? "").trim();
+  const teamMember = session?.user?.teamMember ?? null;
+  const displayName = String(teamMember?.memberName ?? session?.user?.displayName ?? "").trim();
   if (displayName) {
     return displayName;
+  }
+  const loginAccount = String(teamMember?.memberLoginAccount ?? "").trim();
+  if (loginAccount) {
+    return loginAccount;
   }
   const phone = String(session?.user?.phone ?? "").trim();
   const phoneTail = phone.slice(-8);
@@ -1399,31 +1476,33 @@ function resolveMembershipPlanLabel(membershipStatus = null) {
 
 function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   const user = session.user ?? {};
-  const displayName = String(user.displayName ?? user.nickname ?? "").trim();
+  const teamMember = user.teamMember ?? null;
+  const displayName = String(teamMember?.memberName ?? user.displayName ?? user.nickname ?? "").trim();
+  const loginAccount = String(teamMember?.memberLoginAccount ?? "").trim();
   const phone = String(user.phone ?? user.phoneE164 ?? "").trim();
-  const primaryText = displayName || phone || "未命名创作者";
+  const primaryText = displayName || loginAccount || phone || "未命名创作者";
   const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
   const periodEndAt =
     membershipStatus?.currentPeriodEndAt ??
     membershipStatus?.membership?.currentPeriodEndAt ??
     null;
   const dateLabel = formatMembershipDate(periodEndAt);
+  const membershipLabel =
+    status === "professional_active"
+      ? `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`
+      : status === "experience_active"
+        ? `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`
+        : "当前套餐：未开通";
 
-  if (status === "professional_active") {
+  if (loginAccount) {
     return {
       primaryText,
-      secondaryText: `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
-    };
-  }
-  if (status === "experience_active") {
-    return {
-      primaryText,
-      secondaryText: `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
+      secondaryText: `${loginAccount} · ${membershipLabel}`,
     };
   }
   return {
     primaryText,
-    secondaryText: "当前套餐：未开通",
+    secondaryText: membershipLabel,
   };
 }
 
@@ -5909,7 +5988,6 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "team") {
     return renderScrollableWorkbenchSurface("team", `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
@@ -5921,7 +5999,17 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
-        createMemberModal: ui.createMemberModal ?? null,
+        createMemberModal: ui.isTeamMemberCreateOpen
+          ? {
+              open: true,
+              draft: ui.teamMemberDraft ?? {},
+              notice: ui.teamMemberCreateNotice ?? "",
+              temporaryPassword: ui.teamTemporaryPassword ?? "",
+              availableProjects: ui.projectLibrary ?? [],
+              availableScripts: ui.scriptLibraryRecords ?? [],
+              availableCanvases: ui.canvasProjects ?? [],
+            }
+          : null,
         editMemberModal: ui.editMemberModal ?? null,
         dashboardTab: ui.teamDashboardTab ?? "member-consumption",
         dashboardDateShortcut: ui.teamDashboardDateShortcut ?? "今天",
@@ -7556,6 +7644,8 @@ function renderStatusbarActionIcon(icon) {
 function renderGlobalStatusbar(session, options = {}) {
   const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const walletLabel = isTeamMember ? "子账户积分" : "积分";
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -7574,13 +7664,15 @@ function renderGlobalStatusbar(session, options = {}) {
         <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
           <span>商务合作</span>
         </button>
+        ${isTeamMember ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
           <span>购物车</span>
         </button>
+        `}
         <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
-          <span>积分</span>
+          <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
@@ -7730,6 +7822,9 @@ export function getProjectGallerySnapshot(ui = {}) {
   const totalProjects = pagination.total;
   const totalPages = pagination.totalPages;
   const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? pagination.page)), totalPages);
+  const pageProjects = projects.length <= pagination.pageSize
+    ? projects
+    : projects.slice((currentPage - 1) * pagination.pageSize, currentPage * pagination.pageSize);
   return {
     searchQuery,
     filteredProjects: projects,
@@ -7737,7 +7832,7 @@ export function getProjectGallerySnapshot(ui = {}) {
     totalProjects,
     totalPages,
     currentPage,
-    pageProjects: projects,
+    pageProjects,
   };
 }
 

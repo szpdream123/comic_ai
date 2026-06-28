@@ -60,9 +60,9 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
         [orderId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
       const inbox = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM inbox_events WHERE consumer_name = 'credit.payment-succeeded'",
@@ -72,7 +72,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
       assert.equal(replay.kind, "duplicate");
       assert.equal(ledgerCount.rows[0]?.count, 1);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, first.creditGrant.id);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
       assert.equal(inbox.rows[0]?.count, 1);
     } finally {
       await db.close();
@@ -122,9 +122,9 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
         [orderId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
       const inbox = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM inbox_events WHERE consumer_name = 'credit.payment-succeeded'",
@@ -136,7 +136,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
       assert.equal(appliedGrantIds.length >= 1, true);
       assert.equal(ledger.rows.length, 1);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, ledger.rows[0]?.id);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
       assert.equal(inbox.rows[0]?.count, 1);
       assert.equal(
         appliedGrantIds.every((id) => id === ledger.rows[0]?.id),
@@ -255,7 +255,7 @@ async function seedPaidOrderWithOutbox(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138001', 'active')
+      VALUES ($1, '13800138001', 'active')
     `,
     [userId],
   );
@@ -444,7 +444,7 @@ async function seedMembershipPaidOrderWithOutbox(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138001', 'active')
+      VALUES ($1, '13800138001', 'active')
     `,
     [userId],
   );
