@@ -278,6 +278,109 @@ describe("team asset local uploads", () => {
     assert.match(html, /open-pricing/);
   });
 
+  it("uses membership status entitlement when legacy team asset overview is stale", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "team",
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        entitlements: {
+          teamAssetLibrary: true,
+        },
+      },
+      libraryCategory: "character",
+      libraryEntitlement: {
+        hasTeamAssetLibrary: false,
+        blockReason: "team_asset_library_entitlement_required",
+      },
+      teamAssetLocalUploads: {
+        character: [
+          {
+            id: "team-cloud-asset",
+            category: "character",
+            name: "后台配置开通的团队角色",
+            previewUrl: "https://cdn.example.com/team-assets/character/hero.png",
+            sourceUrl: "https://cdn.example.com/team-assets/character/hero.png",
+            storageObjectId: "storage-1",
+            sizeLabel: "53 KB",
+            mimeType: "image/jpeg",
+          },
+        ],
+      },
+    });
+
+    assert.match(html, /后台配置开通的团队角色/);
+    assert.match(html, /data-action="pick-team-asset-local-upload"/);
+    assert.doesNotMatch(html, /立即开通/);
+  });
+
+  it("allows team asset uploads from membership status entitlement when legacy overview is stale", async () => {
+    const globals = globalThis;
+    const originalFileReader = globals.FileReader;
+    const originalWindow = globals.window;
+    const originalDocument = globals.document;
+
+    class TestFileReader {
+      result = "";
+      onload = null;
+
+      readAsDataURL(file) {
+        this.result = `data:${file.type || "application/octet-stream"};base64,cHJldmlldw==`;
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    globals.FileReader = TestFileReader;
+    globals.window = { scrollX: 0, scrollY: 0 };
+    globals.document = {
+      scrollingElement: { scrollLeft: 0, scrollTop: 0 },
+      documentElement: { scrollLeft: 0, scrollTop: 0 },
+    };
+
+    try {
+      const { workbench, uploadCalls } = createWorkbench({
+        ui: {
+          libraryEntitlement: {
+            hasTeamAssetLibrary: false,
+            blockReason: "team_asset_library_entitlement_required",
+          },
+          membershipStatus: {
+            status: "professional_active",
+            currentTier: "professional",
+            entitlements: {
+              teamAssetLibrary: true,
+            },
+          },
+        },
+      });
+
+      await handleTeamAssetLocalUploadFiles(workbench, "character", [
+        { name: "hero.png", type: "image/png", size: 1536, lastModified: 1 },
+      ]);
+
+      assert.equal(uploadCalls.length, 1);
+      assert.equal(workbench.ui.isLibraryPricingModalOpen, undefined);
+      assert.match(workbench.root.innerHTML, /hero/);
+    } finally {
+      if (originalFileReader) {
+        globals.FileReader = originalFileReader;
+      } else {
+        delete globals.FileReader;
+      }
+      if (originalWindow) {
+        globals.window = originalWindow;
+      } else {
+        delete globals.window;
+      }
+      if (originalDocument) {
+        globals.document = originalDocument;
+      } else {
+        delete globals.document;
+      }
+    }
+  });
+
   it("keeps the team asset library separate from the official asset browser", () => {
     const html = renderLibraryTeam({
       route: "assets",

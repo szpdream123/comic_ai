@@ -5079,6 +5079,13 @@ describe("asset generator and imported asset modals", () => {
       scriptTab: "script-upload",
       uploadNotice: "",
       defaultScript: "Episode 1",
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        entitlements: {
+          canvasAccess: true,
+        },
+      },
       ...overrides,
     };
   }
@@ -6526,6 +6533,13 @@ describe("production workbench project tab", () => {
       scriptTab: "script-upload",
       uploadNotice: "",
       defaultScript: "Episode 1",
+      membershipStatus: {
+        status: "professional_active",
+        currentTier: "professional",
+        entitlements: {
+          canvasAccess: true,
+        },
+      },
       ...overrides,
     };
   }
@@ -15857,6 +15871,13 @@ describe("production workbench project tab", () => {
             selectedVideoStatus: "ready",
           },
         ],
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: {
+            canvasAccess: true,
+          },
+        },
         exportHistory: [
           {
             status: "succeeded",
@@ -15882,6 +15903,52 @@ describe("production workbench project tab", () => {
     assert.match(html, /创建画布/);
     assert.doesNotMatch(html, /canvas-workspace/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
+  });
+
+  it("honors backend entitlement config when rendering the canvas create action", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: {
+            canvasAccess: false,
+          },
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /开通会员后创建画布/);
+    assert.match(html, /data-action="open-pricing"/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
+  });
+
+  it("keeps the canvas entry visible but locked when membership is expired", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: {
+          status: "expired",
+          currentTier: null,
+          entitlements: {
+            canvasAccess: true,
+          },
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /开通会员后创建画布/);
+    assert.match(html, /data-action="open-pricing"/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
   });
 
   it("does not render gallery node totals", () => {
@@ -15972,6 +16039,13 @@ describe("production workbench project tab", () => {
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "list",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: {
+            canvasAccess: true,
+          },
+        },
       }),
       root: {
         innerHTML: "",
@@ -15994,6 +16068,86 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedCanvasProjectId, workbench.ui.canvasProjects[0].id);
     assert.ok(workbench.ui.canvasDocumentsByProject[workbench.ui.selectedCanvasProjectId]);
     assert.equal(workbench.ui.canvasDocument.projectId, workbench.ui.selectedCanvasProjectId);
+  });
+
+  it("honors backend entitlement config before creating a canvas project", async () => {
+    const apiCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createCanvasProject(input) {
+          apiCalls.push(["create", input]);
+          return { project: { id: "blocked-canvas", title: input.title, status: "草稿" } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: {
+            canvasAccess: false,
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "create-canvas-project",
+      },
+    });
+
+    assert.deepEqual(apiCalls, []);
+    assert.equal(workbench.ui.canvasProjectView, "list");
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+  });
+
+  it("blocks canvas creation when membership is expired despite stale entitlement payload", async () => {
+    const apiCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createCanvasProject(input) {
+          apiCalls.push(["create", input]);
+          return { project: { id: "expired-canvas", title: input.title, status: "草稿" } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: {
+          status: "expired",
+          currentTier: null,
+          entitlements: {
+            canvasAccess: true,
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "create-canvas-project",
+      },
+    });
+
+    assert.deepEqual(apiCalls, []);
+    assert.equal(workbench.ui.canvasProjectView, "list");
+    assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
   });
 
   it("opens canvas project card menu and renders rename plus delete actions", () => {

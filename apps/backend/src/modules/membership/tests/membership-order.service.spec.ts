@@ -354,7 +354,46 @@ describe("membership order service", { concurrency: false }, () => {
     }
   });
 
-  it("falls back to active experience after professional expires without team entitlements", async () => {
+  it("honors current professional plan entitlements over stale paid period snapshot extras", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedProfessionalPeriodWithCurrentPlanEntitlements(db, {
+        snapshotEntitlements: [
+          "canvas_access",
+          "priority_generation",
+          "team_asset_library",
+          "team_dashboard",
+          "team_member_management",
+        ],
+        currentPlanEntitlements: [
+          "priority_generation",
+          "team_asset_library",
+          "team_dashboard",
+          "team_member_management",
+        ],
+        seatLimit: 36,
+      });
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "professional_active");
+      assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.entitlements.canvasAccess, false);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("falls back to active experience after professional expires with its configured entitlements", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -368,6 +407,7 @@ describe("membership order service", { concurrency: false }, () => {
         periodStartAt: "2026-06-08T08:00:00.000Z",
         periodEndAt: "2026-06-15T08:00:00.000Z",
         entitlements: ["canvas_access", "team_member_management", "team_asset_library"],
+        seatLimit: 4,
       });
       await db.query(
         `
@@ -407,10 +447,10 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.currentTier, "experience");
       assert.equal(response.body.membership.currentPeriodEndAt, "2026-06-15T08:00:00.000Z");
       assert.equal(response.body.membership.entitlements.canvasAccess, true);
-      assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
       assert.equal(response.body.membership.entitlements.teamDashboard, false);
-      assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
-      assert.equal(response.body.membership.team.seatLimit, null);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
+      assert.equal(response.body.membership.team.seatLimit, 4);
     } finally {
       await db.close();
     }
@@ -475,6 +515,121 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.currentTier, null);
       assert.equal(response.body.membership.entitlements.canvasAccess, false);
       assert.equal(response.body.membership.entitlements.priorityGeneration, false);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
+      assert.equal(response.body.membership.team.seatLimit, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("expires current plan entitlements when the professional membership period is over", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedProfessionalPeriodWithCurrentPlanEntitlements(db, {
+        snapshotEntitlements: [
+          "canvas_access",
+          "priority_generation",
+          "team_asset_library",
+          "team_dashboard",
+          "team_member_management",
+        ],
+        currentPlanEntitlements: [
+          "canvas_access",
+          "priority_generation",
+          "team_asset_library",
+          "team_dashboard",
+          "team_member_management",
+        ],
+        seatLimit: 36,
+      });
+      await db.query(
+        `
+          UPDATE organization_membership_subscriptions
+          SET current_period_start_at = '2026-06-01T08:00:00.000Z',
+              current_period_end_at = '2026-06-08T07:59:59.000Z'
+          WHERE organization_id = $1
+        `,
+        [organizationId],
+      );
+      await db.query(
+        `
+          UPDATE membership_periods
+          SET period_start_at = '2026-06-01T08:00:00.000Z',
+              period_end_at = '2026-06-08T07:59:59.000Z'
+          WHERE organization_id = $1
+        `,
+        [organizationId],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "expired");
+      assert.equal(response.body.membership.currentTier, null);
+      assert.equal(response.body.membership.entitlements.canvasAccess, false);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
+      assert.equal(response.body.membership.entitlements.teamDashboard, false);
+      assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
+      assert.equal(response.body.membership.team.seatLimit, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("expires current plan entitlements when the experience membership period is over", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const session = await seedCreator(db);
+      await seedActiveExperiencePeriod(db, {
+        periodStartAt: "2026-06-01T08:00:00.000Z",
+        periodEndAt: "2026-06-08T07:59:59.000Z",
+        entitlements: ["canvas_access", "team_member_management", "team_asset_library"],
+        seatLimit: 4,
+      });
+      await db.query(
+        `
+          INSERT INTO organization_membership_subscriptions (
+            id,
+            organization_id,
+            status,
+            current_tier,
+            current_period_start_at,
+            current_period_end_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1,
+            $2,
+            'experience_active',
+            'experience',
+            '2026-06-01T08:00:00.000Z',
+            '2026-06-08T07:59:59.000Z',
+            '2026-06-01T08:00:00.000Z',
+            '2026-06-01T08:00:00.000Z'
+          )
+        `,
+        [randomUUID(), organizationId],
+      );
+      const service = createMembershipOrderService({ db, workspaceId });
+
+      const response = await service.getMembershipStatus({
+        user: { sessionToken: session.token },
+        now: new Date("2026-06-09T08:00:00.000Z"),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.membership.status, "expired");
+      assert.equal(response.body.membership.currentTier, null);
+      assert.equal(response.body.membership.entitlements.canvasAccess, false);
+      assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
       assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
@@ -566,7 +721,7 @@ async function seedCreator(db: Awaited<ReturnType<typeof createMigratedTestDb>>)
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800238001', 'active')
+      VALUES ($1, '13800238001', 'active')
     `,
     [ownerUserId],
   );
@@ -939,12 +1094,14 @@ async function seedProfessionalPeriodWithCurrentPlanEntitlements(
 
 async function seedActiveExperiencePeriod(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  input: { periodStartAt: string; periodEndAt: string; entitlements?: string[] },
+  input: { periodStartAt: string; periodEndAt: string; entitlements?: string[]; seatLimit?: number },
 ) {
   const entitlements = input.entitlements ?? ["canvas_access"];
+  const seatLimit = input.seatLimit ?? 0;
   const planSnapshot = {
     tier: "experience",
     entitlements,
+    seatLimit,
   };
   const planId = await seedPlan(db, {
     code: `experience_status_${randomUUID().slice(0, 8)}`,
@@ -954,7 +1111,7 @@ async function seedActiveExperiencePeriod(
     periodCount: 7,
     giftCredits: 300,
     amountMinor: 990,
-    seatLimit: 0,
+    seatLimit,
     entitlements,
   });
   const orderId = await seedMembershipBillingOrder(db, {

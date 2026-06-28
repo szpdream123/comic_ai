@@ -128,9 +128,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
     return { repaired: false, orderNo: input.orderNo };
   }
 
-  const planSnapshot = professionalCompatibilitySnapshot(
-    assertMembershipPlanSnapshot(order.product_snapshot_json),
-  );
+  const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
   if (planSnapshot.tier !== "professional") {
     return { repaired: false, orderNo: input.orderNo, organizationId: order.organization_id };
   }
@@ -1213,30 +1211,6 @@ function assertMembershipPlanSnapshot(value: unknown): NormalizedMembershipPlanS
     seatLimit,
     entitlements: normalizeStringArray(snapshot.entitlements),
   };
-}
-
-function professionalCompatibilitySnapshot(
-  snapshot: NormalizedMembershipPlanSnapshot,
-): NormalizedMembershipPlanSnapshot {
-  if (snapshot.tier !== "professional") {
-    return snapshot;
-  }
-  const entitlements = normalizeProfessionalCompatibilityEntitlements(snapshot.entitlements);
-  return {
-    ...snapshot,
-    entitlements,
-  };
-}
-
-function normalizeProfessionalCompatibilityEntitlements(entitlements: string[]) {
-  const normalized = normalizeStringArray(entitlements);
-  if (
-    normalized.includes("team_member_management") &&
-    !normalized.includes("team_asset_library")
-  ) {
-    return [...normalized, "team_asset_library"];
-  }
-  return normalized;
 }
 
 function assertPaidAt(value: Date | string | null): Date {

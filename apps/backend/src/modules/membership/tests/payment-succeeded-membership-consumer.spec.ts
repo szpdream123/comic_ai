@@ -745,7 +745,7 @@ async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) 
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800338001', 'active')
+      VALUES ($1, '13800338001', 'active')
       ON CONFLICT (id) DO NOTHING
     `,
     [userId],

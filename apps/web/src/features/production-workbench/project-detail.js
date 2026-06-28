@@ -1695,7 +1695,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetImportDrafts: ui.assetImportDrafts ?? [],
         assetImportSelection: ui.assetImportSelection ?? [],
         membershipStatus: ui.membershipStatus ?? null,
-        teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
+        teamAssetLibraryEnabled: hasTeamAssetLibraryAccess(ui),
         assetImportPage: ui.assetImportPage ?? 1,
         assetImportPageSize: ui.assetImportPageSize ?? 10,
         assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -6025,7 +6025,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       assetImportDrafts: ui.assetImportDrafts ?? [],
       assetImportSelection: ui.assetImportSelection ?? [],
       membershipStatus: ui.membershipStatus ?? null,
-      teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
+      teamAssetLibraryEnabled: hasTeamAssetLibraryAccess(ui),
       assetImportPage: ui.assetImportPage ?? 1,
       assetImportPageSize: ui.assetImportPageSize ?? 10,
       assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -6215,7 +6215,7 @@ function renderToolsPanel(ui = {}, state = {}) {
 
 function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
-  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus);
+  const canCreateCanvasProject = hasCanvasAccess(ui.membershipStatus);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -6250,7 +6250,38 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "",
   );
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || status.endsWith("_active");
+}
+
+function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    null;
+  if (!entitlements || typeof entitlements !== "object") {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(entitlements, entitlementKey)
+    ? entitlements[entitlementKey] === true
+    : null;
+}
+
+function hasCanvasAccess(membershipStatus) {
+  const configuredEntitlement = resolveMembershipEntitlement(membershipStatus, "canvasAccess");
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && isActiveMembershipStatus(membershipStatus);
+  }
+  return false;
+}
+
+function hasTeamAssetLibraryAccess(ui = {}) {
+  const configuredEntitlement = resolveMembershipEntitlement(ui.membershipStatus, "teamAssetLibrary");
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && isActiveMembershipStatus(ui.membershipStatus);
+  }
+  return ui.libraryEntitlement?.hasTeamAssetLibrary === true &&
+    isActiveMembershipStatus(ui.membershipStatus);
 }
 
 function normalizeCanvasProjectCards(ui = {}) {

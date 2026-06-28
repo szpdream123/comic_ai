@@ -1338,7 +1338,8 @@ function mapDirectRechargePackagesToPlans(packages) {
 }
 
 function isActiveMembershipStatus(status) {
-  return status === "experience_active" || status === "professional_active";
+  const normalizedStatus = String(status ?? "");
+  return normalizedStatus === "active" || normalizedStatus.endsWith("_active");
 }
 
 function formatAmount(amountMinor, currency) {

@@ -61,13 +61,13 @@ interface BillingOrderRow {
 }
 
 interface MembershipSubscriptionRow {
-  status: "none" | "experience_active" | "professional_active" | "expired";
+  status: string;
   current_tier: string | null;
   current_period_end_at: Date | string | null;
 }
 
 interface MembershipPeriodStatusRow {
-  tier: "experience" | "professional";
+  tier: string;
   period_end_at: Date | string;
   plan_snapshot_json: unknown;
   plan_entitlements_json: unknown | null;
@@ -82,12 +82,6 @@ interface ActiveEntitlementRow {
 interface TeamPlanLimitRow {
   seat_limit: number | string;
 }
-
-const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = new Set([
-  "team_asset_library",
-  "team_dashboard",
-  "team_member_management",
-]);
 
 export function createMembershipOrderService(deps: {
   db: SqlDatabase;
@@ -372,9 +366,7 @@ function membershipSubscriptionView(
   const currentPeriodEndAtIso = currentPeriodEndAt
     ? currentPeriodEndAt.toISOString()
     : null;
-  const statusIsActive =
-    subscription.status === "experience_active" ||
-    subscription.status === "professional_active";
+  const statusIsActive = subscription.status === "active" || subscription.status.endsWith("_active");
   const periodIsActive =
     currentPeriodEndAt !== null &&
     Number.isFinite(currentPeriodEndAt.getTime()) &&
@@ -417,7 +409,6 @@ async function findPreferredActiveMembershipPeriod(
       WHERE period.organization_id = $1
         AND period.status = 'active'
         AND period.period_end_at > $2
-        AND period.tier IN ('experience', 'professional')
       ORDER BY
         CASE WHEN period.tier = 'professional' THEN 0 ELSE 1 END,
         period.period_end_at DESC,
@@ -431,11 +422,12 @@ async function findPreferredActiveMembershipPeriod(
 function entitlementKeysFromMembershipPeriod(
   period: MembershipPeriodStatusRow | null | undefined,
 ) {
+  const currentPlanEntitlements = normalizeJson(period?.plan_entitlements_json);
+  if (Array.isArray(currentPlanEntitlements)) {
+    return normalizeStringArray(currentPlanEntitlements);
+  }
   const planSnapshot = normalizeObject(period?.plan_snapshot_json);
-  return [
-    ...normalizeStringArray(planSnapshot.entitlements),
-    ...normalizeStringArray(period?.plan_entitlements_json),
-  ];
+  return normalizeStringArray(planSnapshot.entitlements);
 }
 
 function resolveCurrentMembershipEntitlements(input: {
@@ -443,7 +435,6 @@ function resolveCurrentMembershipEntitlements(input: {
   preferredActivePeriod: MembershipPeriodStatusRow | null | undefined;
   currentTier: string | null;
 }) {
-  const currentTier = input.preferredActivePeriod?.tier ?? input.currentTier;
   const resolved = new Set<string>();
   for (const entitlement of input.persistedEntitlements) {
     if (entitlement.source === "payment") {
@@ -453,12 +444,6 @@ function resolveCurrentMembershipEntitlements(input: {
   }
   for (const entitlementKey of entitlementKeysFromMembershipPeriod(input.preferredActivePeriod)) {
     resolved.add(entitlementKey);
-  }
-
-  if (currentTier !== "professional") {
-    for (const entitlementKey of PROFESSIONAL_ONLY_ENTITLEMENT_KEYS) {
-      resolved.delete(entitlementKey);
-    }
   }
 
   return resolved;
@@ -473,18 +458,37 @@ function resolveMembershipTeamSeatLimit(input: {
     return null;
   }
 
+  const currentPlanSeatLimit = normalizeOptionalSeatLimit(
+    input.preferredActivePeriod?.plan_seat_limit,
+  );
+  if (currentPlanSeatLimit !== null) {
+    return currentPlanSeatLimit;
+  }
+
   const planSnapshot = normalizeObject(input.preferredActivePeriod?.plan_snapshot_json);
-  const candidates = [
-    Number(input.teamPlanLimit?.seat_limit ?? 0),
-    Number(input.preferredActivePeriod?.plan_seat_limit ?? 0),
-    Number(planSnapshot.seatLimit ?? 0),
-  ].filter((value) => Number.isFinite(value) && value >= 0);
+  const snapshotSeatLimit = Object.prototype.hasOwnProperty.call(planSnapshot, "seatLimit")
+    ? normalizeOptionalSeatLimit(planSnapshot.seatLimit)
+    : null;
+  if (snapshotSeatLimit !== null) {
+    return snapshotSeatLimit;
+  }
+
+  const fallbackSeatLimit = normalizeOptionalSeatLimit(input.teamPlanLimit?.seat_limit);
+  const candidates = fallbackSeatLimit === null ? [] : [fallbackSeatLimit];
 
   if (!candidates.length) {
     return null;
   }
 
   return Math.max(...candidates);
+}
+
+function normalizeOptionalSeatLimit(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : null;
 }
 
 async function listActiveEntitlements(

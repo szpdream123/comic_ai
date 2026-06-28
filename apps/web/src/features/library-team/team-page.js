@@ -29,7 +29,7 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "",
   );
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || status.endsWith("_active");
 }
 
 export function renderTeamPage(context = {}) {
@@ -219,18 +219,15 @@ function createPrototypeTeamOverview(members) {
 }
 
 function resolveEffectiveTeamOverview(overview, membershipStatus) {
-  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
-  const currentTier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
   const entitlements = membershipStatus?.entitlements ?? membershipStatus?.membership?.entitlements ?? {};
   const hasActiveMembership = isActiveMembershipStatus(membershipStatus);
-  const isProfessionalActive = status === "professional_active" || (hasActiveMembership && currentTier === "professional");
   const hasTeamMemberManagement =
-    hasActiveMembership && isProfessionalActive && entitlements?.teamMemberManagement === true;
+    hasActiveMembership && entitlements?.teamMemberManagement === true;
   const hasTeamDashboard =
     (hasTeamMemberManagement && overview?.permissions?.canViewDashboard === true && overview?.entitlements?.teamDashboard === true) ||
-    (hasActiveMembership && isProfessionalActive && entitlements?.teamDashboard === true);
+    (hasActiveMembership && entitlements?.teamDashboard === true);
   const hasTeamAssetLibrary =
-    hasActiveMembership && isProfessionalActive && entitlements?.teamAssetLibrary === true;
+    hasActiveMembership && entitlements?.teamAssetLibrary === true;
   const seats = overview?.seats ?? {};
   const membershipSeatLimit = Number(membershipStatus?.team?.seatLimit ?? membershipStatus?.membership?.team?.seatLimit ?? 0);
   const limit = hasTeamMemberManagement

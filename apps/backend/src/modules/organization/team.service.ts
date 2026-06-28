@@ -571,25 +571,30 @@ async function hasActiveEntitlement(
       UNION ALL
       SELECT period.id::text AS id
       FROM membership_periods period
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND (period.plan_snapshot_json -> 'entitlements') ? $2
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
       JOIN membership_plans plan
         ON plan.id = period.plan_id
       WHERE period.organization_id = $1
-        AND period.tier = 'professional'
         AND period.status = 'active'
         AND period.period_end_at > $3
-        AND plan.tier = 'professional'
         AND plan.status = 'active'
         AND (plan.valid_from IS NULL OR plan.valid_from <= $3)
         AND (plan.valid_until IS NULL OR plan.valid_until > $3)
         AND plan.entitlements_json ? $2
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
+        AND period.status = 'active'
+        AND period.period_end_at > $3
+        AND (period.plan_snapshot_json -> 'entitlements') ? $2
+        AND NOT EXISTS (
+          SELECT 1
+          FROM membership_plans plan
+          WHERE plan.id = period.plan_id
+            AND plan.status = 'active'
+            AND (plan.valid_from IS NULL OR plan.valid_from <= $3)
+            AND (plan.valid_until IS NULL OR plan.valid_until > $3)
+        )
       LIMIT 1
     `,
     [input.organizationId, input.entitlementKey, input.now],
@@ -602,7 +607,7 @@ async function resolvePlanLimits(
   db: SqlDatabase,
   input: { organizationId: string; now: Date },
 ) {
-  const activeProfessionalPlan = await queryOne<{
+  const activeMembershipPlan = await queryOne<{
     seat_limit: number;
   }>(
     db,
@@ -612,15 +617,16 @@ async function resolvePlanLimits(
       JOIN membership_plans plan
         ON plan.id = period.plan_id
       WHERE period.organization_id = $1
-        AND period.tier = 'professional'
         AND period.status = 'active'
         AND period.period_end_at > $2
-        AND plan.tier = 'professional'
         AND plan.status = 'active'
         AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
         AND (plan.valid_until IS NULL OR plan.valid_until > $2)
         AND plan.entitlements_json ? 'team_member_management'
-      ORDER BY period.period_end_at DESC, period.created_at DESC
+      ORDER BY
+        CASE WHEN period.tier = 'professional' THEN 0 ELSE 1 END,
+        period.period_end_at DESC,
+        period.created_at DESC
       LIMIT 1
     `,
     [input.organizationId, input.now],
@@ -640,8 +646,8 @@ async function resolvePlanLimits(
   );
   const defaultSeatLimit = await resolveDefaultSubaccountLimit(db);
   const seatLimit =
-    activeProfessionalPlan
-      ? Number(activeProfessionalPlan.seat_limit ?? 0)
+    activeMembershipPlan
+      ? Number(activeMembershipPlan.seat_limit ?? 0)
       : limits
         ? Number(limits.seat_limit ?? 0)
         : defaultSeatLimit;

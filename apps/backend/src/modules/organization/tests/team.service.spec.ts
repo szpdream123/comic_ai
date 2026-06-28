@@ -474,7 +474,7 @@ describe("team service", { concurrency: false }, () => {
     }
   });
 
-  it("does not grant team management from an active experience period after professional expires", async () => {
+  it("grants team management from an active experience period when the plan config includes it after professional expires", async () => {
     const db = await createMigratedTestDb();
     try {
       await seedTeamTenant(db, { seatLimit: 5, credits: 1200 });
@@ -485,21 +485,22 @@ describe("team service", { concurrency: false }, () => {
         now,
       });
 
-      assert.equal(overview.entitlements.teamMemberManagement, false);
-      assert.equal(overview.entitlements.teamAssetLibrary, false);
-      assert.equal(overview.entitlements.teamDashboard, false);
-      await assert.rejects(
-        createTeamMember(db, {
-          actor: ownerActor(),
-          teamAccount: "director_exp",
-          displayName: "Experience Member",
-          businessRole: "director",
-          projectIds: [],
-          initialCredits: 0,
-          now,
-        }),
-        teamError("team_member_management_required"),
-      );
+      assert.equal(overview.entitlements.teamMemberManagement, true);
+      assert.equal(overview.entitlements.teamAssetLibrary, true);
+      assert.equal(overview.entitlements.teamDashboard, true);
+      assert.equal(overview.seats.limit, 5);
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director_exp",
+        displayName: "Experience Member",
+        businessRole: "director",
+        projectIds: [],
+        initialCredits: 0,
+        now,
+      });
+
+      assert.equal(created.member.teamAccount, "director_exp");
     } finally {
       await db.close();
     }
@@ -626,7 +627,7 @@ async function seedTeamTenant(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [ownerUserId],
   );
@@ -894,7 +895,7 @@ async function seedExpiredProfessionalAndActiveExperiencePeriods(
           990,
           'CNY',
           300,
-          0,
+          5,
           '["canvas_access","team_member_management","team_asset_library","team_dashboard"]'::jsonb,
           '{}'::jsonb,
           '{}'::jsonb,
