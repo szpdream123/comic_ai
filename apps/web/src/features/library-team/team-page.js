@@ -786,6 +786,9 @@ function renderFixtureCreateMemberModal(modal = {}) {
     draft.member_login_account ??
     (suffix && teamAccount ? `${teamAccount}@${suffix}` : ""),
   ).trim();
+  const accountPrefix = suffix
+    ? (teamAccount || loginAccount.replace(new RegExp(`@${suffix}$`, "i"), "").split("@")[0].trim())
+    : (loginAccount || teamAccount);
   const roleOptions = [
     ["director", "导演"],
     ["producer", "制片"],
@@ -794,6 +797,7 @@ function renderFixtureCreateMemberModal(modal = {}) {
   const safeDraft = {
     teamAccount,
     displayName: draft.displayName ?? "",
+    password: draft.password ?? "",
     initialCredits: draft.initialCredits ?? 0,
     remark: draft.remark ?? "",
     projectIds: Array.isArray(draft.projectIds) ? draft.projectIds.map((item) => String(item ?? "")) : [],
@@ -828,11 +832,18 @@ function renderFixtureCreateMemberModal(modal = {}) {
         <div class="library-team-form-grid">
           <label class="library-team-field stacked">
             <span>成员账户 / 登录账户</span>
-            <input id="team-member-team-account" type="text" value="${escapeAttr(loginAccount)}" placeholder="director001@abc123" autocomplete="off" />
+            <span class="library-team-account-input-group">
+              <input id="team-member-team-account" type="text" value="${escapeAttr(accountPrefix)}" placeholder="director001" autocomplete="off" />
+              ${suffix ? `<strong>@${escapeHtml(suffix)}</strong>` : ""}
+            </span>
           </label>
           <label class="library-team-field stacked">
             <span>成员名称</span>
             <input id="team-member-display-name" type="text" value="${escapeAttr(safeDraft.displayName)}" placeholder="导演一号" autocomplete="off" />
+          </label>
+          <label class="library-team-field stacked">
+            <span>初始密码</span>
+            <input id="team-member-password" type="text" value="${escapeAttr(safeDraft.password)}" placeholder="至少 8 位，留空则自动生成" autocomplete="new-password" />
           </label>
           <label class="library-team-field stacked">
             <span>初始积分</span>
@@ -1332,7 +1343,7 @@ function renderEditMemberModal(modal) {
               <span class="library-team-status-pill">${escapeHtml(statusLabel)}</span>
             </div>
             <label class="library-team-field stacked">
-              <span>完整账号</span>
+              <span>成员账户</span>
             <input class="library-team-readonly-field" type="text" value="${escapeAttr(
               modal.memberLoginAccount ??
               modal.member_login_account ??
@@ -1372,22 +1383,11 @@ function renderEditMemberModal(modal) {
                   <span>新密码</span>
                   <input
                     id="team-edit-member-new-password-input"
-                    type="password"
+                    type="text"
                     placeholder="至少 8 位"
                     autocomplete="new-password"
                     data-action="change-edit-member-new-password"
                     value="${escapeAttr(modal.newPassword ?? "")}"
-                  />
-                </label>
-                <label class="library-team-field stacked">
-                  <span>确认密码</span>
-                  <input
-                    id="team-edit-member-confirm-password-input"
-                    type="password"
-                    placeholder="再次输入新密码"
-                    autocomplete="new-password"
-                    data-action="change-edit-member-confirm-password"
-                    value="${escapeAttr(modal.confirmPassword ?? "")}"
                   />
                 </label>
               </div>

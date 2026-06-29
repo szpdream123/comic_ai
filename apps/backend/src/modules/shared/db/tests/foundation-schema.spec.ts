@@ -199,7 +199,6 @@ describe("foundation schema", () => {
         "membership_id",
         "team_account",
         "display_name",
-        "business_role",
         "member_group_id",
         "credit_balance_cached",
         "credit_used_cached",
@@ -208,6 +207,8 @@ describe("foundation schema", () => {
         "created_by_user_id",
         "created_at",
         "updated_at",
+        "script_ids",
+        "canvas_ids",
       ]);
 
       assert.deepEqual(await listColumnNames(db, "team_project_assignments"), [
@@ -1092,7 +1093,6 @@ describe("foundation schema", () => {
               membership_id,
               team_account,
               display_name,
-              business_role,
               member_group_id,
               created_by_user_id
             )
@@ -1103,7 +1103,6 @@ describe("foundation schema", () => {
               '30000000-0000-4000-8000-000000000001',
               'director001',
               'Director One',
-              'director',
               '35000000-0000-4000-8000-000000000002',
               '00000000-0000-4000-8000-000000000001'
             )

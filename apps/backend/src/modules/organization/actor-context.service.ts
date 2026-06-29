@@ -61,12 +61,6 @@ interface MembershipRow {
   workspace_id: string | null;
 }
 
-interface TeamProfileRow {
-  membership_id: string;
-  member_group_id: string | null;
-  team_account: string;
-}
-
 interface SimpleTeamMemberSessionRow {
   member_id: string;
   member_account: string;
@@ -174,15 +168,6 @@ export async function resolveActorContext(
     throw new AuthorizationError("membership_disabled");
   }
 
-  const teamProfile =
-    membership.role === "sub_account"
-      ? await resolveTeamProfile(db, {
-          membershipId: membership.id,
-          organizationId: scope.organizationId,
-          workspaceId: scope.workspaceId,
-        })
-      : undefined;
-
   if (simpleTeamMember && input.projectId) {
     await assertSimpleTeamMemberProjectAccess(db, {
       userId: user.id,
@@ -205,10 +190,9 @@ export async function resolveActorContext(
             capabilities.generationStart,
             capabilities.exportCreate,
           ]
-        : []
+        : [capabilities.workspaceRead]
       : roleCapabilities[membership.role],
     teamMember: simpleTeamMember,
-    teamProfile,
   };
 
   if (input.capability) {
@@ -420,39 +404,4 @@ async function findMembership(
     `,
     [input.organizationId, input.userId, input.workspaceId],
   );
-}
-
-async function resolveTeamProfile(
-  db: SqlDatabase,
-  input: {
-    membershipId: string;
-    organizationId: string;
-    workspaceId: string | null;
-  },
-): Promise<ActorContext["teamProfile"]> {
-  if (!input.workspaceId) {
-    throw new AuthorizationError("membership_missing");
-  }
-
-    const profile = await queryOne<TeamProfileRow>(
-    db,
-    `
-      SELECT membership_id, member_group_id, team_account
-      FROM team_member_profiles
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND membership_id = $3
-    `,
-    [input.organizationId, input.workspaceId, input.membershipId],
-  );
-
-  if (!profile) {
-    throw new AuthorizationError("membership_missing");
-  }
-
-  return {
-    membershipId: profile.membership_id,
-    memberGroupId: profile.member_group_id,
-    teamAccount: profile.team_account,
-  };
 }

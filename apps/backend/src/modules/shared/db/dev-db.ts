@@ -280,6 +280,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
+  if (
+    !(await columnExists(db, "team_member_profiles", "script_ids")) ||
+    !(await columnExists(db, "team_member_profiles", "canvas_ids"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  }
+  await ensureTeamMemberProfilesBusinessRoleCompatibility(db);
 
   if (!(await tableExists(db, "admin_accounts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
@@ -355,6 +362,16 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await tableExists(db, "team_member_projects"))
   ) {
     await applySqlMigration(db, process.cwd(), "0053_simple_team_members.sql");
+  }
+  if (
+    !(await tableExists(db, "team_member_scripts")) ||
+    !(await tableExists(db, "team_member_canvases"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  } else if (
+    await needsTeamMemberResourceProjectNullabilityUpdate(db)
+  ) {
+    await applySqlMigration(db, process.cwd(), "0060_team_member_resource_project_nullable.sql");
   }
 
   if (
@@ -865,23 +882,13 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
       membership_id uuid NOT NULL REFERENCES memberships(id),
       team_account text NOT NULL,
       display_name text NOT NULL,
-      business_role text NOT NULL CHECK (
-        business_role IN (
-          'admin',
-          'group_admin',
-          'director_plus',
-          'animator_plus',
-          'director',
-          'animator',
-          'screenwriter',
-          'editor'
-        )
-      ),
       member_group_id uuid NULL REFERENCES team_member_groups(id),
       credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
       credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
       last_credit_consumed_at timestamptz NULL,
       remark text NULL,
+      script_ids text[] NOT NULL DEFAULT '{}'::text[],
+      canvas_ids text[] NOT NULL DEFAULT '{}'::text[],
       created_by_user_id uuid NOT NULL REFERENCES users(id),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -897,7 +904,7 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
     );
 
     CREATE INDEX IF NOT EXISTS team_member_profiles_scope_idx
-      ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+      ON team_member_profiles (organization_id, workspace_id, member_group_id);
 
     CREATE TABLE IF NOT EXISTS team_project_assignments (
       id uuid PRIMARY KEY,
@@ -1106,8 +1113,34 @@ async function tableExists(db: SqlDatabase, tableName: string) {
 
 async function aiModelConfigExists(db: SqlDatabase, modelCode: string) {
   if (!(await tableExists(db, "ai_model_configs"))) {
+  return false;
+}
+
+async function needsTeamMemberResourceProjectNullabilityUpdate(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_scripts")) || !(await tableExists(db, "team_member_canvases"))) {
     return false;
   }
+
+  const scriptColumn = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_scripts'
+        AND column_name = 'project_id'
+    `,
+  );
+  const canvasColumn = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_canvases'
+        AND column_name = 'project_id'
+    `,
+  );
+  return scriptColumn.rows[0]?.is_nullable === "NO" || canvasColumn.rows[0]?.is_nullable === "NO";
+}
 
   const result = await db.query<{ exists: boolean }>(
     `
@@ -1485,4 +1518,16 @@ async function columnExists(db: SqlDatabase, tableName: string, columnName: stri
   );
 
   return columnCheck.rows[0]?.exists === true;
+}
+
+async function ensureTeamMemberProfilesBusinessRoleCompatibility(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_profiles"))) {
+    return;
+  }
+  if (!(await columnExists(db, "team_member_profiles", "business_role"))) {
+    return;
+  }
+
+  await db.query("UPDATE team_member_profiles SET business_role = 'director' WHERE business_role IS NULL");
+  await db.query("ALTER TABLE team_member_profiles ALTER COLUMN business_role DROP NOT NULL");
 }

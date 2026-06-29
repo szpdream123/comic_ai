@@ -5923,7 +5923,7 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (activeNavTab === "home") {
-    return renderHomeHero({ detailState });
+    return renderHomeHero({ detailState, session });
   }
 
   if (activeNavTab === "script") {
@@ -5982,7 +5982,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "tools") {
     return `
-      ${renderToolsPanel(ui, state)}
+      ${renderToolsPanel(ui, state, session)}
     `;
   }
 
@@ -6031,7 +6031,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {
-    return renderProjectGallery({ ui });
+    return renderProjectGallery({ ui, session });
   }
 
   return `
@@ -6173,9 +6173,9 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
-function renderToolsPanel(ui = {}, state = {}) {
+function renderToolsPanel(ui = {}, state = {}, session = null) {
   if (ui.canvasProjectView !== "detail") {
-    return renderCanvasProjectGallery(ui);
+    return renderCanvasProjectGallery({ ...ui, session });
   }
   const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
     projectId: ui.selectedProjectCardId ?? "",
@@ -6292,7 +6292,7 @@ function renderToolsPanel(ui = {}, state = {}) {
 
 function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
-  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus);
+  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus) && !isTeamMemberSession(ui.session);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -6314,10 +6314,14 @@ function renderCanvasProjectGallery(ui = {}) {
       <div class="canvas-project-aurora" aria-hidden="true"></div>
       <button class="canvas-create-project-button" type="button" data-action="${canCreateCanvasProject ? "create-canvas-project" : "open-pricing"}">
         <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
-        ${canCreateCanvasProject ? "创建画布" : "开通会员后创建画布"}
+        ${canCreateCanvasProject ? "创建画布" : "仅管理员可创建画布"}
       </button>
     </section>
   `;
+}
+
+function isTeamMemberSession(session) {
+  return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -7709,7 +7713,8 @@ function renderGlobalStatusbar(session, options = {}) {
   `;
 }
 
-function renderHomeHero({ detailState }) {
+function renderHomeHero({ detailState, session }) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   return `
     <section class="home-hero" aria-label="首页">
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
@@ -7740,7 +7745,7 @@ function renderHomeHero({ detailState }) {
           <span>小成本成就大爆款</span>
         </div>
         <div class="hero-actions">
-          <button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>
+          ${isTeamMember ? "" : `<button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>`}
         </div>
         <div class="hero-status-strip">
           <span>${escapeHtml(detailState.project.statusLabel)}</span>
@@ -7761,7 +7766,8 @@ function renderScrollableWorkbenchSurface(surface, content) {
   `;
 }
 
-function renderProjectGallery({ ui }) {
+function renderProjectGallery({ ui, session }) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   const snapshot = getProjectGallerySnapshot(ui);
   const selectedIds = normalizeSelectedProjectIds(ui.selectedProjectIds);
   const selectedCount = snapshot.pageProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;
@@ -7810,7 +7816,7 @@ function renderProjectGallery({ ui }) {
       ${renderInlineWorkspaceStatusToast(ui)}
       ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.projectsPerPage) : ""}
       <div class="project-gallery-footer">
-        <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
+        ${isTeamMember ? "" : `<button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>`}
       </div>
     </section>
   `;

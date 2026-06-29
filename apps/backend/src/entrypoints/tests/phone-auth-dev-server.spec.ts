@@ -184,7 +184,7 @@ describe("phone auth dev server", () => {
         `
           SELECT id, organization_id, workspace_id
           FROM memberships
-          WHERE user_id = (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+          WHERE user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')
           LIMIT 1
         `,
       );
@@ -195,36 +195,11 @@ describe("phone auth dev server", () => {
       ]);
       await db.query(
         `
-          INSERT INTO team_member_profiles (
-            id,
-            organization_id,
-            workspace_id,
-            membership_id,
-            team_account,
-            display_name,
-            business_role,
-            credit_balance_cached,
-            created_by_user_id
-          )
-          VALUES (
-            '00000000-0000-4000-8000-000000000203',
-            $1,
-            $2,
-            $3,
-            'credit_owner_2036',
-            'Credit Owner',
-            'director',
-            2036,
-            (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
-          )
-          ON CONFLICT (organization_id, workspace_id, membership_id)
-          DO UPDATE SET credit_balance_cached = EXCLUDED.credit_balance_cached
+          UPDATE users
+          SET credit_balance_cached = 2036,
+              credit_reserved_cached = 0
+          WHERE phone_e164 = '13800138000'
         `,
-        [
-          membership.rows[0].organization_id,
-          membership.rows[0].workspace_id,
-          membership.rows[0].id,
-        ],
       );
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -355,7 +330,7 @@ describe("phone auth dev server", () => {
       const session = await sessionResponse.json();
 
       const userRecord = await db.query<{ display_name: string }>(
-        "SELECT display_name FROM users WHERE phone_e164 = '+8613800138000'",
+        "SELECT display_name FROM users WHERE phone_e164 = '13800138000'",
       );
 
       assert.equal(updateResponse.status, 200);
@@ -389,7 +364,7 @@ describe("phone auth dev server", () => {
       const updated = await updateResponse.json();
 
       const userRecord = await db.query<{ display_name: string }>(
-        "SELECT display_name FROM users WHERE phone_e164 = '+8613800138000'",
+        "SELECT display_name FROM users WHERE phone_e164 = '13800138000'",
       );
 
       assert.equal(updateResponse.status, 400);
@@ -418,7 +393,7 @@ describe("phone auth dev server", () => {
           FROM organizations o
           JOIN memberships m ON m.organization_id = o.id
           JOIN users u ON u.id = m.user_id
-          WHERE u.phone_e164 = '+8613800138123'
+          WHERE u.phone_e164 = '13800138123'
           ORDER BY o.name
         `,
       );
@@ -551,7 +526,7 @@ describe("phone auth dev server", () => {
         }),
       });
       const createdUser = await db.query<{ password_hash: string | null }>(
-        "SELECT password_hash FROM users WHERE phone_e164 = '+8618571521874'",
+        "SELECT password_hash FROM users WHERE phone_e164 = '18571521874'",
       );
 
       const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
@@ -930,7 +905,7 @@ describe("phone auth dev server", () => {
               SELECT count(*)::int
               FROM projects
               WHERE workspace_id <> '20000000-0000-4000-8000-000000000001'
-                AND created_by_user_id = (SELECT id FROM users WHERE phone_e164 = '+8613800138000')
+                AND created_by_user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')
             ) AS personal_project_count,
             (SELECT workspace_id FROM projects WHERE id = $1) AS project_workspace_id
         `,
@@ -1257,6 +1232,88 @@ describe("phone auth dev server", () => {
         otherList.data.projects.some(
           (project) => project.id === created.data.project.id || project.title === "只属于原账号的画布",
         ),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not let team members see standalone canvas projects by canvas id alone", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138001");
+
+      const createCanvasResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-team-member-standalone-canvas",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          title: "可分配独立画布",
+        }),
+      });
+      const createdCanvas = await createCanvasResponse.json();
+      const canvasProjectId = createdCanvas.data.project.id;
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (
+            id,
+            organization_id,
+            entitlement_key,
+            status,
+            source
+          )
+          VALUES ($1, '10000000-0000-4000-8000-000000000001', 'team_member_management', 'active', 'dev_seed')
+          ON CONFLICT (organization_id, entitlement_key)
+          DO UPDATE SET status = 'active', source = EXCLUDED.source
+        `,
+        [randomUUID()],
+      );
+
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          teamAccount: "canvas_viewer_001",
+          displayName: "Canvas Viewer",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [canvasProjectId],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+
+      const memberLoginResponse = await fetch(`${server.origin}/api/auth/team-member/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: createdMember.member.memberLoginAccount,
+          password: createdMember.temporaryPassword,
+        }),
+      });
+      const memberCookie = memberLoginResponse.headers.get("set-cookie") ?? "";
+
+      const memberCanvasListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        headers: { cookie: memberCookie },
+      });
+      const memberCanvasList = await memberCanvasListResponse.json();
+
+      assert.equal(createCanvasResponse.status, 201);
+      assert.equal(createMemberResponse.status, 200);
+      assert.equal(memberLoginResponse.status, 200);
+      assert.equal(memberCanvasListResponse.status, 200);
+      assert.equal(
+        memberCanvasList.data.projects.some((project: { id?: string }) => project.id === canvasProjectId),
         false,
       );
     } finally {
@@ -3642,6 +3699,10 @@ describe("phone auth dev server", () => {
         },
       );
       const previewEnvelope = await previewResponse.json();
+      const creatorLedgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie },
+      });
+      const creatorLedgerEnvelope = await creatorLedgerResponse.json();
       const ledgerEntries = await db.query<{
         source_type: string;
         reason: string | null;
@@ -3659,7 +3720,17 @@ describe("phone auth dev server", () => {
 
       assert.equal(createResponse.status, 200);
       assert.equal(previewResponse.status, 200);
+      assert.equal(creatorLedgerResponse.status, 200);
       assert.ok(previewEnvelope.data);
+      assert.equal(previewEnvelope.data.creditBalance, 480);
+      assert.equal(previewEnvelope.data.displayCreditBalance, 480);
+      assert.ok(
+        creatorLedgerEnvelope.data.some((entry: { sourceType?: string; reason?: string; amount?: number | string }) =>
+          entry.sourceType === "episode_generation_task"
+          && entry.reason === "script generation"
+          && Number(entry.amount) === 20,
+        ),
+      );
       assert.ok(
         ledgerEntries.rows.some((entry) =>
             entry.source_type === "episode_generation_task" &&
@@ -8759,7 +8830,6 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           teamAccount: "api_director_001",
           displayName: "API Director",
-          businessRole: "director",
           projectIds: [],
           initialCredits: 0,
         }),
@@ -8791,7 +8861,6 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           teamAccount: "api_director_001",
           displayName: "API Director",
-          businessRole: "director",
           projectIds: [],
           initialCredits: 0,
         }),
@@ -8821,6 +8890,108 @@ describe("phone auth dev server", () => {
       assert.equal(members.members[0].teamAccount, "api_director_001");
       assert.equal("passwordHash" in members.members[0], false);
       assert.equal("temporaryPassword" in members.members[0], false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("updates and deletes team subaccount status through the API", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138001");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          teamAccount: `api_status_${Date.now().toString(36).slice(-6)}`,
+          displayName: "API Status Member",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const created = await createResponse.json();
+      const memberId = created.member?.membershipId;
+
+      const disableResponse = await fetch(`${server.origin}/api/creator/team/members/${encodeURIComponent(memberId)}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      const disabled = await disableResponse.json();
+      const disabledRows = await db.query<{ team_member_status: string }>(
+        `
+          SELECT status AS team_member_status
+          FROM team_members
+          WHERE id = $1
+        `,
+        [memberId],
+      );
+
+      const restoreResponse = await fetch(`${server.origin}/api/creator/team/members/${encodeURIComponent(memberId)}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ status: "active" }),
+      });
+      const restored = await restoreResponse.json();
+      const restoredRows = await db.query<{ team_member_status: string }>(
+        `
+          SELECT status AS team_member_status
+          FROM team_members
+          WHERE id = $1
+        `,
+        [memberId],
+      );
+      const deleteResponse = await fetch(`${server.origin}/api/creator/team/members/${encodeURIComponent(memberId)}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ status: "deleted" }),
+      });
+      const deleted = await deleteResponse.json();
+      const deletedRows = await db.query<{ team_member_status: string }>(
+        `
+          SELECT status AS team_member_status
+          FROM team_members
+          WHERE id = $1
+        `,
+        [memberId],
+      );
+      const membersResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        headers: { cookie },
+      });
+      const members = await membersResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.ok(memberId);
+      assert.equal(disableResponse.status, 200);
+      assert.equal(disabled.member.status, "disabled");
+      assert.equal(disabledRows.rows[0]?.team_member_status, "disabled");
+      assert.equal(restoreResponse.status, 200);
+      assert.equal(restored.member.status, "active");
+      assert.equal(restoredRows.rows[0]?.team_member_status, "active");
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deleted.member.status, "deleted");
+      assert.equal(deletedRows.rows[0]?.team_member_status, "deleted");
+      assert.equal(membersResponse.status, 200);
+      assert.equal(
+        members.members.some((member: { membershipId?: string }) => member.membershipId === memberId),
+        false,
+      );
     } finally {
       await server.close();
     }

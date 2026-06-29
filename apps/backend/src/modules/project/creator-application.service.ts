@@ -6,7 +6,6 @@ import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/pr
 import { resolveActorContext } from "../organization/actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
-import type { TeamBusinessRole } from "../organization/team-roles.ts";
 import {
   createTeamMember as createTeamMemberRecord,
   ensureUserTeamAccountSuffix,
@@ -534,11 +533,16 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       user: AuthenticatedCreatorUser;
       body: {
         teamAccount?: string | null;
+        memberAccount?: string | null;
         displayName?: string | null;
-        businessRole?: TeamBusinessRole | string | null;
+        memberName?: string | null;
+        password?: string | null;
         memberGroupId?: string | null;
         projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
         initialCredits?: number | null;
+        memberCredits?: number | null;
         remark?: string | null;
       };
       now: Date;
@@ -551,12 +555,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         });
         const created = await createTeamMemberRecord(deps.db, {
           actor,
-          teamAccount: input.body.teamAccount ?? "",
-          displayName: input.body.displayName ?? "",
-          businessRole: (input.body.businessRole ?? "") as TeamBusinessRole,
+          teamAccount: input.body.memberAccount ?? input.body.teamAccount ?? "",
+          displayName: input.body.memberName ?? input.body.displayName ?? "",
+          password: input.body.password ?? null,
           memberGroupId: input.body.memberGroupId ?? null,
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : [],
-          initialCredits: input.body.initialCredits ?? 0,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : [],
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : [],
+          initialCredits: input.body.memberCredits ?? input.body.initialCredits ?? 0,
           remark: input.body.remark ?? null,
           now: input.now,
         });
@@ -602,10 +608,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       memberId: string;
       body: {
         displayName?: string | null;
-        businessRole?: TeamBusinessRole | string | null;
         projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
         newPassword?: string | null;
-        status?: "active" | "disabled" | null;
+        status?: "active" | "disabled" | "deleted" | null;
         creditAdjustmentType?: "increase" | "deduct" | null;
         creditAmount?: number | null;
         remark?: string | null;
@@ -622,8 +629,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           actor,
           memberId: input.memberId,
           displayName: input.body.displayName ?? null,
-          businessRole: (input.body.businessRole ?? null) as TeamBusinessRole | null,
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
           newPassword: input.body.newPassword ?? null,
           status: input.body.status ?? null,
           creditAdjustmentType: input.body.creditAdjustmentType ?? null,
@@ -655,10 +663,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       memberId: string;
       body: {
         displayName?: string | null;
-        businessRole?: TeamBusinessRole | string | null;
         projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
         newPassword?: string | null;
-        status?: "active" | "disabled" | null;
+        status?: "active" | "disabled" | "deleted" | null;
         creditAdjustmentType?: "increase" | "deduct" | null;
         creditAmount?: number | null;
         remark?: string | null;
@@ -675,8 +684,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           actor,
           memberId: input.memberId,
           displayName: input.body.displayName ?? null,
-          businessRole: (input.body.businessRole ?? null) as TeamBusinessRole | null,
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
           newPassword: input.body.newPassword ?? null,
           status: input.body.status ?? null,
           creditAdjustmentType: input.body.creditAdjustmentType ?? null,
@@ -740,13 +750,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         workspaceId: deps.workspaceId,
         now: input.now,
       });
+      const visibleScriptIds = actor.teamMember?.id
+        ? await listTeamMemberScriptIds(deps.db, {
+            userId: actor.actorId,
+            memberId: actor.teamMember.id,
+          })
+        : null;
       const scripts = await listScriptsForWorkspace(deps.db, {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
       });
+      const scopedScripts = visibleScriptIds
+        ? scripts.filter((script) => visibleScriptIds.includes(script.id))
+        : scripts;
       const signedScripts = deps.storageRuntime
         ? await Promise.all(
-            scripts.map((script) =>
+            scopedScripts.map((script) =>
               hydrateScriptCoverUrl(deps.db, {
                 script,
                 sessionToken: input.user.sessionToken,
@@ -756,7 +775,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               }),
             ),
           )
-        : scripts;
+        : scopedScripts;
 
       return {
         status: 200,
@@ -779,6 +798,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       const handleCreateProject = createSqlProjectCommandHandler({ db: deps.db });
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+      if (actor.teamMember) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_project_create_forbidden",
+            },
+          },
+        };
+      }
       const result = await handleCreateProject({
         auth: { sessionToken: input.user.sessionToken },
         body: {
@@ -829,6 +864,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         workspaceId: deps.workspaceId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_script_import_forbidden",
+            },
+          },
+        };
+      }
       const scriptInput = String(input.body.scriptInput ?? "").trim();
       if (!scriptInput) {
         return { status: 400, body: { error: "script_text_required" } };
@@ -937,12 +983,19 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const page = normalizeCreatorProjectPage(input.page);
       const pageSize = normalizeCreatorProjectPageSize(input.pageSize);
       const keyword = normalizeCreatorProjectKeyword(input.keyword);
+      const visibleProjectIds = actor.teamMember?.id
+        ? await listTeamMemberProjectIds(deps.db, {
+            userId: actor.actorId,
+            memberId: actor.teamMember.id,
+          })
+        : null;
       const projectPage = await listProjectsForWorkspace(deps.db, {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
         page,
         pageSize,
         keyword,
+        visibleProjectIds,
       });
       const signedProjects = deps.storageRuntime
         ? await Promise.all(
@@ -3853,8 +3906,7 @@ async function getLimitedTeamOverview(
   const [planLimits, usedSeats, credits] = await Promise.all([
     resolveLimitedTeamPlanLimits(db, actor.organizationId),
     countLimitedTeamSubaccounts(db, {
-      organizationId: actor.organizationId,
-      workspaceId: actor.workspaceId,
+      userId: actor.actorId,
     }),
     queryOne<{
       credit_balance_cached: number;
@@ -3962,19 +4014,17 @@ async function resolveLimitedTeamPlanLimits(db: SqlDatabase, organizationId: str
 
 async function countLimitedTeamSubaccounts(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string | null },
+  input: { userId: string },
 ) {
   const result = await queryOne<{ count: string | number }>(
     db,
     `
       SELECT COUNT(*) AS count
-      FROM memberships
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND role = 'sub_account'
+      FROM team_members
+      WHERE user_id = $1
         AND status = 'active'
     `,
-    [input.organizationId, input.workspaceId],
+    [input.userId],
   );
 
   return Number(result?.count ?? 0);
@@ -4314,7 +4364,7 @@ async function appendCalibrationAuditEvent(
 
 async function listProjectsForWorkspace(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string; page: number; pageSize: number; keyword: string },
+  input: { organizationId: string; workspaceId: string; page: number; pageSize: number; keyword: string; visibleProjectIds?: string[] | null },
 ) {
   const params: unknown[] = [input.organizationId, input.workspaceId];
   const whereClauses = [
@@ -4339,6 +4389,18 @@ async function listProjectsForWorkspace(
   if (input.keyword) {
     params.push(input.keyword);
     whereClauses.push(`POSITION($${params.length} IN LOWER(projects.name)) > 0`);
+  }
+  if (Array.isArray(input.visibleProjectIds)) {
+    if (!input.visibleProjectIds.length) {
+      return {
+        projects: [],
+        page: 1,
+        pageSize: input.pageSize,
+        total: 0,
+      };
+    }
+    params.push(input.visibleProjectIds);
+    whereClauses.push(`projects.id = ANY($${params.length}::uuid[])`);
   }
   const whereSql = whereClauses.join("\n        AND ");
   const totalRow = await queryOne<{ total: number | string }>(
@@ -6669,6 +6731,60 @@ async function listScriptsForWorkspace(
     projectUpdatedAt: new Date(script.project_updated_at),
     sectionCount: Number(script.section_count ?? 0),
   }));
+}
+
+async function listTeamMemberProjectIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ project_id: string }>(
+    `
+      SELECT project_id::text AS project_id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.project_id);
+}
+
+async function listTeamMemberScriptIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ script_id: string }>(
+    `
+      SELECT script_id::text AS script_id
+      FROM team_member_scripts
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.script_id);
+}
+
+async function listTeamMemberCanvasIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ canvas_id: string }>(
+    `
+      SELECT canvas_id::text AS canvas_id
+      FROM team_member_canvases
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.canvas_id);
 }
 
 async function buildSignedExportRecord(

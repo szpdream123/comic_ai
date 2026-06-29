@@ -1055,15 +1055,28 @@ async function listCanvasProjects(
   input: { organizationId: string; userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
   const params: unknown[] = [input.organizationId, input.userId, `${standaloneCanvasRunProjectNamePrefix}%`];
-  const teamMemberVisibilitySql = input.teamMemberId
+  const ownerScopeSql = input.teamMemberId
     ? `
-        AND project_id IS NOT NULL
         AND EXISTS (
           SELECT 1
-          FROM team_member_projects visible
-          WHERE visible.user_id = $2
-            AND visible.member_id = $4
-            AND visible.project_id = creator_canvas_projects.project_id
+          FROM team_members member
+          WHERE member.id = $4
+            AND member.user_id = $2
+            AND member.user_id = creator_canvas_projects.created_by_user_id
+        )
+      `
+    : "AND created_by_user_id = $2";
+  const teamMemberVisibilitySql = input.teamMemberId
+    ? `
+        AND EXISTS (
+          SELECT 1
+          FROM team_members member
+          JOIN team_member_canvases visible
+            ON visible.user_id = member.user_id
+           AND visible.member_id = member.id
+           AND visible.canvas_id = creator_canvas_projects.id
+          WHERE member.id = $4
+            AND member.user_id = $2
         )
       `
     : "";
@@ -1083,7 +1096,7 @@ async function listCanvasProjects(
         created_at
       FROM creator_canvas_projects
       WHERE organization_id = $1
-        AND created_by_user_id = $2
+        ${ownerScopeSql}
         AND (
           project_id IS NULL
           OR EXISTS (
@@ -1154,18 +1167,6 @@ async function findCanvasProjectRecord(
   input: { organizationId: string; userId: string; projectId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord | null> {
   const params: unknown[] = [input.organizationId, input.userId, input.projectId, `${standaloneCanvasRunProjectNamePrefix}%`];
-  const teamMemberVisibilitySql = input.teamMemberId
-    ? `
-        AND project_id IS NOT NULL
-        AND EXISTS (
-          SELECT 1
-          FROM team_member_projects visible
-          WHERE visible.user_id = $2
-            AND visible.member_id = $5
-            AND visible.project_id = creator_canvas_projects.project_id
-        )
-      `
-    : "";
   if (input.teamMemberId) {
     params.push(input.teamMemberId);
   }
@@ -1175,7 +1176,14 @@ async function findCanvasProjectRecord(
       SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
       FROM creator_canvas_projects
       WHERE organization_id = $1
-        AND created_by_user_id = $2
+        ${input.teamMemberId ? `
+        AND EXISTS (
+          SELECT 1
+          FROM team_member_canvases visible
+          WHERE visible.user_id = $2
+            AND visible.member_id = $5
+            AND visible.canvas_id = creator_canvas_projects.id
+        )` : "AND created_by_user_id = $2"}
         AND id = $3
         AND (
           project_id IS NULL
@@ -1190,7 +1198,6 @@ async function findCanvasProjectRecord(
           )
         )
         AND deleted_at IS NULL
-        ${teamMemberVisibilitySql}
       LIMIT 1
     `,
     params,
@@ -1204,6 +1211,7 @@ async function updateCanvasProjectRecord(
     organizationId: string;
     userId: string;
     projectId: string;
+    teamMemberId?: string;
     title?: string;
     status?: string;
     now: Date;
@@ -1218,7 +1226,14 @@ async function updateCanvasProjectRecord(
           updated_by_user_id = $2,
           updated_at = $6
       WHERE organization_id = $1
-        AND created_by_user_id = $2
+        ${input.teamMemberId ? `
+        AND EXISTS (
+          SELECT 1
+          FROM team_member_canvases visible
+          WHERE visible.user_id = $2
+            AND visible.member_id = $8
+            AND visible.canvas_id = creator_canvas_projects.id
+        )` : "AND created_by_user_id = $2"}
         AND id = $3
         AND (
           project_id IS NULL
@@ -1243,6 +1258,7 @@ async function updateCanvasProjectRecord(
       input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
       input.now,
       `${standaloneCanvasRunProjectNamePrefix}%`,
+      input.teamMemberId ?? "",
     ],
   );
   return row ? canvasProjectFromRow(row) : null;
@@ -1961,11 +1977,14 @@ async function listCreatorAdminCreditLedger(
 ) {
   const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
   const page = Math.max(1, Number(input.page ?? 1));
-  const offset = (page - 1) * pageSize;
-  const totalResult = await queryOne<{ count: number | string }>(
-    db,
+  const start = (page - 1) * pageSize;
+  const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
+  const totalResult = await db.query<Pick<AdminCreatorCreditLedgerRow, "entry_type" | "reservation_id" | "metadata_json">>(
     `
-      SELECT COUNT(*) AS count
+      SELECT
+        ledger.entry_type,
+        ledger.reservation_id,
+        ledger.metadata_json
       FROM credit_ledger_entries ledger
       LEFT JOIN team_members member
         ON member.user_id = $1
@@ -1975,19 +1994,20 @@ async function listCreatorAdminCreditLedger(
           OR member.id::text = ledger.metadata_json->>'targetUserId'
           OR member.id = ledger.user_id
         )
-      WHERE ledger.organization_id = $2
-        AND (
+      WHERE (
           ledger.user_id = $1
           OR ledger.created_by_user_id = $1
           OR member.id IS NOT NULL
         )
         AND (
-          $3::uuid IS NULL
+          ledger.user_id = $1
+          OR ledger.created_by_user_id = $1
+          OR $2::uuid IS NULL
           OR ledger.metadata_json->>'workspaceId' IS NULL
-          OR ledger.metadata_json->>'workspaceId' = $3::text
+          OR ledger.metadata_json->>'workspaceId' = $2::text
         )
     `,
-    [input.userId, input.organizationId, input.workspaceId],
+    [input.userId, input.workspaceId],
   );
   const result = await db.query<AdminCreatorCreditLedgerRow>(
     `
@@ -2022,28 +2042,30 @@ async function listCreatorAdminCreditLedger(
           OR member.id::text = ledger.metadata_json->>'targetUserId'
           OR member.id = ledger.user_id
         )
-      WHERE ledger.organization_id = $2
-        AND (
+      WHERE (
           ledger.user_id = $1
           OR ledger.created_by_user_id = $1
           OR member.id IS NOT NULL
         )
         AND (
-          $3::uuid IS NULL
+          ledger.user_id = $1
+          OR ledger.created_by_user_id = $1
+          OR $2::uuid IS NULL
           OR ledger.metadata_json->>'workspaceId' IS NULL
-          OR ledger.metadata_json->>'workspaceId' = $3::text
+          OR ledger.metadata_json->>'workspaceId' = $2::text
         )
       ORDER BY ledger.created_at DESC, ledger.id ASC
-      LIMIT $4
-      OFFSET $5
+      LIMIT $3
     `,
-    [input.userId, input.organizationId, input.workspaceId, pageSize, offset],
+    [input.userId, input.workspaceId, fetchLimit],
   );
-  const total = Number(totalResult?.count ?? 0);
+  const totalRows = coalesceCreatorCreditLedgerRows(totalResult.rows);
+  const rows = coalesceCreatorCreditLedgerRows(result.rows).slice(start, start + pageSize);
+  const total = totalRows.length;
   return {
     ...input.baseLedger,
     accountType: input.baseLedger.accountType ?? "管理员账户",
-    data: result.rows.map(adminCreatorLedgerFromRow),
+    data: rows.map(adminCreatorLedgerFromRow),
     meta: {
       ...((input.baseLedger.meta && typeof input.baseLedger.meta === "object") ? input.baseLedger.meta : {}),
       total,
@@ -2052,6 +2074,56 @@ async function listCreatorAdminCreditLedger(
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     },
   };
+}
+
+function coalesceCreatorCreditLedgerRows<
+  T extends Pick<AdminCreatorCreditLedgerRow, "entry_type" | "reservation_id" | "metadata_json" | "source_type">,
+>(rows: T[]) {
+  const reservationDeductionKeys = new Set<string>();
+  for (const row of rows) {
+    if (isInternalCreatorLedgerEntry(row)) {
+      continue;
+    }
+    if (row.entry_type !== "reservation") {
+      continue;
+    }
+    const key = creatorCreditLedgerDeductionKey(row);
+    if (key) {
+      reservationDeductionKeys.add(key);
+    }
+  }
+
+  return rows.filter((row) => {
+    if (isInternalCreatorLedgerEntry(row)) {
+      return false;
+    }
+    const key = creatorCreditLedgerDeductionKey(row);
+    if (row.entry_type === "consume" && key && reservationDeductionKeys.has(key)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function isInternalCreatorLedgerEntry(
+  row: Pick<AdminCreatorCreditLedgerRow, "source_type">,
+) {
+  return String(row.source_type ?? "").trim().toLowerCase() === "credit_reservation_allocation";
+}
+
+function creatorCreditLedgerDeductionKey(
+  row: Pick<AdminCreatorCreditLedgerRow, "reservation_id" | "metadata_json">,
+) {
+  const metadata = normalizeRecordJson(row.metadata_json);
+  const reservationId = String(row.reservation_id ?? "").trim();
+  if (reservationId) {
+    return `reservation:${reservationId}`;
+  }
+  const taskId = String(metadata.taskId ?? metadata.task_id ?? "").trim();
+  if (taskId) {
+    return `task:${taskId}`;
+  }
+  return "";
 }
 
 function adminCreatorLedgerFromRow(row: AdminCreatorCreditLedgerRow) {
@@ -2109,6 +2181,11 @@ function normalizeLedgerReasonToChinese(reason: unknown) {
     "membership frozen credits expired": "会员冻结积分过期失效",
     "credit lot expired": "积分批次过期失效",
     "transfer personal credits to team pool": "个人积分转入团队积分池",
+    "script generation": "剧本生成积分扣减",
+    "image generation": "图片生成积分扣减",
+    "video generation": "视频生成积分扣减",
+    "reservation allocation consumed": "任务积分扣减",
+    "reservation allocation released": "任务积分返还",
   };
   return aliases[text.toLowerCase()] ?? text;
 }
@@ -3559,6 +3636,22 @@ async function getSimpleTeamMemberCreditBalance(
     creditFrozenAt: null,
     creditFrozenUntil: null,
   };
+}
+
+async function getAiStoryboardPreviewCreditBalance(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    teamMemberId?: string | null;
+  },
+) {
+  if (input.teamMemberId) {
+    return getSimpleTeamMemberCreditBalance(db, {
+      userId: input.userId,
+      memberId: input.teamMemberId,
+    });
+  }
+  return getUserCreditBalance(db, input.userId);
 }
 
 async function getEpisodeContext(
@@ -16736,15 +16829,15 @@ export function createPhoneAuthDevServer(
             });
           }
           const adminUsers = createAdminUserService({ db });
-          const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
+          const currentWorkspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
           const page = Number(url.searchParams.get("page") ?? 1);
           const pageSize = Number(url.searchParams.get("pageSize") ?? 50);
           const ledgerPage = Math.max(1, page);
           const ledgerPageSize = Math.min(100, Math.max(1, pageSize));
           const baseLedger = await adminUsers.listUserCreditLedger({
             userId: authenticated.user.id,
-            organizationId: billingScope.organizationId,
-            workspaceId: billingScope.workspaceId,
+            organizationId: devOrganizationId,
+            workspaceId: currentWorkspaceId,
             page: ledgerPage,
             pageSize: ledgerPageSize,
           });
@@ -16755,8 +16848,8 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: await listCreatorAdminCreditLedger(db, {
               userId: authenticated.user.id,
-              organizationId: billingScope.organizationId,
-              workspaceId: billingScope.workspaceId,
+              organizationId: devOrganizationId,
+              workspaceId: currentWorkspaceId,
               page: ledgerPage,
               pageSize: ledgerPageSize,
               baseLedger,
@@ -16771,9 +16864,10 @@ export function createPhoneAuthDevServer(
             displayName?: string | null;
             memberName?: string | null;
             password?: string | null;
-            businessRole?: string | null;
             memberGroupId?: string | null;
             projectIds?: string[] | null;
+            scriptIds?: string[] | null;
+            canvasIds?: string[] | null;
             initialCredits?: number | null;
             memberCredits?: number | null;
             remark?: string | null;
@@ -16796,8 +16890,9 @@ export function createPhoneAuthDevServer(
           const body = (await readJsonBody(request)) as {
             displayName?: string | null;
             memberName?: string | null;
-            businessRole?: string | null;
             projectIds?: string[] | null;
+            scriptIds?: string[] | null;
+            canvasIds?: string[] | null;
             newPassword?: string | null;
             status?: "active" | "disabled" | "deleted" | null;
             creditAdjustmentType?: "increase" | "deduct" | null;
@@ -16968,13 +17063,13 @@ export function createPhoneAuthDevServer(
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
-            capability: request.method === "POST" ? undefined : capabilities.projectView,
+            capability: request.method === "POST" ? undefined : capabilities.workspaceRead,
             now: new Date(),
           });
           if (!actor.workspaceId) {
             throw new AuthorizationError("workspace_not_found");
           }
-          const ownedProjects = await listCanvasProjects(db, {
+          const visibleProjects = await listCanvasProjects(db, {
             organizationId: actor.organizationId,
             userId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id,
@@ -16982,7 +17077,7 @@ export function createPhoneAuthDevServer(
 
           if (request.method === "GET") {
             return writeJson(response, enveloped(200, {
-              projects: ownedProjects.map(serializeCanvasProject),
+              projects: visibleProjects.map(serializeCanvasProject),
             }));
           }
 
@@ -16992,7 +17087,7 @@ export function createPhoneAuthDevServer(
             }
             assertCapability(actor, capabilities.projectCreate);
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
-            const nextIndex = ownedProjects.length + 1;
+            const nextIndex = visibleProjects.length + 1;
             const project = await createCanvasProjectRecord(db, {
               organizationId: actor.organizationId,
               workspaceId: actor.workspaceId,
@@ -17016,7 +17111,7 @@ export function createPhoneAuthDevServer(
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             workspaceId: currentWorkspaceId,
-            capability: request.method === "PUT" ? capabilities.projectEdit : capabilities.projectView,
+            capability: request.method === "PUT" ? capabilities.workspaceRead : capabilities.workspaceRead,
             now: new Date(),
           });
           if (!actor.workspaceId) {
@@ -17108,6 +17203,7 @@ export function createPhoneAuthDevServer(
               organizationId: actor.organizationId,
               userId: authenticated.user.id,
               projectId: project.id,
+              teamMemberId: actor.teamMember?.id,
               title: Object.prototype.hasOwnProperty.call(body, "title")
                 ? normalizeCanvasProjectTitle(body.title, project.title)
                 : undefined,
@@ -17562,6 +17658,10 @@ export function createPhoneAuthDevServer(
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
             const abortController = createRequestAbortController(request, response);
             try {
+              const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
+                userId: authenticated.user.id,
+                teamMemberId: actor.teamMember?.id ?? null,
+              });
               for await (const event of previewService.generatePreviewStream({
                 ...previewInput,
                 signal: abortController.signal,
@@ -17573,6 +17673,8 @@ export function createPhoneAuthDevServer(
                   writeSseData(response, {
                     type: "complete",
                     ...event.preview,
+                    creditBalance: creditBalance.creditBalance,
+                    displayCreditBalance: creditBalance.displayCreditBalance,
                     selectedPackages: {
                       genre: { id: genrePackage.id, name: genrePackage.name },
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
@@ -17618,8 +17720,14 @@ export function createPhoneAuthDevServer(
 
           try {
             const preview = await previewService.generatePreview(previewInput);
+            const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
+              userId: authenticated.user.id,
+              teamMemberId: actor.teamMember?.id ?? null,
+            });
             return writeJson(response, enveloped(200, {
               ...preview,
+              creditBalance: creditBalance.creditBalance,
+              displayCreditBalance: creditBalance.displayCreditBalance,
               selectedPackages: {
                 genre: { id: genrePackage.id, name: genrePackage.name },
                 emotion: { id: emotionPackage.id, name: emotionPackage.name },

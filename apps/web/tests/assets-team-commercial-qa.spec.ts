@@ -2431,6 +2431,22 @@ describe("Worker C team management surfaces", () => {
     assertIncludesText(html, "已停用");
   });
 
+  it("renders visible single-entry password reset in the edit member modal", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        status: "active",
+        newPassword: "new-pass-123",
+      },
+    });
+
+    assert.match(html, /id="team-edit-member-new-password-input"[\s\S]*?type="text"/);
+    assertIncludesText(html, "new-pass-123");
+    assert.doesNotMatch(html, /data-action="change-edit-member-confirm-password"/);
+  });
+
   it("renders the team dashboard route without requiring shell DOM", () => {
     const html = renderLibraryTeam({
       route: "team-dashboard",

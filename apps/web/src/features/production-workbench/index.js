@@ -1229,6 +1229,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       actionTarget.matches?.('input[data-action="toggle-team-member-project"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-script"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-canvas"]') ||
+      actionTarget.matches?.('input[data-action="toggle-edit-member-project"]') ||
+      actionTarget.matches?.('input[data-action="toggle-edit-member-script"]') ||
+      actionTarget.matches?.('input[data-action="toggle-edit-member-canvas"]') ||
       actionTarget.matches?.('input[data-action="upload-script-cover"]') ||
       actionTarget.matches?.('input[data-action="select-script-upload-file"]') ||
       actionTarget.matches?.('input[data-action="change-account-settings-field"]') ||
@@ -1404,6 +1407,16 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         workbench.ui.toast = `操作失败：${friendlyError(error)}`;
         render(workbench);
       });
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"]')) {
+      updateTeamMemberCreateResourceSelection(workbench, target);
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="toggle-edit-member-project"], input[data-action="toggle-edit-member-script"], input[data-action="toggle-edit-member-canvas"]')) {
+      updateEditMemberResourceSelection(workbench, target);
       return;
     }
 
@@ -2018,10 +2031,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
-    if (target?.matches?.("#team-member-team-account-input")) {
+    if (target?.matches?.("#team-member-team-account, #team-member-team-account-input")) {
+      const teamAccountSuffix = String(
+        workbench.ui.teamMemberDraft?.teamAccountSuffix ??
+        workbench.ui.teamOverview?.teamAccountSuffix ??
+        workbench.ui.teamOverview?.team_account_suffix ??
+        "",
+      ).trim().toLowerCase();
       workbench.ui.teamMemberDraft = {
         ...workbench.ui.teamMemberDraft,
-        teamAccount: target.value,
+        memberLoginAccount: target.value,
+        teamAccount: deriveTeamMemberAccountPrefix(target.value, teamAccountSuffix),
       };
       workbench.ui.teamMemberCreateNotice = "";
       return;
@@ -2031,6 +2051,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       workbench.ui.teamMemberDraft = {
         ...workbench.ui.teamMemberDraft,
         displayName: target.value,
+      };
+      workbench.ui.teamMemberCreateNotice = "";
+      return;
+    }
+
+    if (target?.matches?.("#team-member-password")) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        password: target.value,
       };
       workbench.ui.teamMemberCreateNotice = "";
       return;
@@ -2054,141 +2083,23 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
-    if (target?.matches?.('input[data-action="toggle-team-member-project"]')) {
-      const projectId = String(target.dataset.projectId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.teamMemberDraft?.projectIds) ? workbench.ui.teamMemberDraft.projectIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (projectId) {
-        if (target.checked) {
-          current.add(projectId);
-        } else {
-          current.delete(projectId);
-        }
-      }
-      workbench.ui.teamMemberDraft = {
-        ...workbench.ui.teamMemberDraft,
-        projectIds: [...current],
-      };
-      workbench.ui.teamMemberCreateNotice = "";
-      render(workbench);
-      return;
-    }
-
-    if (target?.matches?.('input[data-action="toggle-team-member-script"]')) {
-      const scriptId = String(target.dataset.scriptId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.teamMemberDraft?.scriptIds) ? workbench.ui.teamMemberDraft.scriptIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (scriptId) {
-        if (target.checked) {
-          current.add(scriptId);
-        } else {
-          current.delete(scriptId);
-        }
-      }
-      workbench.ui.teamMemberDraft = {
-        ...workbench.ui.teamMemberDraft,
-        scriptIds: [...current],
-      };
-      workbench.ui.teamMemberCreateNotice = "";
-      render(workbench);
-      return;
-    }
-
-    if (target?.matches?.('input[data-action="toggle-team-member-canvas"]')) {
-      const canvasId = String(target.dataset.canvasId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.teamMemberDraft?.canvasIds) ? workbench.ui.teamMemberDraft.canvasIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (canvasId) {
-        if (target.checked) {
-          current.add(canvasId);
-        } else {
-          current.delete(canvasId);
-        }
-      }
-      workbench.ui.teamMemberDraft = {
-        ...workbench.ui.teamMemberDraft,
-        canvasIds: [...current],
-      };
-      workbench.ui.teamMemberCreateNotice = "";
-      render(workbench);
+    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"]')) {
+      updateTeamMemberCreateResourceSelection(workbench, target);
       return;
     }
 
     if (target?.matches?.('input[data-action="toggle-edit-member-project"]')) {
-      const projectId = String(target.dataset.projectId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.editMemberModal?.projectIds) ? workbench.ui.editMemberModal.projectIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (projectId) {
-        if (target.checked) {
-          current.add(projectId);
-        } else {
-          current.delete(projectId);
-        }
-      }
-      workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
-        projectIds: [...current],
-        notice: "",
-      };
-      render(workbench);
+      updateEditMemberResourceSelection(workbench, target);
       return;
     }
 
     if (target?.matches?.('input[data-action="toggle-edit-member-script"]')) {
-      const scriptId = String(target.dataset.scriptId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.editMemberModal?.scriptIds) ? workbench.ui.editMemberModal.scriptIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (scriptId) {
-        if (target.checked) {
-          current.add(scriptId);
-        } else {
-          current.delete(scriptId);
-        }
-      }
-      workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
-        scriptIds: [...current],
-        notice: "",
-      };
-      render(workbench);
+      updateEditMemberResourceSelection(workbench, target);
       return;
     }
 
     if (target?.matches?.('input[data-action="toggle-edit-member-canvas"]')) {
-      const canvasId = String(target.dataset.canvasId ?? "").trim();
-      const current = new Set(
-        (Array.isArray(workbench.ui.editMemberModal?.canvasIds) ? workbench.ui.editMemberModal.canvasIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
-      if (canvasId) {
-        if (target.checked) {
-          current.add(canvasId);
-        } else {
-          current.delete(canvasId);
-        }
-      }
-      workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
-        canvasIds: [...current],
-        notice: "",
-      };
-      render(workbench);
+      updateEditMemberResourceSelection(workbench, target);
       return;
     }
 
@@ -4034,10 +3945,185 @@ async function loadTeamSurface(workbench) {
   }
 }
 
-async function submitTeamMemberCreate(workbench) {
+function applyTeamMemberPatch(workbench, memberId, patch = {}, options = {}) {
+  const normalizedMemberId = String(memberId ?? "");
+  if (!normalizedMemberId) {
+    return;
+  }
+  const patchMemberList = (members) => {
+    if (!Array.isArray(members)) {
+      return [];
+    }
+    if (options.remove) {
+      return members.filter((member) => String(member?.membershipId ?? member?.id ?? "") !== normalizedMemberId);
+    }
+    return members.map((member) =>
+      String(member?.membershipId ?? member?.id ?? "") === normalizedMemberId
+        ? { ...member, ...patch }
+        : member,
+    );
+  };
+
+  workbench.ui.teamMembers = patchMemberList(workbench.ui.teamMembers);
+  workbench.ui.projectMembers = patchMemberList(workbench.ui.projectMembers);
+  if (workbench.ui.editMemberModal?.id && String(workbench.ui.editMemberModal.id) === normalizedMemberId) {
+    workbench.ui.editMemberModal = options.remove
+      ? null
+      : {
+          ...workbench.ui.editMemberModal,
+          ...patch,
+        };
+  }
+}
+
+function deriveTeamMemberAccountPrefix(memberLoginAccount, teamAccountSuffix) {
+  const rawAccount = String(memberLoginAccount ?? "").trim();
+  if (!rawAccount) {
+    return "";
+  }
+  const normalizedSuffix = String(teamAccountSuffix ?? "").trim().toLowerCase();
+  const expectedSuffix = normalizedSuffix ? `@${normalizedSuffix}` : "";
+  const loweredAccount = rawAccount.toLowerCase();
+  if (expectedSuffix && loweredAccount.endsWith(expectedSuffix)) {
+    return rawAccount.slice(0, -expectedSuffix.length).trim();
+  }
+  const atIndex = rawAccount.indexOf("@");
+  if (atIndex >= 0) {
+    return rawAccount.slice(0, atIndex).trim();
+  }
+  return rawAccount;
+}
+
+function buildTeamMemberLoginAccountFromPrefix(teamAccount, teamAccountSuffix) {
+  const accountPrefix = String(teamAccount ?? "").trim();
+  const normalizedSuffix = String(teamAccountSuffix ?? "").trim().toLowerCase();
+  return accountPrefix && normalizedSuffix ? `${accountPrefix}@${normalizedSuffix}` : accountPrefix;
+}
+
+function syncTeamMemberCreateDraftFromDom(workbench) {
+  const root = workbench?.root;
   const draft = workbench.ui.teamMemberDraft ?? createTeamMemberDraft();
-  const teamAccount = String(draft.teamAccount ?? "").trim();
+  const memberLoginAccountInput =
+    root?.querySelector?.("#team-member-team-account") ??
+    root?.querySelector?.("#team-member-team-account-input") ??
+    null;
+  const displayNameInput = root?.querySelector?.("#team-member-display-name") ?? null;
+  const passwordInput = root?.querySelector?.("#team-member-password") ?? null;
+  const initialCreditsInput = root?.querySelector?.("#team-member-initial-credits") ?? null;
+  const remarkInput = root?.querySelector?.("#team-member-remark") ?? null;
+  const teamAccountSuffix = String(
+    draft.teamAccountSuffix ??
+    workbench.ui.teamOverview?.teamAccountSuffix ??
+    workbench.ui.teamOverview?.team_account_suffix ??
+    "",
+  ).trim().toLowerCase();
+  const memberLoginAccount = memberLoginAccountInput
+    ? String(memberLoginAccountInput.value ?? "")
+    : String(draft.memberLoginAccount ?? draft.member_login_account ?? "");
+  const teamAccount = deriveTeamMemberAccountPrefix(memberLoginAccount, teamAccountSuffix);
+
+  workbench.ui.teamMemberDraft = {
+    ...draft,
+    memberLoginAccount: buildTeamMemberLoginAccountFromPrefix(teamAccount, teamAccountSuffix),
+    teamAccount,
+    displayName: displayNameInput ? String(displayNameInput.value ?? "") : String(draft.displayName ?? ""),
+    password: passwordInput ? String(passwordInput.value ?? "") : String(draft.password ?? ""),
+    initialCredits: initialCreditsInput
+      ? Math.max(0, Number(initialCreditsInput.value) || 0)
+      : Math.max(0, Number(draft.initialCredits) || 0),
+    remark: remarkInput ? String(remarkInput.value ?? "") : String(draft.remark ?? ""),
+  };
+}
+
+function updateTeamMemberCreateResourceSelection(workbench, target) {
+  const action = String(target?.dataset?.action ?? "");
+  const config = action === "toggle-team-member-project"
+    ? { datasetKey: "projectId", fieldKey: "projectIds" }
+    : action === "toggle-team-member-script"
+      ? { datasetKey: "scriptId", fieldKey: "scriptIds" }
+      : action === "toggle-team-member-canvas"
+        ? { datasetKey: "canvasId", fieldKey: "canvasIds" }
+        : null;
+  if (!config) {
+    return false;
+  }
+
+  syncTeamMemberCreateDraftFromDom(workbench);
+  const resourceId = String(target.dataset?.[config.datasetKey] ?? "").trim();
+  const current = new Set(
+    (Array.isArray(workbench.ui.teamMemberDraft?.[config.fieldKey]) ? workbench.ui.teamMemberDraft[config.fieldKey] : [])
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean),
+  );
+  if (resourceId) {
+    if (target.checked) {
+      current.add(resourceId);
+    } else {
+      current.delete(resourceId);
+    }
+  }
+  workbench.ui.teamMemberDraft = {
+    ...workbench.ui.teamMemberDraft,
+    [config.fieldKey]: [...current],
+  };
+  workbench.ui.teamMemberCreateNotice = "";
+  render(workbench);
+  return true;
+}
+
+function updateEditMemberResourceSelection(workbench, target) {
+  const action = String(target?.dataset?.action ?? "");
+  const config = action === "toggle-edit-member-project"
+    ? { datasetKey: "projectId", fieldKey: "projectIds" }
+    : action === "toggle-edit-member-script"
+      ? { datasetKey: "scriptId", fieldKey: "scriptIds" }
+      : action === "toggle-edit-member-canvas"
+        ? { datasetKey: "canvasId", fieldKey: "canvasIds" }
+        : null;
+  if (!config) {
+    return false;
+  }
+
+  const resourceId = String(target.dataset?.[config.datasetKey] ?? "").trim();
+  const current = new Set(
+    (Array.isArray(workbench.ui.editMemberModal?.[config.fieldKey]) ? workbench.ui.editMemberModal[config.fieldKey] : [])
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean),
+  );
+  if (resourceId) {
+    if (target.checked) {
+      current.add(resourceId);
+    } else {
+      current.delete(resourceId);
+    }
+  }
+  workbench.ui.editMemberModal = {
+    ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+    [config.fieldKey]: [...current],
+    resourceSelectionDirty: true,
+    notice: "",
+  };
+  render(workbench);
+  return true;
+}
+
+async function submitTeamMemberCreate(workbench) {
+  syncTeamMemberCreateDraftFromDom(workbench);
+  const draft = workbench.ui.teamMemberDraft ?? createTeamMemberDraft();
+  const teamAccountSuffix = String(
+    draft.teamAccountSuffix ??
+    workbench.ui.teamOverview?.teamAccountSuffix ??
+    workbench.ui.teamOverview?.team_account_suffix ??
+    "",
+  ).trim().toLowerCase();
+  const memberLoginAccount = String(
+    draft.memberLoginAccount ??
+    draft.member_login_account ??
+    "",
+  ).trim();
+  const teamAccount = deriveTeamMemberAccountPrefix(memberLoginAccount, teamAccountSuffix);
   const displayName = String(draft.displayName ?? "").trim();
+  const password = String(draft.password ?? "").trim();
 
   if (!hasEffectiveTeamMemberManagementAccess(workbench)) {
     workbench.ui.teamMemberCreateNotice = "";
@@ -4053,6 +4139,13 @@ async function submitTeamMemberCreate(workbench) {
     return;
   }
 
+  if (password && password.length < 8) {
+    workbench.ui.teamMemberCreateNotice = "";
+    workbench.ui.toast = "初始密码至少需要 8 位。";
+    render(workbench);
+    return;
+  }
+
   await runAction(workbench, "正在创建成员账号...", async () => {
     const availableScripts = Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [];
     const availableCanvases = Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [];
@@ -4061,54 +4154,18 @@ async function submitTeamMemberCreate(workbench) {
         .map((item) => String(item ?? "").trim())
         .filter(Boolean),
     );
-    const selectedScriptIds = new Set(
-      (Array.isArray(draft.scriptIds) ? draft.scriptIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
-    );
-    const selectedCanvasIds = new Set(
-      (Array.isArray(draft.canvasIds) ? draft.canvasIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
-    );
-
-    availableScripts.forEach((script) => {
-      if (!selectedScriptIds.has(String(script?.id ?? ""))) {
-        return;
-      }
-      const projectId = String(
-        script?.projectId ??
-        script?.project_id ??
-        script?.project?.id ??
-        script?.project?.projectId ??
-        "",
-      ).trim();
-      if (projectId) {
-        selectedProjectIds.add(projectId);
-      }
-    });
-
-    availableCanvases.forEach((canvas) => {
-      if (!selectedCanvasIds.has(String(canvas?.id ?? ""))) {
-        return;
-      }
-      const projectId = String(
-        canvas?.projectId ??
-        canvas?.project_id ??
-        canvas?.project?.id ??
-        canvas?.project?.projectId ??
-        "",
-      ).trim();
-      if (projectId) {
-        selectedProjectIds.add(projectId);
-      }
-    });
+    const selectedScriptIds = new Set(collectAssignableResourceIds(draft.scriptIds, availableScripts).ids);
+    const selectedCanvasResources = collectAssignableResourceIds(draft.canvasIds, availableCanvases);
+    const selectedCanvasIds = new Set(selectedCanvasResources.ids);
 
     const created = await workbench.api.createTeamMember({
       teamAccount,
       displayName,
+      password: password || null,
       memberGroupId: draft.memberGroupId ?? null,
       projectIds: [...selectedProjectIds],
+      scriptIds: [...selectedScriptIds],
+      canvasIds: [...selectedCanvasIds],
       initialCredits: Number(draft.initialCredits ?? 0),
       remark: draft.remark ?? null,
     });
@@ -4119,7 +4176,9 @@ async function submitTeamMemberCreate(workbench) {
       teamAccountSuffix: String(workbench.ui.teamOverview?.teamAccountSuffix ?? "").trim().toLowerCase(),
     };
     workbench.ui.teamTemporaryPassword = String(created?.temporaryPassword ?? "");
-    workbench.ui.teamMemberCreateNotice = "成员账号已创建。临时密码只显示一次，请立即保存。";
+    workbench.ui.teamMemberCreateNotice = workbench.ui.teamTemporaryPassword
+      ? "成员账号已创建。临时密码只显示一次，请立即保存。"
+      : "成员账号已创建，可使用设置的初始密码登录。";
     return { skipSuccessToast: true };
   }, {
     successToast: null,
@@ -5139,6 +5198,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     action === "toggle-team-member-script" ||
     action === "toggle-team-member-canvas"
   ) {
+    updateTeamMemberCreateResourceSelection(workbench, target);
     return;
   }
 
@@ -6957,6 +7017,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-team-member-project") {
+    syncTeamMemberCreateDraftFromDom(workbench);
+  }
+
+  if (action === "toggle-team-member-script") {
+    syncTeamMemberCreateDraftFromDom(workbench);
+  }
+
+  if (action === "toggle-team-member-canvas") {
+    syncTeamMemberCreateDraftFromDom(workbench);
+  }
+
   if (action === "submit-team-member-create") {
     await submitTeamMemberCreate(workbench);
     return;
@@ -6978,7 +7050,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.createMemberModal = {
       open: true,
       phone: "",
-      role: "creator",
       note: "",
       notice: "",
     };
@@ -7031,32 +7102,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       newPassword: "",
       confirmPassword: "",
       projectIds,
-      scriptIds: availableScripts
-        .filter((script) => {
-          const projectId = String(
-            script?.projectId ??
-            script?.project_id ??
-            script?.project?.id ??
-            script?.project?.projectId ??
-            "",
-          ).trim();
-          return projectId ? projectIds.includes(projectId) : false;
-        })
-        .map((script) => String(script?.id ?? "").trim())
-        .filter(Boolean),
-      canvasIds: availableCanvases
-        .filter((canvas) => {
-          const projectId = String(
-            canvas?.projectId ??
-            canvas?.project_id ??
-            canvas?.project?.id ??
-            canvas?.project?.projectId ??
-            "",
-          ).trim();
-          return projectId ? projectIds.includes(projectId) : false;
-        })
-        .map((canvas) => String(canvas?.id ?? "").trim())
-        .filter(Boolean),
+      scriptIds: Array.isArray(member.scriptIds)
+        ? member.scriptIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
+      canvasIds: Array.isArray(member.canvasIds)
+        ? member.canvasIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
       availableProjects: Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [],
       availableScripts,
       availableCanvases,
@@ -7064,6 +7115,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       creditBalance: member.creditBalance ?? member.creditQuota ?? member.creditBalanceCached ?? 0,
       creditAdjustmentType: "",
       creditAmount: "",
+      resourceSelectionDirty: false,
       notice: "",
     };
     render(workbench);
@@ -7078,40 +7130,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-create-member-phone") {
     workbench.ui.createMemberModal = {
-      ...(workbench.ui.createMemberModal ?? { open: true, role: "creator", note: "", notice: "" }),
+      ...(workbench.ui.createMemberModal ?? { open: true, note: "", notice: "" }),
       phone: target.value,
       notice: "",
     };
     return;
   }
 
-  if (action === "change-create-member-role") {
-    workbench.ui.createMemberModal = {
-      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", note: "", notice: "" }),
-      role: target.dataset.role || target.value || "creator",
-      notice: "",
-    };
-    eventTarget?.closest?.(".library-team-role-menu-shell")?.classList.remove("is-open");
-    render(workbench);
-    return;
-  }
-
   if (action === "change-create-member-note") {
     workbench.ui.createMemberModal = {
-      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", role: "creator", notice: "" }),
+      ...(workbench.ui.createMemberModal ?? { open: true, phone: "", notice: "" }),
       note: target.value,
       notice: "",
     };
-    return;
-  }
-
-  if (action === "change-edit-member-role") {
-    workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", note: "", status: "enabled", notice: "" }),
-      role: target.value || "creator",
-      notice: "",
-    };
-    render(workbench);
     return;
   }
 
@@ -7130,31 +7161,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       displayName: target.value,
       notice: "",
     };
-    return;
-  }
-
-  if (action === "change-edit-member-business-role") {
-    workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
-      businessRole: target.dataset.role || target.value || "director",
-      notice: "",
-    };
-    eventTarget?.closest?.(".library-team-role-menu-shell")?.classList.remove("is-open");
-    render(workbench);
-    return;
-  }
-
-  if (action === "toggle-member-role-menu") {
-    const shell = eventTarget?.closest?.(".library-team-role-menu-shell");
-    if (!shell) {
-      return;
-    }
-    document.querySelectorAll(".library-team-role-menu-shell.is-open").forEach((menu) => {
-      if (menu !== shell) {
-        menu.classList.remove("is-open");
-      }
-    });
-    shell.classList.toggle("is-open");
     return;
   }
 
@@ -7186,81 +7192,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "change-edit-member-confirm-password") {
-    workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
-      confirmPassword: target.value,
-      notice: "",
-    };
-    return;
-  }
-
   if (action === "toggle-edit-member-project") {
-    const projectId = String(target.dataset.projectId ?? "").trim();
-    const current = new Set(
-      (Array.isArray(workbench.ui.editMemberModal?.projectIds) ? workbench.ui.editMemberModal.projectIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
-    );
-    if (projectId) {
-      if (target.checked) {
-        current.add(projectId);
-      } else {
-        current.delete(projectId);
-      }
-    }
-    workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", businessRole: "director", status: "enabled", notice: "" }),
-      projectIds: [...current],
-      notice: "",
-    };
-    render(workbench);
+    updateEditMemberResourceSelection(workbench, target);
     return;
   }
 
   if (action === "toggle-edit-member-script") {
-    const scriptId = String(target.dataset.scriptId ?? "").trim();
-    const current = new Set(
-      (Array.isArray(workbench.ui.editMemberModal?.scriptIds) ? workbench.ui.editMemberModal.scriptIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
-    );
-    if (scriptId) {
-      if (target.checked) {
-        current.add(scriptId);
-      } else {
-        current.delete(scriptId);
-      }
-    }
-    workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", businessRole: "director", status: "enabled", notice: "" }),
-      scriptIds: [...current],
-      notice: "",
-    };
-    render(workbench);
+    updateEditMemberResourceSelection(workbench, target);
     return;
   }
 
   if (action === "toggle-edit-member-canvas") {
-    const canvasId = String(target.dataset.canvasId ?? "").trim();
-    const current = new Set(
-      (Array.isArray(workbench.ui.editMemberModal?.canvasIds) ? workbench.ui.editMemberModal.canvasIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
-    );
-    if (canvasId) {
-      if (target.checked) {
-        current.add(canvasId);
-      } else {
-        current.delete(canvasId);
-      }
-    }
-    workbench.ui.editMemberModal = {
-      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", businessRole: "director", status: "enabled", notice: "" }),
-      canvasIds: [...current],
-      notice: "",
-    };
-    render(workbench);
+    updateEditMemberResourceSelection(workbench, target);
     return;
   }
 
@@ -7280,7 +7223,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await runAction(workbench, "正在创建成员账号...", async () => {
       const response = await workbench.api.createProjectMember(projectId, {
         phone: draft.phone ?? "",
-        role: draft.role ?? "creator",
         note: draft.note ?? "",
         initialCredits: Math.max(0, Number(draft.initialCredits) || 0),
       });
@@ -7304,10 +7246,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const response = await workbench.api.updateTeamMember(draft.id, {
         status: nextStatus,
       });
+      applyTeamMemberPatch(workbench, draft.id, response.member ?? { status: nextStatus });
       workbench.ui.editMemberModal = {
         ...(workbench.ui.editMemberModal ?? draft),
         open: true,
-        status: response.member?.status ?? (nextStatus === "disabled" ? "disabled" : "enabled"),
+        status: response.member?.status ?? (nextStatus === "disabled" ? "disabled" : "active"),
         notice: nextStatus === "disabled" ? "该成员已停用。" : "该成员已恢复。",
       };
       await syncProjectInteriorSupplementary(workbench);
@@ -7332,19 +7275,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const currentStatus = String(member.status ?? "");
     const finalStatus = action === "delete-team-member"
       ? "deleted"
-      : (nextStatus === "active" || nextStatus === "disabled" ? nextStatus : currentStatus === "disabled" ? "active" : "disabled");
+      : nextStatus === "active" || nextStatus === "disabled"
+      ? nextStatus
+      : currentStatus === "disabled" ? "active" : "disabled";
     workbench.ui.teamMemberConfirmModal = {
       open: true,
       memberId,
       action,
       nextStatus: finalStatus,
-      title: action === "delete-team-member" ? "确认删除成员" : finalStatus === "disabled" ? "确认停用成员" : "确认恢复成员",
-      text: action === "delete-team-member"
+      title: finalStatus === "deleted" ? "确认删除成员" : finalStatus === "disabled" ? "确认停用成员" : "确认恢复成员",
+      text: finalStatus === "deleted"
         ? `确认删除成员 ${member.displayName ?? member.memberName ?? member.phone ?? memberId} 吗？删除后将无法继续登录。`
         : finalStatus === "disabled"
           ? `确认停用成员 ${member.displayName ?? member.memberName ?? member.phone ?? memberId} 吗？`
           : `确认恢复成员 ${member.displayName ?? member.memberName ?? member.phone ?? memberId} 吗？`,
-      confirmLabel: action === "delete-team-member" ? "确定删除" : finalStatus === "disabled" ? "确定停用" : "确定恢复",
+      confirmLabel: finalStatus === "deleted" ? "确定删除" : finalStatus === "disabled" ? "确定停用" : "确定恢复",
     };
     render(workbench);
     return;
@@ -7366,15 +7311,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
     const memberId = String(draft.memberId);
     const nextStatus = String(draft.nextStatus);
-    await runAction(workbench, draft.action === "delete-team-member" ? "正在删除成员..." : nextStatus === "disabled" ? "正在停用成员..." : "正在恢复成员...", async () => {
+    if (nextStatus !== "active" && nextStatus !== "disabled" && nextStatus !== "deleted") {
+      workbench.ui.toast = "成员状态无效，请刷新后重试。";
+      workbench.ui.teamMemberConfirmModal = null;
+      render(workbench);
+      return;
+    }
+
+    await runAction(workbench, nextStatus === "deleted" ? "正在删除成员..." : nextStatus === "disabled" ? "正在停用成员..." : "正在恢复成员...", async () => {
       const response = await workbench.api.updateTeamMember(memberId, {
         status: nextStatus,
       });
+      applyTeamMemberPatch(workbench, memberId, response.member ?? { status: nextStatus }, { remove: nextStatus === "deleted" });
       if (workbench.ui.editMemberModal?.id && String(workbench.ui.editMemberModal.id) === String(memberId)) {
         workbench.ui.editMemberModal = {
           ...(workbench.ui.editMemberModal ?? {}),
           open: true,
-          status: response.member?.status ?? (nextStatus === "deleted" ? "deleted" : nextStatus === "disabled" ? "disabled" : "enabled"),
+          status: response.member?.status ?? (nextStatus === "deleted" ? "deleted" : nextStatus === "disabled" ? "disabled" : "active"),
           notice: nextStatus === "deleted" ? "该成员已删除。" : nextStatus === "disabled" ? "该成员已停用。" : "该成员已恢复。",
         };
       }
@@ -7401,28 +7354,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           .map((item) => String(item ?? "").trim())
           .filter(Boolean),
       );
+      const shouldUpdateResources = draft.resourceSelectionDirty === true;
       const selectedScriptIds = new Set(
-        (Array.isArray(draft.scriptIds) ? draft.scriptIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
+        shouldUpdateResources ? collectAssignableResourceIds(draft.scriptIds, availableScripts).ids : [],
       );
-      const selectedCanvasIds = new Set(
-        (Array.isArray(draft.canvasIds) ? draft.canvasIds : [])
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
-      );
+      const selectedCanvasResources = shouldUpdateResources
+        ? collectAssignableResourceIds(draft.canvasIds, availableCanvases)
+        : { ids: [], blockedIds: [] };
+      const selectedCanvasIds = new Set(selectedCanvasResources.ids);
 
       const newPassword = String(draft.newPassword ?? "");
-      const confirmPassword = String(draft.confirmPassword ?? "");
-      if (newPassword || confirmPassword) {
-        if (!newPassword) {
-          workbench.ui.editMemberModal = {
-            ...(workbench.ui.editMemberModal ?? draft),
-            notice: "请输入新密码。",
-          };
-          render(workbench);
-          return;
-        }
+      if (newPassword) {
         if (newPassword.length < 8) {
           workbench.ui.editMemberModal = {
             ...(workbench.ui.editMemberModal ?? draft),
@@ -7431,78 +7373,33 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           render(workbench);
           return;
         }
-        if (newPassword !== confirmPassword) {
-          workbench.ui.editMemberModal = {
-            ...(workbench.ui.editMemberModal ?? draft),
-            notice: "两次输入的密码不一致。",
-          };
-          render(workbench);
-          return;
-        }
       }
 
-      availableScripts.forEach((script) => {
-        if (!selectedScriptIds.has(String(script?.id ?? ""))) {
-          return;
-        }
-        const projectId = String(
-          script?.projectId ??
-          script?.project_id ??
-          script?.project?.id ??
-          script?.project?.projectId ??
-          "",
-        ).trim();
-        if (projectId) {
-          selectedProjectIds.add(projectId);
-        }
-      });
-
-      availableCanvases.forEach((canvas) => {
-        if (!selectedCanvasIds.has(String(canvas?.id ?? ""))) {
-          return;
-        }
-        const projectId = String(
-          canvas?.projectId ??
-          canvas?.project_id ??
-          canvas?.project?.id ??
-          canvas?.project?.projectId ??
-          "",
-        ).trim();
-        if (projectId) {
-          selectedProjectIds.add(projectId);
-        }
-      });
-
-      const response = await workbench.api.updateTeamMember(draft.id, {
+      const updateInput = {
         displayName: draft.displayName ?? "",
         projectIds: [...selectedProjectIds],
         newPassword: newPassword || null,
         remark: draft.note ?? "",
         creditAdjustmentType: draft.creditAdjustmentType || null,
         creditAmount: draft.creditAmount === "" ? null : Number(draft.creditAmount ?? 0),
+      };
+      if (shouldUpdateResources) {
+        updateInput.scriptIds = [...selectedScriptIds];
+        updateInput.canvasIds = [...selectedCanvasIds];
+      }
+      const response = await workbench.api.updateTeamMember(draft.id, updateInput);
+      applyTeamMemberPatch(workbench, draft.id, {
+        ...(response.member ?? {}),
+        projectIds: updateInput.projectIds,
+        ...(shouldUpdateResources ? {
+          scriptIds: updateInput.scriptIds,
+          canvasIds: updateInput.canvasIds,
+        } : {}),
       });
-      workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? draft),
-        open: true,
-        memberLoginAccount: response.member?.memberLoginAccount ?? draft.memberLoginAccount ?? "",
-        displayName: response.member?.displayName ?? draft.displayName ?? "",
-        note: response.member?.remark ?? draft.note ?? "",
-        projectIds: Array.isArray(response.member?.projectIds) ? response.member.projectIds : [...selectedProjectIds],
-        scriptIds: [...selectedScriptIds],
-        canvasIds: [...selectedCanvasIds],
-        newPassword: "",
-        confirmPassword: "",
-        status: response.member?.status ?? draft.status ?? "enabled",
-      creditBalance: response.member?.creditBalance ?? draft.creditBalance ?? 0,
-      creditAdjustmentType: "",
-      creditAmount: "",
-      newPassword: "",
-      confirmPassword: "",
-      notice: "成员信息已更新。",
-    };
+      workbench.ui.editMemberModal = null;
       await syncProjectInteriorSupplementary(workbench);
       workbench.ui.toast = "成员信息已更新。";
-    });
+    }, { successToast: "成员信息已更新。" });
     return;
   }
 
@@ -7701,6 +7598,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "create-canvas-project") {
+    if (String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(workbench.session?.user?.teamMember)) {
+      workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
+      render(workbench);
+      return;
+    }
     if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
@@ -7830,6 +7732,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-create-modal") {
+    if (String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(workbench.session?.user?.teamMember)) {
+      workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
+      render(workbench);
+      return;
+    }
     workbench.ui.isCreateModalOpen = true;
     workbench.ui.createProjectNotice = "";
     workbench.ui.createProjectName = "";
@@ -7869,6 +7776,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-script-modal") {
+    if (String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(workbench.session?.user?.teamMember)) {
+      workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
+      render(workbench);
+      return;
+    }
     const scriptModalMode =
       target.dataset.scriptModalMode === "manual"
         ? "manual"
@@ -10088,6 +10000,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         preview,
         workbench.ui.singleEpisodeAiPreview,
       );
+      if (Number.isFinite(Number(finalizedPreview?.creditBalance))) {
+        setWorkbenchCreditBalance(workbench, Number(finalizedPreview.creditBalance));
+      }
+      syncWorkbenchDisplayCreditBalance(workbench, finalizedPreview);
       workbench.ui.singleEpisodeAiChecking = false;
       workbench.ui.singleEpisodeAiPreview = {
         status: "ready",
@@ -29933,13 +29849,43 @@ function formatEpisodeDate(value) {
 function createTeamMemberDraft() {
   return {
     teamAccount: "",
+    memberLoginAccount: "",
     displayName: "",
+    password: "",
     initialCredits: 0,
     remark: "",
     projectIds: [],
     scriptIds: [],
     canvasIds: [],
+    resourceSelectionDirty: false,
   };
+}
+
+function resolveAssignableResourceProjectId(resource) {
+  return String(
+    resource?.projectId ??
+    resource?.project_id ??
+    resource?.project?.id ??
+    resource?.project?.projectId ??
+    "",
+  ).trim();
+}
+
+function collectAssignableResourceIds(selectedIds, availableResources) {
+  const selected = new Set(
+    (Array.isArray(selectedIds) ? selectedIds : [])
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean),
+  );
+  const ids = [];
+  (Array.isArray(availableResources) ? availableResources : []).forEach((resource) => {
+    const resourceId = String(resource?.id ?? "").trim();
+    if (!resourceId || !selected.has(resourceId)) {
+      return;
+    }
+    ids.push(resourceId);
+  });
+  return { ids: [...new Set(ids)] };
 }
 
 const TEAM_DASHBOARD_TABS = new Set(["member-consumption", "project-cost", "ranking"]);
@@ -30053,8 +29999,23 @@ function teamErrorMessage(value) {
   if (!text) {
     return "";
   }
+  if (text.includes("team_account_duplicate")) {
+    return "该成员账户已存在，请更换成员账户后重试。";
+  }
   if (text.includes("team_member_limit")) {
     return "团队成员数量已达上限，请升级或调整席位后重试。";
+  }
+  if (text.includes("team_seat_limit_reached")) {
+    return "团队子账号数量已达上限，请联系客服调整团队子账号额度。";
+  }
+  if (text.includes("team_project_scope_violation")) {
+    return "所选项目、剧本或画布不在当前账号可分配范围内，请刷新资源列表后重试。";
+  }
+  if (text.includes("team_member_input_invalid")) {
+    return "成员账号、成员名称或密码格式不正确，请检查后重试。";
+  }
+  if (text.includes("team_member_management_required")) {
+    return "当前账号尚未开通团队成员管理权限，请先开通会员后再创建成员。";
   }
   if (text.includes("team_permission_denied")) {
     return "当前账号没有团队管理权限，请联系管理员。";

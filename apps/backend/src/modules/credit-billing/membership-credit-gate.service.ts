@@ -100,11 +100,10 @@ async function resolveUserCreditScope(db: SqlDatabase, userId: string) {
     `
       SELECT m.organization_id, m.workspace_id
       FROM memberships m
-      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE m.user_id = $1
         AND m.status = 'active'
       ORDER BY
-        CASE WHEN tp.id IS NULL AND m.role = 'owner_admin' THEN 0 ELSE 1 END,
+        CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,

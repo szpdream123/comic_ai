@@ -245,6 +245,35 @@ test("team member create modal safely ignores null state", () => {
   assert.doesNotMatch(html, /data-modal="team-member-create"/);
 });
 
+test("team member create modal renders the fixed account suffix beside the input", () => {
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: false, memberCount: 0 },
+      seats: { used: 0, limit: 50, remaining: 50 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+      teamAccountSuffix: "abc123",
+    },
+    members: [],
+    createMemberModal: {
+      open: true,
+      draft: {
+        teamAccount: "director001",
+      },
+    },
+  });
+
+  assert.match(html, /class="library-team-account-input-group"/);
+  assert.match(html, /value="director001"/);
+  assert.match(html, /<strong>@abc123<\/strong>/);
+  assert.doesNotMatch(html, /value="director001@abc123"/);
+});
+
 test("experience membership without team entitlement opens the existing professional pricing flow", () => {
   const html = renderLibraryTeam({
     route: "team",

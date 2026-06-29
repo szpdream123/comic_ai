@@ -457,6 +457,14 @@ describe("production workbench home shell", () => {
       }),
       /资源不存在或无权访问.*request-missing/,
     );
+    assert.equal(
+      friendlyError({
+        status: 409,
+        errorCode: "team_account_duplicate",
+        message: "team_account_duplicate",
+      }),
+      "该成员账户已存在，请更换成员账户后重试。",
+    );
   });
 
   it("formats model reference validation errors with actionable Chinese copy", () => {
@@ -8460,7 +8468,21 @@ describe("production workbench project tab", () => {
     const workbench = {
       root: {
         innerHTML: "",
-        querySelector: () => null,
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
         querySelectorAll: () => [],
       },
       state: buildProjectState(),
@@ -8500,7 +8522,21 @@ describe("production workbench project tab", () => {
     const workbench = {
       root: {
         innerHTML: "",
-        querySelector: () => null,
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
         querySelectorAll: () => [],
       },
       state: buildProjectState(),
@@ -8595,7 +8631,7 @@ describe("production workbench project tab", () => {
         membershipStatus: {
           status: "professional_active",
           currentTier: "professional",
-          entitlements: { teamMemberManagement: true },
+          entitlements: { teamMemberManagement: false },
           team: { seatLimit: 50 },
         },
         teamOverview: {
@@ -8632,7 +8668,7 @@ describe("production workbench project tab", () => {
         membershipStatus: {
           status: "professional_active",
           currentTier: "professional",
-          entitlements: { teamMemberManagement: true },
+          entitlements: { teamMemberManagement: false },
           team: { seatLimit: 50 },
         },
         teamOverview: {
@@ -8667,6 +8703,96 @@ describe("production workbench project tab", () => {
     assert.notEqual(workbench.ui.toast, "操作已完成。");
   });
 
+  it("keeps the full member login account when toggling team member resource checkboxes", async () => {
+    const accountInput = { value: "director001@team001" };
+    const nameInput = { value: "导演一号" };
+    const creditsInput = { value: "0" };
+    const remarkInput = { value: "" };
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return accountInput;
+          }
+          if (selector === "#team-member-display-name") {
+            return nameInput;
+          }
+          if (selector === "#team-member-initial-credits") {
+            return creditsInput;
+          }
+          if (selector === "#team-member-remark") {
+            return remarkInput;
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "",
+          memberLoginAccount: "",
+          displayName: "",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-team-member-project", projectId: "project-1" },
+      matches: (selector) => selector === 'input[data-action="toggle-team-member-project"]',
+      checked: true,
+    });
+
+    assert.equal(workbench.ui.teamMemberDraft.memberLoginAccount, "director001@team001");
+    assert.equal(workbench.ui.teamMemberDraft.teamAccount, "director001");
+  });
+
+  it("handles team member resource checkbox change events", () => {
+    const source = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
+    const changeBlock = source.match(/root\.addEventListener\("change", async \(event\) => \{[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(changeBlock, /toggle-team-member-project/);
+    assert.match(changeBlock, /toggle-team-member-script/);
+    assert.match(changeBlock, /toggle-team-member-canvas/);
+    assert.match(changeBlock, /updateTeamMemberCreateResourceSelection\(workbench, target\)/);
+  });
+
+  it("handles edit member resource checkbox change events", () => {
+    const source = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
+    const changeBlock = source.match(/root\.addEventListener\("change", async \(event\) => \{[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(changeBlock, /toggle-edit-member-project/);
+    assert.match(changeBlock, /toggle-edit-member-script/);
+    assert.match(changeBlock, /toggle-edit-member-canvas/);
+    assert.match(changeBlock, /updateEditMemberResourceSelection\(workbench, target\)/);
+  });
+
   it("shows a toast instead of inline notice when required team member fields are missing", async () => {
     const workbench = {
       root: {
@@ -8683,7 +8809,7 @@ describe("production workbench project tab", () => {
         membershipStatus: {
           status: "professional_active",
           currentTier: "professional",
-          entitlements: { teamMemberManagement: true },
+          entitlements: { teamMemberManagement: false },
           team: { seatLimit: 50 },
         },
         teamOverview: {
@@ -8696,6 +8822,7 @@ describe("production workbench project tab", () => {
         teamError: "",
         teamMemberDraft: {
           teamAccount: "",
+          memberLoginAccount: "",
           displayName: "",
           businessRole: "director",
           initialCredits: 0,
@@ -8714,7 +8841,7 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(workbench.ui.teamMemberCreateNotice, "");
-    assert.equal(workbench.ui.toast, "请填写账号和成员名称。");
+    assert.equal(workbench.ui.toast, "请填写成员账户和成员名称。");
   });
 
   it("blocks team member creation submit before calling the api when entitlement is missing", async () => {
@@ -8734,7 +8861,7 @@ describe("production workbench project tab", () => {
         membershipStatus: {
           status: "professional_active",
           currentTier: "professional",
-          entitlements: { teamMemberManagement: true },
+          entitlements: { teamMemberManagement: false },
           team: { seatLimit: 50 },
         },
         teamOverview: {
@@ -8747,6 +8874,7 @@ describe("production workbench project tab", () => {
         teamError: "",
         teamMemberDraft: {
           teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
           displayName: "导演一号",
           businessRole: "director",
           initialCredits: 0,
@@ -8803,6 +8931,7 @@ describe("production workbench project tab", () => {
         teamError: "",
         teamMemberDraft: {
           teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
           displayName: "导演一号",
           businessRole: "director",
           initialCredits: 0,
@@ -8833,7 +8962,21 @@ describe("production workbench project tab", () => {
     const workbench = {
       root: {
         innerHTML: "",
-        querySelector: () => null,
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
         querySelectorAll: () => [],
       },
       state: buildProjectState(),
@@ -8862,7 +9005,8 @@ describe("production workbench project tab", () => {
           { id: "canvas-1", title: "画布项目 委屈", projectId: "project-2", createdAt: "2026/06/28", status: "草稿" },
         ],
         teamMemberDraft: {
-          teamAccount: "director001",
+          teamAccount: "",
+          memberLoginAccount: "",
           displayName: "导演一号",
           businessRole: "director",
           initialCredits: 0,
@@ -8899,7 +9043,73 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].teamAccount, "director001");
     assert.deepEqual(createCalls[0].projectIds.sort(), ["project-1", "project-2"]);
+  });
+
+  it("passes the initial password when creating a team member", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        membershipStatus: {
+          status: "professional_active",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          password: "password123",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].password, "password123");
+    assert.equal(workbench.ui.teamMemberCreateNotice, "成员账号已创建，可使用设置的初始密码登录。");
   });
 
   it("closes the create member modal and renders the full login account after a successful create", async () => {
@@ -8907,7 +9117,21 @@ describe("production workbench project tab", () => {
     const workbench = {
       root: {
         innerHTML: "",
-        querySelector: () => null,
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
         querySelectorAll: () => [],
       },
       state: buildProjectState(),
@@ -8939,7 +9163,8 @@ describe("production workbench project tab", () => {
           },
         ],
         teamMemberDraft: {
-          teamAccount: "director001",
+          teamAccount: "",
+          memberLoginAccount: "",
           displayName: "导演一号",
           businessRole: "director",
           initialCredits: 0,
@@ -29607,6 +29832,254 @@ describe("production workbench project tab", () => {
 });
 
 describe("account settings drawer interactions", () => {
+  it("closes the edit member modal after saving a member password reset", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return {
+            member: {
+              membershipId: memberId,
+              memberLoginAccount: "director001@u185715",
+              displayName: "导演一号",
+              projectIds: ["project-1"],
+              creditBalance: 22,
+              status: "active",
+            },
+          };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          newPassword: "new-pass-123",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests, [
+      {
+        memberId: "member-1",
+        input: {
+          displayName: "导演一号",
+          projectIds: ["project-1"],
+          newPassword: "new-pass-123",
+          remark: "",
+          creditAdjustmentType: null,
+          creditAmount: null,
+        },
+      },
+    ]);
+    assert.equal(workbench.ui.editMemberModal, null);
+    assert.equal(workbench.ui.toast, "成员信息已更新。");
+  });
+
+  it("filters stale resource ids when saving edited member visibility", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return { member: { membershipId: memberId, status: "active" } };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: ["script-valid", "script-stale"],
+          canvasIds: ["canvas-valid", "canvas-stale"],
+          availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+          availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-3" }],
+          resourceSelectionDirty: true,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests[0]?.input.scriptIds, ["script-valid"]);
+    assert.deepEqual(requests[0]?.input.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(requests[0]?.input.projectIds.sort(), ["project-1", "project-2", "project-3"]);
+  });
+
+  it("keeps edited member resource selections when reopening edit", async () => {
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId) {
+          return {
+            member: {
+              membershipId: memberId,
+              memberLoginAccount: "director001@u185715",
+              displayName: "导演一号",
+              status: "active",
+            },
+          };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        teamOverview: { teamAccountSuffix: "u185715" },
+        teamMembers: [
+          {
+            membershipId: "member-1",
+            memberLoginAccount: "director001@u185715",
+            displayName: "导演一号",
+            projectIds: ["project-1"],
+            scriptIds: [],
+            canvasIds: [],
+            status: "active",
+          },
+        ],
+        projectLibrary: [{ id: "project-1", title: "项目一" }, { id: "project-2", title: "项目二" }],
+        scriptLibraryRecords: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+        canvasProjects: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-2" }],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: ["script-valid"],
+          canvasIds: ["canvas-valid"],
+          availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+          availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-2" }],
+          resourceSelectionDirty: true,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member", memberId: "member-1" },
+    });
+
+    assert.deepEqual(workbench.ui.teamMembers[0]?.scriptIds, ["script-valid"]);
+    assert.deepEqual(workbench.ui.teamMembers[0]?.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(workbench.ui.editMemberModal?.scriptIds, ["script-valid"]);
+    assert.deepEqual(workbench.ui.editMemberModal?.canvasIds, ["canvas-valid"]);
+  });
+
+  it("submits resource visibility after editing only project checkboxes", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return { member: { membershipId: memberId, status: "active" } };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          resourceSelectionDirty: false,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-edit-member-project", projectId: "project-1" },
+      checked: true,
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests[0]?.input.projectIds, ["project-1"]);
+    assert.deepEqual(requests[0]?.input.scriptIds, []);
+    assert.deepEqual(requests[0]?.input.canvasIds, []);
+  });
+
   it("opens the account settings drawer from the account menu action", async () => {
     const workbench = {
       root: { innerHTML: "" },
