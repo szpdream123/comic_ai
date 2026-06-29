@@ -3,14 +3,11 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
   createTeamTemporaryCredential,
+  createUserPasswordHash,
 } from "../identity/team-account-credentials.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { ActorContext } from "./actor-context.service.ts";
-import {
-  isTeamBusinessRole,
-  type TeamBusinessRole,
-} from "./team-roles.ts";
 
 const DEFAULT_TEAM_SUBACCOUNT_LIMIT = 50;
 const TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY = "team.default_subaccount_limit";
@@ -37,23 +34,38 @@ export interface TeamMemberSummary {
   membershipId: string;
   userId: string;
   teamAccount: string;
+  memberLoginAccount: string;
   displayName: string;
-  businessRole: TeamBusinessRole;
   memberGroupId: string | null;
+  projectIds: string[];
   status: "active" | "invited" | "disabled";
   creditBalance: number;
   creditUsed: number;
   remark: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CreateTeamMemberInput {
   actor: ActorContext;
   teamAccount: string;
   displayName: string;
-  businessRole: TeamBusinessRole;
   memberGroupId?: string | null;
   projectIds?: string[];
   initialCredits?: number;
+  remark?: string | null;
+  now: Date;
+}
+
+export interface UpdateTeamMemberInput {
+  actor: ActorContext;
+  memberId: string;
+  displayName?: string | null;
+  projectIds?: string[] | null;
+  newPassword?: string | null;
+  status?: "active" | "disabled" | null;
+  creditAdjustmentType?: "increase" | "deduct" | null;
+  creditAmount?: number | null;
   remark?: string | null;
   now: Date;
 }
@@ -69,8 +81,6 @@ export async function createTeamMember(
   );
 
   assertCanCreateMember(input.actor, memberGroupId);
-  assertBusinessRole(input.businessRole);
-  assertCanAssignBusinessRole(input.actor, input.businessRole);
 
   const normalizedTeamAccount = normalizeTeamAccount(input.teamAccount);
   const displayName = normalizeRequiredText(input.displayName);
@@ -85,8 +95,10 @@ export async function createTeamMember(
   const userId = randomUUID();
   const membershipId = randomUUID();
   const profileId = randomUUID();
+  const teamMemberId = randomUUID();
   const teamAccountSuffix = await ensureUserTeamAccountSuffix(db, input.actor.actorId);
   const virtualEmail = buildTeamAccountEmail(normalizedTeamAccount, teamAccountSuffix);
+  const memberLoginAccount = buildTeamMemberLoginAccount(normalizedTeamAccount, teamAccountSuffix);
 
   await runInTransaction(db, async () => {
     await lockOrganizationForTeamMutation(db, input.actor.organizationId);
@@ -114,6 +126,7 @@ export async function createTeamMember(
     await assertTeamAccountAvailable(db, {
       actor: input.actor,
       teamAccount: normalizedTeamAccount,
+      memberLoginAccount,
     });
 
     await assertProjectScope(db, {
@@ -158,7 +171,6 @@ export async function createTeamMember(
           membership_id,
           team_account,
           display_name,
-          business_role,
           member_group_id,
           credit_balance_cached,
           remark,
@@ -173,11 +185,36 @@ export async function createTeamMember(
         membershipId,
         normalizedTeamAccount,
         displayName,
-        input.businessRole,
         memberGroupId,
         initialCredits,
         normalizeNullableText(input.remark),
         input.actor.actorId,
+      ],
+    );
+    await db.query(
+      `
+        INSERT INTO team_members (
+          id,
+          user_id,
+          member_account,
+          member_account_suffix,
+          member_login_account,
+          member_name,
+          member_password_hash,
+          member_credits,
+          status
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+      `,
+      [
+        teamMemberId,
+        userId,
+        normalizedTeamAccount,
+        teamAccountSuffix,
+        memberLoginAccount,
+        displayName,
+        credential.passwordHash,
+        initialCredits,
       ],
     );
 
@@ -249,9 +286,10 @@ export async function createTeamMember(
       membershipId,
       userId,
       teamAccount: normalizedTeamAccount,
+      memberLoginAccount,
       displayName,
-      businessRole: input.businessRole,
       memberGroupId,
+      projectIds,
       status: "active",
       creditBalance: initialCredits,
       creditUsed: 0,
@@ -347,33 +385,75 @@ export async function listTeamMembers(
     membership_id: string;
     user_id: string;
     team_account: string;
+    member_login_account: string;
     display_name: string;
-    business_role: TeamBusinessRole;
     member_group_id: string | null;
     status: "active" | "invited" | "disabled";
     credit_balance_cached: number;
     credit_used_cached: number;
     remark: string | null;
+    project_ids: string[] | null;
+    created_at: string;
+    updated_at: string;
   }>(
     `
       SELECT
         membership.id AS membership_id,
         membership.user_id,
         profile.team_account,
+        COALESCE(
+          member.member_login_account,
+          CASE
+            WHEN owner.team_account_suffix IS NOT NULL
+              THEN profile.team_account || '@' || owner.team_account_suffix
+            ELSE profile.team_account
+          END
+        ) AS member_login_account,
         profile.display_name,
-        profile.business_role,
         profile.member_group_id,
         membership.status,
         profile.credit_balance_cached,
         profile.credit_used_cached,
-        profile.remark
+        profile.remark,
+        COALESCE(
+          ARRAY_AGG(DISTINCT assignment.project_id) FILTER (WHERE assignment.project_id IS NOT NULL),
+          ARRAY[]::uuid[]
+        )::text[] AS project_ids,
+        profile.created_at,
+        profile.updated_at
       FROM team_member_profiles profile
       JOIN memberships membership
         ON membership.organization_id = profile.organization_id
        AND membership.id = profile.membership_id
+      JOIN users
+        ON users.id = membership.user_id
+      LEFT JOIN users owner
+        ON owner.id = profile.created_by_user_id
+      LEFT JOIN team_members member
+        ON member.user_id = membership.user_id
+       AND lower(member.member_account) = lower(profile.team_account)
+      LEFT JOIN team_project_assignments assignment
+        ON assignment.organization_id = profile.organization_id
+       AND assignment.workspace_id = profile.workspace_id
+       AND assignment.membership_id = profile.membership_id
       WHERE profile.organization_id = $1
         AND profile.workspace_id = $2
         ${groupScopeSql}
+      GROUP BY
+        membership.id,
+        membership.user_id,
+        profile.team_account,
+        member.member_login_account,
+        owner.team_account_suffix,
+        profile.display_name,
+        profile.member_group_id,
+        membership.status,
+        profile.credit_balance_cached,
+        profile.credit_used_cached,
+        profile.remark,
+        profile.created_at,
+        profile.updated_at,
+        profile.id
       ORDER BY profile.created_at DESC, profile.id DESC
     `,
     params,
@@ -383,14 +463,309 @@ export async function listTeamMembers(
     membershipId: row.membership_id,
     userId: row.user_id,
     teamAccount: row.team_account,
+    memberLoginAccount: row.member_login_account,
     displayName: row.display_name,
-    businessRole: row.business_role,
     memberGroupId: row.member_group_id,
+    projectIds: Array.isArray(row.project_ids) ? row.project_ids : [],
     status: row.status,
     creditBalance: row.credit_balance_cached,
     creditUsed: row.credit_used_cached,
     remark: row.remark,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }));
+}
+
+export async function updateTeamMember(
+  db: SqlDatabase,
+  input: UpdateTeamMemberInput,
+): Promise<TeamMemberSummary | null> {
+  const workspaceId = requireTeamWorkspace(input.actor);
+  assertCanUpdateMember(input.actor);
+  const scopedGroupId = resolveReadableMemberGroup(input.actor);
+  const target = await queryOne<{
+    membership_id: string;
+    user_id: string;
+    member_group_id: string | null;
+    credit_balance_cached: number;
+  }>(
+    db,
+    `
+      SELECT
+        profile.membership_id,
+        membership.user_id,
+        profile.member_group_id,
+        profile.credit_balance_cached
+      FROM team_member_profiles profile
+      JOIN memberships membership
+        ON membership.organization_id = profile.organization_id
+       AND membership.id = profile.membership_id
+      WHERE profile.organization_id = $1
+        AND profile.workspace_id = $2
+        AND profile.membership_id = $3
+      LIMIT 1
+    `,
+    [input.actor.organizationId, workspaceId, input.memberId],
+  );
+  if (!target) {
+    return null;
+  }
+
+  if (scopedGroupId && target.member_group_id !== scopedGroupId) {
+    throw new TeamServiceError("team_group_scope_violation");
+  }
+
+  const displayName = input.displayName == null ? null : normalizeRequiredText(input.displayName);
+
+  const status = input.status == null ? null : String(input.status);
+  if (status != null && status !== "active" && status !== "disabled") {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const creditAdjustmentType = input.creditAdjustmentType == null ? null : String(input.creditAdjustmentType);
+  if (creditAdjustmentType != null && creditAdjustmentType !== "increase" && creditAdjustmentType !== "deduct") {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const creditAmount = normalizeOptionalCreditAmount(input.creditAmount);
+  if (!creditAdjustmentType && creditAmount > 0) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  if (creditAdjustmentType && creditAmount <= 0) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const remark = input.remark == null ? null : normalizeNullableText(input.remark);
+  const projectIds = input.projectIds == null ? null : normalizeProjectIds(input.projectIds);
+  const newPassword = input.newPassword == null ? null : normalizeOptionalPassword(input.newPassword);
+
+  await runInTransaction(db, async () => {
+    await lockOrganizationForTeamMutation(db, input.actor.organizationId);
+    await assertActiveEntitlement(db, {
+      organizationId: input.actor.organizationId,
+      entitlementKey: "team_member_management",
+      now: input.now,
+    });
+
+    if (creditAdjustmentType === "increase" && creditAmount > 0) {
+      await assertAllocatableCredits(db, {
+        organizationId: input.actor.organizationId,
+        amount: creditAmount,
+      });
+    }
+    if (creditAdjustmentType === "deduct" && creditAmount > Number(target.credit_balance_cached ?? 0)) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
+    if (projectIds != null) {
+      await assertProjectScope(db, {
+        actor: input.actor,
+        projectIds,
+      });
+    }
+
+    const updatedMembership = await db.query(
+      `
+        UPDATE memberships
+        SET
+          status = COALESCE($4, status),
+          updated_at = $5
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND id = $3
+      `,
+      [input.actor.organizationId, workspaceId, input.memberId, status, input.now],
+    );
+    if ((updatedMembership.rowCount ?? 0) === 0) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
+
+    await db.query(
+      `
+        UPDATE team_member_profiles
+        SET
+          display_name = COALESCE($4, display_name),
+          remark = CASE
+            WHEN $5::text IS NULL THEN remark
+            ELSE $5
+          END,
+          credit_balance_cached = credit_balance_cached
+            + CASE
+              WHEN $6 = 'increase' THEN $7::int
+              WHEN $6 = 'deduct' THEN -($7::int)
+              ELSE 0
+            END,
+          updated_at = $8
+        WHERE organization_id = $1
+          AND workspace_id = $2
+          AND membership_id = $3
+      `,
+      [
+        input.actor.organizationId,
+        workspaceId,
+        input.memberId,
+        displayName,
+        remark,
+        creditAdjustmentType,
+        creditAmount,
+        input.now,
+      ],
+    );
+
+    if (projectIds != null) {
+      await db.query(
+        `
+          DELETE FROM team_project_assignments
+          WHERE organization_id = $1
+            AND workspace_id = $2
+            AND membership_id = $3
+        `,
+        [input.actor.organizationId, workspaceId, input.memberId],
+      );
+
+      for (const projectId of projectIds) {
+        await db.query(
+          `
+            INSERT INTO team_project_assignments (
+              id,
+              organization_id,
+              workspace_id,
+              membership_id,
+              project_id,
+              assigned_by_user_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+          `,
+          [
+            randomUUID(),
+            input.actor.organizationId,
+            workspaceId,
+            input.memberId,
+            projectId,
+            input.actor.actorId,
+          ],
+        );
+      }
+    }
+
+    if (newPassword) {
+      const nextPasswordHash = await createUserPasswordHash(newPassword);
+      await db.query(
+        `
+          UPDATE users
+          SET password_hash = $2,
+              updated_at = $3
+          WHERE id = $1
+        `,
+        [target.user_id, nextPasswordHash.passwordHash, input.now],
+      );
+      await db.query(
+        `
+          UPDATE team_members
+          SET member_password_hash = $2,
+              updated_at = $3
+          WHERE user_id = $1
+            AND member_account = (
+              SELECT profile.team_account
+              FROM team_member_profiles profile
+              WHERE profile.organization_id = $4
+                AND profile.workspace_id = $5
+                AND profile.membership_id = $6
+              LIMIT 1
+            )
+        `,
+        [
+          target.user_id,
+          nextPasswordHash.passwordHash,
+          input.now,
+          input.actor.organizationId,
+          workspaceId,
+          input.memberId,
+        ],
+      );
+    }
+
+    await db.query(
+      `
+        UPDATE team_members
+        SET
+          member_name = COALESCE($2, member_name),
+          member_credits = member_credits
+            + CASE
+              WHEN $3 = 'increase' THEN $4::int
+              WHEN $3 = 'deduct' THEN -($4::int)
+              ELSE 0
+            END,
+          status = COALESCE($5, status),
+          updated_at = $6
+        WHERE user_id = $1
+          AND member_account = (
+            SELECT profile.team_account
+            FROM team_member_profiles profile
+            WHERE profile.organization_id = $7
+              AND profile.workspace_id = $8
+              AND profile.membership_id = $9
+            LIMIT 1
+          )
+      `,
+      [
+        target.user_id,
+        displayName,
+        creditAdjustmentType,
+        creditAmount,
+        status,
+        input.now,
+        input.actor.organizationId,
+        workspaceId,
+        input.memberId,
+      ],
+    );
+
+    if (creditAdjustmentType && creditAmount > 0) {
+      await db.query(
+        `
+          UPDATE organizations
+          SET
+            credit_balance_cached = credit_balance_cached
+              + CASE WHEN $2 = 'increase' THEN -$3 ELSE $3 END,
+            updated_at = $4
+          WHERE id = $1
+        `,
+        [input.actor.organizationId, creditAdjustmentType, creditAmount, input.now],
+      );
+      await db.query(
+        `
+          INSERT INTO team_credit_adjustments (
+            id,
+            organization_id,
+            workspace_id,
+            operator_user_id,
+            target_membership_id,
+            adjustment_type,
+            amount,
+            reason,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          randomUUID(),
+          input.actor.organizationId,
+          workspaceId,
+          input.actor.actorId,
+          input.memberId,
+          creditAdjustmentType,
+          creditAmount,
+          creditAdjustmentType === "increase" ? "manual_member_credit_increase" : "manual_member_credit_deduction",
+          input.now,
+        ],
+      );
+    }
+  });
+
+  const [member] = await listTeamMembers(db, { actor: input.actor }).then((members) =>
+    members.filter((item) => item.membershipId === input.memberId),
+  );
+  return member ?? null;
 }
 
 function requireTeamWorkspace(actor: ActorContext): string {
@@ -430,6 +805,16 @@ function assertCanCreateMember(actor: ActorContext, memberGroupId: string | null
     throw new TeamServiceError("team_group_scope_violation");
   }
 
+  throw new TeamServiceError("team_permission_missing");
+}
+
+function assertCanUpdateMember(actor: ActorContext) {
+  if (actor.capabilities.includes(capabilities.teamMemberManageAll)) {
+    return;
+  }
+  if (actor.capabilities.includes(capabilities.teamMemberManageGroup)) {
+    return;
+  }
   throw new TeamServiceError("team_permission_missing");
 }
 
@@ -523,22 +908,6 @@ function resolveReadableMemberGroup(actor: ActorContext) {
   throw new TeamServiceError("team_permission_missing");
 }
 
-function assertBusinessRole(role: string): asserts role is TeamBusinessRole {
-  if (!isTeamBusinessRole(role)) {
-    throw new TeamServiceError("team_member_input_invalid");
-  }
-}
-
-function assertCanAssignBusinessRole(actor: ActorContext, role: TeamBusinessRole) {
-  if (actor.capabilities.includes(capabilities.teamMemberManageAll)) {
-    return;
-  }
-
-  if (role === "admin") {
-    throw new TeamServiceError("team_permission_missing");
-  }
-}
-
 async function assertActiveEntitlement(
   db: SqlDatabase,
   input: {
@@ -568,7 +937,6 @@ async function hasActiveEntitlement(
       WHERE organization_id = $1
         AND entitlement_key = $2
         AND status = 'active'
-        AND source IS DISTINCT FROM 'payment'
         AND (expires_at IS NULL OR expires_at > $3)
       UNION ALL
       SELECT period.id::text AS id
@@ -695,7 +1063,7 @@ async function countActiveSubaccounts(db: SqlDatabase, actor: ActorContext) {
 
 async function assertTeamAccountAvailable(
   db: SqlDatabase,
-  input: { actor: ActorContext; teamAccount: string },
+  input: { actor: ActorContext; teamAccount: string; memberLoginAccount: string },
 ) {
   const existing = await queryOne<{ id: string }>(
     db,
@@ -710,7 +1078,18 @@ async function assertTeamAccountAvailable(
     [input.actor.organizationId, input.actor.workspaceId, input.teamAccount],
   );
 
-  if (existing) {
+  const legacyExisting = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM team_members
+      WHERE lower(member_login_account) = lower($1)
+      LIMIT 1
+    `,
+    [input.memberLoginAccount],
+  );
+
+  if (existing || legacyExisting) {
     throw new TeamServiceError("team_account_duplicate");
   }
 }
@@ -826,6 +1205,10 @@ function buildTeamAccountEmail(teamAccount: string, teamAccountSuffix: string) {
   return `${teamAccount}@${teamAccountSuffix}.team.local`;
 }
 
+function buildTeamMemberLoginAccount(teamAccount: string, teamAccountSuffix: string) {
+  return `${teamAccount}@${teamAccountSuffix}`;
+}
+
 export async function ensureUserTeamAccountSuffix(db: SqlDatabase, userId: string) {
   const existing = await queryOne<{ team_account_suffix: string | null }>(
     db,
@@ -887,6 +1270,24 @@ function normalizeInitialCredits(value: unknown) {
     throw new TeamServiceError("team_member_input_invalid");
   }
   return amount;
+}
+
+function normalizeOptionalCreditAmount(value: unknown) {
+  if (value == null || value === "") {
+    return 0;
+  }
+  return normalizeInitialCredits(value);
+}
+
+function normalizeOptionalPassword(value: unknown) {
+  const password = String(value ?? "").trim();
+  if (!password) {
+    return null;
+  }
+  if (password.length < 8) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  return password;
 }
 
 function normalizeProjectIds(projectIds: unknown) {

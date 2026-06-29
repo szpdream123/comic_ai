@@ -9,6 +9,7 @@ import {
   getTeamOverview,
   listTeamMembers,
   TeamServiceError,
+  updateTeamMember,
 } from "../team.service.ts";
 
 const now = new Date("2026-05-28T10:00:00.000Z");
@@ -57,6 +58,7 @@ describe("team service", { concurrency: false }, () => {
       });
 
       assert.equal(result.member.teamAccount, "director001");
+      assert.match(result.member.memberLoginAccount, /^director001@[a-z0-9]{6}$/);
       assert.equal(result.member.businessRole, "director");
       assert.match(result.temporaryPassword, /^[A-Za-z0-9_-]{18,}$/);
 
@@ -90,6 +92,48 @@ describe("team service", { concurrency: false }, () => {
     }
   });
 
+  it("allows paid source team entitlements to create members", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await db.query(
+        `
+          INSERT INTO organization_entitlements (
+            id,
+            organization_id,
+            entitlement_key,
+            status,
+            source,
+            expires_at
+          )
+          VALUES (
+            '34000000-0000-4000-8000-000000000002',
+            $1,
+            'team_member_management',
+            'active',
+            'payment',
+            '2026-06-28T10:00:00.000Z'
+          )
+        `,
+        [organizationId],
+      );
+
+      const result = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director002",
+        displayName: "Director Two",
+        businessRole: "director",
+        projectIds: [],
+        initialCredits: 0,
+        now,
+      });
+
+      assert.equal(result.member.teamAccount, "director002");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("lists team members without exposing stored credentials", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -113,9 +157,95 @@ describe("team service", { concurrency: false }, () => {
       assert.equal(members.length, 1);
       assert.equal(members[0]?.membershipId, created.member.membershipId);
       assert.equal(members[0]?.teamAccount, "director001");
+      assert.match(members[0]?.memberLoginAccount ?? "", /^director001@[a-z0-9]{6}$/);
+      assert.match(members[0]?.createdAt ?? "", /T/);
+      assert.match(members[0]?.updatedAt ?? "", /T/);
       assert.equal("temporaryPassword" in members[0], false);
       assert.equal("passwordHash" in members[0], false);
       assert.equal("password_hash" in members[0], false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("updates team members with profile, status, and credit changes", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { credits: 500 });
+      await seedTeamEntitlement(db);
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director002",
+        displayName: "Director Two",
+        businessRole: "director",
+        projectIds: [],
+        initialCredits: 20,
+        remark: "初始备注",
+        now,
+      });
+
+      const updated = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        displayName: "Updated Director",
+        businessRole: "editor",
+        status: "disabled",
+        creditAdjustmentType: "increase",
+        creditAmount: 15,
+        remark: "更新备注",
+        now: new Date("2026-05-28T11:00:00.000Z"),
+      });
+
+      assert.equal(updated?.membershipId, created.member.membershipId);
+      assert.equal(updated?.displayName, "Updated Director");
+      assert.equal(updated?.businessRole, "editor");
+      assert.equal(updated?.status, "disabled");
+      assert.equal(updated?.creditBalance, 35);
+      assert.equal(updated?.remark, "更新备注");
+
+      const organization = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
+        [organizationId],
+      );
+      assert.equal(Number(organization.rows[0]?.credit_balance_cached ?? 0), 465);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("updates team member status without requiring credit adjustments", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director003",
+        displayName: "Director Three",
+        businessRole: "director",
+        projectIds: [],
+        initialCredits: 0,
+        now,
+      });
+
+      const updated = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        status: "disabled",
+        now: new Date("2026-05-28T11:00:00.000Z"),
+        displayName: null,
+        businessRole: null,
+        projectIds: null,
+        newPassword: null,
+        creditAdjustmentType: null,
+        creditAmount: null,
+        remark: null,
+      });
+
+      assert.equal(updated?.status, "disabled");
+      assert.equal(updated?.membershipId, created.member.membershipId);
     } finally {
       await db.close();
     }
@@ -633,10 +763,10 @@ async function seedTeamTenant(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
   input: { seatLimit?: number; credits?: number; skipPlanLimits?: boolean } = {},
 ) {
-  await db.query(
-    `
+    await db.query(
+      `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [ownerUserId],
   );

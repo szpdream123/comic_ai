@@ -6,11 +6,6 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { findPersistentAuthSessionByToken } from "../identity/persistent-auth.service.ts";
-import {
-  getTeamRoleCapabilities,
-  isTeamBusinessRole,
-  type TeamBusinessRole,
-} from "./team-roles.ts";
 
 export type MembershipRole =
   | "owner_admin"
@@ -33,7 +28,6 @@ export interface ActorContext {
   };
   teamProfile?: {
     membershipId: string;
-    businessRole: TeamBusinessRole;
     memberGroupId: string | null;
     teamAccount: string;
   };
@@ -69,7 +63,6 @@ interface MembershipRow {
 
 interface TeamProfileRow {
   membership_id: string;
-  business_role: string;
   member_group_id: string | null;
   team_account: string;
 }
@@ -204,16 +197,16 @@ export async function resolveActorContext(
     workspaceId: scope.workspaceId,
     role: membership.role,
     capabilities: simpleTeamMember
-      ? [
-          capabilities.workspaceRead,
-          capabilities.projectView,
-          capabilities.projectEdit,
-          capabilities.generationStart,
-          capabilities.exportCreate,
-        ]
-      : teamProfile
-        ? getTeamRoleCapabilities(teamProfile.businessRole)
-        : roleCapabilities[membership.role],
+      ? input.projectId
+        ? [
+            capabilities.workspaceRead,
+            capabilities.projectView,
+            capabilities.projectEdit,
+            capabilities.generationStart,
+            capabilities.exportCreate,
+          ]
+        : []
+      : roleCapabilities[membership.role],
     teamMember: simpleTeamMember,
     teamProfile,
   };
@@ -441,10 +434,10 @@ async function resolveTeamProfile(
     throw new AuthorizationError("membership_missing");
   }
 
-  const profile = await queryOne<TeamProfileRow>(
+    const profile = await queryOne<TeamProfileRow>(
     db,
     `
-      SELECT membership_id, business_role, member_group_id, team_account
+      SELECT membership_id, member_group_id, team_account
       FROM team_member_profiles
       WHERE organization_id = $1
         AND workspace_id = $2
@@ -453,13 +446,12 @@ async function resolveTeamProfile(
     [input.organizationId, input.workspaceId, input.membershipId],
   );
 
-  if (!profile || !isTeamBusinessRole(profile.business_role)) {
+  if (!profile) {
     throw new AuthorizationError("membership_missing");
   }
 
   return {
     membershipId: profile.membership_id,
-    businessRole: profile.business_role,
     memberGroupId: profile.member_group_id,
     teamAccount: profile.team_account,
   };

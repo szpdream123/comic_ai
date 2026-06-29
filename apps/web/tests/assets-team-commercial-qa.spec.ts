@@ -2271,7 +2271,7 @@ describe("Worker C team management surfaces", () => {
     const html = renderLibraryTeam({ route: "team" });
 
     assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录", "数据看板"]);
-    assert.match(html, /library-team-command-strip/);
+    assert.doesNotMatch(html, /team-ops-hero/);
     assert.match(html, /library-team-command-chip/);
     assert.match(html, /library-team-workspace-grid/);
     assert.match(html, /library-team-policy-panel/);
@@ -2386,6 +2386,25 @@ describe("Worker C team management surfaces", () => {
     assert.doesNotMatch(html, /测试9画布/);
   });
 
+  it("falls back to the overview suffix when the create member draft suffix is blank", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      overview: {
+        teamAccountSuffix: "0gt21l",
+      },
+      createMemberModal: {
+        open: true,
+        draft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          teamAccountSuffix: "",
+        },
+      },
+    });
+
+    assert.match(html, /@0gt21l/);
+  });
+
   it("renders the edit member modal from the team page context", () => {
     const html = renderLibraryTeam({
       route: "team",
@@ -2406,6 +2425,7 @@ describe("Worker C team management surfaces", () => {
     assertHasAction(html, "change-edit-member-note");
     assertHasAction(html, "toggle-member-status");
     assertHasAction(html, "submit-edit-member");
+    assertIncludesText(html, "停用成员");
     assertIncludesText(html, "13800138002");
     assertIncludesText(html, "readonly-review");
     assertIncludesText(html, "已停用");

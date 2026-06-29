@@ -16794,7 +16794,11 @@ export function createPhoneAuthDevServer(
         const teamMemberMatch = pathname.match(/^\/api\/creator\/team\/members\/([^/]+)$/);
         if (request.method === "PATCH" && teamMemberMatch) {
           const body = (await readJsonBody(request)) as {
+            displayName?: string | null;
             memberName?: string | null;
+            businessRole?: string | null;
+            projectIds?: string[] | null;
+            newPassword?: string | null;
             status?: "active" | "disabled" | "deleted" | null;
             creditAdjustmentType?: "increase" | "deduct" | null;
             creditAmount?: number | null;

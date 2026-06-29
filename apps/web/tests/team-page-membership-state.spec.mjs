@@ -22,6 +22,7 @@ test("entitled solo professional account renders team setup instead of an active
 
   assert.match(html, /创建子账户/);
   assert.match(html, /已获得团队协作资格/);
+  assert.doesNotMatch(html, /team-ops-hero/);
   assert.doesNotMatch(html, /data-action="open-team-dashboard"/);
   assert.doesNotMatch(html, /专业版已开通/);
 });
@@ -52,8 +53,8 @@ test("professional account with members renders the active team dashboard entry"
   });
 
   assert.match(html, /data-action="open-team-dashboard"/);
-  assert.match(html, /专业版已开通/);
   assert.match(html, /创建子账户/);
+  assert.doesNotMatch(html, /team-ops-hero/);
   assert.doesNotMatch(html, /团队成员管理已开通/);
 });
 
@@ -85,6 +86,38 @@ test("team member list paginates at 10 rows per page", () => {
   assert.match(html, /1 \/ 2/);
   assert.match(html, /成员 10/);
   assert.doesNotMatch(html, /member11@team/);
+});
+
+test("team member list renders edit disable and delete actions", () => {
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: { teamMemberManagement: true },
+      team: { activated: true, memberCount: 1 },
+      seats: { used: 1, limit: 50, remaining: 49 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members: [
+      {
+        id: "member-1",
+        memberAccount: "123",
+        memberLoginAccount: "123@team",
+        memberName: "成员一号",
+        creditBalance: 22,
+        status: "enabled",
+      },
+    ],
+  });
+
+  assert.match(html, /data-action="open-edit-member"/);
+  assert.match(html, /data-action="toggle-team-member-status"/);
+  assert.match(html, /data-action="delete-team-member"/);
+  assert.match(html, /启用/);
+  assert.match(html, /删除/);
 });
 
 test("team member list renders the selected page", () => {
@@ -241,6 +274,6 @@ test("experience membership without team entitlement opens the existing professi
   assert.match(html, /团队资产库为专业版会员权益/);
   assert.match(html, /data-action="open-pricing"/);
   assert.match(html, /开通专业版/);
-  assert.doesNotMatch(html, /data-action="open-team-member-create"/);
+  assert.match(html, /data-action="show-library-placeholder"/);
   assert.doesNotMatch(html, /专业版已开通/);
 });

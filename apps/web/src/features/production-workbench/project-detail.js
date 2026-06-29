@@ -5999,6 +5999,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
+        memberConfirmModal: ui.teamMemberConfirmModal ?? null,
         createMemberModal: ui.isTeamMemberCreateOpen
           ? {
               open: true,

@@ -534,7 +534,7 @@ test("team module renders from team overview instead of project member data", ()
     },
   });
 
-  assert.match(html, /团队成员管理已开通/);
+  assert.doesNotMatch(html, /团队成员管理已开通/);
   assert.match(html, /data-action="open-team-member-create"/);
   assert.doesNotMatch(html, /开通专业版/);
   assert.doesNotMatch(html, /13900000000/);
@@ -569,7 +569,7 @@ test("team module unlocks from active professional membership when team overview
     },
   });
 
-  assert.match(html, /团队成员管理已开通/);
+  assert.doesNotMatch(html, /团队成员管理已开通/);
   assert.match(html, /data-action="open-team-member-create"/);
   assert.doesNotMatch(html, /去开通/);
   assert.doesNotMatch(html, /当前账号没有创建成员权限/);

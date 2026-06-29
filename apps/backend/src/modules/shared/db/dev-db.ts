@@ -373,6 +373,17 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (
+    !(await constraintAllowsValue(
+      db,
+      "memberships",
+      "memberships_role_check",
+      "sub_account",
+    ))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0057_memberships_sub_account_role.sql");
+  }
+
+  if (
     !(await columnExists(db, "organizations", "credit_frozen_cached")) ||
     !(await columnExists(db, "credit_lots", "status")) ||
     !(await constraintAllowsValue(db, "credit_ledger_entries", "credit_ledger_entries_entry_type_check", "freeze")) ||

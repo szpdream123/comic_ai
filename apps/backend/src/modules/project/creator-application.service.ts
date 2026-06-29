@@ -13,6 +13,7 @@ import {
   getTeamOverview as getTeamOverviewRecord,
   listTeamMembers as listTeamMemberRecords,
   TeamServiceError,
+  updateTeamMember as updateTeamMemberRecord,
 } from "../organization/team.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -592,6 +593,112 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             body: { members: [] },
           };
         }
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async updateTeamMember(input: {
+      user: AuthenticatedCreatorUser;
+      memberId: string;
+      body: {
+        displayName?: string | null;
+        businessRole?: TeamBusinessRole | string | null;
+        projectIds?: string[] | null;
+        newPassword?: string | null;
+        status?: "active" | "disabled" | null;
+        creditAdjustmentType?: "increase" | "deduct" | null;
+        creditAmount?: number | null;
+        remark?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const member = await updateTeamMemberRecord(deps.db, {
+          actor,
+          memberId: input.memberId,
+          displayName: input.body.displayName ?? null,
+          businessRole: (input.body.businessRole ?? null) as TeamBusinessRole | null,
+          projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          newPassword: input.body.newPassword ?? null,
+          status: input.body.status ?? null,
+          creditAdjustmentType: input.body.creditAdjustmentType ?? null,
+          creditAmount: input.body.creditAmount ?? null,
+          remark: input.body.remark ?? null,
+          now: input.now,
+        });
+
+        if (!member) {
+          return {
+            status: 404,
+            body: {
+              error: "member_not_found",
+            },
+          };
+        }
+
+        return {
+          status: 200,
+          body: { member },
+        };
+      } catch (error) {
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async updateTeamMember(input: {
+      user: AuthenticatedCreatorUser;
+      memberId: string;
+      body: {
+        displayName?: string | null;
+        businessRole?: TeamBusinessRole | string | null;
+        projectIds?: string[] | null;
+        newPassword?: string | null;
+        status?: "active" | "disabled" | null;
+        creditAdjustmentType?: "increase" | "deduct" | null;
+        creditAmount?: number | null;
+        remark?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const member = await updateTeamMemberRecord(deps.db, {
+          actor,
+          memberId: input.memberId,
+          displayName: input.body.displayName ?? null,
+          businessRole: (input.body.businessRole ?? null) as TeamBusinessRole | null,
+          projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          newPassword: input.body.newPassword ?? null,
+          status: input.body.status ?? null,
+          creditAdjustmentType: input.body.creditAdjustmentType ?? null,
+          creditAmount: input.body.creditAmount ?? null,
+          remark: input.body.remark ?? null,
+          now: input.now,
+        });
+
+        if (!member) {
+          return {
+            status: 404,
+            body: {
+              error: "member_not_found",
+            },
+          };
+        }
+
+        return {
+          status: 200,
+          body: { member },
+        };
+      } catch (error) {
         return teamServiceErrorResponse(error);
       }
     },

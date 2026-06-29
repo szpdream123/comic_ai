@@ -345,18 +345,6 @@ CREATE TABLE team_member_profiles (
   membership_id uuid NOT NULL REFERENCES memberships(id),
   team_account text NOT NULL,
   display_name text NOT NULL,
-  business_role text NOT NULL CHECK (
-    business_role IN (
-      'admin',
-      'group_admin',
-      'director_plus',
-      'animator_plus',
-      'director',
-      'animator',
-      'screenwriter',
-      'editor'
-    )
-  ),
   member_group_id uuid NULL REFERENCES team_member_groups(id),
   credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
   credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
@@ -377,7 +365,7 @@ CREATE TABLE team_member_profiles (
 );
 
 CREATE INDEX team_member_profiles_scope_idx
-  ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+  ON team_member_profiles (organization_id, workspace_id, member_group_id);
 
 CREATE TABLE team_project_assignments (
   id uuid PRIMARY KEY,

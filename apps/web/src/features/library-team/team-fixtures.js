@@ -13,6 +13,7 @@ export const teamFixture = {
 export const memberFilters = ["状态", "角色", "成员名称"];
 
 export const memberTableColumns = [
+  "",
   "成员账号",
   "完整登录账号",
   "成员名称",
