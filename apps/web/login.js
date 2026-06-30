@@ -239,6 +239,7 @@ const statusMessage = document.querySelector("#status-message");
 const authPanel = document.querySelector(".auth-panel");
 const phoneLoginTab = document.querySelector("#phone-login-tab");
 const passwordLoginTab = document.querySelector("#password-login-tab");
+const teamLoginTab = document.querySelector("#team-login-tab");
 const phoneLoginPanel = document.querySelector("#phone-login-panel");
 const passwordLoginPanel = document.querySelector("#password-login-panel");
 const passwordLoginForm = document.querySelector("#password-login-form");
@@ -246,7 +247,6 @@ const phoneRememberInput = document.querySelector("#phone-remember-input");
 const accountInput = document.querySelector("#account-input");
 const passwordInput = document.querySelector("#password-input");
 const passwordRememberInput = document.querySelector("#password-remember-input");
-const accountTypeInputs = document.querySelectorAll('input[name="accountType"]');
 const passwordVisibilityToggle = document.querySelector("#password-visibility-toggle");
 const passwordLoginButton = document.querySelector("#password-login-button");
 const agreementsSection = document.querySelector(".agreements-section");
@@ -444,7 +444,9 @@ function closeAgreementModal() {
 }
 
 function setAuthMode(mode) {
+  const isPhoneMode = mode === "phone";
   const isPasswordMode = mode === "password";
+  const isTeamMode = mode === "team";
 
   document.body.dataset.authMode = mode;
 
@@ -453,22 +455,31 @@ function setAuthMode(mode) {
   }
 
   if (phoneLoginTab) {
-    phoneLoginTab.setAttribute("aria-selected", String(!isPasswordMode));
+    phoneLoginTab.setAttribute("aria-selected", String(isPhoneMode));
   }
 
   if (passwordLoginTab) {
     passwordLoginTab.setAttribute("aria-selected", String(isPasswordMode));
   }
 
+  if (teamLoginTab) {
+    teamLoginTab.setAttribute("aria-selected", String(isTeamMode));
+  }
+
   if (phoneLoginPanel) {
-    phoneLoginPanel.hidden = isPasswordMode;
+    phoneLoginPanel.hidden = !isPhoneMode;
   }
 
   if (passwordLoginPanel) {
-    passwordLoginPanel.hidden = !isPasswordMode;
+    passwordLoginPanel.hidden = isPhoneMode;
+    passwordLoginPanel.setAttribute(
+      "aria-labelledby",
+      isTeamMode ? "team-login-tab" : "password-login-tab",
+    );
   }
 
-  if (isPasswordMode) {
+  if (!isPhoneMode) {
+    updatePasswordAccountHint();
     setStatus("");
   }
 }
@@ -556,8 +567,7 @@ async function readJsonResponse(response) {
 }
 
 function selectedPasswordAccountType() {
-  const selected = [...accountTypeInputs].find((input) => input.checked);
-  return selected?.value === "team_member" ? "team_member" : "user";
+  return document.body.dataset.authMode === "team" ? "team_member" : "user";
 }
 
 function updatePasswordAccountHint() {
@@ -752,11 +762,8 @@ passwordLoginTab?.addEventListener("click", () => {
   setAuthMode("password");
 });
 
-accountTypeInputs.forEach((input) => {
-  input.addEventListener("change", () => {
-    updatePasswordAccountHint();
-    setStatus("");
-  });
+teamLoginTab?.addEventListener("click", () => {
+  setAuthMode("team");
 });
 
 agreementsCheckbox?.addEventListener("change", () => {

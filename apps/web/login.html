@@ -81,6 +81,17 @@
             >
               密码登录
             </button>
+            <button
+              id="team-login-tab"
+              class="auth-mode-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="password-login-panel"
+              data-auth-target="team"
+            >
+              团队登录
+            </button>
           </div>
 
           <div id="phone-login-panel" class="auth-mode-panel" role="tabpanel" aria-labelledby="phone-login-tab">
@@ -144,17 +155,6 @@
             hidden
           >
             <form id="password-login-form" class="login-form password-form">
-              <div class="account-type-switch" role="radiogroup" aria-label="账号类型">
-                <label class="account-type-option">
-                  <input type="radio" name="accountType" value="user" checked />
-                  <span>主账号</span>
-                </label>
-                <label class="account-type-option">
-                  <input type="radio" name="accountType" value="team_member" />
-                  <span>子账户</span>
-                </label>
-              </div>
-
               <label class="field">
                 <span class="sr-only">账号</span>
                 <input

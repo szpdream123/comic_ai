@@ -12,7 +12,7 @@ const professionalPlanId = "95000000-0000-4000-8000-000000030001";
 const experiencePlanId = "95000000-0000-4000-8000-000000030002";
 
 describe("payment succeeded membership consumer", { concurrency: false }, () => {
-  it("activates professional membership, entitlements, team limits, and emits a period event", async () => {
+  it("activates professional membership, entitlements, user team seats, and emits a period event", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -54,9 +54,9 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         `,
         [organizationId],
       );
-      const limits = await db.query<{ seat_limit: number }>(
-        "SELECT seat_limit FROM team_plan_limits WHERE organization_id = $1",
-        [organizationId],
+      const userSeats = await db.query<{ team_seat_limit: number }>(
+        "SELECT team_seat_limit FROM users WHERE id = $1",
+        [userId],
       );
       const outbox = await db.query<{ event_type: string; payload_json: Record<string, unknown> }>(
         "SELECT event_type, payload_json FROM outbox_events WHERE event_type = 'membership.period.started'",
@@ -75,11 +75,94 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         { entitlement_key: "team_asset_library", status: "active" },
         { entitlement_key: "team_member_management", status: "active" },
       ]);
-      assert.equal(Number(limits.rows[0]?.seat_limit), 50);
+      assert.equal(Number(userSeats.rows[0]?.team_seat_limit), 50);
       assert.equal(outbox.rows.length, 1);
       assert.equal(outbox.rows[0]?.event_type, "membership.period.started");
       assert.equal(outbox.rows[0]?.payload_json.gift_credits, 51000);
       assert.equal(outbox.rows[0]?.payload_json.order_id, fixture.orderId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("overwrites user team seats with the latest paid package seat count", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const firstFixture = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030051",
+        paymentIntentId: "97000000-0000-4000-8000-000000030051",
+        providerEventId: "98000000-0000-4000-8000-000000030051",
+        outboxEventId: "99000000-0000-4000-8000-000000030051",
+        plan: { ...professionalPlan(), seatLimit: 12 },
+        amountMinor: 500000,
+        paidAt: new Date("2026-06-08T08:00:00.000Z"),
+      });
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: firstFixture.event,
+        now: new Date("2026-06-08T08:05:00.000Z"),
+      });
+      await db.query(
+        "UPDATE membership_plans SET seat_limit = $2 WHERE id = $1",
+        [professionalPlanId, 24],
+      );
+
+      const secondFixture = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030052",
+        paymentIntentId: "97000000-0000-4000-8000-000000030052",
+        providerEventId: "98000000-0000-4000-8000-000000030052",
+        outboxEventId: "99000000-0000-4000-8000-000000030052",
+        plan: { ...professionalPlan(), seatLimit: 24 },
+        amountMinor: 500000,
+        paidAt: new Date("2026-06-09T08:00:00.000Z"),
+      });
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: secondFixture.event,
+        now: new Date("2026-06-09T08:05:00.000Z"),
+      });
+
+      const userSeats = await db.query<{ team_seat_limit: number }>(
+        "SELECT team_seat_limit FROM users WHERE id = $1",
+        [userId],
+      );
+
+      assert.equal(Number(userSeats.rows[0]?.team_seat_limit), 24);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("uses the current package seat count over stale order snapshots", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const fixture = await seedPaidMembershipOrderWithOutbox(db, {
+        orderId: "96000000-0000-4000-8000-000000030053",
+        paymentIntentId: "97000000-0000-4000-8000-000000030053",
+        providerEventId: "98000000-0000-4000-8000-000000030053",
+        outboxEventId: "99000000-0000-4000-8000-000000030053",
+        plan: { ...professionalPlan(), seatLimit: 4 },
+        snapshotSeatLimit: 50,
+        amountMinor: 500000,
+        paidAt: new Date("2026-06-10T08:00:00.000Z"),
+      });
+
+      await consumePaymentSucceededMembershipActivation(db, {
+        event: fixture.event,
+        now: new Date("2026-06-10T08:05:00.000Z"),
+      });
+
+      const userSeats = await db.query<{ team_seat_limit: number }>(
+        "SELECT team_seat_limit FROM users WHERE id = $1",
+        [userId],
+      );
+      const period = await db.query<{ seat_limit: string }>(
+        "SELECT plan_snapshot_json ->> 'seatLimit' AS seat_limit FROM membership_periods WHERE order_id = $1",
+        [fixture.orderId],
+      );
+
+      assert.equal(Number(userSeats.rows[0]?.team_seat_limit), 4);
+      assert.equal(Number(period.rows[0]?.seat_limit), 4);
     } finally {
       await db.close();
     }
@@ -500,6 +583,7 @@ async function seedPaidMembershipOrderWithOutbox(
     providerEventId: string;
     outboxEventId: string;
     plan: ReturnType<typeof professionalPlan>;
+    snapshotSeatLimit?: number;
     amountMinor: number;
     paidAt: Date;
   },
@@ -518,7 +602,7 @@ async function seedPaidMembershipOrderWithOutbox(
     amountMinor: input.plan.amountMinor,
     currency: "CNY",
     giftCredits: input.plan.giftCredits,
-    seatLimit: input.plan.seatLimit,
+    seatLimit: input.snapshotSeatLimit ?? input.plan.seatLimit,
     entitlements: input.plan.entitlements,
     priorityRules: input.plan.priorityRules,
     displayMetadata: input.plan.displayMetadata,

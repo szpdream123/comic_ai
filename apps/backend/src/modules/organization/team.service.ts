@@ -137,18 +137,11 @@ export async function createTeamMember(
   const memberLoginAccount = buildTeamMemberLoginAccount(memberAccount, memberAccountSuffix);
 
   await runInTransaction(db, async () => {
-    await lockOrganizationForTeamMutation(db, input.actor.organizationId);
     const ownerWallet = await lockOwnerWalletForTeamMutation(db, input.actor.actorId);
-    await assertActiveEntitlement(db, {
-      organizationId: input.actor.organizationId,
-      entitlementKey: "team_member_management",
-      now: input.now,
-    });
-
     const planLimits = await resolvePlanLimits(db, {
-      organizationId: input.actor.organizationId,
-      now: input.now,
+      userId: input.actor.actorId,
     });
+    assertTeamSeatEnabled(planLimits.seatLimit);
     const usedSeats = await countActiveSubaccounts(db, input.actor);
     if (usedSeats >= planLimits.seatLimit) {
       throw new TeamServiceError("team_seat_limit_reached");
@@ -305,8 +298,7 @@ export async function getTeamOverview(
   assertCanViewTeamOverview(input.actor);
 
   const planLimits = await resolvePlanLimits(db, {
-    organizationId: input.actor.organizationId,
-    now: input.now,
+    userId: input.actor.actorId,
   });
   const usedSeats = await countActiveSubaccounts(db, input.actor);
   const credits = await queryOne<{
@@ -316,29 +308,17 @@ export async function getTeamOverview(
     db,
     `
       SELECT credit_balance_cached, credit_reserved_cached
-      FROM organizations
+      FROM users
       WHERE id = $1
     `,
-    [input.actor.organizationId],
+    [input.actor.actorId],
   );
 
   return {
     entitlements: {
-      teamMemberManagement: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_member_management",
-        now: input.now,
-      }),
-      teamAssetLibrary: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_asset_library",
-        now: input.now,
-      }),
-      teamDashboard: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_dashboard",
-        now: input.now,
-      }),
+      teamMemberManagement: planLimits.seatLimit > 0,
+      teamAssetLibrary: planLimits.seatLimit > 0,
+      teamDashboard: false,
     },
     seats: {
       used: usedSeats,
@@ -482,13 +462,11 @@ export async function updateTeamMember(
 
   let updated: TeamMemberRow | null = null;
   await runInTransaction(db, async () => {
-    await lockOrganizationForTeamMutation(db, input.actor.organizationId);
     const ownerWallet = await lockOwnerWalletForTeamMutation(db, input.actor.actorId);
-    await assertActiveEntitlement(db, {
-      organizationId: input.actor.organizationId,
-      entitlementKey: "team_member_management",
-      now: input.now,
+    const planLimits = await resolvePlanLimits(db, {
+      userId: input.actor.actorId,
     });
+    assertTeamSeatEnabled(planLimits.seatLimit);
     if (creditAdjustmentType === "increase" && Number(ownerWallet?.credit_balance_cached ?? 0) < creditAmount) {
       throw new TeamServiceError("team_credit_insufficient");
     }
@@ -784,117 +762,32 @@ function resolveTeamOverviewPermissions(actor: ActorContext) {
   };
 }
 
-async function assertActiveEntitlement(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    entitlementKey: string;
-    now: Date;
-  },
-) {
-  if (!(await hasActiveEntitlement(db, input))) {
+function assertTeamSeatEnabled(seatLimit: number) {
+  if (seatLimit <= 0) {
     throw new TeamServiceError("team_member_management_required");
   }
 }
 
-async function hasActiveEntitlement(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    entitlementKey: string;
-    now: Date;
-  },
-): Promise<boolean> {
-  const entitlement = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id::text AS id
-      FROM organization_entitlements
-      WHERE organization_id = $1
-        AND entitlement_key = $2
-        AND status = 'active'
-        AND (expires_at IS NULL OR expires_at > $3)
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND (period.plan_snapshot_json -> 'entitlements') ? $2
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
-      JOIN membership_plans plan
-        ON plan.id = period.plan_id
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND plan.tier = 'professional'
-        AND plan.status = 'active'
-        AND (plan.valid_from IS NULL OR plan.valid_from <= $3)
-        AND (plan.valid_until IS NULL OR plan.valid_until > $3)
-        AND plan.entitlements_json ? $2
-      LIMIT 1
-    `,
-    [input.organizationId, input.entitlementKey, input.now],
-  );
-
-  return Boolean(entitlement);
-}
-
 async function resolvePlanLimits(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string },
 ) {
-  const activeProfessionalPlan = await queryOne<{
-    seat_limit: number;
-  }>(
+  const userLimits = await queryOne<{ team_seat_limit: number }>(
     db,
     `
-      SELECT plan.seat_limit
-      FROM membership_periods period
-      JOIN membership_plans plan
-        ON plan.id = period.plan_id
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $2
-        AND plan.tier = 'professional'
-        AND plan.status = 'active'
-        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
-        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
-        AND plan.entitlements_json ? 'team_member_management'
-      ORDER BY period.period_end_at DESC, period.created_at DESC
+      SELECT team_seat_limit
+      FROM users
+      WHERE id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId],
   );
-  const limits = await queryOne<{
-    seat_limit: number;
-    single_account_concurrency_limit: number;
-  }>(
-    db,
-    `
-      SELECT seat_limit, single_account_concurrency_limit
-      FROM team_plan_limits
-      WHERE organization_id = $1
-      LIMIT 1
-    `,
-    [input.organizationId],
-  );
-  const defaultSeatLimit = await resolveDefaultSubaccountLimit(db);
-  const seatLimit =
-    activeProfessionalPlan
-      ? Number(activeProfessionalPlan.seat_limit ?? 0)
-      : limits
-        ? Number(limits.seat_limit ?? 0)
-        : defaultSeatLimit;
+  const defaultSeatLimit = userLimits ? 0 : await resolveDefaultSubaccountLimit(db);
+  const seatLimit = normalizeSubaccountLimit(userLimits?.team_seat_limit ?? defaultSeatLimit);
 
   return {
     seatLimit,
-    singleAccountConcurrencyLimit: limits?.single_account_concurrency_limit ?? 1,
+    singleAccountConcurrencyLimit: 1,
   };
 }
 
@@ -965,15 +858,11 @@ async function assertProjectScope(
       `
         SELECT id
         FROM projects
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND id = $3
-          AND created_by_user_id = $4
+        WHERE id = $1
+          AND created_by_user_id = $2
         LIMIT 1
       `,
       [
-        input.actor.organizationId,
-        input.actor.workspaceId,
         projectId,
         input.actor.actorId,
       ],
@@ -997,21 +886,6 @@ async function runInTransaction(
     await db.query("ROLLBACK");
     throw error;
   }
-}
-
-async function lockOrganizationForTeamMutation(
-  db: SqlDatabase,
-  organizationId: string,
-) {
-  await db.query(
-    `
-      SELECT id
-      FROM organizations
-      WHERE id = $1
-      FOR UPDATE
-    `,
-    [organizationId],
-  );
 }
 
 async function lockOwnerWalletForTeamMutation(db: SqlDatabase, userId: string) {
@@ -1167,10 +1041,10 @@ async function resolveTeamResourceAssignments(
       `
         SELECT id::text AS id, project_id::text AS project_id
         FROM scripts
-        WHERE organization_id = $1
-          AND id = ANY($2::uuid[])
+        WHERE id = ANY($1::uuid[])
+          AND created_by_user_id = $2
       `,
-      [input.actor.organizationId, input.scriptIds],
+      [input.scriptIds, input.actor.actorId],
     );
     if (scripts.rows.length !== input.scriptIds.length) {
       throw new TeamServiceError("team_member_input_invalid");
@@ -1186,12 +1060,11 @@ async function resolveTeamResourceAssignments(
       `
         SELECT id::text AS id, project_id::text AS project_id
         FROM creator_canvas_projects
-        WHERE organization_id = $1
-          AND id = ANY($2::uuid[])
-          AND created_by_user_id = $3
+        WHERE id = ANY($1::uuid[])
+          AND created_by_user_id = $2
           AND deleted_at IS NULL
       `,
-      [input.actor.organizationId, input.canvasIds, input.actor.actorId],
+      [input.canvasIds, input.actor.actorId],
     );
     if (canvases.rows.length !== input.canvasIds.length) {
       throw new TeamServiceError("team_member_input_invalid");

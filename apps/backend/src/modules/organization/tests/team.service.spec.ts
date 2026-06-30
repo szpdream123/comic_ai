@@ -806,10 +806,48 @@ describe("simple team member service", { concurrency: false }, () => {
     }
   });
 
+  it("uses user team seats over active organization plan defaults in the overview", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { seatLimit: 36 });
+      await seedTeamEntitlement(db);
+      await seedActiveProfessionalPeriod(db, { planSeatLimit: 0 });
+
+      const overview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(overview.seats.limit, 36);
+      assert.equal(overview.seats.remaining, 36);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not use organization package seats for user team limits", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db, { seatLimit: 0 });
+      await seedTeamEntitlement(db);
+      await seedActiveProfessionalPeriod(db, { planSeatLimit: 36 });
+
+      const overview = await getTeamOverview(db, {
+        actor: ownerActor(),
+        now,
+      });
+
+      assert.equal(overview.seats.limit, 0);
+      assert.equal(overview.seats.remaining, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects creating members without the paid entitlement", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedTeamTenant(db);
+      await seedTeamTenant(db, { seatLimit: 0 });
 
       await assert.rejects(
         createTeamMember(db, {
@@ -858,10 +896,15 @@ async function seedTeamTenant(
 
   await db.query(
     `
-      INSERT INTO users (id, phone_e164, status, credit_balance_cached)
-      VALUES ($1, $2, 'active', $3)
+      INSERT INTO users (id, phone_e164, status, credit_balance_cached, team_seat_limit)
+      VALUES ($1, $2, 'active', $3, $4)
     `,
-    [seededUserId, seededUserId === ownerUserId ? "13800138000" : "13800138001", ownerCredits],
+    [
+      seededUserId,
+      seededUserId === ownerUserId ? "13800138000" : "13800138001",
+      ownerCredits,
+      input.seatLimit ?? 50,
+    ],
   );
   await db.query(
     `
@@ -937,6 +980,136 @@ async function seedTeamEntitlement(
     [
       input.entitlementId ?? "34000000-0000-4000-8000-000000000001",
       input.organizationId ?? organizationId,
+    ],
+  );
+}
+
+async function seedActiveProfessionalPeriod(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: { planSeatLimit: number },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status
+      )
+      VALUES (
+        '95000000-0000-4000-8000-000000050001',
+        'professional_monthly_zero_seat',
+        'Professional Monthly',
+        'professional',
+        'month',
+        1,
+        500000,
+        'CNY',
+        51000,
+        $1,
+        '["team_member_management"]'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        'active'
+      )
+    `,
+    [input.planSeatLimit],
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        product_type,
+        membership_plan_id,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      )
+      VALUES (
+        '96000000-0000-4000-8000-000000050001',
+        $1,
+        $2,
+        'TEAM-PLAN-ZERO-SEAT',
+        'membership_plan',
+        '95000000-0000-4000-8000-000000050001',
+        '{}'::jsonb,
+        '{}'::jsonb,
+        0,
+        500000,
+        'CNY',
+        'paid',
+        $3,
+        $4,
+        '97000000-0000-4000-8000-000000050001'
+      )
+    `,
+    [
+      organizationId,
+      ownerUserId,
+      new Date("2026-06-27T10:30:00.000Z"),
+      new Date("2026-06-27T10:00:00.000Z"),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status
+      )
+      VALUES (
+        '98000000-0000-4000-8000-000000050001',
+        $1,
+        '96000000-0000-4000-8000-000000050001',
+        '95000000-0000-4000-8000-000000050001',
+        'professional',
+        $2,
+        $3,
+        51000,
+        $4::jsonb,
+        'active'
+      )
+    `,
+    [
+      organizationId,
+      new Date("2026-06-27T10:00:00.000Z"),
+      new Date("2026-07-27T10:00:00.000Z"),
+      JSON.stringify({
+        id: "95000000-0000-4000-8000-000000050001",
+        code: "professional_monthly_zero_seat",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        giftCredits: 51000,
+        seatLimit: input.planSeatLimit,
+        entitlements: ["team_member_management"],
+      }),
     ],
   );
 }

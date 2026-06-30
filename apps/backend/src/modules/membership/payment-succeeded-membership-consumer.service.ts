@@ -131,7 +131,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
   }
 
   const planSnapshot = professionalCompatibilitySnapshot(
-    assertMembershipPlanSnapshot(order.product_snapshot_json),
+    await resolveEffectivePlanSnapshot(db, order),
   );
   if (planSnapshot.tier !== "professional") {
     return { repaired: false, orderNo: input.orderNo, organizationId: order.organization_id };
@@ -228,7 +228,7 @@ export async function enqueueMissingMembershipActivationForPaidOrder(
     return { kind: "not_found", orderNo: input.orderNo };
   }
 
-  const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+  const planSnapshot = await resolveEffectivePlanSnapshot(db, order);
   if (await membershipActivationSideEffectsComplete(db, { order, planSnapshot, now: input.now })) {
     return { kind: "not_needed", orderNo: input.orderNo };
   }
@@ -282,7 +282,7 @@ export async function consumePaymentSucceededMembershipActivation(
           throw new Error("membership_order_missing_plan");
         }
 
-        const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+        const planSnapshot = await resolveEffectivePlanSnapshot(db, order);
         const paidAt = assertPaidAt(order.paid_at);
         const activeProfessionalPeriod = await findActiveProfessionalPeriod(db, {
           organizationId: order.organization_id,
@@ -403,6 +403,36 @@ async function findPaidOrder(
   );
 }
 
+async function resolveEffectivePlanSnapshot(
+  db: SqlDatabase,
+  order: PaidOrderRow,
+): Promise<NormalizedMembershipPlanSnapshot> {
+  const snapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+  if (!order.membership_plan_id) {
+    return snapshot;
+  }
+
+  const livePlan = await queryOne<{ seat_limit: number | string }>(
+    db,
+    `
+      SELECT seat_limit
+      FROM membership_plans
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [order.membership_plan_id],
+  );
+  const liveSeatLimit = Number(livePlan?.seat_limit);
+  if (!Number.isInteger(liveSeatLimit) || liveSeatLimit < 0) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    seatLimit: liveSeatLimit,
+  };
+}
+
 async function membershipActivationSideEffectsComplete(
   db: SqlDatabase,
   input: { order: PaidOrderRow; planSnapshot: NormalizedMembershipPlanSnapshot; now: Date },
@@ -466,12 +496,12 @@ async function membershipActivationSideEffectsComplete(
         return false;
       }
     }
-    const teamLimit = await queryOne<{ seat_limit: number | string }>(
+    const teamLimit = await queryOne<{ team_seat_limit: number | string }>(
       db,
-      "SELECT seat_limit FROM team_plan_limits WHERE organization_id = $1 LIMIT 1",
-      [input.order.organization_id],
+      "SELECT team_seat_limit FROM users WHERE id = $1 LIMIT 1",
+      [input.order.created_by_user_id],
     );
-    if (Number(teamLimit?.seat_limit ?? -1) !== input.planSnapshot.seatLimit) {
+    if (Number(teamLimit?.team_seat_limit ?? -1) !== input.planSnapshot.seatLimit) {
       return false;
     }
   }
@@ -531,8 +561,8 @@ async function repairExistingProfessionalActivation(
     periodEndAt: input.periodEndAt,
     now: input.now,
   });
-  await upsertTeamPlanLimit(db, {
-    organizationId: input.order.organization_id,
+  await updateUserTeamSeatLimit(db, {
+    userId: input.order.created_by_user_id,
     seatLimit: input.planSnapshot.seatLimit,
     now: input.now,
   });
@@ -660,8 +690,8 @@ async function applyMembershipPeriodEffects(
       periodEndAt: new Date(input.activeProfessionalPeriod.period_end_at),
       now: input.now,
     });
-    await upsertTeamPlanLimit(db, {
-      organizationId: input.order.organization_id,
+    await updateUserTeamSeatLimit(db, {
+      userId: input.order.created_by_user_id,
       seatLimit: professionalPlanSnapshot.seatLimit,
       now: input.now,
     });
@@ -690,8 +720,8 @@ async function applyMembershipPeriodEffects(
       periodEndAt,
       now: input.now,
     });
-    await upsertTeamPlanLimit(db, {
-      organizationId: input.order.organization_id,
+    await updateUserTeamSeatLimit(db, {
+      userId: input.order.created_by_user_id,
       seatLimit: input.planSnapshot.seatLimit,
       now: input.now,
     });
@@ -840,6 +870,11 @@ async function upsertSubscription(
       input.now,
     ],
   );
+  await updateUserTeamSeatLimit(db, {
+    userId: input.order.created_by_user_id,
+    seatLimit: input.planSnapshot.seatLimit,
+    now: input.now,
+  });
 }
 
 async function expirePaymentProfessionalEntitlementsOutsidePlan(
@@ -921,27 +956,18 @@ async function upsertProfessionalEntitlements(
   }
 }
 
-async function upsertTeamPlanLimit(
+async function updateUserTeamSeatLimit(
   db: SqlDatabase,
-  input: { organizationId: string; seatLimit: number; now: Date },
+  input: { userId: string; seatLimit: number; now: Date },
 ) {
   await db.query(
     `
-      INSERT INTO team_plan_limits (
-        id,
-        organization_id,
-        seat_limit,
-        single_account_concurrency_limit,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, 1, $4, $4)
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        seat_limit = EXCLUDED.seat_limit,
-        updated_at = EXCLUDED.updated_at
+      UPDATE users
+      SET team_seat_limit = $2,
+          updated_at = $3
+      WHERE id = $1
     `,
-    [randomUUID(), input.organizationId, input.seatLimit, input.now],
+    [input.userId, input.seatLimit, input.now],
   );
 }
 

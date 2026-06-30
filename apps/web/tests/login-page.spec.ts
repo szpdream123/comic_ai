@@ -12,7 +12,7 @@ describe("login page shell", () => {
     assert.match(html, /请输入11位手机号（不带\+86）/);
   });
 
-  it("lets people switch between phone code login and password login", async () => {
+  it("lets people switch between phone code, password, and team login", async () => {
     const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
     const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
     const css = await readFile(new URL("../login.css", import.meta.url), "utf8");
@@ -23,12 +23,13 @@ describe("login page shell", () => {
     assert.doesNotMatch(html, /id="auth-panel-copy"/);
     assert.match(html, /id="phone-login-tab"/);
     assert.match(html, /id="password-login-tab"/);
+    assert.match(html, /id="team-login-tab"/);
+    assert.match(html, /团队登录/);
     assert.match(html, /id="phone-login-panel"/);
     assert.match(html, /id="password-login-panel"[^>]*hidden/);
     assert.match(html, /id="password-login-form"/);
-    assert.match(html, /name="accountType"/);
-    assert.match(html, /value="team_member"/);
-    assert.match(html, /子账户/);
+    assert.doesNotMatch(html, /name="accountType"/);
+    assert.doesNotMatch(html, /class="account-type-switch"/);
     assert.match(html, /id="account-input"/);
     assert.match(html, /id="password-input"/);
     assert.match(html, /id="password-visibility-toggle"/);
@@ -36,10 +37,12 @@ describe("login page shell", () => {
 
     assert.match(js, /#phone-login-tab/);
     assert.match(js, /#password-login-tab/);
+    assert.match(js, /#team-login-tab/);
     assert.doesNotMatch(js, /authModeCopy/);
     assert.match(js, /#password-visibility-toggle/);
     assert.match(js, /function setAuthMode\(mode\)/);
     assert.match(js, /document\.body\.dataset\.authMode = mode/);
+    assert.match(js, /setAuthMode\("team"\)/);
     assert.match(js, /passwordInput\.type = isPasswordVisible \? "text" : "password"/);
     assert.match(js, /passwordLoginForm\?\.addEventListener\("submit"/);
     assert.match(js, /\/api\/auth\/password\/login/);
@@ -64,7 +67,7 @@ describe("login page shell", () => {
     assert.match(css, /border-bottom/);
     assert.match(css, /\.auth-mode-panel\[hidden\]/);
     assert.match(css, /\.password-form/);
-    assert.match(css, /\.account-type-switch/);
+    assert.doesNotMatch(css, /\.account-type-switch/);
   });
 
   it("loads backend-managed agreements, requires consent, and opens rich-text documents in a modal", async () => {

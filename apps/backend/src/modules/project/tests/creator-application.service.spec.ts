@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
+import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
+import type { ActorContext } from "../../organization/actor-context.service.ts";
 import { createTeamMember } from "../../organization/team.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { StorageAdapter } from "../../storage/storage.service.ts";
@@ -1505,7 +1508,7 @@ describe("creator application service", { concurrency: false }, () => {
       });
 
       assert.equal(overview.status, 200);
-      assert.equal((overview.body as any).entitlements.teamMemberManagement, false);
+      assert.equal((overview.body as any).entitlements.teamMemberManagement, true);
       assert.deepEqual((overview.body as any).permissions, {
         canReadMembers: false,
         canCreateMember: false,
@@ -3285,13 +3288,23 @@ describe("creator application service", { concurrency: false }, () => {
   });
 });
 
+function ownerActor(): ActorContext {
+  return {
+    actorId: userId,
+    organizationId,
+    workspaceId,
+    role: "owner_admin",
+    capabilities: Object.values(capabilities),
+  };
+}
+
 async function seedTenant(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
-      INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '13800138000', 'active')
+      INSERT INTO users (id, phone_e164, status, team_seat_limit)
+      VALUES ($1, '13800138000', 'active', 50)
     `,
     [userId],
   );

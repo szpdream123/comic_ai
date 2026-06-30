@@ -8545,6 +8545,7 @@ describe("production workbench project tab", () => {
 
     assert.equal(workbench.ui.isTeamMemberCreateOpen, true);
     assert.equal(workbench.ui.teamMemberCreateNotice, "");
+    assert.equal(workbench.ui.teamMemberDraft.password, "");
     assert.equal(workbench.ui.toast, "当前账号尚未开通团队成员管理权限，请先开通会员后再创建成员。");
   });
 
@@ -9461,6 +9462,70 @@ describe("production workbench project tab", () => {
     assert.equal(createCalls.length, 1);
     assert.equal(createCalls[0].password, "password123");
     assert.equal(workbench.ui.teamMemberCreateNotice, "成员账号已创建，可使用设置的初始密码登录。");
+  });
+
+  it("uses the default team member password when the password field is blank", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        membershipStatus: {
+          status: "professional_active",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          password: "",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].password, "12345678");
   });
 
   it("closes the create member modal and renders the full login account after a successful create", async () => {

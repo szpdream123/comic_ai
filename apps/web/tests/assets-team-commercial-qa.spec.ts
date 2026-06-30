@@ -2253,28 +2253,46 @@ describe("Worker C production workbench integration", () => {
 });
 
 describe("Worker C team management surfaces", () => {
-  it("renders team metrics, filters, member table, and empty member CTA", () => {
+  it("renders team filters, member table, and empty member CTA", () => {
     const html = renderLibraryTeam({ route: "team" });
 
     assert.match(html, /team-page/);
-    assertHasAction(html, "refresh-team");
-    assertHasAction(html, "open-team-dashboard");
-    assertHasAction(html, "open-member-rules");
-    assertHasAction(html, "open-create-member");
+    assertHasAction(html, "open-pricing");
     assertHasAction(html, "search-team-members");
     assertHasAction(html, "set-team-member-role-filter");
     assertHasAction(html, "set-team-member-status-filter");
-    assertHasAction(html, "reset-team-member-filters");
+    assert.doesNotMatch(html, /library-team-policy-panel/);
+    assert.doesNotMatch(html, /library-team-operations-band/);
   });
 
-  it("renders a refined creator-workbench command surface for team operations", () => {
+  it("shows used and total team seats in the member toolbar", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      overview: {
+        entitlements: { teamMemberManagement: true },
+        permissions: { canCreateMember: true },
+        seats: { used: 5, limit: 10 },
+        team: { activated: true, memberCount: 5 },
+      },
+    });
+
+    assert.match(html, /team-seat-summary/);
+    assertIncludesText(html, "席位");
+    assertIncludesText(html, "5 / 10");
+    assertIncludesText(html, "已使用 / 合计");
+  });
+
+  it("does not render removed team summary panels below the member table", () => {
     const html = renderLibraryTeam({ route: "team" });
 
-    assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录", "数据看板"]);
-    assert.doesNotMatch(html, /team-ops-hero/);
-    assert.match(html, /library-team-command-chip/);
-    assert.match(html, /library-team-workspace-grid/);
-    assert.match(html, /library-team-policy-panel/);
+    assertIncludesText(html, "成员管理");
+    assert.doesNotMatch(html, /席位与积分/);
+    assert.doesNotMatch(html, /权限矩阵/);
+    assert.doesNotMatch(html, /数据看板/);
+    assert.doesNotMatch(html, /data-action="open-team-dashboard"/);
+    assert.doesNotMatch(html, /data-action="open-member-rules"/);
+    assert.doesNotMatch(html, /library-team-operations-band/);
+    assert.doesNotMatch(html, /library-team-policy-panel/);
   });
 
   it("does not render backend team errors as visible bottom-page copy", () => {

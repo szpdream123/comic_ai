@@ -3,7 +3,7 @@ import { normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { resolveActorContext, type ActorContext } from "../organization/actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
@@ -990,8 +990,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           })
         : null;
       const projectPage = await listProjectsForWorkspace(deps.db, {
-        organizationId: actor.organizationId,
-        workspaceId: deps.workspaceId,
+        ownerUserId: actor.actorId,
         page,
         pageSize,
         keyword,
@@ -1033,14 +1032,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
+        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const bundle = await loadProjectBundleFromSql(deps.db, {
         projectId: input.projectId,
         scriptId: null,
       });
-      if (!bundle || bundle.project?.workspaceId !== actor.workspaceId) {
+      if (!bundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: bundle.project?.createdByUserId ?? null }))) {
         return { status: 404, body: { error: "project_not_found" } };
       }
 
@@ -1083,16 +1082,24 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
+        workspaceId: deps.workspaceId,
         now: input.now,
       });
+      const projectBundle = await loadProjectBundleFromSql(deps.db, {
+        projectId: input.projectId,
+        scriptId: null,
+      });
+      if (!projectBundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: projectBundle.project?.createdByUserId ?? null }))) {
+        return { status: 404, body: { error: "project_not_found" } };
+      }
       const detail = await buildProjectDetail(deps.db, {
-        organizationId: actor.organizationId,
+        organizationId: projectBundle.project.organizationId,
         projectId: input.projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
         signedUrlExpiresInSeconds,
         now: input.now,
+        projectBundle,
       });
       if (!detail.project) {
         return { status: 404, body: { error: "project_not_found" } };
@@ -3905,7 +3912,7 @@ async function getLimitedTeamOverview(
     now: input.now,
   });
   const [planLimits, usedSeats, credits] = await Promise.all([
-    resolveLimitedTeamPlanLimits(db, actor.organizationId),
+    resolveLimitedTeamPlanLimits(db, { userId: actor.actorId }),
     countLimitedTeamSubaccounts(db, {
       userId: actor.actorId,
     }),
@@ -3916,30 +3923,18 @@ async function getLimitedTeamOverview(
       db,
       `
         SELECT credit_balance_cached, credit_reserved_cached
-        FROM organizations
+        FROM users
         WHERE id = $1
       `,
-      [actor.organizationId],
+      [actor.actorId],
     ),
   ]);
 
   return {
     entitlements: {
-      teamMemberManagement: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_member_management",
-        now: input.now,
-      }),
-      teamAssetLibrary: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_asset_library",
-        now: input.now,
-      }),
-      teamDashboard: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_dashboard",
-        now: input.now,
-      }),
+      teamMemberManagement: planLimits.seatLimit > 0,
+      teamAssetLibrary: planLimits.seatLimit > 0,
+      teamDashboard: false,
     },
     seats: {
       used: usedSeats,
@@ -3971,45 +3966,25 @@ async function getLimitedTeamOverview(
   };
 }
 
-async function hasLimitedTeamEntitlement(
+async function resolveLimitedTeamPlanLimits(
   db: SqlDatabase,
-  input: { organizationId: string; entitlementKey: string; now: Date },
+  input: { userId: string },
 ) {
-  const entitlement = await queryOne<{ id: string }>(
+  const limits = await queryOne<{ team_seat_limit: number }>(
     db,
     `
-      SELECT id
-      FROM organization_entitlements
-      WHERE organization_id = $1
-        AND entitlement_key = $2
-        AND status = 'active'
-        AND (expires_at IS NULL OR expires_at > $3)
+      SELECT team_seat_limit
+      FROM users
+      WHERE id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.entitlementKey, input.now],
+    [input.userId],
   );
-
-  return Boolean(entitlement);
-}
-
-async function resolveLimitedTeamPlanLimits(db: SqlDatabase, organizationId: string) {
-  const limits = await queryOne<{
-    seat_limit: number;
-    single_account_concurrency_limit: number;
-  }>(
-    db,
-    `
-      SELECT seat_limit, single_account_concurrency_limit
-      FROM team_plan_limits
-      WHERE organization_id = $1
-      LIMIT 1
-    `,
-    [organizationId],
-  );
+  const seatLimit = Number(limits?.team_seat_limit ?? 0);
 
   return {
-    seatLimit: Number(limits?.seat_limit ?? 50),
-    singleAccountConcurrencyLimit: Number(limits?.single_account_concurrency_limit ?? 1),
+    seatLimit,
+    singleAccountConcurrencyLimit: 1,
   };
 }
 
@@ -4365,12 +4340,11 @@ async function appendCalibrationAuditEvent(
 
 async function listProjectsForWorkspace(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string; page: number; pageSize: number; keyword: string; visibleProjectIds?: string[] | null },
+  input: { ownerUserId: string; page: number; pageSize: number; keyword: string; visibleProjectIds?: string[] | null },
 ) {
-  const params: unknown[] = [input.organizationId, input.workspaceId];
+  const params: unknown[] = [input.ownerUserId];
   const whereClauses = [
-    "organization_id = $1",
-    "workspace_id = $2",
+    "created_by_user_id = $1",
     `NOT EXISTS (
           SELECT 1
           FROM creator_canvas_projects ccp
@@ -4467,6 +4441,29 @@ async function listProjectsForWorkspace(
     pageSize: input.pageSize,
     total,
   };
+}
+
+async function isProjectVisibleToActor(
+  db: SqlDatabase,
+  input: { actor: ActorContext; projectId: string; projectOwnerUserId: string | null },
+) {
+  if (!input.actor.teamMember) {
+    return input.projectOwnerUserId === input.actor.actorId;
+  }
+
+  const assignment = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+        AND project_id = $3
+      LIMIT 1
+    `,
+    [input.actor.actorId, input.actor.teamMember.id, input.projectId],
+  );
+  return Boolean(assignment);
 }
 
 function normalizeCreatorProjectPage(value: unknown) {

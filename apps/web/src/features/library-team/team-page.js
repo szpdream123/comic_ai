@@ -19,11 +19,10 @@ export function renderTeamPage(context = {}) {
   const members = Array.isArray(context.members)
     ? context.members
     : (Array.isArray(team.members) ? team.members : teamFixture.members);
-  const metrics = resolveTeamMetrics(context.stats ?? overview?.stats ?? overview?.metrics ?? overview, members);
   const createState = resolveCreateMemberState(overview);
+  const seatSummary = resolveTeamSeatSummary(overview, members);
   const canCreateMember = createState.canCreate;
   const teamActivated = createState.teamActivated;
-  const showTeamDashboardActions = overview ? teamActivated : true;
   const showTeamHero = context.showTeamHero === true && canCreateMember !== true;
   const createAction = createState.action;
   const createActionMessage = createState.message;
@@ -89,7 +88,10 @@ export function renderTeamPage(context = {}) {
                 ).join("")}
               </div>
             </form>
-            <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
+            <div class="team-member-action-cluster">
+              ${renderTeamSeatSummary(seatSummary)}
+              <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
+            </div>
           </div>
           <div class="library-team-table-wrap">
             <table>
@@ -107,30 +109,6 @@ export function renderTeamPage(context = {}) {
           </div>
           ${renderMemberPagination({ total: memberTotal, page: memberPage, pageSize: memberPageSize, totalPages: memberTotalPages }, filteredMembers.length > memberPageSize)}
         </section>
-        <div class="library-team-operations-band">
-          ${teamActivated ? "" : renderTeamGate(createState)}
-          <section class="library-team-metrics" aria-labelledby="team-metrics-title">
-            <header>
-              <div>
-                <p class="library-team-kicker">${teamActivated ? "实时总览" : "协作准备"}</p>
-                <h2 id="team-metrics-title">${teamActivated ? "数据管理" : "权益与席位"}</h2>
-              </div>
-              <div class="library-team-section-actions">
-                <button class="library-team-icon-button library-team-refresh-icon" type="button" aria-label="刷新团队数据" data-action="refresh-team">刷新</button>
-                ${showTeamDashboardActions ? '<button class="library-team-button" type="button" data-action="open-team-dashboard">查看详细数据看板</button>' : ""}
-              </div>
-            </header>
-            <dl class="library-team-metric-grid">
-              ${renderMetric("团队项目", metrics.projects)}
-              ${renderMetric("团队席位", metrics.seats, canCreateMember ? "扩容" : "")}
-              ${renderMetric("单账号任务并发", metrics.concurrency, canCreateMember ? "扩容" : "")}
-              ${renderMetric("团队消耗积分", metrics.consumedCredits)}
-              ${renderMetric("团队剩余积分", metrics.remainingCredits)}
-              ${renderMetric("团队剩余可分配积分", metrics.distributableCredits, canCreateMember ? "加量" : "")}
-            </dl>
-          </section>
-        </div>
-        ${renderTeamPolicyPanel({ createState, metrics })}
         ${commercePrototypeNotice ? `<p class="library-team-commerce-notice is-error">${escapeHtml(commercePrototypeNotice)}</p>` : ""}
         ${renderPricingModal({
           open: context.pricingOpen === true,
@@ -165,6 +143,36 @@ function renderMemberPagination(pagination, hasPossibleNextPage = false) {
       </div>
     </footer>
   `;
+}
+
+function renderTeamSeatSummary(summary) {
+  return `
+    <div class="team-seat-summary" aria-label="团队席位：已使用 ${escapeAttr(summary.used)}，合计 ${escapeAttr(summary.total)}">
+      <span class="team-seat-summary-label">席位</span>
+      <strong class="team-seat-summary-value">${escapeHtml(summary.used)} / ${escapeHtml(summary.total)}</strong>
+      <span class="team-seat-summary-caption">已使用 / 合计</span>
+    </div>
+  `;
+}
+
+function resolveTeamSeatSummary(overview, members) {
+  const seats = overview?.seats ?? {};
+  const used = resolveSeatCount(seats.used, Array.isArray(members) ? members.length : 0);
+  const limit = resolveSeatCount(seats.limit, null);
+  const total = limit === null ? resolveSeatCount(seats.total, null) : limit;
+  return {
+    used: String(used),
+    total: total === null ? "--" : String(total),
+  };
+}
+
+function resolveSeatCount(value, fallback) {
+  const rawValue = value ?? fallback;
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return fallback;
+  }
+  const count = Number(rawValue);
+  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : fallback;
 }
 
 function renderCommandChip(label, value, state = "") {
@@ -851,7 +859,7 @@ function renderFixtureCreateMemberModal(modal = {}) {
           </label>
           <label class="library-team-field stacked">
             <span>初始密码</span>
-            <input id="team-member-password" type="text" value="${escapeAttr(safeDraft.password)}" placeholder="至少 8 位，留空则自动生成" autocomplete="new-password" />
+            <input id="team-member-password" type="text" value="${escapeAttr(safeDraft.password)}" placeholder="至少8位，不填默认密码为：12345678" autocomplete="new-password" />
           </label>
           <label class="library-team-field stacked">
             <span>初始积分</span>

@@ -3962,7 +3962,7 @@ async function loadTeamSurface(workbench) {
 }
 
 function normalizeTeamOverviewPayload(payload) {
-  const overview = payload?.overview ?? payload?.team ?? payload ?? null;
+  const overview = payload?.overview ?? payload ?? null;
   if (!overview || typeof overview !== "object") {
     return null;
   }
@@ -4203,6 +4203,7 @@ async function submitTeamMemberCreate(workbench) {
   const teamAccount = deriveTeamMemberAccountPrefix(memberLoginAccount, teamAccountSuffix);
   const displayName = String(draft.displayName ?? "").trim();
   const password = String(draft.password ?? "").trim();
+  const finalPassword = password || "12345678";
 
   if (!hasEffectiveTeamMemberManagementAccess(workbench)) {
     workbench.ui.teamMemberCreateNotice = "";
@@ -4239,7 +4240,7 @@ async function submitTeamMemberCreate(workbench) {
     const created = await workbench.api.createTeamMember({
       teamAccount,
       displayName,
-      password: password || null,
+      password: finalPassword,
       memberGroupId: draft.memberGroupId ?? null,
       projectIds: [...selectedProjectIds],
       scriptIds: [...selectedScriptIds],
@@ -7067,7 +7068,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.teamMemberCreateNotice = "";
     workbench.ui.teamTemporaryPassword = "";
     workbench.ui.teamMemberDraft = {
-      ...workbench.ui.teamMemberDraft,
+      ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
       teamAccountSuffix: String(
         workbench.ui.teamOverview?.teamAccountSuffix ??
         workbench.ui.teamOverview?.team_account_suffix ??

@@ -297,7 +297,7 @@ h2 {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 2.6rem;
+  gap: clamp(1.25rem, 6vw, 2.6rem);
   margin: 0 0 2.4rem;
   padding: 0;
 }
@@ -465,52 +465,6 @@ h2 {
 
 .password-form {
   gap: 1.45rem;
-}
-
-.account-type-switch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  padding: 1px;
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--line-subtle);
-}
-
-.account-type-option {
-  position: relative;
-  display: grid;
-  min-height: 2.35rem;
-  place-items: center;
-  overflow: hidden;
-  border-radius: calc(var(--radius-sm) - 2px);
-  color: var(--text-dim);
-  cursor: pointer;
-}
-
-.account-type-option input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.account-type-option span {
-  position: relative;
-  z-index: 1;
-  color: inherit;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.account-type-option:has(input:checked) {
-  background: oklch(58% 0.18 275 / 0.16);
-  color: var(--text-primary);
-  box-shadow: inset 0 0 0 1px oklch(58% 0.18 275 / 0.22);
-}
-
-.account-type-option:focus-within {
-  box-shadow: 0 0 0 3px oklch(58% 0.18 275 / 0.12);
 }
 
 .form-options {
