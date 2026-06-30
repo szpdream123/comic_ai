@@ -280,6 +280,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
+  if (
+    !(await columnExists(db, "team_member_profiles", "script_ids")) ||
+    !(await columnExists(db, "team_member_profiles", "canvas_ids"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  }
+  await ensureTeamMemberProfilesBusinessRoleCompatibility(db);
 
   if (!(await tableExists(db, "admin_accounts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
@@ -339,6 +346,66 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     ))
   ) {
     await applySqlMigration(db, process.cwd(), "0043_membership_entitlement_keys.sql");
+  }
+
+  if (
+    !(await columnExists(db, "memberships", "membership_tier")) ||
+    !(await columnExists(db, "memberships", "purchase_at")) ||
+    !(await columnExists(db, "memberships", "expires_at")) ||
+    !(await columnExists(db, "memberships", "gift_credits"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0052_user_membership_subscription.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_members")) ||
+    !(await tableExists(db, "team_member_projects"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0053_simple_team_members.sql");
+  } else if (
+    await constraintExistsOnCurrentSchema(db, "team_members", "team_members_user_id_member_account_key")
+  ) {
+    await applySqlMigration(db, process.cwd(), "0062_team_member_login_account_only_unique.sql");
+  }
+  if (
+    !(await tableExists(db, "team_member_scripts")) ||
+    !(await tableExists(db, "team_member_canvases"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  } else if (
+    await needsTeamMemberResourceProjectNullabilityUpdate(db)
+  ) {
+    await applySqlMigration(db, process.cwd(), "0060_team_member_resource_project_nullable.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_member_auth_sessions")) ||
+    !(await tableExists(db, "team_member_project_records"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0054_simple_team_member_access.sql");
+  } else if (
+    await constraintExistsOnCurrentSchema(db, "team_member_project_records", "team_member_project_records_member_id_project_id_fkey")
+  ) {
+    await applySqlMigration(db, process.cwd(), "0061_team_member_project_records_detach_project_fk.sql");
+  }
+
+  if (
+    !(await columnExists(db, "users", "team_account_suffix")) ||
+    !(await constraintExists(db, "users", "users_team_account_suffix_format_check")) ||
+    !(await indexExists(db, "users_team_account_suffix_key"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0055_user_team_account_suffix.sql");
+  }
+
+  if (
+    !(await constraintAllowsValue(
+      db,
+      "memberships",
+      "memberships_role_check",
+      "sub_account",
+    ))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0057_memberships_sub_account_role.sql");
   }
 
   if (
@@ -823,23 +890,13 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
       membership_id uuid NOT NULL REFERENCES memberships(id),
       team_account text NOT NULL,
       display_name text NOT NULL,
-      business_role text NOT NULL CHECK (
-        business_role IN (
-          'admin',
-          'group_admin',
-          'director_plus',
-          'animator_plus',
-          'director',
-          'animator',
-          'screenwriter',
-          'editor'
-        )
-      ),
       member_group_id uuid NULL REFERENCES team_member_groups(id),
       credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
       credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
       last_credit_consumed_at timestamptz NULL,
       remark text NULL,
+      script_ids text[] NOT NULL DEFAULT '{}'::text[],
+      canvas_ids text[] NOT NULL DEFAULT '{}'::text[],
       created_by_user_id uuid NOT NULL REFERENCES users(id),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -855,7 +912,7 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
     );
 
     CREATE INDEX IF NOT EXISTS team_member_profiles_scope_idx
-      ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+      ON team_member_profiles (organization_id, workspace_id, member_group_id);
 
     CREATE TABLE IF NOT EXISTS team_project_assignments (
       id uuid PRIMARY KEY,
@@ -1102,6 +1159,32 @@ async function seedanceModelConfigsCurrent(db: SqlDatabase) {
   return result.rows[0]?.count === 3;
 }
 
+async function needsTeamMemberResourceProjectNullabilityUpdate(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_scripts")) || !(await tableExists(db, "team_member_canvases"))) {
+    return false;
+  }
+
+  const scriptColumn = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_scripts'
+        AND column_name = 'project_id'
+    `,
+  );
+  const canvasColumn = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_canvases'
+        AND column_name = 'project_id'
+    `,
+  );
+  return scriptColumn.rows[0]?.is_nullable === "NO" || canvasColumn.rows[0]?.is_nullable === "NO";
+}
+
 async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
   if (!(await tableExists(db, "ai_model_configs"))) {
     return false;
@@ -1246,18 +1329,39 @@ async function ensureHappyHorseResolutionConfig(db: SqlDatabase) {
   `);
 }
 
+async function currentSchemaName(db: SqlDatabase) {
+  const schema = await db.query<{ schema_name: string }>(`
+    SELECT current_schema() AS schema_name
+  `);
+
+  return schema.rows[0]?.schema_name ?? "public";
+}
+
 async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {
+  return constraintExistsOnSchema(db, await currentSchemaName(db), tableName, constraintName);
+}
+
+async function constraintExistsOnCurrentSchema(db: SqlDatabase, tableName: string, constraintName: string) {
+  return constraintExistsOnSchema(db, await currentSchemaName(db), tableName, constraintName);
+}
+
+async function constraintExistsOnSchema(
+  db: SqlDatabase,
+  schemaName: string,
+  tableName: string,
+  constraintName: string,
+) {
   const constraintCheck = await db.query<{ exists: boolean }>(
     `
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.table_constraints
-        WHERE table_schema = current_schema()
-          AND table_name = $1
-          AND constraint_name = $2
+        WHERE table_schema = $1
+          AND table_name = $2
+          AND constraint_name = $3
       ) AS exists
     `,
-    [tableName, constraintName],
+    [schemaName, tableName, constraintName],
   );
 
   return constraintCheck.rows[0]?.exists === true;
@@ -1443,4 +1547,16 @@ async function columnExists(db: SqlDatabase, tableName: string, columnName: stri
   );
 
   return columnCheck.rows[0]?.exists === true;
+}
+
+async function ensureTeamMemberProfilesBusinessRoleCompatibility(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_profiles"))) {
+    return;
+  }
+  if (!(await columnExists(db, "team_member_profiles", "business_role"))) {
+    return;
+  }
+
+  await db.query("UPDATE team_member_profiles SET business_role = 'director' WHERE business_role IS NULL");
+  await db.query("ALTER TABLE team_member_profiles ALTER COLUMN business_role DROP NOT NULL");
 }

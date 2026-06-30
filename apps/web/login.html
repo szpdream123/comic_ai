@@ -81,6 +81,17 @@
             >
               密码登录
             </button>
+            <button
+              id="team-login-tab"
+              class="auth-mode-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="password-login-panel"
+              data-auth-target="team"
+            >
+              团队登录
+            </button>
           </div>
 
           <div id="phone-login-panel" class="auth-mode-panel" role="tabpanel" aria-labelledby="phone-login-tab">
@@ -150,7 +161,7 @@
                   id="account-input"
                   name="account"
                   type="text"
-                  placeholder="请输入手机号/邮箱"
+                  placeholder="请输入手机号"
                   autocomplete="username"
                 />
               </label>

@@ -49,6 +49,83 @@ interface GptImageTaskRow {
   amount_reserved: number | string | null;
 }
 
+function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
+  const candidate = snapshot.teamMemberId ?? snapshot.memberId;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+async function refundTeamMemberGenerationCredits(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    teamMemberId: string;
+    amount: number;
+    sourceId: string;
+    reason: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return;
+  }
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        UPDATE team_members
+        SET member_credits = member_credits + $3,
+            updated_at = $4
+        WHERE id = $1
+          AND status <> 'deleted'
+      `,
+      [input.teamMemberId, input.amount, input.amount, input.now],
+    );
+    await queryOne<{ id: string }>(
+      db,
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          user_id,
+          reservation_id,
+          allocation_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, $3, $8)
+        RETURNING id
+      `,
+      [
+        randomUUID(),
+        input.organizationId,
+        input.teamMemberId,
+        input.amount,
+        input.sourceId,
+        input.reason,
+        JSON.stringify({
+          ...input.metadata,
+          memberId: input.teamMemberId,
+        }),
+        input.now,
+      ],
+    );
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function processGptImageSubmitJob(
   db: SqlDatabase,
   input: {
@@ -541,6 +618,26 @@ async function markGptImageTaskManualReview(
       metadata: input.metadata,
       now: input.now,
     });
+  }
+  if (!input.row.reservation_id && amount > 0) {
+    const snapshot = parseSnapshot(input.row.input_snapshot_json);
+    const memberId = readSnapshotTeamMemberId(snapshot);
+    if (memberId) {
+      await refundTeamMemberGenerationCredits(db, {
+        organizationId: input.row.organization_id,
+        teamMemberId: memberId,
+        amount,
+        sourceId: input.row.task_id,
+        reason: "生成失败返还积分",
+        metadata: buildWorkerBillingMetadata(input.row, snapshot, {
+          billingEvent: "released",
+          outcome: "released",
+          providerRequestId: input.providerRequestId,
+          settledAt: input.now,
+        }),
+        now: input.now,
+      });
+    }
   }
 }
 

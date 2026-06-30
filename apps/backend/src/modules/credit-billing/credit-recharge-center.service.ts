@@ -167,7 +167,7 @@ export function createCreditRechargeCenterService(deps: {
           targetOrganizationId: team.id,
           amount,
           sourceId: transferId,
-          reason: "transfer personal credits to team pool",
+          reason: "个人积分转入团队积分池",
           createdByUserId: actor.actorId,
           metadata: {
             sourceOrganizationId: actor.organizationId,
@@ -287,14 +287,9 @@ async function resolveRealTeamCandidate(
         memberships.role,
         (
           SELECT COUNT(*)::int
-          FROM memberships sub_membership
-          JOIN team_member_profiles profile
-            ON profile.organization_id = sub_membership.organization_id
-           AND profile.membership_id = sub_membership.id
-          WHERE sub_membership.organization_id = organizations.id
-            AND sub_membership.workspace_id = workspaces.id
-            AND sub_membership.role = 'sub_account'
-            AND sub_membership.status = 'active'
+          FROM team_members member
+          WHERE member.user_id = $1
+            AND member.status = 'active'
         ) AS member_count,
         EXISTS (
           SELECT id

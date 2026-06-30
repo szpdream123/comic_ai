@@ -6,7 +6,10 @@ import {
   reserveCredits,
   settleReservationAllocation,
 } from "../credit-ledger.service.ts";
-import { expireAvailableCreditLots } from "../credit-lot.service.ts";
+import {
+  expireAvailableCreditLots,
+  expireFrozenWalletCreditsInTransaction,
+} from "../credit-lot.service.ts";
 
 const organizationId = "10000000-0000-4000-8000-000000050001";
 const lotSoon = "90000000-0000-4000-8000-000000050001";
@@ -168,6 +171,72 @@ describe("credit lots", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("writes Chinese reasons for expired lot ledger entries", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db, 100);
+      await seedLot(db, {
+        id: expiredLot,
+        amount: 100,
+        expiresAt: new Date("2026-06-08T00:00:00.000Z"),
+      });
+
+      await expireAvailableCreditLots(db, {
+        organizationId,
+        now: new Date("2026-06-09T00:00:00.000Z"),
+        limit: 20,
+      });
+      const ledger = await db.query<{ reason: string }>(
+        "SELECT reason FROM credit_ledger_entries WHERE source_type = 'credit_lot_expiry'",
+      );
+
+      assert.equal(ledger.rows[0]?.reason, "积分批次过期失效");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("writes Chinese reasons for expired frozen membership credits", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db, 0);
+      await db.query(
+        `
+          UPDATE organizations
+          SET credit_frozen_cached = 80,
+              credit_frozen_at = $2,
+              credit_frozen_until = $3
+          WHERE id = $1
+        `,
+        [
+          organizationId,
+          new Date("2026-06-01T00:00:00.000Z"),
+          new Date("2026-06-08T00:00:00.000Z"),
+        ],
+      );
+      await seedFrozenLot(db, {
+        id: lotOnly,
+        amount: 80,
+        frozenUntil: new Date("2026-06-08T00:00:00.000Z"),
+      });
+
+      const result = await expireFrozenWalletCreditsInTransaction(db, {
+        now: new Date("2026-06-09T00:00:00.000Z"),
+        limit: 20,
+      });
+      const ledger = await db.query<{ reason: string }>(
+        "SELECT reason FROM credit_ledger_entries WHERE source_type = 'membership_frozen_credit_expiry'",
+      );
+
+      assert.equal(result.expiredAmount, 80);
+      assert.equal(ledger.rows[0]?.reason, "会员冻结积分过期失效");
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedOrganization(
@@ -244,6 +313,64 @@ async function seedLot(
       input.expiresAt,
       JSON.stringify(input.metadata ?? {}),
     ],
+  );
+}
+
+async function seedFrozenLot(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    id: string;
+    amount: number;
+    frozenUntil: Date;
+  },
+) {
+  const grantLedgerEntryId = input.id.replace("90000000", "91000000");
+  await db.query(
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        reservation_id,
+        allocation_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      )
+      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, NULL, '2026-06-01T00:00:00.000Z')
+    `,
+    [grantLedgerEntryId, organizationId, input.amount, input.id],
+  );
+  await db.query(
+    `
+      INSERT INTO credit_lots (
+        id,
+        organization_id,
+        source_type,
+        source_id,
+        grant_ledger_entry_id,
+        total_amount,
+        available_amount,
+        reserved_amount,
+        consumed_amount,
+        expired_amount,
+        status,
+        frozen_at,
+        frozen_until,
+        metadata_json,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, 'membership_gift', $1, $3, $4, $4, 0, 0, 0, 'frozen', '2026-06-01T00:00:00.000Z', $5, '{}'::jsonb, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
+    `,
+    [input.id, organizationId, grantLedgerEntryId, input.amount, input.frozenUntil],
   );
 }
 

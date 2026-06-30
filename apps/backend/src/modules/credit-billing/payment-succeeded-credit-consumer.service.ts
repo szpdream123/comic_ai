@@ -107,7 +107,7 @@ export async function consumePaymentSucceededCreditGrant(
           amount: order.credits,
           sourceType: "payment_order",
           sourceId: order.id,
-          reason: "paid order credited",
+          reason: "充值套餐增加积分",
           createdByUserId: order.created_by_user_id,
           metadata: {
             orderNo: order.order_no,

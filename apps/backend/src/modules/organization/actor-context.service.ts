@@ -6,11 +6,6 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { findPersistentAuthSessionByToken } from "../identity/persistent-auth.service.ts";
-import {
-  getTeamRoleCapabilities,
-  isTeamBusinessRole,
-  type TeamBusinessRole,
-} from "./team-roles.ts";
 
 export type MembershipRole =
   | "owner_admin"
@@ -25,9 +20,14 @@ export interface ActorContext {
   workspaceId: string | null;
   role: MembershipRole;
   capabilities: Capability[];
+  teamMember?: {
+    id: string;
+    memberAccount: string;
+    memberLoginAccount: string;
+    memberName: string;
+  };
   teamProfile?: {
     membershipId: string;
-    businessRole: TeamBusinessRole;
     memberGroupId: string | null;
     teamAccount: string;
   };
@@ -61,11 +61,14 @@ interface MembershipRow {
   workspace_id: string | null;
 }
 
-interface TeamProfileRow {
-  membership_id: string;
-  business_role: string;
-  member_group_id: string | null;
-  team_account: string;
+interface SimpleTeamMemberSessionRow {
+  member_id: string;
+  member_account: string;
+  member_login_account: string;
+  member_name: string;
+  member_session_status: "active" | "revoked" | "expired";
+  member_session_expires_at: Date | string;
+  member_status: "active" | "disabled" | "deleted";
 }
 
 export class AuthorizationError extends Error {
@@ -145,6 +148,11 @@ export async function resolveActorContext(
     throw new AuthorizationError("user_disabled");
   }
 
+  const simpleTeamMember = await resolveSimpleTeamMemberSession(db, {
+    authSessionId: session.id,
+    userId: user.id,
+    now: input.now,
+  });
   const scope = await resolveTenantScope(db, input);
   const membership = await findMembership(db, {
     userId: user.id,
@@ -160,24 +168,31 @@ export async function resolveActorContext(
     throw new AuthorizationError("membership_disabled");
   }
 
-  const teamProfile =
-    membership.role === "sub_account"
-      ? await resolveTeamProfile(db, {
-          membershipId: membership.id,
-          organizationId: scope.organizationId,
-          workspaceId: scope.workspaceId,
-        })
-      : undefined;
+  if (simpleTeamMember && input.projectId) {
+    await assertSimpleTeamMemberProjectAccess(db, {
+      userId: user.id,
+      memberId: simpleTeamMember.id,
+      projectId: input.projectId,
+    });
+  }
 
   const actor: ActorContext = {
     actorId: user.id,
     organizationId: scope.organizationId,
     workspaceId: scope.workspaceId,
     role: membership.role,
-    capabilities: teamProfile
-      ? getTeamRoleCapabilities(teamProfile.businessRole)
+    capabilities: simpleTeamMember
+      ? input.projectId
+        ? [
+            capabilities.workspaceRead,
+            capabilities.projectView,
+            capabilities.projectEdit,
+            capabilities.generationStart,
+            capabilities.exportCreate,
+          ]
+        : [capabilities.workspaceRead]
       : roleCapabilities[membership.role],
-    teamProfile,
+    teamMember: simpleTeamMember,
   };
 
   if (input.capability) {
@@ -190,6 +205,74 @@ export async function resolveActorContext(
 export function assertCapability(actor: ActorContext, capability: Capability) {
   if (!actor.capabilities.includes(capability)) {
     throw new AuthorizationError("capability_missing");
+  }
+}
+
+async function resolveSimpleTeamMemberSession(
+  db: SqlDatabase,
+  input: { authSessionId: string; userId: string; now: Date },
+): Promise<ActorContext["teamMember"] | undefined> {
+  const row = await queryOne<SimpleTeamMemberSessionRow>(
+    db,
+    `
+      SELECT
+        member_session.member_id,
+        member.member_account,
+        member.member_login_account,
+        member.member_name,
+        member_session.status AS member_session_status,
+        member_session.expires_at AS member_session_expires_at,
+        member.status AS member_status
+      FROM team_member_auth_sessions member_session
+      JOIN team_members member
+        ON member.id = member_session.member_id
+       AND member.user_id = member_session.user_id
+      WHERE member_session.auth_session_id = $1
+        AND member_session.user_id = $2
+      LIMIT 1
+    `,
+    [input.authSessionId, input.userId],
+  );
+
+  if (!row) {
+    return undefined;
+  }
+
+  if (
+    row.member_session_status !== "active" ||
+    new Date(row.member_session_expires_at).getTime() <= input.now.getTime() ||
+    row.member_status !== "active"
+  ) {
+    throw new AuthorizationError("unauthenticated");
+  }
+
+  return {
+    id: row.member_id,
+    memberAccount: row.member_account,
+    memberLoginAccount: row.member_login_account,
+    memberName: row.member_name,
+  };
+}
+
+async function assertSimpleTeamMemberProjectAccess(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; projectId: string },
+) {
+  const assignment = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+        AND project_id = $3
+      LIMIT 1
+    `,
+    [input.userId, input.memberId, input.projectId],
+  );
+
+  if (!assignment) {
+    throw new AuthorizationError("project_not_found");
   }
 }
 
@@ -321,40 +404,4 @@ async function findMembership(
     `,
     [input.organizationId, input.userId, input.workspaceId],
   );
-}
-
-async function resolveTeamProfile(
-  db: SqlDatabase,
-  input: {
-    membershipId: string;
-    organizationId: string;
-    workspaceId: string | null;
-  },
-): Promise<ActorContext["teamProfile"]> {
-  if (!input.workspaceId) {
-    throw new AuthorizationError("membership_missing");
-  }
-
-  const profile = await queryOne<TeamProfileRow>(
-    db,
-    `
-      SELECT membership_id, business_role, member_group_id, team_account
-      FROM team_member_profiles
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND membership_id = $3
-    `,
-    [input.organizationId, input.workspaceId, input.membershipId],
-  );
-
-  if (!profile || !isTeamBusinessRole(profile.business_role)) {
-    throw new AuthorizationError("membership_missing");
-  }
-
-  return {
-    membershipId: profile.membership_id,
-    businessRole: profile.business_role,
-    memberGroupId: profile.member_group_id,
-    teamAccount: profile.team_account,
-  };
 }

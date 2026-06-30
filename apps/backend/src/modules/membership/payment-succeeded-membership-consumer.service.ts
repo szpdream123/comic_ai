@@ -39,9 +39,11 @@ interface PaidOrderRow {
 }
 
 interface SubscriptionRow {
-  status: string | null;
-  current_tier: string | null;
-  current_period_end_at: Date | string | null;
+  user_id: string;
+  membership_tier: string | null;
+  purchase_at: Date | string | null;
+  expires_at: Date | string | null;
+  gift_credits: number;
 }
 
 interface NormalizedMembershipPlanSnapshot extends Record<string, unknown> {
@@ -129,7 +131,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
   }
 
   const planSnapshot = professionalCompatibilitySnapshot(
-    assertMembershipPlanSnapshot(order.product_snapshot_json),
+    await resolveEffectivePlanSnapshot(db, order),
   );
   if (planSnapshot.tier !== "professional") {
     return { repaired: false, orderNo: input.orderNo, organizationId: order.organization_id };
@@ -226,7 +228,7 @@ export async function enqueueMissingMembershipActivationForPaidOrder(
     return { kind: "not_found", orderNo: input.orderNo };
   }
 
-  const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+  const planSnapshot = await resolveEffectivePlanSnapshot(db, order);
   if (await membershipActivationSideEffectsComplete(db, { order, planSnapshot, now: input.now })) {
     return { kind: "not_needed", orderNo: input.orderNo };
   }
@@ -280,7 +282,7 @@ export async function consumePaymentSucceededMembershipActivation(
           throw new Error("membership_order_missing_plan");
         }
 
-        const planSnapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+        const planSnapshot = await resolveEffectivePlanSnapshot(db, order);
         const paidAt = assertPaidAt(order.paid_at);
         const activeProfessionalPeriod = await findActiveProfessionalPeriod(db, {
           organizationId: order.organization_id,
@@ -290,11 +292,11 @@ export async function consumePaymentSucceededMembershipActivation(
           planSnapshot.tier !== "professional" &&
           activeProfessionalPeriod !== null;
         const currentSameTier = await findCurrentSameTierSubscription(db, {
-          organizationId: order.organization_id,
+          userId: order.created_by_user_id,
           tier: planSnapshot.tier,
         });
-        const currentPeriodEndAt = currentSameTier?.current_period_end_at
-          ? new Date(currentSameTier.current_period_end_at)
+        const currentPeriodEndAt = currentSameTier?.expires_at
+          ? new Date(currentSameTier.expires_at)
           : null;
         const baseWindow = calculateMembershipWindow({
           paidAt,
@@ -401,6 +403,36 @@ async function findPaidOrder(
   );
 }
 
+async function resolveEffectivePlanSnapshot(
+  db: SqlDatabase,
+  order: PaidOrderRow,
+): Promise<NormalizedMembershipPlanSnapshot> {
+  const snapshot = assertMembershipPlanSnapshot(order.product_snapshot_json);
+  if (!order.membership_plan_id) {
+    return snapshot;
+  }
+
+  const livePlan = await queryOne<{ seat_limit: number | string }>(
+    db,
+    `
+      SELECT seat_limit
+      FROM membership_plans
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [order.membership_plan_id],
+  );
+  const liveSeatLimit = Number(livePlan?.seat_limit);
+  if (!Number.isInteger(liveSeatLimit) || liveSeatLimit < 0) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    seatLimit: liveSeatLimit,
+  };
+}
+
 async function membershipActivationSideEffectsComplete(
   db: SqlDatabase,
   input: { order: PaidOrderRow; planSnapshot: NormalizedMembershipPlanSnapshot; now: Date },
@@ -427,20 +459,18 @@ async function membershipActivationSideEffectsComplete(
   }
 
   const expectedPeriodEndAt = new Date(period.period_end_at);
-  const subscription = await queryOne<{ status: string; current_tier: string | null }>(
+  const subscription = await queryOne<{ membership_tier: string | null; expires_at: Date | string | null }>(
     db,
     `
-      SELECT status, current_tier
-      FROM organization_membership_subscriptions
-      WHERE organization_id = $1
-        AND status = $2
-        AND current_tier = $3
-        AND current_period_end_at = $4
+      SELECT membership_tier, expires_at
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier = $2
+        AND expires_at = $3
       LIMIT 1
     `,
     [
-      input.order.organization_id,
-      `${input.planSnapshot.tier}_active`,
+      input.order.created_by_user_id,
       input.planSnapshot.tier,
       expectedPeriodEndAt,
     ],
@@ -466,12 +496,12 @@ async function membershipActivationSideEffectsComplete(
         return false;
       }
     }
-    const teamLimit = await queryOne<{ seat_limit: number | string }>(
+    const teamLimit = await queryOne<{ team_seat_limit: number | string }>(
       db,
-      "SELECT seat_limit FROM team_plan_limits WHERE organization_id = $1 LIMIT 1",
-      [input.order.organization_id],
+      "SELECT team_seat_limit FROM users WHERE id = $1 LIMIT 1",
+      [input.order.created_by_user_id],
     );
-    if (Number(teamLimit?.seat_limit ?? -1) !== input.planSnapshot.seatLimit) {
+    if (Number(teamLimit?.team_seat_limit ?? -1) !== input.planSnapshot.seatLimit) {
       return false;
     }
   }
@@ -501,18 +531,18 @@ async function membershipActivationSideEffectsComplete(
 
 async function findCurrentSameTierSubscription(
   db: SqlDatabase,
-  input: { organizationId: string; tier: string },
+  input: { userId: string; tier: string },
 ) {
   return queryOne<SubscriptionRow>(
     db,
     `
-      SELECT status, current_tier, current_period_end_at
-      FROM organization_membership_subscriptions
-      WHERE organization_id = $1
-        AND current_tier = $2
+      SELECT user_id, membership_tier, purchase_at, expires_at, gift_credits
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier = $2
       LIMIT 1
     `,
-    [input.organizationId, input.tier],
+    [input.userId, input.tier],
   );
 }
 
@@ -531,8 +561,8 @@ async function repairExistingProfessionalActivation(
     periodEndAt: input.periodEndAt,
     now: input.now,
   });
-  await upsertTeamPlanLimit(db, {
-    organizationId: input.order.organization_id,
+  await updateUserTeamSeatLimit(db, {
+    userId: input.order.created_by_user_id,
     seatLimit: input.planSnapshot.seatLimit,
     now: input.now,
   });
@@ -647,6 +677,7 @@ async function applyMembershipPeriodEffects(
 
   if (input.keepCurrentProfessionalSubscription && input.activeProfessionalPeriod) {
     await restoreProfessionalSubscription(db, {
+      userId: input.order.created_by_user_id,
       period: input.activeProfessionalPeriod,
       now: input.now,
     });
@@ -659,8 +690,8 @@ async function applyMembershipPeriodEffects(
       periodEndAt: new Date(input.activeProfessionalPeriod.period_end_at),
       now: input.now,
     });
-    await upsertTeamPlanLimit(db, {
-      organizationId: input.order.organization_id,
+    await updateUserTeamSeatLimit(db, {
+      userId: input.order.created_by_user_id,
       seatLimit: professionalPlanSnapshot.seatLimit,
       now: input.now,
     });
@@ -689,8 +720,8 @@ async function applyMembershipPeriodEffects(
       periodEndAt,
       now: input.now,
     });
-    await upsertTeamPlanLimit(db, {
-      organizationId: input.order.organization_id,
+    await updateUserTeamSeatLimit(db, {
+      userId: input.order.created_by_user_id,
       seatLimit: input.planSnapshot.seatLimit,
       now: input.now,
     });
@@ -731,37 +762,21 @@ async function findActiveProfessionalPeriod(
 
 async function restoreProfessionalSubscription(
   db: SqlDatabase,
-  input: { period: ActiveProfessionalPeriodRow; now: Date },
+  input: { userId: string; period: ActiveProfessionalPeriodRow; now: Date },
 ) {
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, 'professional_active', 'professional', $3, $4, $5, $6, $6)
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        status = 'professional_active',
-        current_tier = 'professional',
-        current_period_start_at = EXCLUDED.current_period_start_at,
-        current_period_end_at = EXCLUDED.current_period_end_at,
-        latest_order_id = EXCLUDED.latest_order_id,
-        updated_at = EXCLUDED.updated_at
+      UPDATE memberships
+      SET membership_tier = 'professional',
+          purchase_at = $2,
+          expires_at = $3,
+          updated_at = $4
+      WHERE user_id = $1
     `,
     [
-      randomUUID(),
-      input.period.organization_id,
+      input.userId,
       input.period.period_start_at,
       input.period.period_end_at,
-      input.period.order_id,
       input.now,
     ],
   );
@@ -838,38 +853,28 @@ async function upsertSubscription(
 ) {
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        status = EXCLUDED.status,
-        current_tier = EXCLUDED.current_tier,
-        current_period_start_at = EXCLUDED.current_period_start_at,
-        current_period_end_at = EXCLUDED.current_period_end_at,
-        latest_order_id = EXCLUDED.latest_order_id,
-        updated_at = EXCLUDED.updated_at
+      UPDATE memberships
+      SET membership_tier = $2,
+          purchase_at = $3,
+          expires_at = $4,
+          gift_credits = $5,
+          updated_at = $6
+      WHERE user_id = $1
     `,
     [
-      randomUUID(),
-      input.order.organization_id,
-      `${input.planSnapshot.tier}_active`,
+      input.order.created_by_user_id,
       input.planSnapshot.tier,
       input.periodStartAt,
       input.periodEndAt,
-      input.order.id,
+      input.planSnapshot.giftCredits,
       input.now,
     ],
   );
+  await updateUserTeamSeatLimit(db, {
+    userId: input.order.created_by_user_id,
+    seatLimit: input.planSnapshot.seatLimit,
+    now: input.now,
+  });
 }
 
 async function expirePaymentProfessionalEntitlementsOutsidePlan(
@@ -951,27 +956,18 @@ async function upsertProfessionalEntitlements(
   }
 }
 
-async function upsertTeamPlanLimit(
+async function updateUserTeamSeatLimit(
   db: SqlDatabase,
-  input: { organizationId: string; seatLimit: number; now: Date },
+  input: { userId: string; seatLimit: number; now: Date },
 ) {
   await db.query(
     `
-      INSERT INTO team_plan_limits (
-        id,
-        organization_id,
-        seat_limit,
-        single_account_concurrency_limit,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, 1, $4, $4)
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        seat_limit = EXCLUDED.seat_limit,
-        updated_at = EXCLUDED.updated_at
+      UPDATE users
+      SET team_seat_limit = $2,
+          updated_at = $3
+      WHERE id = $1
     `,
-    [randomUUID(), input.organizationId, input.seatLimit, input.now],
+    [input.userId, input.seatLimit, input.now],
   );
 }
 

@@ -6006,15 +6006,14 @@ async function seedAdminUserListFixture(db: Awaited<ReturnType<typeof createMigr
         membership_id,
         team_account,
         display_name,
-        business_role,
         member_group_id,
         credit_balance_cached,
         credit_used_cached,
         created_by_user_id
       )
       VALUES
-        ('96000000-0000-4000-8000-000000000001', $1, $2, $3, 'story-lead', '分镜组长', 'group_admin', $5, 2100, 300, $6),
-        ('96000000-0000-4000-8000-000000000002', $1, $2, $4, 'story-sub-a', '子账户 A', 'animator', $5, 680, 90, $6)
+        ('96000000-0000-4000-8000-000000000001', $1, $2, $3, 'story-lead', '分镜组长', $5, 2100, 300, $6),
+        ('96000000-0000-4000-8000-000000000002', $1, $2, $4, 'story-sub-a', '子账户 A', $5, 680, 90, $6)
     `,
     [
       organizationId,

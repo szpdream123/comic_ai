@@ -2253,28 +2253,46 @@ describe("Worker C production workbench integration", () => {
 });
 
 describe("Worker C team management surfaces", () => {
-  it("renders team metrics, filters, member table, and empty member CTA", () => {
+  it("renders team filters, member table, and empty member CTA", () => {
     const html = renderLibraryTeam({ route: "team" });
 
     assert.match(html, /team-page/);
-    assertHasAction(html, "refresh-team");
-    assertHasAction(html, "open-team-dashboard");
-    assertHasAction(html, "open-member-rules");
-    assertHasAction(html, "open-create-member");
+    assertHasAction(html, "open-pricing");
     assertHasAction(html, "search-team-members");
     assertHasAction(html, "set-team-member-role-filter");
     assertHasAction(html, "set-team-member-status-filter");
-    assertHasAction(html, "reset-team-member-filters");
+    assert.doesNotMatch(html, /library-team-policy-panel/);
+    assert.doesNotMatch(html, /library-team-operations-band/);
   });
 
-  it("renders a refined creator-workbench command surface for team operations", () => {
+  it("shows used and total team seats in the member toolbar", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      overview: {
+        entitlements: { teamMemberManagement: true },
+        permissions: { canCreateMember: true },
+        seats: { used: 5, limit: 10 },
+        team: { activated: true, memberCount: 5 },
+      },
+    });
+
+    assert.match(html, /team-seat-summary/);
+    assertIncludesText(html, "席位");
+    assertIncludesText(html, "5 / 10");
+    assertIncludesText(html, "已使用 / 合计");
+  });
+
+  it("does not render removed team summary panels below the member table", () => {
     const html = renderLibraryTeam({ route: "team" });
 
-    assertIncludesAll(html, ["团队运行", "席位与积分", "权限矩阵", "成员目录", "数据看板"]);
-    assert.match(html, /library-team-command-strip/);
-    assert.match(html, /library-team-command-chip/);
-    assert.match(html, /library-team-workspace-grid/);
-    assert.match(html, /library-team-policy-panel/);
+    assertIncludesText(html, "成员管理");
+    assert.doesNotMatch(html, /席位与积分/);
+    assert.doesNotMatch(html, /权限矩阵/);
+    assert.doesNotMatch(html, /数据看板/);
+    assert.doesNotMatch(html, /data-action="open-team-dashboard"/);
+    assert.doesNotMatch(html, /data-action="open-member-rules"/);
+    assert.doesNotMatch(html, /library-team-operations-band/);
+    assert.doesNotMatch(html, /library-team-policy-panel/);
   });
 
   it("does not render backend team errors as visible bottom-page copy", () => {
@@ -2352,17 +2370,59 @@ describe("Worker C team management surfaces", () => {
         role: "creator",
         note: "storyboard-collab",
         notice: "member-create-notice",
+        draft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          projectIds: ["project-1"],
+        },
+        availableProjects: [
+          { id: "project-1", name: "整体测试项目" },
+          { id: "project-2", name: "测试9" },
+        ],
+        availableScripts: [
+          { id: "script-1", title: "整体测试项目剧本", projectId: "project-1" },
+          { id: "script-2", title: "测试9剧本", projectId: "project-2" },
+        ],
+        availableCanvases: [
+          { id: "canvas-1", title: "整体测试项目画布", projectId: "project-1" },
+          { id: "canvas-2", title: "测试9画布", projectId: "project-2" },
+        ],
       },
     });
 
-    assert.match(html, /data-modal="create-member"/);
-    assertHasAction(html, "close-create-member");
-    assertHasAction(html, "change-create-member-phone");
-    assertHasAction(html, "change-create-member-role");
-    assertHasAction(html, "change-create-member-note");
-    assertHasAction(html, "submit-create-member");
-    assertIncludesText(html, "13800138002");
-    assertIncludesText(html, "storyboard-collab");
+    assert.match(html, /data-modal="team-member-create"/);
+    assertHasAction(html, "close-team-member-create");
+    assertHasAction(html, "submit-team-member-create");
+    assertHasAction(html, "toggle-team-member-project");
+    assert.doesNotMatch(
+      html.slice(html.indexOf('data-modal="team-member-create"')),
+      /<p class="library-team-kicker">成员账号<\/p>/,
+    );
+    assertIncludesText(html, "项目");
+    assertIncludesText(html, "剧本");
+    assertIncludesText(html, "画布");
+    assertIncludesText(html, "整体测试项目");
+    assertIncludesText(html, "整体测试项目剧本");
+    assertIncludesText(html, "整体测试项目画布");
+  });
+
+  it("falls back to the overview suffix when the create member draft suffix is blank", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      overview: {
+        teamAccountSuffix: "0gt21l",
+      },
+      createMemberModal: {
+        open: true,
+        draft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          teamAccountSuffix: "",
+        },
+      },
+    });
+
+    assert.match(html, /@0gt21l/);
   });
 
   it("renders the edit member modal from the team page context", () => {
@@ -2385,9 +2445,75 @@ describe("Worker C team management surfaces", () => {
     assertHasAction(html, "change-edit-member-note");
     assertHasAction(html, "toggle-member-status");
     assertHasAction(html, "submit-edit-member");
+    assertIncludesText(html, "停用成员");
     assertIncludesText(html, "13800138002");
     assertIncludesText(html, "readonly-review");
     assertIncludesText(html, "已停用");
+  });
+
+  it("renders visible single-entry password reset in the edit member modal", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        status: "active",
+        newPassword: "new-pass-123",
+      },
+    });
+
+    assert.match(html, /id="team-edit-member-new-password-input"[\s\S]*?type="text"/);
+    assertIncludesText(html, "new-pass-123");
+    assert.doesNotMatch(html, /data-action="change-edit-member-confirm-password"/);
+  });
+
+  it("renders the edit member modal with create-style layout and preserved credit controls", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        phone: "13800138002",
+        status: "active",
+        creditBalance: 6000,
+        creditAdjustmentType: "increase",
+        creditAmount: "99",
+      },
+    });
+
+    assert.match(html, /library-team-modal-scroll-edit/);
+    assert.match(html, /library-team-edit-member-identity-grid/);
+    assert.doesNotMatch(html, /library-team-form-grid-edit/);
+    assert.doesNotMatch(html, /library-team-edit-member-identity-grid[\s\S]*成员名称[\s\S]*成员账户/);
+    assert.match(html, /team-edit-member-credit-action-input/);
+    assert.match(html, /team-edit-member-credit-amount-input/);
+    assertIncludesText(html, "当前积分");
+  });
+
+  it("renders the edit member resource picker with real page copy", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        resourcePickerType: "project",
+        resourcePickerPage: 2,
+        resourcePagination: {
+          project: { page: 2, pageSize: 10, total: 24, totalPages: 3 },
+        },
+        availableProjects: [
+          { id: "project-11", name: "项目 11" },
+          { id: "project-12", name: "项目 12" },
+        ],
+        projectIds: ["project-11"],
+      },
+    });
+
+    assert.match(html, /子账户可见范围/);
+    assert.match(html, /第 2 \/ 3 页/);
+    assert.match(html, /每页 10 条/);
+    assert.match(html, /项目.*2 \/ 24/);
+    assert.match(html, /项目 11/);
   });
 
   it("renders the team dashboard route without requiring shell DOM", () => {

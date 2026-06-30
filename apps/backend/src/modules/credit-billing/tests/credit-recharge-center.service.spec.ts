@@ -222,7 +222,7 @@ async function seedRechargeFixture(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800199001', 'active')
+      VALUES ($1, '13800199001', 'active')
     `,
     [userId],
   );
@@ -281,52 +281,32 @@ async function seedRechargeFixture(
   }
 
   if (options.realTeam) {
-    const memberUserId = "00000000-0000-4000-8000-000000001101";
     await db.query(
       `
-        INSERT INTO users (id, email, display_name, status)
-        VALUES ($1, 'member@example.local', 'Member', 'active')
-      `,
-      [memberUserId],
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES (
-          '30000000-0000-4000-8000-000000001101',
-          $1,
-          $2,
-          $3,
-          'sub_account',
-          'active'
-        )
-      `,
-      [teamOrganizationId, teamWorkspaceId, memberUserId],
-    );
-    await db.query(
-      `
-        INSERT INTO team_member_profiles (
+        INSERT INTO team_members (
           id,
-          organization_id,
-          workspace_id,
-          membership_id,
-          team_account,
-          display_name,
-          business_role,
-          created_by_user_id
+          user_id,
+          member_account,
+          member_account_suffix,
+          member_login_account,
+          member_name,
+          member_password_hash,
+          member_credits,
+          status
         )
         VALUES (
           '32000000-0000-4000-8000-000000001101',
           $1,
-          $2,
-          '30000000-0000-4000-8000-000000001101',
           'member001',
+          'u00101',
+          'member001@u00101',
           'Member',
-          'animator',
-          $3
+          'hashed-member-password',
+          0,
+          'active'
         )
       `,
-      [teamOrganizationId, teamWorkspaceId, userId],
+      [userId],
     );
   }
 

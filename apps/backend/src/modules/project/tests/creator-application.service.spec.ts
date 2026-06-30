@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
+import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
+import type { ActorContext } from "../../organization/actor-context.service.ts";
+import { createTeamMember } from "../../organization/team.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { StorageAdapter } from "../../storage/storage.service.ts";
 import {
@@ -14,6 +18,7 @@ import { createCreatorApplication } from "../creator-application.service.ts";
 const userId = "00000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "20000000-0000-4000-8000-000000000001";
+const memberId = "30000000-0000-4000-8000-000000000001";
 
 describe("creator application service", { concurrency: false }, () => {
   it("keeps workspace project and script libraries separated", async () => {
@@ -70,6 +75,108 @@ describe("creator application service", { concurrency: false }, () => {
         (scripts.body as any).scripts.map((script: any) => script.title),
         ["独立剧本"],
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("filters subaccount project and script visibility by explicit resource assignments", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-team-member-visibility-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      const ownedProject = await creator.createProject({
+        user,
+        body: {
+          name: "可见项目",
+          scriptInput: "Episode 1: visible project script.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-team-member-visibility-project",
+        now: new Date("2026-06-20T08:00:00.000Z"),
+      });
+      const hiddenProject = await creator.createProject({
+        user,
+        body: {
+          name: "不可见项目",
+          scriptInput: "Episode 1: hidden project script.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-application-team-member-visibility-hidden-project",
+        now: new Date("2026-06-20T08:01:00.000Z"),
+      });
+      const visibleProjectId = (ownedProject.body as any).project.id;
+      const hiddenProjectId = (hiddenProject.body as any).project.id;
+      const visibleScript = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "可见剧本",
+          scriptInput: "第 1 集\n可见剧本正文。",
+        },
+        now: new Date("2026-06-20T08:02:00.000Z"),
+      });
+      const hiddenScript = await creator.importScriptDocument({
+        user,
+        body: {
+          title: "不可见剧本",
+          scriptInput: "第 1 集\n不可见剧本正文。",
+        },
+        now: new Date("2026-06-20T08:03:00.000Z"),
+      });
+
+      const scriptRows = await db.query<{
+        id: string;
+        project_id: string;
+      }>("SELECT id, project_id FROM scripts WHERE organization_id = $1 ORDER BY created_at ASC", [organizationId]);
+      const visibleScriptId = scriptRows.rows[0]?.id ?? "";
+      const hiddenScriptId = scriptRows.rows[1]?.id ?? "";
+
+      const member = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director002",
+        displayName: "Director Two",
+        password: "member-secret-002",
+        projectIds: [visibleProjectId],
+        scriptIds: [visibleScriptId],
+        canvasIds: [],
+        now: new Date("2026-06-20T08:04:00.000Z"),
+      });
+
+      const memberSession = await seedMemberSession(db, member.member.membershipId, "creator-application-team-member-visibility-member-session");
+      const memberCreator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const memberUser = {
+        id: userId,
+        sessionToken: memberSession.token,
+      };
+
+      const projects = await memberCreator.listProjects({
+        user: memberUser,
+        now: new Date("2026-06-20T08:05:00.000Z"),
+      });
+      const scripts = await memberCreator.listWorkspaceScripts({
+        user: memberUser,
+        now: new Date("2026-06-20T08:06:00.000Z"),
+      });
+
+      assert.deepEqual((projects.body as any).projects.map((project: any) => project.id), [visibleProjectId]);
+      assert.deepEqual((scripts.body as any).scripts.map((script: any) => script.id), [visibleScriptId]);
+      assert.notEqual(hiddenProjectId, visibleProjectId);
+      assert.notEqual(hiddenScriptId, visibleScriptId);
     } finally {
       await db.close();
     }
@@ -1401,7 +1508,7 @@ describe("creator application service", { concurrency: false }, () => {
       });
 
       assert.equal(overview.status, 200);
-      assert.equal((overview.body as any).entitlements.teamMemberManagement, false);
+      assert.equal((overview.body as any).entitlements.teamMemberManagement, true);
       assert.deepEqual((overview.body as any).permissions, {
         canReadMembers: false,
         canCreateMember: false,
@@ -3181,13 +3288,23 @@ describe("creator application service", { concurrency: false }, () => {
   });
 });
 
+function ownerActor(): ActorContext {
+  return {
+    actorId: userId,
+    organizationId,
+    workspaceId,
+    role: "owner_admin",
+    capabilities: Object.values(capabilities),
+  };
+}
+
 async function seedTenant(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
-      INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      INSERT INTO users (id, phone_e164, status, team_seat_limit)
+      VALUES ($1, '13800138000', 'active', 50)
     `,
     [userId],
   );
@@ -3258,6 +3375,72 @@ async function seedSession(
       session.session.lastSeenAt,
       session.session.revokedAt,
       seededSessionTime,
+    ],
+  );
+  return session;
+}
+
+async function seedMemberSession(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  memberId: string,
+  token: string,
+) {
+  const memberSessionTime = new Date("2099-01-01T00:00:00.000Z");
+  const session = await createAuthSession({
+    userId,
+    token,
+    now: new Date("2026-06-20T08:04:30.000Z"),
+    ttlMs: 365 * 24 * 60 * 60 * 1000,
+  });
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      session.session.id,
+      session.session.userId,
+      session.session.status,
+      session.session.sessionTokenHash,
+      session.session.sessionTokenHashVersion,
+      session.session.expiresAt,
+      session.session.lastSeenAt,
+      session.session.revokedAt,
+      memberSessionTime,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO team_member_auth_sessions (
+        id,
+        auth_session_id,
+        user_id,
+        member_id,
+        status,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, 'active', $5, $6, NULL, $6)
+    `,
+    [
+      randomUUID(),
+      session.session.id,
+      userId,
+      memberId,
+      session.session.expiresAt,
+      memberSessionTime,
     ],
   );
   return session;

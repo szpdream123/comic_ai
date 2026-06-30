@@ -11,7 +11,7 @@ describe("membership priority service", { concurrency: false }, () => {
 
     try {
       const organizationId = await seedOrganization(db);
-      await seedProfessionalMembership(db, {
+      const professionalUserId = await seedProfessionalMembership(db, {
         organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
@@ -22,7 +22,7 @@ describe("membership priority service", { concurrency: false }, () => {
       });
 
       const priority = await resolveMembershipGenerationPriority(db, {
-        organizationId,
+        userId: professionalUserId,
         modelCode: "seedance-i2v-pro",
         now: new Date("2026-06-08T00:00:00.000Z"),
       });
@@ -42,7 +42,7 @@ describe("membership priority service", { concurrency: false }, () => {
 
     try {
       const organizationId = await seedOrganization(db);
-      await seedExperienceMembership(db, {
+      const experienceUserId = await seedExperienceMembership(db, {
         organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-06-15T00:00:00.000Z",
@@ -53,7 +53,7 @@ describe("membership priority service", { concurrency: false }, () => {
       });
 
       const priority = await resolveMembershipGenerationPriority(db, {
-        organizationId,
+        userId: experienceUserId,
         modelCode: "seedance-i2v-pro",
         now: new Date("2026-06-08T00:00:00.000Z"),
       });
@@ -73,13 +73,13 @@ describe("membership priority service", { concurrency: false }, () => {
 
     try {
       const organizationId = await seedOrganization(db);
-      await seedProfessionalMembership(db, {
+      const professionalUserId = await seedProfessionalMembership(db, {
         organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
       });
       await overwriteSubscriptionTier(db, {
-        organizationId,
+        userId: professionalUserId,
         tier: "experience",
         periodEndAt: "2026-06-15T00:00:00.000Z",
       });
@@ -89,15 +89,15 @@ describe("membership priority service", { concurrency: false }, () => {
       });
 
       const priority = await resolveMembershipGenerationPriority(db, {
-        organizationId,
+        userId: professionalUserId,
         modelCode: "seedance-i2v-pro",
         now: new Date("2026-06-09T00:00:00.000Z"),
       });
 
       assert.deepEqual(priority, {
-        enabled: true,
-        priority: 1,
-        reason: "professional_membership_model_family_priority",
+        enabled: false,
+        priority: 5,
+        reason: "not_membership_priority_eligible",
       });
     } finally {
       await db.close();
@@ -109,7 +109,7 @@ describe("membership priority service", { concurrency: false }, () => {
 
     try {
       const organizationId = await seedOrganization(db);
-      await seedProfessionalMembership(db, {
+      const professionalUserId = await seedProfessionalMembership(db, {
         organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
@@ -120,7 +120,7 @@ describe("membership priority service", { concurrency: false }, () => {
       });
 
       const priority = await resolveMembershipGenerationPriority(db, {
-        organizationId,
+        userId: professionalUserId,
         modelCode: "gpt-image-2-cn",
         now: new Date("2026-06-08T00:00:00.000Z"),
       });
@@ -158,10 +158,9 @@ async function seedProfessionalMembership(
     periodEndAt: string;
   },
 ) {
-  await seedMembership(db, {
+  return seedMembership(db, {
     organizationId: input.organizationId,
     tier: "professional",
-    status: "professional_active",
     entitlementKeys: ["priority_generation"],
     priorityRules: input.priorityRules,
     periodEndAt: input.periodEndAt,
@@ -176,10 +175,9 @@ async function seedExperienceMembership(
     periodEndAt: string;
   },
 ) {
-  await seedMembership(db, {
+  return seedMembership(db, {
     organizationId: input.organizationId,
     tier: "experience",
-    status: "experience_active",
     entitlementKeys: ["priority_generation"],
     priorityRules: input.priorityRules,
     periodEndAt: input.periodEndAt,
@@ -191,7 +189,6 @@ async function seedMembership(
   input: {
     organizationId: string;
     tier: "experience" | "professional";
-    status: "experience_active" | "professional_active";
     entitlementKeys: string[];
     priorityRules: Record<string, unknown>;
     periodEndAt: string;
@@ -222,7 +219,7 @@ async function seedMembership(
       INSERT INTO users (id, phone_e164, status)
       VALUES ($1, $2, 'active')
     `,
-    [userId, input.tier === "experience" ? "+8613800990101" : "+8613800990102"],
+    [userId, input.tier === "experience" ? "13800199001" : "13800199002"],
   );
   await db.query(
     `
@@ -291,18 +288,42 @@ async function seedMembership(
   );
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
+      INSERT INTO memberships (
         id,
         organization_id,
+        workspace_id,
+        user_id,
+        role,
         status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id
+        membership_tier,
+        purchase_at,
+        expires_at,
+        gift_credits,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, '2026-06-08T00:00:00.000Z', $5, $6)
+      VALUES (
+        $1,
+        $2,
+        NULL,
+        $3,
+        'owner_admin',
+        'active',
+        $4,
+        '2026-06-08T00:00:00.000Z',
+        $5,
+        0,
+        '2026-06-08T00:00:00.000Z',
+        '2026-06-08T00:00:00.000Z'
+      )
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET
+        membership_tier = EXCLUDED.membership_tier,
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        updated_at = EXCLUDED.updated_at
     `,
-    [randomUUID(), input.organizationId, input.status, input.tier, input.periodEndAt, orderId],
+    [randomUUID(), input.organizationId, userId, input.tier, input.periodEndAt],
   );
   await db.query(
     `
@@ -348,26 +369,27 @@ async function seedMembership(
       [randomUUID(), input.organizationId, entitlementKey, input.periodEndAt],
     );
   }
+
+  return userId;
 }
 
 async function overwriteSubscriptionTier(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
   input: {
-    organizationId: string;
+    userId: string;
     tier: "experience" | "professional";
     periodEndAt: string;
   },
 ) {
   await db.query(
     `
-      UPDATE organization_membership_subscriptions
-      SET status = $2,
-          current_tier = $3,
-          current_period_end_at = $4,
+      UPDATE memberships
+      SET membership_tier = $2,
+          expires_at = $3,
           updated_at = '2026-06-09T00:00:00.000Z'
-      WHERE organization_id = $1
+      WHERE user_id = $1
     `,
-    [input.organizationId, `${input.tier}_active`, input.tier, input.periodEndAt],
+    [input.userId, input.tier, input.periodEndAt],
   );
 }
 

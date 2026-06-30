@@ -50,7 +50,7 @@ export async function verifyMembershipAndConsumeCredits(
   }
 
   const membershipStatus = await resolveMembershipStatus(db, {
-    organizationId: scope.organizationId,
+    userId: input.userId,
     now: input.now,
   });
   if (membershipStatus === "none") {
@@ -100,11 +100,10 @@ async function resolveUserCreditScope(db: SqlDatabase, userId: string) {
     `
       SELECT m.organization_id, m.workspace_id
       FROM memberships m
-      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE m.user_id = $1
         AND m.status = 'active'
       ORDER BY
-        CASE WHEN tp.id IS NULL AND m.role = 'owner_admin' THEN 0 ELSE 1 END,
+        CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
         m.created_at ASC
       LIMIT 1
     `,
@@ -120,20 +119,19 @@ async function resolveUserCreditScope(db: SqlDatabase, userId: string) {
 
 async function resolveMembershipStatus(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string; now: Date },
 ): Promise<"active" | "expired" | "none"> {
   const activePeriod = await queryOne<{ id: string }>(
     db,
     `
       SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
-        AND status = 'active'
-        AND period_start_at <= $2
-        AND period_end_at > $2
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId, input.now],
   );
   if (activePeriod) {
     return "active";
@@ -143,11 +141,12 @@ async function resolveMembershipStatus(
     db,
     `
       SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
       LIMIT 1
     `,
-    [input.organizationId],
+    [input.userId],
   );
   return anyPeriod ? "expired" : "none";
 }

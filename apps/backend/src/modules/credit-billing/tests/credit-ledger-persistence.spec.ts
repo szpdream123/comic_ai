@@ -25,7 +25,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const replay = await grantCredits(db, {
@@ -33,7 +33,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
 
@@ -98,7 +98,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
 
@@ -107,7 +107,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 30,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -147,7 +147,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       await db.query(
@@ -171,7 +171,7 @@ describe("persistent credit ledger and reservation", () => {
           amount: 10,
           sourceType: "workflow_task",
           sourceId: ids.task,
-          reason: "shot generation reservation",
+          reason: "分镜生成预占积分",
           now: now(),
         }),
         (error) => {
@@ -206,6 +206,58 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
+  it("normalizes membership ledger reasons to Chinese before persisting", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db);
+
+      const entry = await grantCredits(db, {
+        organizationId: ids.organization,
+        amount: 100,
+        sourceType: "membership_gift",
+        sourceId: ids.paymentOrder,
+        reason: "membership period gifted credits",
+        now: now(),
+      });
+      const stored = await queryOne<{ reason: string }>(
+        db,
+        "SELECT reason FROM credit_ledger_entries WHERE id = $1",
+        [entry.id],
+      );
+
+      assert.equal(stored?.reason, "会员赠送积分");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps reservation allocation reasons in source form when not normalized", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOrganization(db);
+
+      const entry = await grantCredits(db, {
+        organizationId: ids.organization,
+        amount: 30,
+        sourceType: "reservation_allocation",
+        sourceId: ids.task,
+        reason: "reservation allocation consumed",
+        now: now(),
+      });
+      const stored = await queryOne<{ reason: string }>(
+        db,
+        "SELECT reason FROM credit_ledger_entries WHERE id = $1",
+        [entry.id],
+      );
+
+      assert.equal(stored?.reason, "reservation allocation consumed");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("settles a reservation allocation at most once", async () => {
     const db = await createMigratedTestDb();
 
@@ -216,7 +268,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
@@ -224,7 +276,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 50,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -276,7 +328,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
@@ -284,7 +336,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 40,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -330,7 +382,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
@@ -338,7 +390,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 30,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
       await settleReservationAllocation(db, {
@@ -397,7 +449,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       await db.query(
@@ -461,7 +513,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
@@ -469,7 +521,7 @@ describe("persistent credit ledger and reservation", () => {
         amount: 50,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 

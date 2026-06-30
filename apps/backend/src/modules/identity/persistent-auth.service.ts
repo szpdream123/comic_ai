@@ -98,6 +98,24 @@ export type PersistentPasswordLoginResult =
   | { kind: "invalid_credentials" }
   | { kind: "user_disabled" };
 
+export type PersistentTeamMemberPasswordLoginResult =
+  | {
+      kind: "verified";
+      user: { id: string; phone: string | null; displayName?: string | null };
+      member: {
+        id: string;
+        memberAccount: string;
+        memberLoginAccount: string;
+        memberName: string;
+      };
+      session: AuthSession;
+      token: string;
+    }
+  | { kind: "invalid_credentials" }
+  | { kind: "user_disabled" }
+  | { kind: "team_member_disabled" }
+  | { kind: "team_member_deleted" };
+
 export async function requestPersistentLoginCode(
   db: SqlDatabase,
   input: {
@@ -558,6 +576,173 @@ export async function verifyPersistentPasswordLogin(
       id: user.id,
       phone: normalizeCnPhone(user.phone_e164),
       displayName: user.display_name ?? null,
+    },
+    session: createdSession.session,
+    token: createdSession.token,
+  };
+}
+
+export async function verifyPersistentTeamMemberPasswordLogin(
+  db: SqlDatabase,
+  input: {
+    account: string;
+    password: string;
+    now: Date;
+    remember?: boolean;
+  },
+): Promise<PersistentTeamMemberPasswordLoginResult> {
+  const account = String(input.account ?? "").trim().toLowerCase();
+  if (!account) {
+    return { kind: "invalid_credentials" };
+  }
+
+  const member = await queryOne<{
+    id: string;
+    user_id: string;
+    member_account: string;
+    member_login_account: string;
+    member_name: string;
+    member_password_hash: string;
+    status: "active" | "disabled" | "deleted";
+    user_phone_e164: string | null;
+    user_display_name: string | null;
+    user_status: "active" | "disabled";
+  }>(
+    db,
+    `
+      SELECT
+        team_members.id,
+        team_members.user_id,
+        team_members.member_account,
+        team_members.member_login_account,
+        team_members.member_name,
+        team_members.member_password_hash,
+        team_members.status,
+        users.phone_e164 AS user_phone_e164,
+        users.display_name AS user_display_name,
+        users.status AS user_status
+      FROM team_members
+      JOIN users ON users.id = team_members.user_id
+      WHERE lower(team_members.member_login_account) = $1
+      LIMIT 1
+    `,
+    [account],
+  );
+
+  if (!member) {
+    return { kind: "invalid_credentials" };
+  }
+
+  if (member.user_status !== "active") {
+    return { kind: "user_disabled" };
+  }
+
+  if (member.status === "disabled") {
+    return { kind: "team_member_disabled" };
+  }
+
+  if (member.status === "deleted") {
+    return { kind: "team_member_deleted" };
+  }
+
+  const validPassword = await verifyTeamCredential({
+    password: input.password,
+    passwordHash: member.member_password_hash,
+  });
+
+  if (!validPassword) {
+    return { kind: "invalid_credentials" };
+  }
+
+  const createdSession = await createAuthSession({
+    userId: member.user_id,
+    now: input.now,
+    ttlMs: sessionTtlMsForRemember(input.remember),
+  });
+
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        INSERT INTO auth_sessions (
+          id,
+          user_id,
+          status,
+          session_token_hash,
+          session_token_hash_version,
+          expires_at,
+          last_seen_at,
+          revoked_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        createdSession.session.id,
+        createdSession.session.userId,
+        createdSession.session.status,
+        createdSession.session.sessionTokenHash,
+        createdSession.session.sessionTokenHashVersion,
+        createdSession.session.expiresAt,
+        createdSession.session.lastSeenAt,
+        createdSession.session.revokedAt,
+        input.now,
+      ],
+    );
+
+    await db.query(
+      `
+        INSERT INTO team_member_auth_sessions (
+          id,
+          auth_session_id,
+          user_id,
+          member_id,
+          status,
+          expires_at,
+          last_seen_at,
+          revoked_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, 'active', $5, $6, NULL, $6)
+      `,
+      [
+        randomUUID(),
+        createdSession.session.id,
+        member.user_id,
+        member.id,
+        createdSession.session.expiresAt,
+        input.now,
+      ],
+    );
+
+    await db.query(
+      `
+        UPDATE users
+        SET last_login_at = $2,
+            updated_at = $2
+        WHERE id = $1
+      `,
+      [member.user_id, input.now],
+    );
+
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    kind: "verified",
+    user: {
+      id: member.user_id,
+      phone: member.user_phone_e164,
+      displayName: member.user_display_name ?? null,
+    },
+    member: {
+      id: member.id,
+      memberAccount: member.member_account,
+      memberLoginAccount: member.member_login_account,
+      memberName: member.member_name,
     },
     session: createdSession.session,
     token: createdSession.token,

@@ -8,6 +8,7 @@ ALTER TABLE ai_model_configs
     'openai_compatible_chat',
     'volcengine_ark_video',
     'aliyun_bailian_video',
+    'lingdong_api',
     'custom_http'
   ));
 

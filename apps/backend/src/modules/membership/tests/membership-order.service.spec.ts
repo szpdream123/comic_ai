@@ -207,6 +207,7 @@ describe("membership order service", { concurrency: false }, () => {
         status: "none",
         currentTier: null,
         currentPeriodEndAt: null,
+        giftCredits: 0,
         entitlements: {
           canvasAccess: false,
           fullFlowAgent: false,
@@ -214,9 +215,6 @@ describe("membership order service", { concurrency: false }, () => {
           teamAssetLibrary: false,
           teamDashboard: false,
           teamMemberManagement: false,
-        },
-        team: {
-          seatLimit: null,
         },
       });
     } finally {
@@ -242,16 +240,14 @@ describe("membership order service", { concurrency: false }, () => {
         status: "professional_active",
         currentTier: "professional",
         currentPeriodEndAt: "2026-07-08T08:00:00.000Z",
+        giftCredits: 3000,
         entitlements: {
-          canvasAccess: false,
-          fullFlowAgent: false,
+          canvasAccess: true,
+          fullFlowAgent: true,
           priorityGeneration: true,
           teamAssetLibrary: true,
           teamDashboard: true,
           teamMemberManagement: true,
-        },
-        team: {
-          seatLimit: 50,
         },
       });
     } finally {
@@ -276,9 +272,9 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.status, "professional_active");
       assert.equal(response.body.membership.currentTier, "professional");
       assert.equal(response.body.membership.currentPeriodEndAt, "2026-07-08T08:00:00.000Z");
+      assert.equal(response.body.membership.giftCredits, 3000);
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
-      assert.equal(response.body.membership.team.seatLimit, 50);
     } finally {
       await db.close();
     }
@@ -310,11 +306,11 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "professional_active");
       assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.giftCredits, 3000);
       assert.equal(response.body.membership.entitlements.priorityGeneration, true);
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
       assert.equal(response.body.membership.entitlements.teamDashboard, true);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
-      assert.equal(response.body.membership.team.seatLimit, 50);
     } finally {
       await db.close();
     }
@@ -345,10 +341,10 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "professional_active");
       assert.equal(response.body.membership.currentTier, "professional");
+      assert.equal(response.body.membership.giftCredits, 3000);
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, true);
       assert.equal(response.body.membership.entitlements.teamDashboard, true);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, true);
-      assert.equal(response.body.membership.team.seatLimit, 36);
     } finally {
       await db.close();
     }
@@ -410,7 +406,6 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
       assert.equal(response.body.membership.entitlements.teamDashboard, false);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
-      assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
       await db.close();
     }
@@ -423,28 +418,17 @@ describe("membership order service", { concurrency: false }, () => {
       const session = await seedCreator(db);
       await db.query(
         `
-          INSERT INTO organization_membership_subscriptions (
-            id,
-            organization_id,
-            status,
-            current_tier,
-            current_period_start_at,
-            current_period_end_at,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            $1,
-            $2,
-            'professional_active',
-            'professional',
-            '2026-06-01T08:00:00.000Z',
-            '2026-06-08T07:59:59.000Z',
-            '2026-06-01T08:00:00.000Z',
-            '2026-06-01T08:00:00.000Z'
-          )
+          UPDATE memberships
+          SET membership_tier = 'professional',
+              purchase_at = '2026-06-01T08:00:00.000Z',
+              expires_at = '2026-06-08T07:59:59.000Z',
+              gift_credits = 3000,
+              updated_at = '2026-06-01T08:00:00.000Z'
+          WHERE organization_id = $1
+            AND workspace_id = $2
+            AND user_id = $3
         `,
-        [randomUUID(), organizationId],
+        [organizationId, workspaceId, ownerUserId],
       );
       await db.query(
         `
@@ -473,10 +457,10 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "expired");
       assert.equal(response.body.membership.currentTier, null);
+      assert.equal(response.body.membership.giftCredits, 3000);
       assert.equal(response.body.membership.entitlements.canvasAccess, false);
       assert.equal(response.body.membership.entitlements.priorityGeneration, false);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
-      assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
       await db.close();
     }
@@ -503,6 +487,7 @@ describe("membership order service", { concurrency: false }, () => {
         status: "expired",
         currentTier: null,
         currentPeriodEndAt: "2026-06-08T07:59:59.000Z",
+        giftCredits: 3000,
         entitlements: {
           canvasAccess: false,
           fullFlowAgent: false,
@@ -510,9 +495,6 @@ describe("membership order service", { concurrency: false }, () => {
           teamAssetLibrary: false,
           teamDashboard: false,
           teamMemberManagement: false,
-        },
-        team: {
-          seatLimit: null,
         },
       });
     } finally {
@@ -554,6 +536,7 @@ describe("membership order service", { concurrency: false }, () => {
 
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "expired");
+      assert.equal(response.body.membership.giftCredits, 3000);
       assert.equal(organization.rows[0]?.credit_balance_cached, 21800);
       assert.deepEqual(ledger.rows, []);
     } finally {
@@ -566,7 +549,7 @@ async function seedCreator(db: Awaited<ReturnType<typeof createMigratedTestDb>>)
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800238001', 'active')
+      VALUES ($1, '13800138001', 'active')
     `,
     [ownerUserId],
   );
@@ -746,34 +729,23 @@ async function seedActiveProfessionalStatus(
   });
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
+      UPDATE memberships
+      SET membership_tier = $1,
+          purchase_at = $2,
+          expires_at = $3,
+          gift_credits = 3000,
+          updated_at = '2026-06-08T08:00:00.000Z'
+      WHERE organization_id = $4
+        AND workspace_id = $5
+        AND user_id = $6
     `,
     [
-      randomUUID(),
+      "professional",
+      periodStartAt,
+      periodEndAt,
       organizationId,
-      `${subscriptionTier}_active`,
-      subscriptionTier,
-      subscriptionTier === "professional" ? periodStartAt : "2026-06-09T08:00:00.000Z",
-      subscriptionTier === "professional" ? periodEndAt : "2026-06-16T08:00:00.000Z",
+      workspaceId,
+      ownerUserId,
     ],
   );
   await db.query(
@@ -873,28 +845,17 @@ async function seedProfessionalPeriodWithCurrentPlanEntitlements(
   });
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        'professional_active',
-        'professional',
-        '2026-06-08T08:00:00.000Z',
-        '2026-07-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
+      UPDATE memberships
+      SET membership_tier = 'professional',
+          purchase_at = '2026-06-08T08:00:00.000Z',
+          expires_at = '2026-07-08T08:00:00.000Z',
+          gift_credits = 3000,
+          updated_at = '2026-06-08T08:00:00.000Z'
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND user_id = $3
     `,
-    [randomUUID(), organizationId],
+    [organizationId, workspaceId, ownerUserId],
   );
   await db.query(
     `
@@ -964,6 +925,20 @@ async function seedActiveExperiencePeriod(
     productSnapshot: planSnapshot,
     createdAt: input.periodStartAt,
   });
+  await db.query(
+    `
+      UPDATE memberships
+      SET membership_tier = 'experience',
+          purchase_at = $1,
+          expires_at = $2,
+          gift_credits = 300,
+          updated_at = $1
+      WHERE organization_id = $3
+        AND workspace_id = $4
+        AND user_id = $5
+    `,
+    [input.periodStartAt, input.periodEndAt, organizationId, workspaceId, ownerUserId],
+  );
   await db.query(
     `
       INSERT INTO membership_periods (

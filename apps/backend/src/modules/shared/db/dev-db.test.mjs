@@ -115,6 +115,33 @@ test("ensureFoundationSchema repairs legacy foundation databases missing team me
   await db.close();
 });
 
+test("ensureFoundationSchema repairs memberships role check to allow sub_account", async () => {
+  const db = await createMigratedTestDb();
+  await db.query(`
+    ALTER TABLE memberships
+      DROP CONSTRAINT IF EXISTS memberships_role_check,
+      ADD CONSTRAINT memberships_role_check
+        CHECK (role IN ('owner_admin', 'producer', 'creator', 'viewer'));
+  `);
+
+  await ensureFoundationSchema(db);
+
+  const constraint = await db.query(`
+    SELECT pg_get_constraintdef(con.oid) AS definition
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = current_schema()
+      AND rel.relname = 'memberships'
+      AND con.conname = 'memberships_role_check'
+    LIMIT 1
+  `);
+
+  assert.match(constraint.rows[0]?.definition ?? "", /sub_account/);
+
+  await db.close();
+});
+
 test("ensureFoundationSchema repairs legacy storyboard prompt schema cleanup", async () => {
   const db = await createEmptyTestDb();
 

@@ -70,7 +70,7 @@ export async function consumeMembershipPeriodCreditGrant(
           amount: period.gift_credits,
           sourceType: "membership_gift",
           sourceId: period.id,
-          reason: "membership period gifted credits",
+          reason: "会员赠送积分",
           metadata: {
             orderId: period.order_id,
             orderNo: period.order_no,

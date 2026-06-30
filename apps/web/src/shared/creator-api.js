@@ -689,8 +689,12 @@ export const creatorApi = {
   },
 
   getCreditLedger(options = {}) {
-    const pageSize = Number(options.pageSize ?? 50);
+    const page = Number(options.page ?? 1);
+    const pageSize = Number(options.pageSize ?? 10);
     const params = new URLSearchParams();
+    if (Number.isFinite(page) && page > 0) {
+      params.set("page", String(Math.max(1, Math.round(page))));
+    }
     if (Number.isFinite(pageSize) && pageSize > 0) {
       params.set("pageSize", String(Math.min(100, Math.round(pageSize))));
     }
@@ -722,10 +726,28 @@ export const creatorApi = {
     return fetchJson("/api/creator/team/members", { dedupeKey: "GET /api/creator/team/members" });
   },
 
+  getTeamMemberAssignableResources(input = {}) {
+    const type = String(input.type ?? "").trim();
+    const page = Number(input.page ?? 1);
+    const pageSize = Number(input.pageSize ?? 10);
+    const params = new URLSearchParams();
+    if (type) {
+      params.set("type", type);
+    }
+    params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
+    params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 10));
+    const path = `/api/creator/team/assignable-resources?${params.toString()}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
   createTeamMember(input) {
     return postJsonWithIdempotency("/api/creator/team/members", input, {
       action: "team.member.create",
     });
+  },
+
+  updateTeamMember(memberId, input) {
+    return patchJson(`/api/creator/team/members/${encodeURIComponent(memberId)}`, input);
   },
 
   createProject(input) {

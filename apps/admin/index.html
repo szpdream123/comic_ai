@@ -6118,19 +6118,23 @@
             api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
           ]);
           const creditSummary = renderCreditSummary(ledgerResult.summary || {});
+          const creditAccountType = ledgerResult.accountType || frontendAccountTypeLabel(user);
           const ledgerRows = (ledgerResult.data || [])
             .map((entry) => {
               const creditChange = creditLedgerDisplayChange(entry);
-              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
+              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td>${escapeHtml(creditLedgerContentLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
             })
-            .join("") || `<tr><td colspan="6">暂无流水</td></tr>`;
+            .join("") || `<tr><td colspan="7">暂无流水</td></tr>`;
           const subRows = (subaccountsResult.data || [])
             .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
             .join("");
           document.getElementById("user-ledger-panel").innerHTML = `
             ${creditSummary}
+            <div class="check-list" style="margin-top:12px;">
+              <div><span>账户类型</span><span class="tag blue">${escapeHtml(creditAccountType)}</span></div>
+            </div>
             <h4>积分流水</h4>
-            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>内容</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
             <h4 style="margin-top:14px;">关联子账户</h4>
             <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
           `;
@@ -7700,6 +7704,32 @@
         if (text.includes("paid order")) return "充值到账";
         if (reason) return reason;
         return creditLedgerSourceLabel(entry);
+      }
+
+      function creditLedgerContentLabel(entry = {}) {
+        const explicit = String(entry.content || "").trim();
+        if (explicit) return explicit;
+        const metadata = entry.metadata || {};
+        const sourceType = String(entry.sourceType || "").toLowerCase();
+        const text = [
+          sourceType,
+          entry.reason,
+          metadata.mediaType,
+          metadata.kind,
+          metadata.taskType,
+          metadata.operation,
+          metadata.modelCode,
+        ].filter(Boolean).join(" ").toLowerCase();
+        if (sourceType === "payment_order") return "充值套餐增加积分";
+        if (sourceType === "membership_gift") return "会员赠送积分";
+        if (sourceType.includes("admin")) {
+          return entry.entryType === "consume" ? "手动扣减积分" : "手动增加积分";
+        }
+        if (text.includes("storyboard")) return entry.entryType === "release" ? "AI分镜生成返还积分" : "生AI分镜扣减";
+        if (text.includes("script")) return entry.entryType === "release" ? "生成剧本返还积分" : "生成剧本扣减";
+        if (text.includes("video")) return entry.entryType === "release" ? "生视频返还积分" : "生视频扣减";
+        if (text.includes("image")) return entry.entryType === "release" ? "生图返还积分" : "生图扣减";
+        return creditLedgerReasonLabel(entry);
       }
 
       function renderCreditSummary(summary = {}) {

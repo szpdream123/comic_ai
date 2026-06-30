@@ -13,6 +13,19 @@ test("script management shows creation entries when no backend script exists", (
   assert.match(html, /暂无剧本/);
 });
 
+test("team member script management waits for assigned scripts instead of showing creation entries", () => {
+  const html = renderScriptManagementPage({
+    state: {},
+    ui: {},
+    session: { user: { actorType: "team_member" } },
+  });
+
+  assert.doesNotMatch(html, /class="script-entry-grid"/);
+  assert.doesNotMatch(html, /data-action="open-script-modal"/);
+  assert.doesNotMatch(html, /data-action="open-original-script-modal"/);
+  assert.match(html, /请联系管理员分配/);
+});
+
 test("script management keeps analysis and direct adaptation modal entries separate", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
   const buttons = [...html.matchAll(/<button[^>]*data-action="open-script-modal"[^>]*>/g)]

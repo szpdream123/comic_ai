@@ -152,12 +152,18 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           FROM memberships membership_search
           LEFT JOIN organizations organization_search
             ON organization_search.id = membership_search.organization_id
-          LEFT JOIN team_member_profiles team_profile_search
-            ON team_profile_search.membership_id = membership_search.id
           WHERE membership_search.user_id = u.id
+            AND COALESCE(organization_search.name, '') ILIKE $${params.length}
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM team_members member_search
+          WHERE member_search.user_id = u.id
+            AND member_search.status <> 'deleted'
             AND (
-              COALESCE(organization_search.name, '') ILIKE $${params.length}
-              OR COALESCE(team_profile_search.display_name, '') ILIKE $${params.length}
+              COALESCE(member_search.member_name, '') ILIKE $${params.length}
+              OR COALESCE(member_search.member_account, '') ILIKE $${params.length}
+              OR COALESCE(member_search.member_login_account, '') ILIKE $${params.length}
             )
         )
       )`);
@@ -208,12 +214,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           ), 0) AS workspace_reserved_credits,
           COALESCE((
             SELECT COUNT(*)
-            FROM team_member_profiles child
-            WHERE child.organization_id = chosen.organization_id
-              AND child.workspace_id = chosen.workspace_id
-              AND child.member_group_id = chosen.team_group_id
-              AND child.membership_id <> chosen.membership_id
-              AND chosen.team_role IN ('admin', 'group_admin')
+            FROM team_members child
+            WHERE child.user_id = u.id
+              AND child.status = 'active'
           ), 0) AS subaccount_count
         FROM users u
         LEFT JOIN LATERAL (
@@ -223,18 +226,16 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             o.name AS organization_name,
             m.workspace_id,
             m.role AS membership_role,
-            tp.business_role AS team_role,
-            tg.id AS team_group_id,
-            tg.name AS team_group_name,
+            NULL::text AS team_role,
+            NULL::uuid AS team_group_id,
+            NULL::text AS team_group_name,
             u.credit_balance_cached AS organization_credit_balance,
             u.credit_reserved_cached AS organization_reserved_balance,
             u.credit_frozen_cached AS organization_frozen_balance,
             NULL::integer AS member_credit_balance,
-            tp.credit_used_cached AS member_credit_used
+            0::integer AS member_credit_used
           FROM memberships m
           LEFT JOIN organizations o ON o.id = m.organization_id
-          LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-          LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
           WHERE m.user_id = u.id
           ORDER BY
             CASE
@@ -243,10 +244,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             END,
             CASE
               WHEN o.name = '${PERSONAL_CREDIT_ORGANIZATION_NAME}' AND m.role = 'owner_admin' THEN 0
-              WHEN tp.id IS NOT NULL THEN 1
-              WHEN m.role = 'owner_admin' THEN 2
-              WHEN m.role = 'sub_account' THEN 3
-              ELSE 4
+              WHEN m.role = 'owner_admin' THEN 1
+              ELSE 2
             END,
             m.created_at DESC,
             m.id ASC
@@ -273,60 +272,60 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
   async function listSubaccounts(input: { userId: string }) {
     const result = await deps.db.query<AdminUserRow>(
       `
-        WITH parent AS (
-          SELECT tp.organization_id, tp.workspace_id, tp.member_group_id
-          FROM users u
-          JOIN memberships m ON m.user_id = u.id
-          JOIN team_member_profiles tp ON tp.membership_id = m.id
-          WHERE u.id = $1
-            AND tp.business_role IN ('admin', 'group_admin')
+        WITH owner_scope AS (
+          SELECT
+            m.organization_id,
+            o.name AS organization_name,
+            m.workspace_id
+          FROM memberships m
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          WHERE m.user_id = $1
+            AND m.status = 'active'
+          ORDER BY
+            CASE WHEN o.name = '${PERSONAL_CREDIT_ORGANIZATION_NAME}' AND m.role = 'owner_admin' THEN 0 ELSE 1 END,
+            CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
+            m.created_at DESC,
+            m.id ASC
           LIMIT 1
         )
         SELECT
-          u.id AS user_id,
-          u.invite_code,
-          u.display_name,
-          u.phone_e164,
-          u.email,
-          u.last_login_at,
-          u.status AS user_status,
-          o.id AS organization_id,
-          o.name AS organization_name,
-          w.id AS workspace_id,
-          m.id AS membership_id,
-          m.role AS membership_role,
-          tp.business_role AS team_role,
-          tg.id AS team_group_id,
-          tg.name AS team_group_name,
-          u.credit_balance_cached AS organization_credit_balance,
-          u.credit_reserved_cached AS organization_reserved_balance,
-          u.credit_frozen_cached AS organization_frozen_balance,
-          NULL::integer AS member_credit_balance,
-          tp.credit_used_cached AS member_credit_used,
+          member.id AS user_id,
+          NULL::text AS invite_code,
+          member.member_name AS display_name,
+          NULL::text AS phone_e164,
+          NULL::text AS email,
+          NULL::timestamptz AS last_login_at,
+          member.status AS user_status,
+          owner_scope.organization_id,
+          owner_scope.organization_name,
+          owner_scope.workspace_id,
+          member.id AS membership_id,
+          'team_member'::text AS membership_role,
+          NULL::text AS team_role,
+          NULL::uuid AS team_group_id,
+          NULL::text AS team_group_name,
+          member.member_credits AS organization_credit_balance,
+          0::integer AS organization_reserved_balance,
+          0::integer AS organization_frozen_balance,
+          member.member_credits AS member_credit_balance,
+          0::integer AS member_credit_used,
           COALESCE((
             SELECT SUM(r.amount_reserved)
             FROM credit_reservations r
-            WHERE r.organization_id = o.id
+            WHERE r.organization_id = owner_scope.organization_id
               AND r.status = 'active'
               AND (
-                r.user_id = u.id
-                OR r.metadata_json->>'targetUserId' = u.id::text
-                OR r.metadata_json->>'targetMembershipId' = m.id::text
+                r.user_id = member.id
+                OR r.metadata_json->>'targetUserId' = member.id::text
+                OR r.metadata_json->>'targetMembershipId' = member.id::text
               )
           ), 0) AS workspace_reserved_credits,
           0 AS subaccount_count
-        FROM parent p
-        JOIN team_member_profiles tp
-          ON tp.organization_id = p.organization_id
-          AND tp.workspace_id = p.workspace_id
-          AND tp.member_group_id = p.member_group_id
-          AND tp.business_role NOT IN ('admin', 'group_admin')
-        JOIN memberships m ON m.id = tp.membership_id
-        JOIN users u ON u.id = m.user_id
-        JOIN organizations o ON o.id = m.organization_id
-        JOIN workspaces w ON w.id = m.workspace_id
-        LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
-        ORDER BY tp.created_at DESC
+        FROM team_members member
+        CROSS JOIN owner_scope
+        WHERE member.user_id = $1
+          AND member.status <> 'deleted'
+        ORDER BY member.created_at DESC, member.id ASC
       `,
       [input.userId],
     );
@@ -348,18 +347,19 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 20)));
     const offset = (page - 1) * pageSize;
     const params: unknown[] = [];
-    const filters = ["tp.business_role IN ('admin', 'group_admin')"];
+    const filters = ["member.status <> 'deleted'"];
     const keyword = input.keyword?.trim();
     if (keyword) {
       params.push(`%${keyword}%`);
       filters.push(`(
-        u.id::text ILIKE $${params.length}
-        OR COALESCE(u.display_name, '') ILIKE $${params.length}
-        OR COALESCE(u.phone_e164, '') ILIKE $${params.length}
-        OR COALESCE(u.email, '') ILIKE $${params.length}
+        member.id::text ILIKE $${params.length}
+        OR COALESCE(member.member_name, '') ILIKE $${params.length}
+        OR COALESCE(member.member_account, '') ILIKE $${params.length}
+        OR COALESCE(member.member_login_account, '') ILIKE $${params.length}
+        OR COALESCE(owner.display_name, '') ILIKE $${params.length}
+        OR COALESCE(owner.phone_e164, '') ILIKE $${params.length}
+        OR COALESCE(owner.email, '') ILIKE $${params.length}
         OR COALESCE(o.name, '') ILIKE $${params.length}
-        OR COALESCE(tp.display_name, '') ILIKE $${params.length}
-        OR COALESCE(tg.name, '') ILIKE $${params.length}
       )`);
     }
     const whereSql = `WHERE ${filters.join(" AND ")}`;
@@ -367,11 +367,20 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const total = await deps.db.query<{ count: number | string }>(
       `
         SELECT COUNT(*) AS count
-        FROM users u
-        JOIN memberships m ON m.user_id = u.id
-        JOIN organizations o ON o.id = m.organization_id
-        JOIN team_member_profiles tp ON tp.membership_id = m.id
-        LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
+        FROM team_members member
+        JOIN users owner ON owner.id = member.user_id
+        LEFT JOIN LATERAL (
+          SELECT m.organization_id, m.workspace_id
+          FROM memberships m
+          WHERE m.user_id = owner.id
+            AND m.status = 'active'
+          ORDER BY
+            CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
+            m.created_at DESC,
+            m.id ASC
+          LIMIT 1
+        ) owner_membership ON TRUE
+        LEFT JOIN organizations o ON o.id = owner_membership.organization_id
         ${whereSql}
       `,
       params,
@@ -379,52 +388,54 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const result = await deps.db.query<AdminUserRow>(
       `
         SELECT
-          u.id AS user_id,
-          u.display_name,
-          u.phone_e164,
-          u.email,
-          u.status AS user_status,
+          member.id AS user_id,
+          NULL::text AS invite_code,
+          member.member_name AS display_name,
+          NULL::text AS phone_e164,
+          NULL::text AS email,
+          NULL::timestamptz AS last_login_at,
+          member.status AS user_status,
           o.id AS organization_id,
           o.name AS organization_name,
-          w.id AS workspace_id,
-          m.id AS membership_id,
-          m.role AS membership_role,
-          tp.business_role AS team_role,
-          tg.id AS team_group_id,
-          tg.name AS team_group_name,
-          u.credit_balance_cached AS organization_credit_balance,
-          u.credit_reserved_cached AS organization_reserved_balance,
-          u.credit_frozen_cached AS organization_frozen_balance,
-          NULL::integer AS member_credit_balance,
-          tp.credit_used_cached AS member_credit_used,
+          owner_membership.workspace_id,
+          member.id AS membership_id,
+          'team_member'::text AS membership_role,
+          NULL::text AS team_role,
+          NULL::uuid AS team_group_id,
+          NULL::text AS team_group_name,
+          member.member_credits AS organization_credit_balance,
+          0::integer AS organization_reserved_balance,
+          0::integer AS organization_frozen_balance,
+          member.member_credits AS member_credit_balance,
+          0::integer AS member_credit_used,
           COALESCE((
             SELECT SUM(r.amount_reserved)
             FROM credit_reservations r
             WHERE r.organization_id = o.id
               AND r.status = 'active'
               AND (
-                r.user_id = u.id
-                OR r.metadata_json->>'targetUserId' = u.id::text
-                OR r.metadata_json->>'targetMembershipId' = m.id::text
+                r.user_id = member.id
+                OR r.metadata_json->>'targetUserId' = member.id::text
+                OR r.metadata_json->>'targetMembershipId' = member.id::text
               )
           ), 0) AS workspace_reserved_credits,
-          COALESCE((
-            SELECT COUNT(*)
-            FROM team_member_profiles child
-            WHERE child.organization_id = tp.organization_id
-              AND child.workspace_id = tp.workspace_id
-              AND child.member_group_id = tp.member_group_id
-              AND child.membership_id <> tp.membership_id
-              AND child.business_role NOT IN ('admin', 'group_admin')
-          ), 0) AS subaccount_count
-        FROM users u
-        JOIN memberships m ON m.user_id = u.id
-        JOIN organizations o ON o.id = m.organization_id
-        JOIN workspaces w ON w.id = m.workspace_id
-        JOIN team_member_profiles tp ON tp.membership_id = m.id
-        LEFT JOIN team_member_groups tg ON tg.id = tp.member_group_id
+          0 AS subaccount_count
+        FROM team_members member
+        JOIN users owner ON owner.id = member.user_id
+        LEFT JOIN LATERAL (
+          SELECT m.organization_id, m.workspace_id
+          FROM memberships m
+          WHERE m.user_id = owner.id
+            AND m.status = 'active'
+          ORDER BY
+            CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
+            m.created_at DESC,
+            m.id ASC
+          LIMIT 1
+        ) owner_membership ON TRUE
+        LEFT JOIN organizations o ON o.id = owner_membership.organization_id
         ${whereSql}
-        ORDER BY tp.created_at DESC, u.id ASC
+        ORDER BY member.created_at DESC, member.id ASC
         LIMIT $${params.length + 1}
         OFFSET $${params.length + 2}
       `,
@@ -1042,6 +1053,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
 
   async function listUserCreditLedger(input: {
     userId: string;
+    page?: number;
     pageSize?: number;
     organizationId?: string | null;
     workspaceId?: string | null;
@@ -1053,8 +1065,18 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
+    const page = Math.max(1, Number(input.page ?? 1));
     const ledgerScope = ledgerScopeForTarget(target);
-    const fetchLimit = Math.min(300, pageSize * 4);
+    const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
+    const totalResult = await deps.db.query<LedgerRow>(
+      `
+        SELECT *
+        FROM credit_ledger_entries
+        WHERE ${ledgerScope.sql}
+        ORDER BY created_at DESC, id ASC
+      `,
+      ledgerScope.params,
+    );
     const result = await deps.db.query<LedgerRow>(
       `
         SELECT *
@@ -1065,12 +1087,20 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       `,
       [...ledgerScope.params, fetchLimit],
     );
-    const rows = coalesceUserCreditLedgerRows(result.rows).slice(0, pageSize);
+    const totalRows = coalesceUserCreditLedgerRows(totalResult.rows);
+    const start = (page - 1) * pageSize;
+    const rows = coalesceUserCreditLedgerRows(result.rows).slice(start, start + pageSize);
     const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
       data: rows.map(ledgerFromRow),
+      accountType: resolveCreditAccountType(target),
       summary,
-      meta: { total: rows.length },
+      meta: {
+        total: totalRows.length,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalRows.length / pageSize)),
+      },
     };
   }
 
@@ -1231,6 +1261,7 @@ interface UserCreditTargetRow {
   organization_name: string | null;
   workspace_id: string | null;
   membership_id: string;
+  membership_role: string | null;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -1242,7 +1273,10 @@ interface UserCreditTarget {
   organizationName: string | null;
   workspaceId: string | null;
   membershipId: string;
+  membershipRole: string | null;
   teamProfileId: string | null;
+  teamRole: string | null;
+  teamGroupId: string | null;
   createdByUserId: string | null;
 }
 
@@ -1266,6 +1300,7 @@ interface LedgerRow {
   source_id: string;
   reason: string;
   metadata_json: unknown;
+  user_id: string | null;
   created_at: Date | string;
 }
 
@@ -1273,7 +1308,7 @@ async function buildTeamPlanLimitSummary(
   db: SqlDatabase,
   organizationId: string,
 ): Promise<AdminTeamPlanLimitSummary | null> {
-  const wallet = await queryOne<{
+  const organization = await queryOne<{
     id: string;
     name: string;
   }>(
@@ -1340,10 +1375,13 @@ async function countOrganizationActiveSubaccounts(db: SqlDatabase, organizationI
     db,
     `
       SELECT COUNT(*) AS count
-      FROM memberships
-      WHERE organization_id = $1
-        AND role = 'sub_account'
-        AND status = 'active'
+      FROM team_members member
+      JOIN memberships owner_membership
+        ON owner_membership.user_id = member.user_id
+       AND owner_membership.organization_id = $1
+       AND owner_membership.status = 'active'
+      WHERE member.status = 'active'
+        AND owner_membership.role = 'owner_admin'
     `,
     [organizationId],
   );
@@ -1378,21 +1416,21 @@ async function findUserCreditTarget(
         m.organization_id,
         m.workspace_id,
         m.id AS membership_id,
+        m.role AS membership_role,
         o.name AS organization_name,
-        tp.id AS team_profile_id,
-        tp.created_by_user_id
+        NULL::text AS team_profile_id,
+        NULL::text AS team_role,
+        NULL::text AS team_group_id,
+        NULL::text AS created_by_user_id
       FROM users u
       JOIN memberships m ON m.user_id = u.id
       LEFT JOIN organizations o ON o.id = m.organization_id
-      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
       WHERE ${filters.join(" AND ")}
       ORDER BY
         CASE
           WHEN o.name = '${PERSONAL_CREDIT_ORGANIZATION_NAME}' AND m.role = 'owner_admin' THEN 0
-          WHEN tp.id IS NOT NULL THEN 1
-          WHEN m.role = 'owner_admin' THEN 2
-          WHEN m.role = 'sub_account' THEN 3
-          ELSE 4
+          WHEN m.role = 'owner_admin' THEN 1
+          ELSE 2
         END,
         m.created_at ASC
       LIMIT 1
@@ -1411,7 +1449,10 @@ async function findUserCreditTarget(
     organizationName: row.organization_name,
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
+    membershipRole: row.membership_role,
     teamProfileId: row.team_profile_id,
+    teamRole: row.team_role,
+    teamGroupId: row.team_group_id,
     createdByUserId: row.created_by_user_id,
   };
 }
@@ -1447,6 +1488,35 @@ function ledgerScopeForTarget(target: UserCreditTarget): LedgerScope {
         AND ledger_workflow.created_by_user_id = $1::uuid
     )
   )`;
+  if (target.membershipRole === "owner_admin" || target.teamRole === "admin" || target.teamRole === "group_admin") {
+    const managedMemberFilter = `(
+      ${targetFilter}
+      OR EXISTS (
+        SELECT 1
+        FROM team_members ledger_member
+        LEFT JOIN credit_reservations managed_reservation
+          ON managed_reservation.organization_id = credit_ledger_entries.organization_id
+         AND managed_reservation.id = credit_ledger_entries.reservation_id
+        WHERE (
+            ledger_member.id = credit_ledger_entries.user_id
+            OR ledger_member.id::text = credit_ledger_entries.metadata_json->>'targetUserId'
+            OR ledger_member.id::text = credit_ledger_entries.metadata_json->>'targetMembershipId'
+            OR ledger_member.id = credit_ledger_entries.created_by_user_id
+            OR ledger_member.id = managed_reservation.user_id
+            OR ledger_member.id::text = managed_reservation.metadata_json->>'targetUserId'
+            OR ledger_member.id::text = managed_reservation.metadata_json->>'targetMembershipId'
+            OR ledger_member.id = managed_reservation.created_by_user_id
+          )
+          AND ledger_member.user_id = $1::uuid
+          AND ledger_member.status <> 'deleted'
+      )
+    )`;
+    return {
+      sql: managedMemberFilter,
+      params: [target.userId, target.userId, target.membershipId],
+      limitParamIndex: 4,
+    };
+  }
   return {
     sql: targetFilter,
     params: [target.userId, target.userId, target.membershipId],
@@ -1461,6 +1531,13 @@ function isMemberWalletTarget(target: UserCreditTarget) {
 function isPersonalCreditOwnerTarget(target: UserCreditTarget) {
   return target.organizationName === PERSONAL_CREDIT_ORGANIZATION_NAME
     && !target.teamProfileId;
+}
+
+function resolveCreditAccountType(target: UserCreditTarget): "管理员账户" | "子账户" | "普通账户" {
+  if (target.membershipRole === "owner_admin" || target.teamRole === "admin" || target.teamRole === "group_admin") {
+    return "管理员账户";
+  }
+  return "普通账户";
 }
 
 function isWritableCreditTarget(target: UserCreditTarget) {
@@ -1492,20 +1569,6 @@ async function buildUserCreditSummary(
     `,
     [target.userId],
   );
-  const member = target.teamProfileId
-    ? await queryOne<{
-        credit_balance_cached: number | string;
-        credit_used_cached: number | string;
-      }>(
-        db,
-        `
-          SELECT credit_balance_cached, credit_used_cached
-          FROM team_member_profiles
-          WHERE id = $1
-        `,
-        [target.teamProfileId],
-      )
-    : null;
   const totals = await queryOne<{
     total_granted: number | string;
     total_released: number | string;
@@ -1575,7 +1638,7 @@ async function buildUserCreditSummary(
   const organizationReserved = Number(wallet?.credit_reserved_cached ?? 0);
   const organizationFrozen = Number(wallet?.credit_frozen_cached ?? 0);
   const memberAvailable = null;
-  const memberUsed = member ? Number(member.credit_used_cached ?? 0) : null;
+  const memberUsed = null;
   const displayAvailableCredits = organizationAvailable;
   const targetReserved = Number(reservations?.active_reserved ?? 0);
   const totalConsumed = Number(reservationConsumed?.total_consumed ?? 0) + Number(standaloneConsumed?.total_consumed ?? 0);
@@ -1642,10 +1705,7 @@ function isPersonalCreditOwnerRow(row: AdminUserRow) {
 }
 
 function resolveAccountType(row: AdminUserRow): AdminUserListItem["accountType"] {
-  if (row.team_role === "admin" || row.team_role === "group_admin") {
-    return "team_permission_account";
-  }
-  if (row.membership_role === "sub_account" || row.team_role) {
+  if (row.membership_role === "team_member") {
     return "subaccount";
   }
   if (row.membership_role === "owner_admin") {
@@ -1688,8 +1748,50 @@ function ledgerFromRow(row: LedgerRow) {
     sourceId: row.source_id,
     reason: row.reason,
     metadata: normalizeJson(row.metadata_json),
+    content: creditLedgerContentLabel(row),
+    userId: row.user_id,
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function creditLedgerContentLabel(row: LedgerRow) {
+  const metadata = normalizeJson(row.metadata_json);
+  const reason = String(row.reason ?? "").trim();
+  const sourceType = String(row.source_type ?? "").trim().toLowerCase();
+  const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  const scenario = String(metadata.adjustmentScenario ?? "").trim();
+  const packageName = String(metadata.packageName ?? metadata.package_name ?? metadata.planName ?? metadata.plan_name ?? "").trim();
+  const credits = Number(row.amount ?? 0);
+  const text = [sourceType, reason, mediaType, taskType, metadata.modelCode, metadata.providerOperation]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (sourceType === "payment_order") {
+    return packageName ? `充值${packageName}套餐增加积分` : `充值${Number.isFinite(credits) ? `${credits}积分套餐` : "套餐"}增加积分`;
+  }
+  if (sourceType === "membership_gift") {
+    return "会员赠送积分";
+  }
+  if (sourceType.includes("admin")) {
+    if (scenario === "promotion" || scenario === "recharge_bonus") return "活动增加积分";
+    return row.entry_type === "consume" ? "手动扣减积分" : "手动增加积分";
+  }
+  if (text.includes("storyboard")) {
+    return row.entry_type === "release" ? "AI分镜生成返还积分" : "生AI分镜扣减";
+  }
+  if (text.includes("script") || mediaType === "text") {
+    return row.entry_type === "release" ? "生成剧本返还积分" : "生成剧本扣减";
+  }
+  if (text.includes("video") || mediaType === "video") {
+    return row.entry_type === "release" ? "生视频返还积分" : "生视频扣减";
+  }
+  if (text.includes("image") || mediaType === "image") {
+    return row.entry_type === "release" ? "生图返还积分" : "生图扣减";
+  }
+  if (row.entry_type === "grant") return "增加积分";
+  if (row.entry_type === "release") return "任务返还积分";
+  return row.entry_type === "consume" || row.entry_type === "reservation" ? "任务扣减积分" : "积分变动";
 }
 
 function modelRequestLogFromRow(
