@@ -23,7 +23,7 @@ test("team member script management waits for assigned scripts instead of showin
   assert.doesNotMatch(html, /class="script-entry-grid"/);
   assert.doesNotMatch(html, /data-action="open-script-modal"/);
   assert.doesNotMatch(html, /data-action="open-original-script-modal"/);
-  assert.match(html, /请等待管理员分配/);
+  assert.match(html, /请联系管理员分配/);
 });
 
 test("script management keeps analysis and direct adaptation modal entries separate", () => {

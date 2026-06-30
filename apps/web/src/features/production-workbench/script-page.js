@@ -87,7 +87,7 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
             ? renderScriptRecordTabs(filteredCards, selectedCard, ui)
             : `<div class="script-empty-state">
                 <strong>暂无剧本</strong>
-                <span>${isTeamMember ? "请等待管理员分配" : "从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。"}</span>
+                <span>${isTeamMember ? "请联系管理员分配" : "从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。"}</span>
               </div>`
         }
       </section>

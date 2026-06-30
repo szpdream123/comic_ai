@@ -64,6 +64,7 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
+const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
@@ -928,7 +929,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       isStoryboardDescriptionModalOpen: false,
       storyboardDescriptionDraft: "",
       episodeCardMenuId: null,
-      activeNavTab: deriveInitialNavTab(window.location.hash),
+      activeNavTab: deriveInitialNavTab(window.location.hash, session),
       projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
       libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
       libraryTeamAssetScope: "official",
@@ -1359,8 +1360,28 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       !workbench.ui.activeGenerationFrameMenu &&
       !workbench.ui.referenceAssetPickerKind &&
       !workbench.ui.libraryDetailAssetId &&
-      !workbench.ui.storyboardDeleteId
+      !workbench.ui.storyboardDeleteId &&
+      !workbench.ui.teamMemberDraft?.resourcePickerType &&
+      !workbench.ui.editMemberModal?.resourcePickerType
     ) {
+      return;
+    }
+    if (workbench.ui.teamMemberDraft?.resourcePickerType) {
+      workbench.ui.teamMemberDraft = {
+        ...workbench.ui.teamMemberDraft,
+        resourcePickerType: "",
+        resourcePickerPage: 1,
+      };
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
+    if (workbench.ui.editMemberModal?.resourcePickerType) {
+      workbench.ui.editMemberModal = {
+        ...workbench.ui.editMemberModal,
+        resourcePickerType: "",
+        resourcePickerPage: 1,
+      };
+      render(workbench, { preserveLibraryScroll: true });
       return;
     }
     workbench.ui.assetCardMenuId = null;
@@ -2071,6 +2092,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         initialCredits: Math.max(0, Number(target.value) || 0),
       };
       workbench.ui.teamMemberCreateNotice = "";
+      target.value = String(workbench.ui.teamMemberDraft.initialCredits ?? 0);
       return;
     }
 
@@ -2996,6 +3018,10 @@ function isActiveMembershipStatus(membershipStatus) {
 
 function hasActiveMembershipAccess(workbench) {
   return isActiveMembershipStatus(workbench.ui?.membershipStatus);
+}
+
+function isTeamMemberSession(session) {
+  return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
 }
 
 function hasEffectiveTeamMemberManagementAccess(workbench) {
@@ -3925,17 +3951,7 @@ async function loadTeamSurface(workbench) {
       workbench.api.getTeamOverview(),
       workbench.api.getTeamMembers(),
     ]);
-    workbench.ui.teamOverview = overviewPayload?.overview ?? overviewPayload?.team ?? overviewPayload ?? null;
-    workbench.ui.teamOverview = {
-      ...(workbench.ui.teamOverview ?? {}),
-      teamAccountSuffix: String(
-        workbench.ui.teamOverview?.teamAccountSuffix ??
-        workbench.ui.teamOverview?.team_account_suffix ??
-        overviewPayload?.teamAccountSuffix ??
-        overviewPayload?.team_account_suffix ??
-        "",
-      ).trim().toLowerCase(),
-    };
+    workbench.ui.teamOverview = normalizeTeamOverviewPayload(overviewPayload);
     workbench.ui.teamMembers = Array.isArray(membersPayload?.members) ? membersPayload.members : [];
     workbench.ui.teamError = "";
   } catch (error) {
@@ -3943,6 +3959,44 @@ async function loadTeamSurface(workbench) {
     workbench.ui.teamMembers = [];
     workbench.ui.teamError = friendlyError(error);
   }
+}
+
+function normalizeTeamOverviewPayload(payload) {
+  const overview = payload?.overview ?? payload?.team ?? payload ?? null;
+  if (!overview || typeof overview !== "object") {
+    return null;
+  }
+  const memberCount = Number(overview.team?.memberCount ?? overview.memberCount ?? overview.member_count ?? 0);
+  const activated = overview.team?.activated ?? overview.activated ?? overview.teamActivated ?? overview.team_activated;
+  const seatLimit = overview.seats?.limit ?? overview.seats?.total ?? overview.seatLimit ?? overview.seat_limit;
+  const seatUsed = overview.seats?.used ?? overview.usedSeats ?? overview.used_seats ?? memberCount;
+  const seatRemaining = overview.seats?.remaining ?? overview.remainingSeats ?? overview.remaining_seats;
+  const normalizedSeatLimit = Number(seatLimit ?? 0);
+  const normalizedSeatUsed = Number(seatUsed ?? 0);
+  const normalizedSeatRemaining = Number(seatRemaining ?? (
+    normalizedSeatLimit > 0 ? Math.max(0, normalizedSeatLimit - normalizedSeatUsed) : 0
+  ));
+  return {
+    ...overview,
+    team: {
+      ...(overview.team ?? {}),
+      activated: activated === true || memberCount > 0,
+      memberCount: Number.isFinite(memberCount) ? memberCount : 0,
+    },
+    seats: {
+      ...(overview.seats ?? {}),
+      used: Number.isFinite(normalizedSeatUsed) ? normalizedSeatUsed : 0,
+      limit: Number.isFinite(normalizedSeatLimit) ? normalizedSeatLimit : 0,
+      remaining: Number.isFinite(normalizedSeatRemaining) ? normalizedSeatRemaining : 0,
+    },
+    teamAccountSuffix: String(
+      overview.teamAccountSuffix ??
+      overview.team_account_suffix ??
+      payload?.teamAccountSuffix ??
+      payload?.team_account_suffix ??
+      "",
+    ).trim().toLowerCase(),
+  };
 }
 
 function applyTeamMemberPatch(workbench, memberId, patch = {}, options = {}) {
@@ -3974,6 +4028,30 @@ function applyTeamMemberPatch(workbench, memberId, patch = {}, options = {}) {
           ...patch,
         };
   }
+}
+
+function resolveTeamMemberUpdateResponseMember(response) {
+  if (response?.member && typeof response.member === "object") {
+    return response.member;
+  }
+  if (response?.body?.member && typeof response.body.member === "object") {
+    return response.body.member;
+  }
+  if (response?.data?.member && typeof response.data.member === "object") {
+    return response.data.member;
+  }
+  return null;
+}
+
+function normalizeTeamMemberStatus(value) {
+  const status = String(value ?? "").trim().toLowerCase();
+  if (status === "enabled") {
+    return "active";
+  }
+  if (status === "disabled" || status === "deleted" || status === "active") {
+    return status;
+  }
+  return "active";
 }
 
 function deriveTeamMemberAccountPrefix(memberLoginAccount, teamAccountSuffix) {
@@ -4058,6 +4136,7 @@ function updateTeamMemberCreateResourceSelection(workbench, target) {
   if (resourceId) {
     if (target.checked) {
       current.add(resourceId);
+      rememberSelectedTeamMemberResource(workbench, config.fieldKey.replace(/Ids$/, ""), resourceId);
     } else {
       current.delete(resourceId);
     }
@@ -4074,7 +4153,7 @@ function updateTeamMemberCreateResourceSelection(workbench, target) {
 function updateEditMemberResourceSelection(workbench, target) {
   const action = String(target?.dataset?.action ?? "");
   const config = action === "toggle-edit-member-project"
-    ? { datasetKey: "projectId", fieldKey: "projectIds" }
+    ? { datasetKey: "projectId", fieldKey: "directProjectIds" }
     : action === "toggle-edit-member-script"
       ? { datasetKey: "scriptId", fieldKey: "scriptIds" }
       : action === "toggle-edit-member-canvas"
@@ -4147,16 +4226,15 @@ async function submitTeamMemberCreate(workbench) {
   }
 
   await runAction(workbench, "正在创建成员账号...", async () => {
-    const availableScripts = Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [];
-    const availableCanvases = Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [];
+    const availableScripts = mergeCachedTeamMemberResources(workbench, "script", workbench.ui?.scriptLibraryRecords);
+    const availableCanvases = mergeCachedTeamMemberResources(workbench, "canvas", workbench.ui?.canvasProjects);
     const selectedProjectIds = new Set(
-      (Array.isArray(draft.projectIds) ? draft.projectIds : [])
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean),
+      normalizeSelectedResourceIds(draft.projectIds),
     );
-    const selectedScriptIds = new Set(collectAssignableResourceIds(draft.scriptIds, availableScripts).ids);
-    const selectedCanvasResources = collectAssignableResourceIds(draft.canvasIds, availableCanvases);
-    const selectedCanvasIds = new Set(selectedCanvasResources.ids);
+    const selectedScriptIds = new Set(normalizeSelectedResourceIds(draft.scriptIds));
+    const selectedCanvasIds = new Set(normalizeSelectedResourceIds(draft.canvasIds));
+    addSelectedResourceProjectIds(selectedProjectIds, draft.scriptIds, availableScripts);
+    addSelectedResourceProjectIds(selectedProjectIds, draft.canvasIds, availableCanvases);
 
     const created = await workbench.api.createTeamMember({
       teamAccount,
@@ -7029,6 +7107,49 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     syncTeamMemberCreateDraftFromDom(workbench);
   }
 
+  if (action === "open-team-member-resource-picker") {
+    const resourceType = String(target.dataset.resourceType ?? "").trim();
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+      syncTeamMemberCreateDraftFromDom(workbench);
+      workbench.ui.teamMemberDraft = {
+        ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
+        resourcePickerType: resourceType,
+        resourcePickerPage: 1,
+      };
+      render(workbench);
+      await loadTeamMemberAssignableResourcePage(workbench, resourceType, 1);
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-team-member-resource-picker") {
+    syncTeamMemberCreateDraftFromDom(workbench);
+    workbench.ui.teamMemberDraft = {
+      ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
+      resourcePickerType: "",
+      resourcePickerPage: 1,
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "page-team-member-resource-picker") {
+    const resourceType = String(workbench.ui.teamMemberDraft?.resourcePickerType ?? "").trim();
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+      const page = Math.max(1, Number(target.dataset.page ?? 1) || 1);
+      syncTeamMemberCreateDraftFromDom(workbench);
+      workbench.ui.teamMemberDraft = {
+        ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
+        resourcePickerPage: page,
+      };
+      render(workbench);
+      await loadTeamMemberAssignableResourcePage(workbench, resourceType, page);
+      render(workbench);
+    }
+    return;
+  }
+
   if (action === "submit-team-member-create") {
     await submitTeamMemberCreate(workbench);
     return;
@@ -7074,7 +7195,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    await preloadTeamMemberAssignableResources(workbench);
     const projectIds = Array.isArray(member.projectIds)
       ? member.projectIds.map((item) => String(item ?? "").trim()).filter(Boolean)
       : [];
@@ -7084,8 +7204,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.teamOverview?.team_account_suffix ??
       "",
     ).trim().toLowerCase();
-    const availableScripts = Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [];
-    const availableCanvases = Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [];
+    const scriptIds = Array.isArray(member.scriptIds)
+      ? member.scriptIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : [];
+    const canvasIds = Array.isArray(member.canvasIds)
+      ? member.canvasIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : [];
     workbench.ui.editMemberModal = {
       open: true,
       id: member.membershipId ?? member.id,
@@ -7102,22 +7226,39 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       newPassword: "",
       confirmPassword: "",
       projectIds,
-      scriptIds: Array.isArray(member.scriptIds)
-        ? member.scriptIds.map((item) => String(item ?? "").trim()).filter(Boolean)
-        : [],
-      canvasIds: Array.isArray(member.canvasIds)
-        ? member.canvasIds.map((item) => String(item ?? "").trim()).filter(Boolean)
-        : [],
+      directProjectIds: Array.isArray(member.directProjectIds)
+        ? normalizeSelectedResourceIds(member.directProjectIds)
+        : projectIds,
+      scriptIds,
+      canvasIds,
       availableProjects: Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [],
-      availableScripts,
-      availableCanvases,
-      status: member.status ?? "enabled",
+      availableScripts: Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [],
+      availableCanvases: Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [],
+      status: normalizeTeamMemberStatus(member.status),
       creditBalance: member.creditBalance ?? member.creditQuota ?? member.creditBalanceCached ?? 0,
       creditAdjustmentType: "",
       creditAmount: "",
       resourceSelectionDirty: false,
+      resourcePickerType: "",
+      resourcePickerPage: 1,
       notice: "",
     };
+    await preloadTeamMemberAssignableResources(workbench);
+    if (workbench.ui.editMemberModal?.id && String(workbench.ui.editMemberModal.id) === String(member.membershipId ?? member.id)) {
+      const availableScripts = Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [];
+      const availableCanvases = Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [];
+      workbench.ui.editMemberModal = {
+        ...workbench.ui.editMemberModal,
+        directProjectIds: Array.isArray(member.directProjectIds)
+          ? normalizeSelectedResourceIds(member.directProjectIds)
+          : Array.isArray(member.inheritedProjectIds)
+            ? subtractSelectedResourceIds(projectIds, member.inheritedProjectIds)
+          : deriveDirectProjectIdsFromResourceScope(projectIds, scriptIds, canvasIds, [
+              ...availableScripts,
+              ...availableCanvases,
+            ]),
+      };
+    }
     render(workbench);
     return;
   }
@@ -7125,6 +7266,47 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-edit-member") {
     workbench.ui.editMemberModal = null;
     render(workbench);
+    return;
+  }
+
+  if (action === "open-edit-member-resource-picker") {
+    const resourceType = String(target.dataset.resourceType ?? "").trim();
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+      const currentPage = Math.max(1, Number(workbench.ui.editMemberModal?.resourcePagination?.[resourceType]?.page ?? 1) || 1);
+      workbench.ui.editMemberModal = {
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
+        resourcePickerType: resourceType,
+        resourcePickerPage: currentPage,
+      };
+      render(workbench);
+      await loadTeamMemberAssignableResourcePage(workbench, resourceType, currentPage);
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-edit-member-resource-picker") {
+    workbench.ui.editMemberModal = {
+      ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
+      resourcePickerType: "",
+      resourcePickerPage: 1,
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "page-edit-member-resource-picker") {
+    const page = Math.max(1, Number(target.dataset.page ?? 1) || 1);
+    const resourceType = String(workbench.ui.editMemberModal?.resourcePickerType ?? "").trim();
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+      workbench.ui.editMemberModal = {
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
+        resourcePickerPage: page,
+      };
+      render(workbench);
+      await loadTeamMemberAssignableResourcePage(workbench, resourceType, page);
+      render(workbench);
+    }
     return;
   }
 
@@ -7148,7 +7330,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-edit-member-note") {
     workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
       note: target.value,
       notice: "",
     };
@@ -7157,7 +7339,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-edit-member-display-name") {
     workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
       displayName: target.value,
       notice: "",
     };
@@ -7166,7 +7348,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-edit-member-credit-adjustment-type") {
     workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
       creditAdjustmentType: target.value || "",
       notice: "",
     };
@@ -7176,7 +7358,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-edit-member-credit-amount") {
     workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
       creditAmount: target.value,
       notice: "",
     };
@@ -7185,7 +7367,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "change-edit-member-new-password") {
     workbench.ui.editMemberModal = {
-        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "enabled", notice: "" }),
+        ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
       newPassword: target.value,
       notice: "",
     };
@@ -7246,11 +7428,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const response = await workbench.api.updateTeamMember(draft.id, {
         status: nextStatus,
       });
-      applyTeamMemberPatch(workbench, draft.id, response.member ?? { status: nextStatus });
+      const updatedMember = resolveTeamMemberUpdateResponseMember(response);
+      applyTeamMemberPatch(workbench, draft.id, updatedMember ?? { status: nextStatus });
       workbench.ui.editMemberModal = {
         ...(workbench.ui.editMemberModal ?? draft),
         open: true,
-        status: response.member?.status ?? (nextStatus === "disabled" ? "disabled" : "active"),
+        status: updatedMember?.status ?? (nextStatus === "disabled" ? "disabled" : "active"),
         notice: nextStatus === "disabled" ? "该成员已停用。" : "该成员已恢复。",
       };
       await syncProjectInteriorSupplementary(workbench);
@@ -7322,12 +7505,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const response = await workbench.api.updateTeamMember(memberId, {
         status: nextStatus,
       });
-      applyTeamMemberPatch(workbench, memberId, response.member ?? { status: nextStatus }, { remove: nextStatus === "deleted" });
+      const updatedMember = resolveTeamMemberUpdateResponseMember(response);
+      applyTeamMemberPatch(workbench, memberId, updatedMember ?? { status: nextStatus }, { remove: nextStatus === "deleted" });
       if (workbench.ui.editMemberModal?.id && String(workbench.ui.editMemberModal.id) === String(memberId)) {
         workbench.ui.editMemberModal = {
           ...(workbench.ui.editMemberModal ?? {}),
           open: true,
-          status: response.member?.status ?? (nextStatus === "deleted" ? "deleted" : nextStatus === "disabled" ? "disabled" : "active"),
+          status: updatedMember?.status ?? (nextStatus === "deleted" ? "deleted" : nextStatus === "disabled" ? "disabled" : "active"),
           notice: nextStatus === "deleted" ? "该成员已删除。" : nextStatus === "disabled" ? "该成员已停用。" : "该成员已恢复。",
         };
       }
@@ -7346,11 +7530,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
 
+    const creditActionInput = workbench.root?.querySelector?.("#team-edit-member-credit-action-input");
+    const creditAmountInput = workbench.root?.querySelector?.("#team-edit-member-credit-amount-input");
+    const creditAdjustmentType = String(creditActionInput?.value ?? draft.creditAdjustmentType ?? "").trim() || null;
+    const creditAmountValue = creditAmountInput?.value ?? draft.creditAmount ?? "";
+    const creditAmount = creditAmountValue === "" ? null : Number(creditAmountValue ?? 0);
+    workbench.ui.editMemberModal = {
+      ...(workbench.ui.editMemberModal ?? draft),
+      creditAdjustmentType: creditAdjustmentType ?? "",
+      creditAmount: creditAmountValue ?? "",
+    };
+
     await runAction(workbench, "正在保存成员信息...", async () => {
       const availableScripts = Array.isArray(draft.availableScripts) ? draft.availableScripts : [];
       const availableCanvases = Array.isArray(draft.availableCanvases) ? draft.availableCanvases : [];
       const selectedProjectIds = new Set(
-        (Array.isArray(draft.projectIds) ? draft.projectIds : [])
+        (Array.isArray(draft.directProjectIds) ? draft.directProjectIds : draft.projectIds)
           .map((item) => String(item ?? "").trim())
           .filter(Boolean),
       );
@@ -7362,6 +7557,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         ? collectAssignableResourceIds(draft.canvasIds, availableCanvases)
         : { ids: [], blockedIds: [] };
       const selectedCanvasIds = new Set(selectedCanvasResources.ids);
+      if (shouldUpdateResources) {
+        addSelectedResourceProjectIds(selectedProjectIds, draft.scriptIds, availableScripts);
+        addSelectedResourceProjectIds(selectedProjectIds, draft.canvasIds, availableCanvases);
+      }
 
       const newPassword = String(draft.newPassword ?? "");
       if (newPassword) {
@@ -7377,21 +7576,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
       const updateInput = {
         displayName: draft.displayName ?? "",
-        projectIds: [...selectedProjectIds],
         newPassword: newPassword || null,
         remark: draft.note ?? "",
-        creditAdjustmentType: draft.creditAdjustmentType || null,
-        creditAmount: draft.creditAmount === "" ? null : Number(draft.creditAmount ?? 0),
+        creditAdjustmentType,
+        creditAmount,
       };
       if (shouldUpdateResources) {
+        updateInput.projectIds = [...selectedProjectIds];
         updateInput.scriptIds = [...selectedScriptIds];
         updateInput.canvasIds = [...selectedCanvasIds];
       }
       const response = await workbench.api.updateTeamMember(draft.id, updateInput);
+      const updatedMember = resolveTeamMemberUpdateResponseMember(response);
       applyTeamMemberPatch(workbench, draft.id, {
-        ...(response.member ?? {}),
-        projectIds: updateInput.projectIds,
+        ...(updatedMember ?? {}),
+        creditAdjustmentType: creditAdjustmentType ?? "",
+        creditAmount: creditAmountValue ?? "",
         ...(shouldUpdateResources ? {
+          projectIds: updateInput.projectIds,
+          directProjectIds: [...selectedProjectIds],
           scriptIds: updateInput.scriptIds,
           canvasIds: updateInput.canvasIds,
         } : {}),
@@ -7542,6 +7745,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectPanelMode =
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
+      if (isTeamMemberSession(workbench.session)) {
+        workbench.ui.activeNavTab = "project";
+        workbench.ui.projectPanelMode = "workspace";
+        workbench.ui.projectInteriorSection = "overview";
+        workbench.ui.libraryTeamRoute = "assets";
+        workbench.ui.toast = "";
+        const fallbackHash = "project";
+        if (globalThis.window?.location) {
+          globalThis.window.location.hash = fallbackHash;
+        }
+        render(workbench);
+        return;
+      }
       workbench.ui.libraryTeamRoute = "team";
       workbench.ui.teamDashboardTab = "member-consumption";
       workbench.ui.teamDashboardDateRange = "today";
@@ -8545,7 +8761,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     const nextDescription =
-      workbench.ui.storyboardDescriptionDraft.trim() || "Please describe the storyboard content.";
+      workbench.ui.storyboardDescriptionDraft.trim() || "请描述分镜内容。";
     if (selectedStoryboard.linkedShotId) {
       await runAction(workbench, "正在保存分镜描述...", async () => {
         await workbench.api.updateShot({
@@ -10161,7 +10377,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const episodeId = workbench.ui.renameEpisodeId;
     const nextName = workbench.ui.renameEpisodeName.trim();
     if (!nextName) {
-      workbench.ui.renameEpisodeNotice = "Please enter an episode name.";
+      workbench.ui.renameEpisodeNotice = "请输入剧集名称。";
       render(workbench);
       return;
     }
@@ -10377,7 +10593,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const draft = workbench.ui.renameImportedAsset;
     const normalizedName = workbench.ui.renameImportedAssetName.trim();
     if (!normalizedName) {
-      workbench.ui.renameImportedAssetNotice = "Please enter an asset name.";
+      workbench.ui.renameImportedAssetNotice = "请输入资产名称。";
       render(workbench);
       return;
     }
@@ -10418,7 +10634,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const draft = workbench.ui.renameImportedAsset;
     const normalizedName = workbench.ui.renameImportedAssetName.trim();
     if (!normalizedName) {
-      workbench.ui.renameImportedAssetNotice = "Please enter an asset name.";
+      workbench.ui.renameImportedAssetNotice = "请输入资产名称。";
       render(workbench);
       return;
     }
@@ -10960,7 +11176,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (!importRecords.length) {
-      workbench.ui.toast = "Please choose at least one asset to import.";
+      workbench.ui.toast = "请至少选择一个要导入的资产。";
       render(workbench);
       return;
     }
@@ -11496,7 +11712,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       findImportedAsset(workbench.ui.importedAssets, assetKind, mediaType, assetId) ??
       findAssetForReference(workbench, assetKind);
     if (!asset?.id) {
-      workbench.ui.toast = "Please import a matching asset first.";
+      workbench.ui.toast = "请先导入匹配的资产。";
       render(workbench);
       return;
     }
@@ -11744,7 +11960,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         ...state,
         localReferenceRoles: toggleSelection(state.localReferenceRoles ?? [], role),
       }));
-      workbench.ui.toast = "Please import a matching asset first.";
+      workbench.ui.toast = "请先导入匹配的资产。";
       render(workbench);
       return;
     }
@@ -12050,7 +12266,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const projectId = workbench.ui.renameProjectId;
     const nextName = workbench.ui.renameProjectName.trim();
     if (!nextName) {
-      workbench.ui.renameProjectNotice = "Please enter a project name.";
+      workbench.ui.renameProjectNotice = "请输入项目名称。";
       render(workbench);
       return;
     }
@@ -12186,8 +12402,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     ).trim();
     if (!reason) {
       workbench.ui.validationMessage = isSkip
-        ? "Please enter a reason for skipping calibration."
-        : "Please enter a reason for overriding calibration.";
+        ? "请输入跳过校准的原因。"
+        : "请输入覆盖校准的原因。";
       workbench.ui.toast = workbench.ui.validationMessage;
       render(workbench);
       return;
@@ -12302,12 +12518,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const aspectRatio = getCheckedValue(workbench.root, 'input[name="project-aspect-ratio"]', "9:16");
     const projectType = getCheckedValue(workbench.root, 'input[name="project-type"]', "anime");
     if (!aspectRatio) {
-      workbench.ui.createProjectNotice = "Please choose an aspect ratio.";
+      workbench.ui.createProjectNotice = "请选择画面比例。";
       render(workbench);
       return;
     }
     if (!projectType) {
-      workbench.ui.createProjectNotice = "Please choose a project type.";
+      workbench.ui.createProjectNotice = "请选择项目风格。";
       render(workbench);
       return;
     }
@@ -15099,6 +15315,18 @@ export async function syncCanvasProjectsFromApiForTest(workbench) {
 
 export function syncWorkbenchHashRouteForTest(workbench, hash) {
   return syncWorkbenchHashRoute(workbench, hash);
+}
+
+export function syncWorkbenchRouteStateForTest(workbench, hash) {
+  return syncWorkbenchRouteState(workbench, hash);
+}
+
+export function deriveInitialNavTabForTest(hash, session = {}) {
+  return deriveInitialNavTab(hash, session);
+}
+
+export function syncTeamMemberCreateDraftFromDomForTest(workbench) {
+  return syncTeamMemberCreateDraftFromDom(workbench);
 }
 
 export function mapEpisodeStoryboardContractForTest(storyboard) {
@@ -21863,15 +22091,15 @@ function clampCount(value, minimum, maximum) {
 function buildSuggestedPrompt(selectedStoryboard, ui) {
   const base = (selectedStoryboard?.description || selectedStoryboard?.title || "").trim();
   if (ui?.episodeMediaMode === "video") {
-    return `${base || "Describe the shot content"}, keep the comic style consistent, motion smooth, and expressions natural.`;
+    return `${base || "请描述镜头内容"}，保持漫画风格一致，动作流畅，表情自然。`;
   }
-  return `${base || "Describe the frame content"}, keep character consistency and strong composition with layered lighting.`;
+  return `${base || "请描述画面内容"}，保持角色一致性，构图完整，层次光影清晰。`;
 }
 
 async function handleGenerationUploadFiles(workbench, uploadTarget, files) {
   const storyboardId = workbench.ui.selectedStoryboardId ?? null;
   if (!storyboardId) {
-    workbench.ui.toast = "Please select a storyboard first.";
+    workbench.ui.toast = "请先选择一个分镜。";
     render(workbench);
     return;
   }
@@ -21879,7 +22107,7 @@ async function handleGenerationUploadFiles(workbench, uploadTarget, files) {
   if (uploadTarget === "first-frame-image") {
     const firstImage = files.find((file) => String(file.type || "").startsWith("image/"));
     if (!firstImage) {
-      workbench.ui.toast = "Please upload an image file.";
+      workbench.ui.toast = "请上传图片文件。";
       render(workbench);
       return;
     }
@@ -21892,7 +22120,7 @@ async function handleGenerationUploadFiles(workbench, uploadTarget, files) {
   if (uploadTarget === "last-frame-image") {
     const lastFrameImage = files.find((file) => String(file.type || "").startsWith("image/"));
     if (!lastFrameImage) {
-      workbench.ui.toast = "Please upload an image file.";
+      workbench.ui.toast = "请上传图片文件。";
       render(workbench);
       return;
     }
@@ -21903,7 +22131,7 @@ async function handleGenerationUploadFiles(workbench, uploadTarget, files) {
   if (uploadTarget === "image-reference") {
     const imageReference = files.find((file) => String(file.type || "").startsWith("image/"));
     if (!imageReference) {
-      workbench.ui.toast = "Please upload an image file.";
+      workbench.ui.toast = "请上传图片文件。";
       render(workbench);
       return;
     }
@@ -21920,7 +22148,7 @@ async function handleGenerationUploadFiles(workbench, uploadTarget, files) {
   if (uploadTarget === "edit-source-video") {
     const sourceVideo = files.find((file) => String(file.type || "").startsWith("video/"));
     if (!sourceVideo) {
-      workbench.ui.toast = "Please upload a video file.";
+      workbench.ui.toast = "请上传视频文件。";
       render(workbench);
       return;
     }
@@ -22066,7 +22294,7 @@ async function handleGenerationAssetUpload(workbench, storyboardId, stateKey, fi
       ...state,
       [stateKey]: null,
     }));
-    workbench.ui.toast = `Upload failed: ${friendlyError(error)}`;
+    workbench.ui.toast = `上传失败：${friendlyError(error)}`;
   }
 
   render(workbench);
@@ -26629,6 +26857,13 @@ function syncWorkbenchRouteState(workbench, hash) {
     return;
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.activeNavTab = "project";
+      workbench.ui.projectPanelMode = "workspace";
+      workbench.ui.projectInteriorSection = "overview";
+      workbench.ui.libraryTeamRoute = "assets";
+      return;
+    }
     workbench.ui.activeNavTab = "team";
     workbench.ui.projectPanelMode = "library";
     workbench.ui.selectedEpisodeId = null;
@@ -26990,7 +27225,7 @@ async function handleLocalStoryboardImageFile(workbench, storyboardId, file) {
       ...storyboard,
       imageStatus: storyboard.previewImageUrl ? "ready" : "empty",
     }));
-    workbench.ui.toast = `Image upload failed: ${friendlyError(error)}`;
+    workbench.ui.toast = `图片上传失败：${friendlyError(error)}`;
     render(workbench);
     return;
   }
@@ -27031,7 +27266,7 @@ async function handleLocalStoryboardImageFile(workbench, storyboardId, file) {
     } catch (error) {
       applyLocalReadyImage(
         `local-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        `Image kept locally; backend sync failed: ${friendlyError(error)}`,
+        `图片已保留在本地，后端同步失败：${friendlyError(error)}`,
       );
       return;
     }
@@ -27201,7 +27436,7 @@ async function startStoryboardVideoUpload(workbench, storyboardId, file) {
     });
   } catch (error) {
     cancelStoryboardVideoUpload(workbench, storyboardId, videoId);
-    workbench.ui.toast = `Video upload failed: ${friendlyError(error)}`;
+    workbench.ui.toast = `视频上传失败：${friendlyError(error)}`;
     render(workbench);
     return;
   }
@@ -29858,6 +30093,11 @@ function createTeamMemberDraft() {
     scriptIds: [],
     canvasIds: [],
     resourceSelectionDirty: false,
+    resourcePickerType: "",
+    resourcePickerPage: 1,
+    resourcePagination: {},
+    resourceCounts: {},
+    selectedResourcesByType: {},
   };
 }
 
@@ -29886,6 +30126,85 @@ function collectAssignableResourceIds(selectedIds, availableResources) {
     ids.push(resourceId);
   });
   return { ids: [...new Set(ids)] };
+}
+
+function normalizeSelectedResourceIds(selectedIds) {
+  return [
+    ...new Set(
+      (Array.isArray(selectedIds) ? selectedIds : [])
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function addSelectedResourceProjectIds(projectIds, selectedIds, availableResources) {
+  const selected = new Set(
+    (Array.isArray(selectedIds) ? selectedIds : [])
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean),
+  );
+  (Array.isArray(availableResources) ? availableResources : []).forEach((resource) => {
+    const resourceId = String(resource?.id ?? "").trim();
+    if (!resourceId || !selected.has(resourceId)) {
+      return;
+    }
+    const projectId = resolveAssignableResourceProjectId(resource);
+    if (projectId) {
+      projectIds.add(projectId);
+    }
+  });
+}
+
+function deriveDirectProjectIdsFromResourceScope(projectIds, scriptIds, canvasIds, availableResources) {
+  const directProjectIds = new Set(normalizeSelectedResourceIds(projectIds));
+  const inheritedProjectIds = new Set();
+  addSelectedResourceProjectIds(inheritedProjectIds, scriptIds, availableResources);
+  addSelectedResourceProjectIds(inheritedProjectIds, canvasIds, availableResources);
+  inheritedProjectIds.forEach((projectId) => directProjectIds.delete(projectId));
+  return [...directProjectIds];
+}
+
+function subtractSelectedResourceIds(selectedIds, removedIds) {
+  const nextIds = new Set(normalizeSelectedResourceIds(selectedIds));
+  normalizeSelectedResourceIds(removedIds).forEach((resourceId) => nextIds.delete(resourceId));
+  return [...nextIds];
+}
+
+function mergeCachedTeamMemberResources(workbench, resourceType, resources) {
+  const cached = Object.values(workbench.ui.teamMemberDraft?.selectedResourcesByType?.[resourceType] ?? {});
+  return [
+    ...(Array.isArray(resources) ? resources : []),
+    ...cached,
+  ];
+}
+
+function rememberSelectedTeamMemberResource(workbench, resourceType, resourceId) {
+  const normalizedId = String(resourceId ?? "").trim();
+  if (!normalizedId || (resourceType !== "project" && resourceType !== "script" && resourceType !== "canvas")) {
+    return;
+  }
+  const listKey = resourceType === "project"
+    ? "projectLibrary"
+    : resourceType === "script"
+      ? "scriptLibraryRecords"
+      : "canvasProjects";
+  const resource = (Array.isArray(workbench.ui?.[listKey]) ? workbench.ui[listKey] : [])
+    .find((item) => String(item?.id ?? "") === normalizedId);
+  if (!resource) {
+    return;
+  }
+  const currentCache = workbench.ui.teamMemberDraft?.selectedResourcesByType ?? {};
+  workbench.ui.teamMemberDraft = {
+    ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
+    selectedResourcesByType: {
+      ...currentCache,
+      [resourceType]: {
+        ...(currentCache[resourceType] ?? {}),
+        [normalizedId]: resource,
+      },
+    },
+  };
 }
 
 const TEAM_DASHBOARD_TABS = new Set(["member-consumption", "project-cost", "ranking"]);
@@ -29956,20 +30275,26 @@ export function friendlyError(error) {
   if (teamMessageFromBody) {
     return teamMessageFromBody;
   }
+  const databaseMessage = databaseErrorMessage(message);
+  if (databaseMessage) {
+    return `${databaseMessage}${requestId}`;
+  }
   return (
     {
       ASSET_ALREADY_EXISTS: "已存在该资源图片",
-      creator_project_missing: "Please upload a script and create a project first.",
-      creator_shots_missing: "Please split the storyboard into shots first.",
-      asset_review_not_ready: "Please confirm the required assets first.",
-      image_assets_missing: "Some storyboard shots are still missing image assets.",
-      script_not_ready: "The script is not ready yet. Upload or save it first.",
-      script_not_parsed: "The script has not finished parsing yet.",
-      project_not_editable: "The current project status does not allow generation yet.",
-      project_not_found: "The current project no longer exists. Refresh and try again.",
+      creator_project_missing: "请先上传剧本并创建项目。",
+      creator_shots_missing: "请先拆分分镜，再继续生成。",
+      asset_review_not_ready: "请先确认所需资产。",
+      image_assets_missing: "部分分镜仍缺少图片资产。",
+      script_not_ready: "剧本还未准备好，请先上传或保存。",
+      script_not_parsed: "剧本还未完成解析。",
+      project_not_editable: "当前项目状态暂不支持继续生成。",
+      project_not_found: "当前项目已不存在，请刷新后重试。",
       canvas_episode_context_missing: "画布生成任务容器创建失败，请先打开项目后再生成。",
       canvas_image_generation_api_missing: "图片生成接口未就绪，请刷新页面后重试。",
       canvas_video_generation_api_missing: "视频生成接口未就绪，请刷新页面后重试。",
+      internal_error: "服务内部错误，请稍后重试。",
+      unexpected_error: "服务内部错误，请稍后重试。",
     }[message] ?? `${message}${requestId}`
   );
 }
@@ -29994,6 +30319,30 @@ function modelGenerationErrorMessage(value) {
   );
 }
 
+function databaseErrorMessage(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return "";
+  }
+  if (
+    text.includes("violates check constraint") ||
+    text.includes("violates foreign key constraint") ||
+    text.includes("violates unique constraint")
+  ) {
+    return "数据校验失败，请检查内容后重试。";
+  }
+  if (text.includes("duplicate key value")) {
+    return "数据已存在，请刷新后重试。";
+  }
+  if (text.includes("new row for relation") && text.includes("delta_shape")) {
+    return "积分账本数据校验失败，请稍后重试。";
+  }
+  if (text === "internal_error") {
+    return "服务内部错误，请稍后重试。";
+  }
+  return "";
+}
+
 function teamErrorMessage(value) {
   const text = String(value ?? "");
   if (!text) {
@@ -30010,6 +30359,15 @@ function teamErrorMessage(value) {
   }
   if (text.includes("team_project_scope_violation")) {
     return "所选项目、剧本或画布不在当前账号可分配范围内，请刷新资源列表后重试。";
+  }
+  if (text.includes("team_member_credit_insufficient")) {
+    return "子账户余额不足，无法收回该数量积分。";
+  }
+  if (text.includes("team_credit_insufficient")) {
+    return "账户余额不足，无法分配该数量积分。";
+  }
+  if (text.includes("team_member_project_in_use")) {
+    return "该项目已有成员操作记录，不能直接取消该项目权限。请先保留该项目权限，再调整其他资源。";
   }
   if (text.includes("team_member_input_invalid")) {
     return "成员账号、成员名称或密码格式不正确，请检查后重试。";
@@ -30157,7 +30515,7 @@ function updateOriginalScriptSubmitState(workbench) {
   );
 }
 
-function deriveInitialNavTab(hash) {
+function deriveInitialNavTab(hash, session = {}) {
   const token = String(hash || "").replace(/^#/, "");
   if (!token) {
     return "project";
@@ -30193,6 +30551,9 @@ function deriveInitialNavTab(hash) {
     return "tools";
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
+    if (isTeamMemberSession(session)) {
+      return "project";
+    }
     return "team";
   }
   return "project";
@@ -31308,6 +31669,14 @@ async function refreshScriptLibraryIfAvailable(workbench) {
 }
 
 async function preloadTeamMemberAssignableResources(workbench) {
+  if (typeof workbench.api?.getTeamMemberAssignableResources === "function") {
+    await Promise.allSettled(
+      ["project", "script", "canvas"].map((resourceType) =>
+        loadTeamMemberAssignableResourcePage(workbench, resourceType, 1),
+      ),
+    );
+    return;
+  }
   const refreshes = [];
   if (typeof workbench.api?.getProjects === "function") {
     refreshes.push(refreshProjectLibraryIfAvailable(workbench));
@@ -31322,6 +31691,87 @@ async function preloadTeamMemberAssignableResources(workbench) {
     return;
   }
   await Promise.allSettled(refreshes);
+}
+
+async function loadTeamMemberAssignableResourcePage(workbench, resourceType, page = 1) {
+  const normalizedType = String(resourceType ?? "").trim();
+  if (normalizedType !== "project" && normalizedType !== "script" && normalizedType !== "canvas") {
+    return;
+  }
+  if (typeof workbench.api?.getTeamMemberAssignableResources !== "function") {
+    await preloadTeamMemberAssignableResources(workbench);
+    return;
+  }
+  const requestedPage = Math.max(1, Math.floor(Number(page) || 1));
+  try {
+    const payload = await workbench.api.getTeamMemberAssignableResources({
+      type: normalizedType,
+      page: requestedPage,
+      pageSize: TEAM_MEMBER_RESOURCE_PAGE_SIZE,
+    });
+    const resources = Array.isArray(payload?.resources) ? payload.resources : [];
+    const pagination = payload?.pagination && typeof payload.pagination === "object"
+      ? payload.pagination
+      : {
+          page: requestedPage,
+          pageSize: TEAM_MEMBER_RESOURCE_PAGE_SIZE,
+          total: resources.length,
+          totalPages: 1,
+        };
+    applyTeamMemberAssignableResourcePage(workbench, normalizedType, resources, pagination);
+  } catch (error) {
+    workbench.ui.toast = `资源列表加载失败：${friendlyError(error)}`;
+  }
+}
+
+function applyTeamMemberAssignableResourceSnapshot(target, resourceType, resources, pagination) {
+  if (!target) {
+    return;
+  }
+  const normalizedResources = Array.isArray(resources) ? resources : [];
+  const normalizedPagination = {
+    page: Math.max(1, Number(pagination?.page ?? 1) || 1),
+    pageSize: Math.max(1, Number(pagination?.pageSize ?? TEAM_MEMBER_RESOURCE_PAGE_SIZE) || TEAM_MEMBER_RESOURCE_PAGE_SIZE),
+    total: Math.max(0, Number(pagination?.total ?? normalizedResources.length) || 0),
+    totalPages: Math.max(1, Number(pagination?.totalPages ?? 1) || 1),
+  };
+  const listKey = resourceType === "project"
+    ? "availableProjects"
+    : resourceType === "script"
+      ? "availableScripts"
+      : "availableCanvases";
+  target[listKey] = normalizedResources;
+  target.resourcePickerPage = normalizedPagination.page;
+  target.resourcePagination = {
+    ...(target.resourcePagination ?? {}),
+    [resourceType]: normalizedPagination,
+  };
+  target.resourceCounts = {
+    ...(target.resourceCounts ?? {}),
+    [resourceType]: normalizedPagination.total,
+  };
+}
+
+function applyTeamMemberAssignableResourcePage(workbench, resourceType, resources, pagination) {
+  const listKey = resourceType === "project"
+    ? "projectLibrary"
+    : resourceType === "script"
+      ? "scriptLibraryRecords"
+      : "canvasProjects";
+  const normalizedResources = Array.isArray(resources) ? resources : [];
+  workbench.ui[listKey] = normalizedResources;
+  applyTeamMemberAssignableResourceSnapshot(workbench.ui.teamMemberDraft, resourceType, normalizedResources, pagination);
+  applyTeamMemberAssignableResourceSnapshot(workbench.ui.editMemberModal, resourceType, normalizedResources, pagination);
+  const selectedIds = resourceType === "project"
+    ? normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.projectIds)
+    : resourceType === "script"
+      ? normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.scriptIds)
+      : normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.canvasIds);
+  selectedIds.forEach((resourceId) => {
+    if (normalizedResources.some((resource) => String(resource?.id ?? "") === resourceId)) {
+      rememberSelectedTeamMemberResource(workbench, resourceType, resourceId);
+    }
+  });
 }
 
 async function syncAssetLibraryFromApi(workbench, options = {}) {

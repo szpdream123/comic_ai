@@ -21,6 +21,8 @@ export type TeamServiceErrorCode =
   | "team_group_scope_violation"
   | "team_project_scope_violation"
   | "team_credit_insufficient"
+  | "team_member_credit_insufficient"
+  | "team_member_project_in_use"
   | "team_member_disabled"
   | "team_member_input_invalid";
 
@@ -38,6 +40,7 @@ export interface TeamMemberSummary {
   displayName: string;
   memberGroupId: string | null;
   projectIds: string[];
+  inheritedProjectIds: string[];
   scriptIds: string[];
   canvasIds: string[];
   status: "active" | "invited" | "disabled" | "deleted";
@@ -89,6 +92,7 @@ interface TeamMemberRow {
   created_at: string | Date;
   updated_at: string | Date;
   project_ids: string[] | null;
+  inherited_project_ids?: string[] | null;
   script_ids?: string[] | null;
   canvas_ids?: string[] | null;
 }
@@ -286,6 +290,7 @@ export async function createTeamMember(
       created_at: input.now,
       updated_at: input.now,
       project_ids: assignments.projectIds,
+      inherited_project_ids: inheritedProjectIdsFromAssignments(assignments),
       script_ids: scriptIds,
       canvas_ids: canvasIds,
     }),
@@ -383,6 +388,12 @@ export async function listTeamMembers(
           ARRAY[]::uuid[]
         )::text[] AS project_ids,
         COALESCE(
+          ARRAY_AGG(DISTINCT COALESCE(script.project_id, canvas.project_id)) FILTER (
+            WHERE COALESCE(script.project_id, canvas.project_id) IS NOT NULL
+          ),
+          ARRAY[]::uuid[]
+        )::text[] AS inherited_project_ids,
+        COALESCE(
           ARRAY_AGG(DISTINCT script.script_id) FILTER (WHERE script.script_id IS NOT NULL),
           ARRAY[]::uuid[]
         )::text[] AS script_ids,
@@ -449,7 +460,7 @@ export async function updateTeamMember(
     throw new TeamServiceError("team_member_input_invalid");
   }
   if (creditAdjustmentType === "deduct" && creditAmount > Number(target.member_credits ?? 0)) {
-    throw new TeamServiceError("team_member_input_invalid");
+    throw new TeamServiceError("team_member_credit_insufficient");
   }
 
   const shouldRefreshProjectIds =
@@ -563,6 +574,7 @@ export async function updateTeamMember(
           input.now,
         ],
       );
+
     }
 
     if (creditAdjustmentType === "deduct" && creditAmount > 0) {
@@ -615,6 +627,7 @@ export async function updateTeamMember(
           input.now,
         ],
       );
+
     }
 
     updated = await queryOne<TeamMemberRow>(
@@ -655,7 +668,8 @@ export async function updateTeamMember(
           status,
           created_at,
           updated_at,
-          ARRAY[]::text[] AS project_ids
+          ARRAY[]::text[] AS project_ids,
+          ARRAY[]::text[] AS inherited_project_ids
       `,
       [
         input.memberId,
@@ -693,10 +707,15 @@ export async function updateTeamMember(
     userId: input.actor.actorId,
     memberId: input.memberId,
   });
+  const inheritedProjectAssignments = await listTeamMemberInheritedProjectIds(db, {
+    userId: input.actor.actorId,
+    memberId: input.memberId,
+  });
 
   return summaryFromRow({
     ...updated!,
     project_ids: projectAssignments,
+    inherited_project_ids: inheritedProjectAssignments,
     script_ids: scriptAssignments,
     canvas_ids: canvasAssignments,
   });
@@ -920,18 +939,6 @@ async function assertTeamAccountAvailable(
   db: SqlDatabase,
   input: { actor: ActorContext; teamAccount: string; memberLoginAccount: string },
 ) {
-  const existing = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM team_members
-      WHERE user_id = $1
-        AND lower(member_account) = lower($2)
-      LIMIT 1
-    `,
-    [input.actor.actorId, input.teamAccount],
-  );
-
   const loginExisting = await queryOne<{ id: string }>(
     db,
     `
@@ -943,7 +950,7 @@ async function assertTeamAccountAvailable(
     [input.memberLoginAccount],
   );
 
-  if (existing || loginExisting) {
+  if (loginExisting) {
     throw new TeamServiceError("team_account_duplicate");
   }
 }
@@ -1236,16 +1243,48 @@ async function replaceTeamMemberProjects(
   db: SqlDatabase,
   input: { userId: string; memberId: string; projectIds: string[]; now: Date },
 ) {
-  await db.query(
+  const currentAssignments = await db.query<{ project_id: string }>(
     `
-      DELETE FROM team_member_projects
+      SELECT project_id::text AS project_id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+  const existingRecords = await db.query<{ project_id: string }>(
+    `
+      SELECT DISTINCT project_id::text AS project_id
+      FROM team_member_project_records
       WHERE user_id = $1
         AND member_id = $2
     `,
     [input.userId, input.memberId],
   );
+  const currentProjectIds = currentAssignments.rows.map((row) => String(row.project_id));
+  const nextProjectIds = [...new Set(input.projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean))];
+  const nextProjectIdSet = new Set(nextProjectIds);
+  const blockedProjectIds = new Set(existingRecords.rows.map((row) => String(row.project_id)));
+  const removedProjectIds = currentProjectIds.filter((projectId) => !nextProjectIdSet.has(projectId));
+  if (removedProjectIds.length > 0) {
+    const blockedRemovedProjectIds = removedProjectIds.filter((projectId) => blockedProjectIds.has(projectId));
+    if (blockedRemovedProjectIds.length > 0) {
+      throw new TeamServiceError("team_member_project_in_use");
+    }
+    await db.query(
+      `
+        DELETE FROM team_member_projects
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id = ANY($3::uuid[])
+      `,
+      [input.userId, input.memberId, removedProjectIds],
+    );
+  }
 
-  for (const projectId of input.projectIds) {
+  const addedProjectIds = nextProjectIds.filter((projectId) => !currentProjectIds.includes(projectId));
+  for (const projectId of addedProjectIds) {
     await db.query(
       `
         INSERT INTO team_member_projects (
@@ -1378,6 +1417,43 @@ async function listTeamMemberCanvasIds(
   return result.rows.map((row) => row.canvas_id);
 }
 
+async function listTeamMemberInheritedProjectIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ project_id: string }>(
+    `
+      SELECT DISTINCT project_id::text AS project_id
+      FROM (
+        SELECT project_id
+        FROM team_member_scripts
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id IS NOT NULL
+        UNION
+        SELECT project_id
+        FROM team_member_canvases
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id IS NOT NULL
+      ) inherited
+      ORDER BY project_id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.project_id);
+}
+
+function inheritedProjectIdsFromAssignments(assignments: TeamResourceAssignments) {
+  return [
+    ...new Set([
+      ...assignments.scripts.map((script) => script.projectId),
+      ...assignments.canvases.map((canvas) => canvas.projectId).filter((projectId): projectId is string => Boolean(projectId)),
+    ]),
+  ];
+}
+
 async function revokeTeamMemberSessions(
   db: SqlDatabase,
   input: { userId: string; memberId: string; now: Date },
@@ -1404,6 +1480,7 @@ function summaryFromRow(row: TeamMemberRow): TeamMemberSummary {
     displayName: row.member_name,
     memberGroupId: null,
     projectIds: Array.isArray(row.project_ids) ? row.project_ids.map(String) : [],
+    inheritedProjectIds: Array.isArray(row.inherited_project_ids) ? row.inherited_project_ids.map(String) : [],
     scriptIds: Array.isArray(row.script_ids) ? row.script_ids.map(String) : [],
     canvasIds: Array.isArray(row.canvas_ids) ? row.canvas_ids.map(String) : [],
     status: row.status,

@@ -295,6 +295,45 @@ describe("createDevDb", () => {
     });
   });
 
+  it("repairs existing PostgreSQL databases by detaching team member project record project FK", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      const before = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class r ON r.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE n.nspname = current_schema()
+              AND r.relname = 'team_member_project_records'
+              AND c.conname = 'team_member_project_records_member_id_project_id_fkey'
+          ) AS exists
+        `,
+      );
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const after = await repairedDb.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class r ON r.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE n.nspname = current_schema()
+              AND r.relname = 'team_member_project_records'
+              AND c.conname = 'team_member_project_records_member_id_project_id_fkey'
+          ) AS exists
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(before.rows[0]?.exists, true);
+      assert.equal(after.rows[0]?.exists, false);
+    });
+  });
+
   it("repairs existing PostgreSQL databases missing user team account suffixes", async () => {
     await withIsolatedDevSchema(async () => {
       const db = await createDevDb();

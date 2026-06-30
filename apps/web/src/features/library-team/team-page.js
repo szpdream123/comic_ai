@@ -8,6 +8,7 @@ const DASHBOARD_TABS = [
   { id: "project-cost", label: "项目资产与成本" },
   { id: "ranking", label: "排行榜" },
 ];
+const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 
 export function renderTeamPage(context = {}) {
   const team = context.team ?? {};
@@ -203,6 +204,10 @@ function resolveEffectiveTeamOverview(overview, membershipStatus) {
       teamMemberManagement: true,
       teamDashboard: overview?.entitlements?.teamDashboard === true || entitlements?.teamDashboard === true,
       teamAssetLibrary: overview?.entitlements?.teamAssetLibrary === true || entitlements?.teamAssetLibrary === true,
+    },
+    permissions: {
+      ...(overview?.permissions ?? {}),
+      canCreateMember: true,
     },
     seats: {
       ...seats,
@@ -810,9 +815,13 @@ function renderFixtureCreateMemberModal(modal = {}) {
   const availableProjects = Array.isArray(modal.availableProjects) ? modal.availableProjects : [];
   const availableScripts = Array.isArray(modal.availableScripts) ? modal.availableScripts : [];
   const availableCanvases = Array.isArray(modal.availableCanvases) ? modal.availableCanvases : [];
-  const selectedProjects = availableProjects.filter((project) => selectedProjectIds.has(String(project?.id ?? "")));
-  const selectedScripts = availableScripts.filter((script) => selectedScriptIds.has(String(script?.id ?? "")));
-  const selectedCanvases = availableCanvases.filter((canvas) => selectedCanvasIds.has(String(canvas?.id ?? "")));
+  const resourceCounts = modal.resourceCounts ?? {};
+  const selectedProjectCount = selectedProjectIds.size;
+  const selectedScriptCount = selectedScriptIds.size;
+  const selectedCanvasCount = selectedCanvasIds.size;
+  const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
+  const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
+  const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
 
   return `
     <div class="library-team-modal-backdrop" data-modal="team-member-create">
@@ -824,7 +833,6 @@ function renderFixtureCreateMemberModal(modal = {}) {
       >
         <header class="library-team-modal-header">
           <div>
-            <p class="library-team-kicker">成员账号</p>
             <h2 id="team-member-create-title">创建成员账号</h2>
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-team-member-create" aria-label="关闭创建成员弹窗">×</button>
@@ -855,92 +863,30 @@ function renderFixtureCreateMemberModal(modal = {}) {
           </label>
           <div class="library-team-field stacked wide">
             <span>可分配资源</span>
-            <div class="team-member-resource-grid">
-              <section class="team-member-resource-panel">
-                <header>
-                  <strong>项目</strong>
-                  <span>${escapeHtml(String(selectedProjects.length))} / ${escapeHtml(String(availableProjects.length))}</span>
-                </header>
-                <div class="team-member-resource-list team-member-resource-list-selectable">
-                  ${
-                    availableProjects.length
-                      ? availableProjects.map((project) => {
-                        const projectId = String(project?.id ?? "");
-                        const checked = selectedProjectIds.has(projectId);
-                        const label = String(project?.name ?? project?.title ?? projectId ?? "未命名项目");
-                        return `
-                          <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                            <input
-                              type="checkbox"
-                              data-action="toggle-team-member-project"
-                              data-project-id="${escapeAttr(projectId)}"
-                              ${checked ? "checked" : ""}
-                            />
-                            <span>${escapeHtml(label)}</span>
-                          </label>
-                        `;
-                      }).join("")
-                      : '<p class="team-member-resource-empty">暂无可分配项目</p>'
-                  }
-                </div>
-              </section>
-              <section class="team-member-resource-panel">
-                <header>
-                  <strong>剧本</strong>
-                  <span>${escapeHtml(String(selectedScripts.length))} / ${escapeHtml(String(availableScripts.length))}</span>
-                </header>
-                <div class="team-member-resource-list team-member-resource-list-selectable">
-                  ${
-                    availableScripts.length
-                      ? availableScripts.map((script) => {
-                        const scriptId = String(script?.id ?? "");
-                        const checked = selectedScriptIds.has(scriptId);
-                        const label = String(script?.title ?? script?.name ?? scriptId ?? "未命名剧本");
-                        return `
-                          <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                            <input
-                              type="checkbox"
-                              data-action="toggle-team-member-script"
-                              data-script-id="${escapeAttr(scriptId)}"
-                              ${checked ? "checked" : ""}
-                            />
-                            <span>${escapeHtml(label)}</span>
-                          </label>
-                        `;
-                      }).join("")
-                      : '<p class="team-member-resource-empty">暂无可分配剧本</p>'
-                  }
-                </div>
-              </section>
-              <section class="team-member-resource-panel">
-                <header>
-                  <strong>画布</strong>
-                  <span>${escapeHtml(String(selectedCanvases.length))} / ${escapeHtml(String(availableCanvases.length))}</span>
-                </header>
-                <div class="team-member-resource-list team-member-resource-list-selectable">
-                  ${
-                    availableCanvases.length
-                      ? availableCanvases.map((canvas) => {
-                        const canvasId = String(canvas?.id ?? "");
-                        const checked = selectedCanvasIds.has(canvasId);
-                        const label = String(canvas?.title ?? canvas?.name ?? canvasId ?? "未命名画布");
-                        return `
-                          <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                            <input
-                              type="checkbox"
-                              data-action="toggle-team-member-canvas"
-                              data-canvas-id="${escapeAttr(canvasId)}"
-                              ${checked ? "checked" : ""}
-                            />
-                            <span>${escapeHtml(label)}</span>
-                          </label>
-                        `;
-                      }).join("")
-                      : '<p class="team-member-resource-empty">暂无可分配画布</p>'
-                  }
-                </div>
-              </section>
+            <div class="team-member-resource-launch-grid">
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "project",
+                label: "项目",
+                selectedCount: selectedProjectCount,
+                totalCount: totalProjectCount,
+              })}
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "script",
+                label: "剧本",
+                selectedCount: selectedScriptCount,
+                totalCount: totalScriptCount,
+              })}
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "canvas",
+                label: "画布",
+                selectedCount: selectedCanvasCount,
+                totalCount: totalCanvasCount,
+              })}
             </div>
+            <p class="team-member-resource-hint">点击资源类型后勾选可见范围；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
           </div>
         </div>
         ${notice ? `<p class="library-team-inline-status" role="status">${escapeHtml(notice)}</p>` : ""}
@@ -958,6 +904,15 @@ function renderFixtureCreateMemberModal(modal = {}) {
           <button class="library-team-button library-team-button-primary" type="button" data-action="submit-team-member-create">创建成员账号</button>
         </footer>
       </section>
+      ${renderCreateMemberResourcePickerModal({
+        modal,
+        selectedProjectIds,
+        selectedScriptIds,
+        selectedCanvasIds,
+        availableProjects,
+        availableScripts,
+        availableCanvases,
+      })}
     </div>
   `;
 }
@@ -981,6 +936,11 @@ function buildTeamMetrics(overview, members, fallback) {
     remainingCredits: allocatableCredits,
     distributableCredits: allocatableCredits,
   };
+}
+
+function resolveResourceTotalCount(value, fallback) {
+  const total = Number(value ?? fallback ?? 0);
+  return Number.isFinite(total) && total >= 0 ? Math.floor(total) : 0;
 }
 
 function renderMetric(label, value, actionLabel) {
@@ -1260,7 +1220,6 @@ function renderCreateMemberModal(modal) {
       >
         <header class="library-team-modal-header">
           <div>
-            <p class="library-team-kicker">成员账号</p>
             <h2 id="create-member-title">创建成员账号</h2>
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-create-member" aria-label="关闭创建成员弹窗">×</button>
@@ -1307,7 +1266,7 @@ function renderEditMemberModal(modal) {
 
   const statusLabel = mapMemberStatusLabel(modal.status) ?? (modal.status ? String(modal.status) : "未知");
   const selectedProjectIds = new Set(
-    (Array.isArray(modal.projectIds) ? modal.projectIds : []).map((item) => String(item ?? "")).filter(Boolean),
+    (Array.isArray(modal.directProjectIds) ? modal.directProjectIds : modal.projectIds ?? []).map((item) => String(item ?? "")).filter(Boolean),
   );
   const selectedScriptIds = new Set(
     (Array.isArray(modal.scriptIds) ? modal.scriptIds : []).map((item) => String(item ?? "")).filter(Boolean),
@@ -1321,6 +1280,10 @@ function renderEditMemberModal(modal) {
   const selectedProjects = availableProjects.filter((project) => selectedProjectIds.has(String(project?.id ?? "")));
   const selectedScripts = availableScripts.filter((script) => selectedScriptIds.has(String(script?.id ?? "")));
   const selectedCanvases = availableCanvases.filter((canvas) => selectedCanvasIds.has(String(canvas?.id ?? "")));
+  const resourceCounts = modal.resourceCounts ?? {};
+  const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
+  const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
+  const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
   return `
     <div class="library-team-modal-backdrop" data-modal="edit-member">
       <section
@@ -1336,23 +1299,24 @@ function renderEditMemberModal(modal) {
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-edit-member" aria-label="关闭成员详情弹窗">×</button>
         </header>
-        <div class="library-team-form-grid library-team-form-grid-edit">
-          <section class="library-team-member-section-card">
-            <div class="library-team-member-section-head">
-              <h3>成员资料与积分</h3>
-              <span class="library-team-status-pill">${escapeHtml(statusLabel)}</span>
-            </div>
+        <div class="library-team-modal-scroll library-team-modal-scroll-edit">
+          <div class="library-team-edit-member-identity-grid">
             <label class="library-team-field stacked">
               <span>成员账户</span>
-            <input class="library-team-readonly-field" type="text" value="${escapeAttr(
-              modal.memberLoginAccount ??
-              modal.member_login_account ??
-              ((modal.teamAccount || modal.memberAccount) && modal.teamAccountSuffix
-                ? `${modal.teamAccount ?? modal.memberAccount}@${String(modal.teamAccountSuffix ?? "").trim().toLowerCase()}`
-                : "") ??
-              modal.phone ??
-              ""
-            )}" readonly />
+              <input
+                class="library-team-readonly-field"
+                type="text"
+                value="${escapeAttr(
+                  modal.memberLoginAccount ??
+                  modal.member_login_account ??
+                  ((modal.teamAccount || modal.memberAccount) && modal.teamAccountSuffix
+                    ? `${modal.teamAccount ?? modal.memberAccount}@${String(modal.teamAccountSuffix ?? "").trim().toLowerCase()}`
+                    : "") ??
+                  modal.phone ??
+                  ""
+                )}"
+                readonly
+              />
             </label>
             <label class="library-team-field stacked">
               <span>成员名称</span>
@@ -1364,162 +1328,85 @@ function renderEditMemberModal(modal) {
                 data-action="change-edit-member-display-name"
               />
             </label>
-            <label class="library-team-field stacked wide">
-              <span>备注</span>
-              <textarea
-                id="team-edit-member-note-input"
-                rows="3"
-                placeholder="补充成员职责或协作说明"
-                data-action="change-edit-member-note"
-              >${escapeHtml(modal.note ?? "")}</textarea>
+          </div>
+          <label class="library-team-field stacked wide">
+            <span>备注</span>
+            <textarea
+              id="team-edit-member-note-input"
+              rows="3"
+              placeholder="补充成员职责或协作说明"
+              data-action="change-edit-member-note"
+            >${escapeHtml(modal.note ?? "")}</textarea>
+          </label>
+          <label class="library-team-field stacked">
+            <span>新密码</span>
+            <input
+              id="team-edit-member-new-password-input"
+              type="text"
+              placeholder="至少 8 位，留空则不修改"
+              autocomplete="new-password"
+              data-action="change-edit-member-new-password"
+              value="${escapeAttr(modal.newPassword ?? "")}"
+            />
+          </label>
+          <div class="library-team-member-inline-grid">
+            <label class="library-team-field stacked">
+              <span>当前积分</span>
+              <input type="text" value="${escapeAttr(modal.creditBalance ?? 0)}" disabled />
             </label>
-            <div class="library-team-member-password-block">
-              <div class="library-team-member-password-head">
-                <h4>密码重置</h4>
-                <span>留空则不修改</span>
-              </div>
-              <div class="library-team-member-inline-grid">
-                <label class="library-team-field stacked">
-                  <span>新密码</span>
-                  <input
-                    id="team-edit-member-new-password-input"
-                    type="text"
-                    placeholder="至少 8 位"
-                    autocomplete="new-password"
-                    data-action="change-edit-member-new-password"
-                    value="${escapeAttr(modal.newPassword ?? "")}"
-                  />
-                </label>
-              </div>
-            </div>
-            <div class="library-team-member-inline-grid">
-              <label class="library-team-field stacked">
-                <span>当前积分</span>
-                <input type="text" value="${escapeAttr(modal.creditBalance ?? 0)}" disabled />
-              </label>
-              <label class="library-team-field stacked">
-                <span>积分操作</span>
-                <select id="team-edit-member-credit-action-input" data-action="change-edit-member-credit-adjustment-type" aria-label="编辑成员积分操作">
-                  ${[
-                    ["", "不调整"],
-                    ["increase", "增加积分"],
-                    ["deduct", "减少积分"],
-                  ].map(([value, label]) => `<option value="${escapeAttr(value)}" ${value === (modal.creditAdjustmentType ?? "") ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
-                </select>
-              </label>
-              <label class="library-team-field stacked">
-                <span>积分数量</span>
-                <input
-                  id="team-edit-member-credit-amount-input"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value="${escapeAttr(modal.creditAmount ?? "")}"
-                  placeholder="不调整可留空"
-                  data-action="change-edit-member-credit-amount"
-                />
-              </label>
-            </div>
-          </section>
-          <section class="library-team-member-section-card library-team-member-resource-card">
-            <div class="library-team-member-section-head">
+            <label class="library-team-field stacked">
+              <span>积分操作</span>
+              <select id="team-edit-member-credit-action-input" data-action="change-edit-member-credit-adjustment-type" aria-label="编辑成员积分操作">
+                ${[
+                  ["", "不调整"],
+                  ["increase", "分配积分"],
+                  ["deduct", "收回积分"],
+                ].map(([value, label]) => `<option value="${escapeAttr(value)}" ${value === (modal.creditAdjustmentType ?? "") ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="library-team-field stacked">
+              <span>积分数量</span>
+              <input
+                id="team-edit-member-credit-amount-input"
+                type="number"
+                min="0"
+                step="1"
+                value="${escapeAttr(modal.creditAmount ?? "")}"
+                placeholder="不调整可留空"
+                data-action="change-edit-member-credit-amount"
+              />
+            </label>
+          </div>
+          <div class="library-team-field stacked wide">
+            <div class="library-team-member-section-head library-team-member-section-head-compact">
               <div>
                 <p class="library-team-kicker">资源权限</p>
-                <h3>重新勾选子账户可见范围</h3>
+                <h3>子账户可见范围</h3>
               </div>
               <span class="library-team-member-scope-badge">项目 / 画布 / 剧本</span>
             </div>
-            <div class="library-team-field stacked wide">
-              <span>子账户可见</span>
-              <div class="team-member-resource-grid">
-                <section class="team-member-resource-panel">
-                  <header>
-                    <strong>项目</strong>
-                    <span>${escapeHtml(String(selectedProjects.length))} / ${escapeHtml(String(availableProjects.length))}</span>
-                  </header>
-                  <div class="team-member-resource-list team-member-resource-list-selectable">
-                    ${
-                      availableProjects.length
-                        ? availableProjects.map((project) => {
-                          const projectId = String(project?.id ?? "");
-                          const checked = selectedProjectIds.has(projectId);
-                          const label = String(project?.name ?? project?.title ?? projectId ?? "未命名项目");
-                          return `
-                            <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                              <input
-                                type="checkbox"
-                                data-action="toggle-edit-member-project"
-                                data-project-id="${escapeAttr(projectId)}"
-                                ${checked ? "checked" : ""}
-                              />
-                              <span>${escapeHtml(label)}</span>
-                            </label>
-                          `;
-                        }).join("")
-                        : '<p class="team-member-resource-empty">暂无可分配项目</p>'
-                    }
-                  </div>
-                </section>
-                <section class="team-member-resource-panel">
-                  <header>
-                    <strong>剧本</strong>
-                    <span>${escapeHtml(String(selectedScripts.length))} / ${escapeHtml(String(availableScripts.length))}</span>
-                  </header>
-                  <div class="team-member-resource-list team-member-resource-list-selectable">
-                    ${
-                      availableScripts.length
-                        ? availableScripts.map((script) => {
-                          const scriptId = String(script?.id ?? "");
-                          const checked = selectedScriptIds.has(scriptId);
-                          const label = String(script?.title ?? script?.name ?? scriptId ?? "未命名剧本");
-                          return `
-                            <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                              <input
-                                type="checkbox"
-                                data-action="toggle-edit-member-script"
-                                data-script-id="${escapeAttr(scriptId)}"
-                                ${checked ? "checked" : ""}
-                              />
-                              <span>${escapeHtml(label)}</span>
-                            </label>
-                          `;
-                        }).join("")
-                        : '<p class="team-member-resource-empty">暂无可分配剧本</p>'
-                    }
-                  </div>
-                </section>
-                <section class="team-member-resource-panel">
-                  <header>
-                    <strong>画布</strong>
-                    <span>${escapeHtml(String(selectedCanvases.length))} / ${escapeHtml(String(availableCanvases.length))}</span>
-                  </header>
-                  <div class="team-member-resource-list team-member-resource-list-selectable">
-                    ${
-                      availableCanvases.length
-                        ? availableCanvases.map((canvas) => {
-                          const canvasId = String(canvas?.id ?? "");
-                          const checked = selectedCanvasIds.has(canvasId);
-                          const label = String(canvas?.title ?? canvas?.name ?? canvasId ?? "未命名画布");
-                          return `
-                            <label class="team-member-resource-item${checked ? " is-selected" : ""}">
-                              <input
-                                type="checkbox"
-                                data-action="toggle-edit-member-canvas"
-                                data-canvas-id="${escapeAttr(canvasId)}"
-                                ${checked ? "checked" : ""}
-                              />
-                              <span>${escapeHtml(label)}</span>
-                            </label>
-                          `;
-                        }).join("")
-                        : '<p class="team-member-resource-empty">暂无可分配画布</p>'
-                    }
-                  </div>
-                </section>
-              </div>
-              <p class="team-member-resource-hint">三类资源都支持重新勾选；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
+            <div class="team-member-resource-launch-grid">
+              ${renderEditMemberResourceLaunchButton({
+                type: "project",
+                label: "项目",
+                selectedCount: selectedProjectIds.size,
+                totalCount: totalProjectCount,
+              })}
+              ${renderEditMemberResourceLaunchButton({
+                type: "script",
+                label: "剧本",
+                selectedCount: selectedScriptIds.size,
+                totalCount: totalScriptCount,
+              })}
+              ${renderEditMemberResourceLaunchButton({
+                type: "canvas",
+                label: "画布",
+                selectedCount: selectedCanvasIds.size,
+                totalCount: totalCanvasCount,
+              })}
             </div>
-          </section>
+            <p class="team-member-resource-hint">三类资源都支持重新勾选；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
+          </div>
         </div>
         <p class="library-team-inline-status" role="status">${escapeHtml(modal.notice ?? "")}</p>
         <footer class="library-team-modal-actions library-team-modal-actions-edit">
@@ -1530,8 +1417,268 @@ function renderEditMemberModal(modal) {
           <button class="library-team-button library-team-button-primary library-team-button-modal-primary" type="button" data-action="submit-edit-member">保存修改</button>
         </footer>
       </section>
+      ${renderEditMemberResourcePickerModal({
+        modal,
+        selectedProjectIds,
+        selectedScriptIds,
+        selectedCanvasIds,
+        availableProjects,
+        availableScripts,
+        availableCanvases,
+      })}
     </div>
   `;
+}
+
+function renderEditMemberResourceLaunchButton({ type, label, selectedCount, totalCount }) {
+  return renderTeamMemberResourceLaunchButton({
+    action: "open-edit-member-resource-picker",
+    type,
+    label,
+    selectedCount,
+    totalCount,
+  });
+}
+
+function renderTeamMemberResourceLaunchButton({ action, type, label, selectedCount, totalCount }) {
+  return `
+    <button
+      class="team-member-resource-launch"
+      type="button"
+      data-action="${escapeAttr(action)}"
+      data-resource-type="${escapeAttr(type)}"
+    >
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(selectedCount))} / ${escapeHtml(String(totalCount))}</strong>
+    </button>
+  `;
+}
+
+function renderCreateMemberResourcePickerModal({
+  modal,
+  selectedProjectIds,
+  selectedScriptIds,
+  selectedCanvasIds,
+  availableProjects,
+  availableScripts,
+  availableCanvases,
+}) {
+  const resourceType = String(modal.resourcePickerType ?? "").trim();
+  const config = resolveTeamMemberResourcePickerConfig(resourceType, {
+    selectedProjectIds,
+    selectedScriptIds,
+    selectedCanvasIds,
+    availableProjects,
+    availableScripts,
+    availableCanvases,
+  }, {
+    project: "toggle-team-member-project",
+    script: "toggle-team-member-script",
+    canvas: "toggle-team-member-canvas",
+  });
+  if (!config) {
+    return "";
+  }
+
+  const pagination = resolveResourcePagination(modal.resourcePagination?.[resourceType], config.items.length);
+  const selectedCount = config.selectedIds.size;
+  return `
+    <div class="library-team-modal-backdrop library-team-resource-picker-backdrop" data-modal="team-member-resource-picker">
+      <section
+        class="library-team-modal library-team-resource-picker-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="team-member-resource-picker-title"
+      >
+        <header class="library-team-modal-header library-team-resource-picker-header">
+          <div>
+            <p class="library-team-kicker">可分配资源</p>
+            <h3 id="team-member-resource-picker-title">选择${escapeHtml(config.label)}</h3>
+          </div>
+          <button class="library-team-icon-button" type="button" data-action="close-team-member-resource-picker" aria-label="关闭资源选择弹窗">×</button>
+        </header>
+        <div class="library-team-resource-picker-summary">
+          <span>已选 ${escapeHtml(String(selectedCount))} / ${escapeHtml(String(pagination.total))}</span>
+          <span>每页 10 条</span>
+        </div>
+        <div class="team-member-resource-list team-member-resource-list-selectable library-team-resource-picker-list">
+          ${
+            config.items.length
+              ? config.items.map((item) => renderEditMemberResourcePickerItem(item, config)).join("")
+              : `<p class="team-member-resource-empty">暂无可分配${escapeHtml(config.label)}</p>`
+          }
+        </div>
+        <footer class="library-team-resource-picker-footer">
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-team-member-resource-picker"
+            data-page="${escapeAttr(String(pagination.page - 1))}"
+            ${pagination.page <= 1 ? "disabled" : ""}
+          >上一页</button>
+          <span>第 ${escapeHtml(String(pagination.page))} / ${escapeHtml(String(pagination.totalPages))} 页</span>
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-team-member-resource-picker"
+            data-page="${escapeAttr(String(pagination.page + 1))}"
+            ${pagination.page >= pagination.totalPages ? "disabled" : ""}
+          >下一页</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function renderEditMemberResourcePickerModal({
+  modal,
+  selectedProjectIds,
+  selectedScriptIds,
+  selectedCanvasIds,
+  availableProjects,
+  availableScripts,
+  availableCanvases,
+}) {
+  const resourceType = String(modal.resourcePickerType ?? "").trim();
+  const config = resolveTeamMemberResourcePickerConfig(resourceType, {
+    selectedProjectIds,
+    selectedScriptIds,
+    selectedCanvasIds,
+    availableProjects,
+    availableScripts,
+    availableCanvases,
+  }, {
+    project: "toggle-edit-member-project",
+    script: "toggle-edit-member-script",
+    canvas: "toggle-edit-member-canvas",
+  });
+  if (!config) {
+    return "";
+  }
+
+  const pagination = resolveResourcePagination(modal.resourcePagination?.[resourceType], config.items.length);
+  const totalPages = pagination.totalPages;
+  const requestedPage = Math.max(1, Number(modal.resourcePickerPage ?? 1) || 1);
+  const page = Math.min(totalPages, requestedPage);
+  const pageItems = config.items;
+  const selectedCount = config.selectedIds.size;
+  return `
+    <div class="library-team-modal-backdrop library-team-resource-picker-backdrop" data-modal="edit-member-resource-picker">
+      <section
+        class="library-team-modal library-team-resource-picker-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-member-resource-picker-title"
+      >
+        <header class="library-team-modal-header library-team-resource-picker-header">
+          <div>
+            <p class="library-team-kicker">资源权限</p>
+            <h3 id="edit-member-resource-picker-title">子账户可见范围</h3>
+          </div>
+          <button class="library-team-icon-button" type="button" data-action="close-edit-member-resource-picker" aria-label="关闭资源选择弹窗">×</button>
+        </header>
+        <div class="library-team-resource-picker-summary">
+          <span>已选 ${escapeHtml(String(selectedCount))} / ${escapeHtml(String(pagination.total))}</span>
+          <span>第 ${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))} 页</span>
+        </div>
+        <div class="team-member-resource-list team-member-resource-list-selectable library-team-resource-picker-list">
+          ${
+            pageItems.length
+              ? pageItems.map((item) => renderEditMemberResourcePickerItem(item, config)).join("")
+              : `<p class="team-member-resource-empty">暂无可分配${escapeHtml(config.label)}</p>`
+          }
+        </div>
+        <footer class="library-team-resource-picker-footer">
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-edit-member-resource-picker"
+            data-page="${escapeAttr(String(page - 1))}"
+            ${page <= 1 ? "disabled" : ""}
+          >上一页</button>
+          <span>每页 10 条</span>
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-edit-member-resource-picker"
+            data-page="${escapeAttr(String(page + 1))}"
+            ${page >= totalPages ? "disabled" : ""}
+          >下一页</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function resolveResourcePagination(pagination, fallbackTotal) {
+  const total = resolveResourceTotalCount(pagination?.total, fallbackTotal);
+  const pageSize = resolveResourceTotalCount(pagination?.pageSize, TEAM_MEMBER_RESOURCE_PAGE_SIZE) || TEAM_MEMBER_RESOURCE_PAGE_SIZE;
+  const totalPages = Math.max(1, Number(pagination?.totalPages ?? Math.ceil(total / pageSize)) || 1);
+  const requestedPage = Math.max(1, Number(pagination?.page ?? 1) || 1);
+  return {
+    page: Math.min(totalPages, requestedPage),
+    pageSize,
+    total,
+    totalPages,
+  };
+}
+
+function resolveTeamMemberResourcePickerConfig(resourceType, resources, actions) {
+  if (resourceType === "project") {
+    return {
+      label: "项目",
+      items: resources.availableProjects,
+      selectedIds: resources.selectedProjectIds,
+      action: actions.project,
+      idKey: "projectId",
+      fallbackLabel: "未命名项目",
+      getLabel: (item) => item?.name ?? item?.title,
+    };
+  }
+  if (resourceType === "script") {
+    return {
+      label: "剧本",
+      items: resources.availableScripts,
+      selectedIds: resources.selectedScriptIds,
+      action: actions.script,
+      idKey: "scriptId",
+      fallbackLabel: "未命名剧本",
+      getLabel: (item) => item?.title ?? item?.name,
+    };
+  }
+  if (resourceType === "canvas") {
+    return {
+      label: "画布",
+      items: resources.availableCanvases,
+      selectedIds: resources.selectedCanvasIds,
+      action: actions.canvas,
+      idKey: "canvasId",
+      fallbackLabel: "未命名画布",
+      getLabel: (item) => item?.title ?? item?.name,
+    };
+  }
+  return null;
+}
+
+function renderEditMemberResourcePickerItem(item, config) {
+  const resourceId = String(item?.id ?? "");
+  const checked = config.selectedIds.has(resourceId);
+  const label = String(config.getLabel(item) ?? resourceId ?? config.fallbackLabel);
+  return `
+    <label class="team-member-resource-item${checked ? " is-selected" : ""}">
+      <input
+        type="checkbox"
+        data-action="${escapeAttr(config.action)}"
+        data-${escapeAttr(kebabCase(config.idKey))}="${escapeAttr(resourceId)}"
+        ${checked ? "checked" : ""}
+      />
+      <span>${escapeHtml(label || config.fallbackLabel)}</span>
+    </label>
+  `;
+}
+
+function kebabCase(value) {
+  return String(value ?? "").replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
 }
 
 function renderMemberConfirmModal(modal) {
@@ -1570,4 +1717,18 @@ function mapMemberStatusLabel(status) {
     return "待激活";
   }
   return null;
+}
+
+function mapMemberRoleLabel(role) {
+  const labels = {
+    admin: "管理员",
+    manager: "组管理员",
+    director: "导演",
+    producer: "制片",
+    animator: "动画师",
+    writer: "编剧",
+    editor: "剪辑师",
+    viewer: "查看者",
+  };
+  return labels[String(role ?? "").trim()] ?? null;
 }

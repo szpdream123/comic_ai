@@ -600,7 +600,7 @@ export function renderProjectDetail(context = {}) {
     `);
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab)}
+        ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode">
           ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
@@ -640,7 +640,7 @@ export function renderProjectDetail(context = {}) {
     );
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab)}
+        ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode episode-workbench-main">
           ${episodeWorkbenchContent}
         </section>
@@ -678,7 +678,7 @@ export function renderProjectDetail(context = {}) {
     : "";
   return `
     <section class="production-workbench">
-      ${renderWorkbenchRail(activeNavTab)}
+      ${renderWorkbenchRail(activeNavTab, session)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
         ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
@@ -972,10 +972,11 @@ function normalizeCreditLedgerEntry(row = {}) {
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
   const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
+  const teamCreditType = normalizeTeamMemberCreditLedgerType(sourceType, creditType);
   return {
-    label: sourceType === "team_member_credit_allocation" ? "分配" : creditType.label,
-    tone: creditType.tone,
-    valueTone: creditType.valueTone,
+    label: teamCreditType.label,
+    tone: teamCreditType.tone,
+    valueTone: teamCreditType.valueTone,
     displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
     amount: signedDelta,
     availableDelta: signedDelta,
@@ -989,6 +990,16 @@ function normalizeCreditLedgerEntry(row = {}) {
     result,
     source,
   };
+}
+
+function normalizeTeamMemberCreditLedgerType(sourceType, fallbackType) {
+  if (sourceType === "team_member_credit_allocation") {
+    return { ...fallbackType, label: "分配", tone: "grant" };
+  }
+  if (sourceType === "team_member_credit_deduction") {
+    return { ...fallbackType, label: "收回", tone: "consume" };
+  }
+  return fallbackType;
 }
 
 function normalizeCreditLedgerType(type, signedDelta) {
@@ -1131,9 +1142,11 @@ function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
   if (sourceType === "team_member_credit_allocation") {
     return "主账号分配积分";
   }
+  if (sourceType === "team_member_credit_deduction") {
+    return "主账号收回积分";
+  }
   const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
   if (
-    sourceType === "team_member_credit_deduction" ||
     sourceType === "team_member_generation_task" ||
     (sourceType === "episode_generation_task" && (taskType.includes("storyboard_preview") || taskType.includes("ai_storyboard")))
   ) {
@@ -1629,11 +1642,13 @@ function resolveMembershipPaymentState(ui) {
   };
 }
 
-function renderWorkbenchRail(activeNavTab) {
+function renderWorkbenchRail(activeNavTab, session = {}) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
-        ${NAV_TABS.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
+        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
       </nav>
       <button class="rail-item rail-bottom" type="button" data-action="logout">退出</button>
     </aside>
@@ -5391,6 +5406,7 @@ function renderCommunityPage({ ui, session }) {
   const sortedFeatures = [...features]
     .sort((left, right) => Number(right.votes || 0) - Number(left.votes || 0))
     .slice(0, 10);
+  const totalVotes = features.reduce((sum, feature) => sum + Number(feature.votes || 0), 0);
   const postRows = visiblePosts.length
     ? visiblePosts.map((post) => renderCommunityPost(post, session, ui)).join("")
     : `<article class="community-empty"><strong>还没有社区反馈</strong><span>提交你的第一个问题或想法，管理员会在后台看到。</span></article>`;
@@ -5427,14 +5443,25 @@ function renderCommunityPage({ ui, session }) {
 
   return `
     <section class="community-page" aria-label="灵曦社区">
+      <div class="community-overview" aria-label="社区概览">
+        <div>
+          <span>共创社区</span>
+          <strong>把生成体验、问题反馈和功能优先级集中到一处。</strong>
+        </div>
+        <dl>
+          <div><dt>发布</dt><dd>${sortedPosts.length}</dd></div>
+          <div><dt>建议</dt><dd>${features.length}</dd></div>
+          <div><dt>投票</dt><dd>${totalVotes}</dd></div>
+        </dl>
+      </div>
       <section class="community-layout">
-        <section class="community-column">
-          <div class="community-section-head"><div><h2>社区发布</h2><p>分享视频提示词心得，或记录 Bug、体验卡点、内容生成异常。</p></div></div>
+        <section class="community-column community-feed-column">
+          <div class="community-section-head"><div><span>Feedback</span><h2>社区发布</h2><p>分享视频提示词心得，或记录 Bug、体验卡点、内容生成异常。</p></div></div>
           <div class="community-feed">${postRows}</div>
           ${pagination}
         </section>
-        <aside class="community-column">
-          <div class="community-section-head"><div><h2>功能投票</h2><p>自发提出想让我们优先开发的功能，也可以给已有建议投票。</p></div></div>
+        <aside class="community-column community-feature-column">
+          <div class="community-section-head"><div><span>Roadmap</span><h2>功能投票</h2><p>自发提出想让我们优先开发的功能，也可以给已有建议投票。</p></div></div>
           <div class="community-feature-list">${featureRows}</div>
         </aside>
       </section>
@@ -5733,7 +5760,7 @@ function renderCommunityPost(post, session = {}, ui = {}) {
   const replyTarget = String(ui.communityReplyTarget ?? "");
   return `
     <article class="community-post">
-      <div class="community-post-head"><h3>${escapeHtml(post.title || "未命名反馈")}</h3><span class="community-tag">${escapeHtml(post.category || "问题反馈")}</span></div>
+      <div class="community-post-head"><span class="community-tag">${escapeHtml(post.category || "问题反馈")}</span><h3>${escapeHtml(post.title || "未命名反馈")}</h3></div>
       <p>${escapeHtml(post.content || "")}</p>
       <footer><span>${escapeHtml(post.author || "灵曦用户")}</span><span>${escapeHtml(post.createdAtLabel || post.createdAt || "")}</span></footer>
       <div class="community-post-actions">
@@ -6009,6 +6036,10 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
               availableProjects: ui.projectLibrary ?? [],
               availableScripts: ui.scriptLibraryRecords ?? [],
               availableCanvases: ui.canvasProjects ?? [],
+              resourcePickerType: ui.teamMemberDraft?.resourcePickerType ?? "",
+              resourcePickerPage: ui.teamMemberDraft?.resourcePickerPage ?? 1,
+              resourcePagination: ui.teamMemberDraft?.resourcePagination ?? {},
+              resourceCounts: ui.teamMemberDraft?.resourceCounts ?? {},
             }
           : null,
         editMemberModal: ui.editMemberModal ?? null,
@@ -6312,10 +6343,14 @@ function renderCanvasProjectGallery(ui = {}) {
         ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
       <div class="canvas-project-aurora" aria-hidden="true"></div>
-      <button class="canvas-create-project-button" type="button" data-action="${canCreateCanvasProject ? "create-canvas-project" : "open-pricing"}">
-        <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
-        ${canCreateCanvasProject ? "创建画布" : "仅管理员可创建画布"}
-      </button>
+      ${canCreateCanvasProject
+        ? `<button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
+            <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
+            创建画布
+          </button>`
+        : projects.length === 0
+          ? `<p class="canvas-project-empty-note">请联系管理员分配</p>`
+          : ``}
     </section>
   `;
 }

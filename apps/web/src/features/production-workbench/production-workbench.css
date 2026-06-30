@@ -24,7 +24,7 @@
 
 .workbench-body.community-window-body {
   overflow-y: auto;
-  background: #f7fafc;
+  background: #f4f7fb;
 }
 
 .workbench-body.community-window-body::after {
@@ -72,7 +72,7 @@
 }
 
 .workbench-scroll-surface[data-scroll-surface="community"] {
-  background: #f7fafc;
+  background: #f4f7fb;
 }
 
 .workbench-scroll-surface[data-scroll-surface="media-library"] {
@@ -81,7 +81,7 @@
 
 .production-community-window {
   min-height: 100dvh;
-  background: #f7fafc;
+  background: #f4f7fb;
 }
 
 .production-media-library-window {
@@ -98,11 +98,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  min-height: 4.5rem;
+  min-height: 4.4rem;
   padding: .7rem clamp(1.25rem, 2.2vw, 2.5rem);
-  border-bottom: 1px solid #e3eaf4;
-  background: rgba(255, 255, 255, .98);
-  box-shadow: 0 10px 30px rgba(36, 52, 78, .06);
+  border-bottom: 1px solid rgba(213, 223, 238, .88);
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 8px 28px rgba(38, 50, 74, .05);
+  backdrop-filter: blur(16px);
 }
 
 .community-window-brand {
@@ -231,11 +232,12 @@
   position: relative;
   z-index: 1;
   min-height: 2.55rem;
-  border: 1px solid #dbe6f5;
+  border: 1px solid #d7e2f1;
   border-radius: 8px;
-  padding: 0 .95rem;
-  background: #fff;
-  color: #172033;
+  padding: 0 1rem;
+  background: #ffffff;
+  color: #142033;
+  box-shadow: 0 6px 16px rgba(44, 63, 94, .05);
   font-weight: 800;
 }
 
@@ -244,12 +246,78 @@
 }
 
 .community-page {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
   min-height: calc(100dvh - 6.5rem);
   padding: clamp(1rem, 1.8vw, 2rem) clamp(1.25rem, 2.2vw, 2.5rem) clamp(1.25rem, 2.2vw, 2.5rem);
   color: #172033;
-  background:
-    linear-gradient(135deg, rgba(54, 112, 255, .08), transparent 28rem),
-    #f7fafc;
+  background: #f4f7fb;
+}
+
+.community-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .8rem;
+  align-items: center;
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  padding: .7rem .85rem;
+  background: #ffffff;
+  box-shadow: 0 14px 38px rgba(42, 57, 82, .06);
+}
+
+.community-overview > div {
+  display: grid;
+  gap: .25rem;
+  min-width: 0;
+}
+
+.community-overview span,
+.community-section-head span {
+  color: #60728d;
+  font-size: .74rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.community-overview strong {
+  color: #111827;
+  font-size: .95rem;
+  line-height: 1.45;
+}
+
+.community-overview dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(4.4rem, 1fr));
+  gap: .55rem;
+  margin: 0;
+}
+
+.community-overview dl div {
+  display: grid;
+  gap: .15rem;
+  min-height: 3rem;
+  align-content: center;
+  border: 1px solid #e2e9f3;
+  border-radius: 8px;
+  padding: .38rem .62rem;
+  background: #f8fafc;
+}
+
+.community-overview dt {
+  color: #718096;
+  font-size: .76rem;
+  font-weight: 800;
+}
+
+.community-overview dd {
+  margin: 0;
+  color: #172033;
+  font-size: 1.08rem;
+  font-weight: 950;
+  line-height: 1;
 }
 
 .community-hero {
@@ -264,8 +332,8 @@
 .community-column {
   border: 1px solid #dfe7f1;
   border-radius: 8px;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: 0 18px 50px rgba(36, 52, 78, .08);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 14px 38px rgba(42, 57, 82, .06);
 }
 
 .community-hero {
@@ -320,8 +388,8 @@
 
 .community-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(18rem, .75fr);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1.55fr) minmax(22rem, .92fr);
+  gap: 1.1rem;
   align-items: start;
 }
 
@@ -697,8 +765,13 @@
 
 .community-column {
   display: grid;
-  gap: 1rem;
+  gap: .9rem;
   padding: 1rem;
+}
+
+.community-feature-column {
+  position: sticky;
+  top: 5.4rem;
 }
 
 .community-section-head h2,
@@ -707,6 +780,12 @@
   margin: 0;
   color: #111827;
   letter-spacing: 0;
+}
+
+.community-section-head h2 {
+  margin-top: .2rem;
+  font-size: 1.35rem;
+  line-height: 1.2;
 }
 
 .community-section-head p,
@@ -784,7 +863,7 @@
 .community-post,
 .community-feature-card,
 .community-empty {
-  border: 1px solid #e3eaf4;
+  border: 1px solid #e1e8f2;
   border-radius: 8px;
   background: #fff;
   padding: 1rem;
@@ -792,58 +871,64 @@
 
 .community-post {
   display: grid;
-  gap: .75rem;
+  gap: .82rem;
+  box-shadow: 0 10px 28px rgba(42, 57, 82, .045);
 }
 
 .community-post-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .75rem;
+  display: grid;
+  gap: .5rem;
 }
 
 .community-post-head h3 {
   min-width: 0;
+  font-size: 1.08rem;
+  line-height: 1.35;
 }
 
 .community-post p {
   margin: 0;
+  font-size: .96rem;
 }
 
 .community-post footer {
   display: flex;
   justify-content: space-between;
   gap: .75rem;
+  border-top: 1px solid #edf2f7;
+  padding-top: .72rem;
   color: #718096;
   font-size: .82rem;
+  font-weight: 700;
 }
 
 .community-post-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
-  gap: 1rem;
-  padding: .35rem 0 .15rem;
+  gap: .65rem;
+  padding: 0;
 }
 
 .community-social-action {
-  display: grid;
-  justify-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: .45rem;
-  min-height: 4.3rem;
-  border: 0;
+  min-height: 2.65rem;
+  border: 1px solid #e4ebf5;
   border-radius: 8px;
-  padding: .45rem;
-  background: transparent;
+  padding: 0 .85rem;
+  background: #f8fbff;
   color: #111827;
   font-size: .9rem;
-  font-weight: 600;
+  font-weight: 800;
   text-align: center;
 }
 
 .community-social-action svg {
-  width: 2.1rem;
-  height: 2.1rem;
+  width: 1.18rem;
+  height: 1.18rem;
   fill: currentColor;
   stroke: currentColor;
   stroke-width: 0;
@@ -858,7 +943,8 @@
 }
 
 .community-social-action:hover {
-  background: #f8fbff;
+  border-color: #cfe0ff;
+  background: #eef5ff;
 }
 
 .community-social-action.liked span {
@@ -869,10 +955,10 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: .6rem;
-  padding: .7rem;
-  border: 1px solid #e7edf6;
+  padding: .75rem;
+  border: 1px solid #e9eef6;
   border-radius: 8px;
-  background: #fbfdff;
+  background: #f9fbfe;
 }
 
 .community-comment {
@@ -982,19 +1068,22 @@
 .community-tag {
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   min-height: 1.55rem;
-  padding: 0 .6rem;
+  padding: 0 .62rem;
   border-radius: 999px;
-  background: #e9f1ff;
-  color: #1f5fd0;
+  background: #eef4ff;
+  color: #315a9d;
   font-size: .76rem;
   font-weight: 800;
 }
 
 .community-feature-card {
   display: grid;
-  grid-template-columns: 5.3rem minmax(0, 1fr);
+  grid-template-columns: 4.8rem minmax(0, 1fr);
   gap: .85rem;
+  align-items: stretch;
+  box-shadow: 0 10px 28px rgba(42, 57, 82, .04);
 }
 
 .community-vote {
@@ -1002,21 +1091,23 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 4.4rem;
+  min-height: 5rem;
   border: 1px solid #cfe0ff;
   border-radius: 8px;
-  background: #f1f6ff;
+  background: linear-gradient(180deg, #f4f8ff 0%, #edf4ff 100%);
   color: #1d4ed8;
+  font-weight: 900;
 }
 
 .community-vote.voted {
   border-color: #b9d1ff;
-  background: #e7f0ff;
+  background: #e6f0ff;
   color: #1747b8;
 }
 
 .community-vote strong {
-  font-size: 1.35rem;
+  font-size: 1.45rem;
+  line-height: 1;
 }
 
 .community-vote span,
@@ -1032,6 +1123,15 @@
 .community-feature-card small {
   margin: .35rem 0 0;
   color: #64748b;
+}
+
+.community-feature-card h3 {
+  font-size: 1.02rem;
+  line-height: 1.35;
+}
+
+.community-feature-card p {
+  font-size: .92rem;
 }
 
 .community-empty {
@@ -1084,16 +1184,17 @@
 
 .community-fab-menu {
   display: grid;
-  width: min(21rem, calc(100vw - 2rem));
+  width: min(22rem, calc(100vw - 2rem));
   gap: .55rem;
-  padding: .65rem;
-  border: 1px solid #dbe6f5;
+  padding: .7rem;
+  border: 1px solid #d8e4f2;
   border-radius: 8px;
   background: #fff;
-  box-shadow: 0 20px 55px rgba(15, 23, 42, .16);
+  box-shadow: 0 22px 60px rgba(15, 23, 42, .18);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(.45rem);
+  transform: translateY(.45rem) scale(.98);
+  transform-origin: bottom right;
   transition: opacity 140ms ease, transform 140ms ease;
 }
 
@@ -1101,7 +1202,7 @@
 .community-fab-wrap:focus-within .community-fab-menu {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
 }
 
 .community-fab-menu button {
@@ -1135,13 +1236,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 4rem;
-  height: 4rem;
+  width: 4.05rem;
+  height: 4.05rem;
   border: 1px solid rgba(31, 111, 255, .22);
   border-radius: 50%;
-  background: #1f6fff;
+  background: linear-gradient(180deg, #2f78ff 0%, #1d62f0 100%);
   color: #fff;
-  box-shadow: 0 18px 42px rgba(31, 111, 255, .32);
+  box-shadow: 0 18px 42px rgba(31, 111, 255, .34);
   font-size: 2.7rem;
   font-weight: 300;
   line-height: 0;
@@ -1175,7 +1276,7 @@
   border-radius: 8px;
   background: #fff;
   padding: clamp(1rem, 2.4vw, 1.5rem);
-  box-shadow: 0 28px 70px rgba(15, 23, 42, .2);
+  box-shadow: 0 28px 70px rgba(15, 23, 42, .22);
 }
 
 .community-modal-head {
@@ -1344,6 +1445,10 @@
   .personal-media-toolbar {
     grid-template-columns: 1fr;
   }
+
+  .community-feature-column {
+    position: static;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1385,6 +1490,14 @@
     padding-bottom: 6.5rem;
   }
 
+  .community-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .community-overview dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .personal-media-row {
     grid-template-columns: 1fr;
   }
@@ -1394,31 +1507,33 @@
     justify-content: flex-start;
   }
 
-  .community-post-head,
   .community-post footer,
   .community-modal-head {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .community-feature-card {
+  .community-post-actions {
     grid-template-columns: 1fr;
   }
 
+  .community-feature-card {
+    grid-template-columns: 4.6rem minmax(0, 1fr);
+  }
+
   .community-vote {
-    width: 5.3rem;
-    min-height: 3.8rem;
+    min-height: 4.5rem;
   }
 
   .community-fab-wrap {
-    right: 1rem;
-    bottom: 1rem;
+    right: .85rem;
+    bottom: .85rem;
   }
 
   .community-fab {
-    width: 3.5rem;
-    height: 3.5rem;
-    font-size: 2.35rem;
+    width: 3.15rem;
+    height: 3.15rem;
+    font-size: 2.05rem;
   }
 }
 

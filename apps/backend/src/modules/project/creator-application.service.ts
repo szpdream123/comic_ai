@@ -3874,6 +3874,7 @@ function teamServiceErrorResponse(
     "team_account_duplicate",
     "team_seat_limit_reached",
     "team_credit_insufficient",
+    "team_member_credit_insufficient",
   ]);
   const status =
     error.code === "team_member_input_invalid"

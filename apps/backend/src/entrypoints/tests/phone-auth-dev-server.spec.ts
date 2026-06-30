@@ -304,6 +304,93 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("returns team member credit ledger entries without uuid type mismatches", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await seedTeamMemberCreditLedgerFixture(db);
+      await server.listen(0);
+
+      const cookie = await login(server.origin, "13800138000");
+      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie },
+      });
+      const ledger = await ledgerResponse.json();
+
+      assert.equal(ledgerResponse.status, 200);
+      assert.equal(ledger.accountType, "子账户");
+      assert.equal(ledger.meta.total, 1);
+      assert.equal(ledger.data[0]?.sourceType, "team_member_credit_allocation");
+      assert.equal(ledger.data[0]?.amount, 10);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reflects owner credit allocations in the subaccount balance and ledger", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await seedTeamMemberCreditLedgerFixture(db);
+      await server.listen(0);
+
+      const ownerCookie = await loginAsAccount(server.origin, "13900000000", "owner-secret-001");
+      const ownerMembersResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        headers: { cookie: ownerCookie },
+      });
+      const ownerMembers = await ownerMembersResponse.json();
+      const memberId = ownerMembers.body?.members?.[0]?.membershipId ?? ownerMembers.members?.[0]?.membershipId;
+
+      assert.equal(ownerMembersResponse.status, 200);
+      assert.ok(memberId);
+
+      const updateResponse = await fetch(`${server.origin}/api/creator/team/members/${encodeURIComponent(memberId)}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          creditAdjustmentType: "increase",
+          creditAmount: 15,
+        }),
+      });
+      const updated = await updateResponse.json();
+
+      const memberCookie = await loginAsAccount(server.origin, "member001@u138001", "member-secret-001");
+      const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie: memberCookie },
+      });
+      const session = await sessionResponse.json();
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie: memberCookie },
+      });
+      const state = await stateResponse.json();
+      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie: memberCookie },
+      });
+      const ledger = await ledgerResponse.json();
+
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updated.body?.member?.creditBalance ?? updated.member?.creditBalance, 25);
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(stateResponse.status, 200);
+      assert.equal(ledgerResponse.status, 200);
+      assert.equal(session.user.availableCredits, 25);
+      assert.equal(state.availableCredits, 25);
+      assert.equal(ledger.summary.displayAvailableCredits, 25);
+      assert.equal(ledger.meta.total, 2);
+      assert.equal(ledger.data[0]?.sourceType, "team_member_credit_allocation");
+      assert.equal(ledger.data[0]?.amount, 15);
+      assert.equal(ledger.data[1]?.sourceType, "team_member_credit_allocation");
+      assert.equal(ledger.data[1]?.amount, 10);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("persists creator display name updates and returns them from session", async () => {
     const db = await createDevDb();
     const server = createPhoneAuthDevServer({ db });
@@ -9449,17 +9536,22 @@ describe("phone auth dev server", () => {
 });
 
 async function login(origin: string, phone: string) {
+  return loginAsAccount(origin, phone, defaultPasswordFromPhone(normalizeCnPhone(phone)));
+}
+
+async function loginAsAccount(origin: string, account: string, password: string) {
   const fallbackDb = loginDbByOrigin.get(origin) ? null : await createDevDb();
   const db = loginDbByOrigin.get(origin) ?? fallbackDb!;
   try {
-    const normalizedPhone = normalizeCnPhone(phone);
-    await ensurePasswordLoginUser(db, normalizedPhone);
-    const password = defaultPasswordFromPhone(normalizedPhone);
+    const normalizedPhone = normalizeLoginPhoneIfPossible(account);
+    if (normalizedPhone) {
+      await ensurePasswordLoginUser(db, normalizedPhone);
+    }
     const passwordResponse = await fetch(`${origin}/api/auth/password/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        account: normalizedPhone,
+        account,
         password,
       }),
     });
@@ -9469,6 +9561,191 @@ async function login(origin: string, phone: string) {
   } finally {
     await fallbackDb?.close();
   }
+}
+
+function normalizeLoginPhoneIfPossible(account: string) {
+  const digits = String(account ?? "").replace(/\D/g, "");
+  if (/^1\d{10}$/.test(digits)) {
+    return normalizeCnPhone(digits);
+  }
+  if (/^86\d{11}$/.test(digits)) {
+    return normalizeCnPhone(digits.slice(2));
+  }
+  return null;
+}
+
+async function seedTeamMemberCreditLedgerFixture(
+  db: PhoneAuthTestDb,
+) {
+  const memberUserId = randomUUID();
+  const memberId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, password_hash, status)
+      VALUES ($1, $2, $3, 'active')
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        status = 'active'
+    `,
+    [memberUserId, "13800138000", await createUserPasswordHash(defaultPasswordFromPhone("13800138000"))],
+  );
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status)
+      VALUES ('10000000-0000-4000-8000-000000000010', 'Org', 'active')
+      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ('20000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000010', 'Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, membership_tier, expires_at)
+      VALUES (
+        '30000000-0000-4000-8000-000000000010',
+        '10000000-0000-4000-8000-000000000010',
+        '20000000-0000-4000-8000-000000000010',
+        $1,
+        'creator',
+        'active',
+        'professional',
+        '2099-01-01T00:00:00.000Z'
+      )
+      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
+      SET role = EXCLUDED.role,
+          status = EXCLUDED.status,
+          membership_tier = EXCLUDED.membership_tier,
+          expires_at = EXCLUDED.expires_at
+    `,
+    [memberUserId],
+  );
+  await db.query(
+    `
+      INSERT INTO team_members (
+        id,
+        user_id,
+        member_account,
+        member_account_suffix,
+        member_login_account,
+        member_name,
+        member_password_hash,
+        member_credits,
+        status
+      )
+      VALUES (
+        $1,
+        $2,
+        'member001',
+        'u138001',
+        'member001@u138001',
+        '子账户一号',
+        $3,
+        10,
+        'active'
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET member_password_hash = EXCLUDED.member_password_hash,
+          member_credits = EXCLUDED.member_credits,
+          status = EXCLUDED.status
+    `,
+    [memberId, memberUserId, await createUserPasswordHash("member-secret-001")],
+  );
+  const authSessionId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id,
+        user_id,
+        status,
+        session_token_hash,
+        session_token_hash_version,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES (
+        $1,
+        $2,
+        'active',
+        'scrypt:v1:test:test',
+        'v1',
+        '2099-01-01T00:00:00.000Z',
+        '2026-06-20T08:00:00.000Z',
+        NULL,
+        '2026-06-20T08:00:00.000Z'
+      )
+    `,
+    [authSessionId, memberUserId],
+  );
+  await db.query(
+    `
+      INSERT INTO team_member_auth_sessions (
+        id,
+        auth_session_id,
+        user_id,
+        member_id,
+        status,
+        expires_at,
+        last_seen_at,
+        revoked_at,
+        created_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        'active',
+        '2099-01-01T00:00:00.000Z',
+        '2026-06-20T08:00:00.000Z',
+        NULL,
+        '2026-06-20T08:00:00.000Z'
+      )
+    `,
+    [randomUUID(), authSessionId, memberUserId, memberId],
+  );
+  await db.query(
+    `
+      INSERT INTO credit_ledger_entries (
+        id,
+        organization_id,
+        user_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_at
+      )
+      VALUES (
+        '70000000-0000-4000-8000-000000000010',
+        '10000000-0000-4000-8000-000000000010',
+        $1,
+        'grant',
+        10,
+        10,
+        0,
+        0,
+        'team_member_credit_allocation',
+        '80000000-0000-4000-8000-000000000010',
+        '主账号分配积分',
+        $2::jsonb,
+        '2026-06-20T08:00:00.000Z'
+      )
+    `,
+    [memberUserId, JSON.stringify({ memberId })],
+  );
 }
 
 async function ensurePasswordLoginUser(

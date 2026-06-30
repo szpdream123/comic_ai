@@ -124,6 +124,69 @@ describe("simple team member service", { concurrency: false }, () => {
     }
   });
 
+  it("allows the same member name because the login account is the unique account identity", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+
+      const first = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-name-1",
+        displayName: "Director Same",
+        password: "member-secret-001",
+        now,
+      });
+      const second = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-name-2",
+        displayName: "Director Same",
+        password: "member-secret-002",
+        now,
+      });
+
+      assert.equal(first.member.displayName, "Director Same");
+      assert.equal(second.member.displayName, "Director Same");
+      assert.notEqual(first.member.memberLoginAccount, second.member.memberLoginAccount);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allows the same member account prefix when the complete login account is unique", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedOtherTeamTenant(db);
+      await seedTeamEntitlement(db);
+      await seedTeamEntitlement(db, {
+        organizationId: otherOrganizationId,
+        entitlementId: "34000000-0000-4000-8000-000000000002",
+      });
+
+      const first = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-shared",
+        displayName: "Owner Member",
+        password: "member-secret-001",
+        now,
+      });
+      const second = await createTeamMember(db, {
+        actor: otherOwnerActor(),
+        teamAccount: "director-shared",
+        displayName: "Other Owner Member",
+        password: "member-secret-002",
+        now,
+      });
+
+      assert.equal(first.member.teamAccount, "director-shared");
+      assert.equal(second.member.teamAccount, "director-shared");
+      assert.notEqual(first.member.memberLoginAccount, second.member.memberLoginAccount);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("stores project assignment in team_member_projects", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -193,8 +256,10 @@ describe("simple team member service", { concurrency: false }, () => {
       ]);
 
       assert.deepEqual(created.member.projectIds, []);
+      assert.deepEqual(created.member.inheritedProjectIds, ["36000000-0000-4000-8000-000000000003"]);
       assert.deepEqual(created.member.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(created.member.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
+      assert.deepEqual(listedAfterCreate[0]?.inheritedProjectIds, ["36000000-0000-4000-8000-000000000003"]);
       assert.deepEqual(listedAfterCreate[0]?.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(listedAfterCreate[0]?.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
       assert.equal(projectRowsAfterCreate.rows.length, 0);
@@ -220,10 +285,185 @@ describe("simple team member service", { concurrency: false }, () => {
 
       assert.deepEqual(updated?.scriptIds, []);
       assert.deepEqual(updated?.canvasIds, []);
+      assert.deepEqual(listedAfterUpdate[0]?.inheritedProjectIds, []);
       assert.deepEqual(listedAfterUpdate[0]?.scriptIds, []);
       assert.deepEqual(listedAfterUpdate[0]?.canvasIds, []);
       assert.equal(scriptRowsAfterUpdate.rows.length, 0);
       assert.equal(canvasRowsAfterUpdate.rows.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps existing project, script, and canvas assignments when editing profile fields only", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000010",
+      });
+      await seedScript(db, {
+        scriptId: "37000000-0000-4000-8000-000000000010",
+        projectId: "36000000-0000-4000-8000-000000000010",
+      });
+      await seedCanvas(db, {
+        canvasId: "38000000-0000-4000-8000-000000000010",
+        projectId: "36000000-0000-4000-8000-000000000010",
+      });
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-edit",
+        displayName: "Director Edit",
+        password: "member-secret-edit",
+        projectIds: ["36000000-0000-4000-8000-000000000010"],
+        scriptIds: ["37000000-0000-4000-8000-000000000010"],
+        canvasIds: ["38000000-0000-4000-8000-000000000010"],
+        now,
+      });
+
+      const updated = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        displayName: "Director Edit v2",
+        remark: "profile only",
+        now: new Date("2026-06-27T11:40:00.000Z"),
+      });
+      const listed = await listTeamMembers(db, { actor: ownerActor() });
+
+      assert.equal(updated?.displayName, "Director Edit v2");
+      assert.equal(updated?.remark, null);
+      assert.deepEqual(updated?.projectIds, ["36000000-0000-4000-8000-000000000010"]);
+      assert.deepEqual(updated?.scriptIds, ["37000000-0000-4000-8000-000000000010"]);
+      assert.deepEqual(updated?.canvasIds, ["38000000-0000-4000-8000-000000000010"]);
+      assert.deepEqual(listed[0]?.projectIds, ["36000000-0000-4000-8000-000000000010"]);
+      assert.deepEqual(listed[0]?.scriptIds, ["37000000-0000-4000-8000-000000000010"]);
+      assert.deepEqual(listed[0]?.canvasIds, ["38000000-0000-4000-8000-000000000010"]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects removing project access when project records already exist", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000020",
+      });
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-record",
+        displayName: "Director Record",
+        password: "member-secret-record",
+        projectIds: ["36000000-0000-4000-8000-000000000020"],
+        now,
+      });
+
+      await db.query(
+        `
+          INSERT INTO team_member_project_records (
+            id,
+            user_id,
+            member_id,
+            project_id,
+            record_type,
+            record_status,
+            record_title
+          )
+          VALUES (
+            '62000000-0000-4000-8000-000000000020',
+            '00000000-0000-4000-8000-000000000001',
+            $1,
+            '36000000-0000-4000-8000-000000000020',
+            'project_view',
+            'recorded',
+            'Viewed assigned project'
+          )
+        `,
+        [created.member.membershipId],
+      );
+
+      await assert.rejects(
+        updateTeamMember(db, {
+          actor: ownerActor(),
+          memberId: created.member.membershipId,
+          projectIds: [],
+          now: new Date("2026-06-27T11:00:00.000Z"),
+        }),
+        teamError("team_member_project_in_use"),
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allows removing unrecorded project access while keeping recorded projects intact", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000021",
+      });
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000022",
+      });
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-record-keep",
+        displayName: "Director Record Keep",
+        password: "member-secret-record-keep",
+        projectIds: [
+          "36000000-0000-4000-8000-000000000021",
+          "36000000-0000-4000-8000-000000000022",
+        ],
+        now,
+      });
+
+      await db.query(
+        `
+          INSERT INTO team_member_project_records (
+            id,
+            user_id,
+            member_id,
+            project_id,
+            record_type,
+            record_status,
+            record_title
+          )
+          VALUES (
+            '62000000-0000-4000-8000-000000000021',
+            '00000000-0000-4000-8000-000000000001',
+            $1,
+            '36000000-0000-4000-8000-000000000021',
+            'project_view',
+            'recorded',
+            'Viewed recorded project'
+          )
+        `,
+        [created.member.membershipId],
+      );
+
+      const updated = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        projectIds: ["36000000-0000-4000-8000-000000000021"],
+        now: new Date("2026-06-27T11:00:00.000Z"),
+      });
+      const remainingProjects = await db.query<{ project_id: string }>(
+        "SELECT project_id::text AS project_id FROM team_member_projects WHERE member_id = $1 ORDER BY project_id ASC",
+        [created.member.membershipId],
+      );
+
+      assert.deepEqual(updated?.projectIds, ["36000000-0000-4000-8000-000000000021"]);
+      assert.deepEqual(remainingProjects.rows.map((row) => row.project_id), [
+        "36000000-0000-4000-8000-000000000021",
+      ]);
     } finally {
       await db.close();
     }
@@ -364,10 +604,32 @@ describe("simple team member service", { concurrency: false }, () => {
         "SELECT member_credits FROM team_members WHERE id = $1",
         [created.member.membershipId],
       );
+      const afterIncreaseLedger = await db.query<{
+        user_id: string;
+        entry_type: string;
+        source_type: string;
+        amount: number;
+      }>(
+        `
+          SELECT user_id::text AS user_id, entry_type, source_type, amount
+          FROM credit_ledger_entries
+          WHERE user_id = $1
+            AND metadata_json->>'memberId' = $2
+          ORDER BY created_at ASC, id ASC
+        `,
+        [ownerUserId, created.member.membershipId],
+      );
 
       assert.equal(increased?.creditBalance, 25);
       assert.equal(afterIncreaseOwner.rows[0]?.credit_balance_cached, 75);
       assert.equal(afterIncreaseMember.rows[0]?.member_credits, 25);
+      assert.equal(afterIncreaseLedger.rows.length, 2);
+      assert.deepEqual(afterIncreaseLedger.rows.at(-1), {
+        user_id: ownerUserId,
+        entry_type: "transfer_out",
+        source_type: "team_member_credit_allocation",
+        amount: 15,
+      });
 
       const deducted = await updateTeamMember(db, {
         actor: ownerActor(),
@@ -384,10 +646,60 @@ describe("simple team member service", { concurrency: false }, () => {
         "SELECT member_credits FROM team_members WHERE id = $1",
         [created.member.membershipId],
       );
+      const afterDeductLedger = await db.query<{
+        user_id: string;
+        entry_type: string;
+        source_type: string;
+        amount: number;
+      }>(
+        `
+          SELECT user_id::text AS user_id, entry_type, source_type, amount
+          FROM credit_ledger_entries
+          WHERE user_id = $1
+            AND metadata_json->>'memberId' = $2
+          ORDER BY created_at ASC, id ASC
+        `,
+        [ownerUserId, created.member.membershipId],
+      );
 
       assert.equal(deducted?.creditBalance, 20);
       assert.equal(afterDeductOwner.rows[0]?.credit_balance_cached, 80);
       assert.equal(afterDeductMember.rows[0]?.member_credits, 20);
+      assert.deepEqual(afterDeductLedger.rows.at(-1), {
+        user_id: ownerUserId,
+        entry_type: "transfer_in",
+        source_type: "team_member_credit_deduction",
+        amount: 5,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps member credits updated when credit adjustment is submitted", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamTenant(db);
+      await seedTeamEntitlement(db);
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-credit-submit",
+        displayName: "Director Credit Submit",
+        password: "member-secret-submit",
+        initialCredits: 8,
+        now,
+      });
+
+      const updated = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        creditAdjustmentType: "increase",
+        creditAmount: 7,
+        now: new Date("2026-06-27T11:00:00.000Z"),
+      });
+
+      assert.equal(updated?.creditBalance, 15);
+      assert.equal(updated?.status, "active");
     } finally {
       await db.close();
     }
@@ -425,7 +737,7 @@ describe("simple team member service", { concurrency: false }, () => {
           creditAmount: 6,
           now: new Date("2026-06-27T11:30:00.000Z"),
         }),
-        teamError("team_member_input_invalid"),
+        teamError("team_member_credit_insufficient"),
       );
     } finally {
       await db.close();

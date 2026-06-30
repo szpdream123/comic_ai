@@ -389,6 +389,56 @@ describe("foundation schema", () => {
           `,
         ),
       );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            member_credits
+          )
+          VALUES (
+            '50000000-0000-4000-8000-000000000002',
+            '00000000-0000-4000-8000-000000000002',
+            'director001',
+            'u285715',
+            'director001@u285715',
+            'Director One',
+            'scrypt:v1:member:safe-hash',
+            100
+          )
+        `,
+      );
+      await assert.rejects(
+        db.query(
+          `
+            INSERT INTO team_members (
+              id,
+              user_id,
+              member_account,
+              member_account_suffix,
+              member_login_account,
+              member_name,
+              member_password_hash,
+              member_credits
+            )
+            VALUES (
+              '50000000-0000-4000-8000-000000000003',
+              '00000000-0000-4000-8000-000000000002',
+              'director002',
+              'u185715',
+              'director001@u185715',
+              'Director Duplicate',
+              'scrypt:v1:member:safe-hash',
+              100
+            )
+          `,
+        ),
+      );
 
       await db.query(
         `
@@ -438,7 +488,6 @@ describe("foundation schema", () => {
         "source_id",
         "created_at",
       ]);
-
       await db.query(
         `
           INSERT INTO users (id, phone_e164, status)

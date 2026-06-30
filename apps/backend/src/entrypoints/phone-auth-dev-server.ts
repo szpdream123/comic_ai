@@ -1828,9 +1828,9 @@ async function listSimpleTeamMemberCreditLedger(
        AND member.id = $2
       WHERE (
           ledger.user_id = $1
-          OR ledger.user_id = $2::uuid
+          OR ledger.user_id = $2::text::uuid
         )
-        AND ledger.metadata_json->>'memberId' = $2
+        AND ledger.metadata_json->>'memberId' = $2::text
         AND ledger.source_type IN (
           'team_member_credit_allocation',
           'team_member_credit_deduction',
@@ -1867,9 +1867,9 @@ async function listSimpleTeamMemberCreditLedger(
        AND member.id = $2
       WHERE (
           ledger.user_id = $1
-          OR ledger.user_id = $2::uuid
+          OR ledger.user_id = $2::text::uuid
         )
-        AND ledger.metadata_json->>'memberId' = $2
+        AND ledger.metadata_json->>'memberId' = $2::text
         AND ledger.source_type IN (
           'team_member_credit_allocation',
           'team_member_credit_deduction',
@@ -1948,7 +1948,7 @@ function teamMemberLedgerFromRow(row: TeamMemberCreditLedgerRow) {
     accountId: String(metadata.memberId ?? ""),
     content:
       sourceType === "team_member_credit_deduction"
-        ? "主账号扣减积分"
+        ? "主账号收回积分"
         : sourceType === "team_member_generation_task"
           ? "生成任务消耗积分"
           : sourceType === "team_member_generation_refund"
@@ -2164,7 +2164,7 @@ function creditLedgerContentFromEntry(
   if (explicit) return explicit;
   const sourceType = String(row.source_type ?? "").trim();
   if (sourceType === "team_member_credit_allocation") return "主账号分配积分";
-  if (sourceType === "team_member_credit_deduction") return "主账号扣减积分";
+  if (sourceType === "team_member_credit_deduction") return "主账号收回积分";
   if (sourceType === "team_member_generation_task") return "AI分镜积分消耗";
   if (sourceType === "team_member_generation_refund") return "生成失败返还积分";
   if (sourceType === "credit_wallet_transfer") return "个人积分转入团队积分池";
@@ -16816,6 +16816,105 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        if (request.method === "GET" && pathname === "/api/creator/team/assignable-resources") {
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          if (actor.teamMember || !actor.capabilities.includes(capabilities.teamMemberManageAll)) {
+            return writeJson(response, envelopedError(403, "team_permission_denied", "team permission denied"));
+          }
+
+          const resourceType = readString(url.searchParams.get("type"));
+          if (resourceType !== "project" && resourceType !== "script" && resourceType !== "canvas") {
+            return writeJson(response, envelopedError(400, "resource_type_invalid", "resource type invalid"));
+          }
+          const page = Math.max(1, Math.floor(Number(url.searchParams.get("page") ?? 1)) || 1);
+          const pageSize = Math.min(10, Math.max(1, Math.floor(Number(url.searchParams.get("pageSize") ?? 10)) || 10));
+
+          if (resourceType === "project") {
+            const projectResult = await creatorApplication.listProjects({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now,
+              page,
+              pageSize,
+              keyword: url.searchParams.get("keyword"),
+            });
+            if (projectResult.status !== 200) {
+              return writeJson(response, projectResult);
+            }
+            const body = projectResult.body as Record<string, unknown>;
+            return writeJson(response, {
+              status: 200,
+              body: {
+                resources: Array.isArray(body.projects) ? body.projects : [],
+                pagination: body.pagination ?? {
+                  page,
+                  pageSize,
+                  total: 0,
+                  totalPages: 1,
+                },
+              },
+            });
+          }
+
+          if (resourceType === "script") {
+            const scriptResult = await creatorApplication.listWorkspaceScripts({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now,
+            });
+            if (scriptResult.status !== 200) {
+              return writeJson(response, scriptResult);
+            }
+            const scripts = Array.isArray((scriptResult.body as Record<string, unknown>).scripts)
+              ? (scriptResult.body as Record<string, unknown>).scripts as unknown[]
+              : [];
+            const totalPages = Math.max(1, Math.ceil(scripts.length / pageSize));
+            const normalizedPage = Math.min(page, totalPages);
+            const pageItems = scripts.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+            return writeJson(response, {
+              status: 200,
+              body: {
+                resources: pageItems,
+                pagination: {
+                  page: normalizedPage,
+                  pageSize,
+                  total: scripts.length,
+                  totalPages,
+                },
+              },
+            });
+          }
+
+          const canvasProjects = await listCanvasProjects(db, {
+            organizationId: actor.organizationId,
+            userId: authenticated.user.id,
+          });
+          const totalPages = Math.max(1, Math.ceil(canvasProjects.length / pageSize));
+          const normalizedPage = Math.min(page, totalPages);
+          const pageItems = canvasProjects.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+          return writeJson(response, {
+            status: 200,
+            body: {
+              resources: pageItems.map(serializeCanvasProject),
+              pagination: {
+                page: normalizedPage,
+                pageSize,
+                total: canvasProjects.length,
+                totalPages,
+              },
+            },
+          });
+        }
+
         if (request.method === "GET" && pathname === "/api/creator/credits/ledger") {
           if (authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id) {
             return writeJson(response, {
@@ -19249,7 +19348,8 @@ export function createPhoneAuthDevServer(
       response.setHeader("content-type", "application/json; charset=utf-8");
       response.end(
         JSON.stringify({
-          error: error instanceof Error ? error.message : "internal_error",
+          error: "internal_error",
+          message: "服务内部错误，请稍后重试。",
         }),
       );
     }

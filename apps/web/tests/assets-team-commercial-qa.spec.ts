@@ -2376,14 +2376,16 @@ describe("Worker C team management surfaces", () => {
     assertHasAction(html, "close-team-member-create");
     assertHasAction(html, "submit-team-member-create");
     assertHasAction(html, "toggle-team-member-project");
+    assert.doesNotMatch(
+      html.slice(html.indexOf('data-modal="team-member-create"')),
+      /<p class="library-team-kicker">成员账号<\/p>/,
+    );
     assertIncludesText(html, "项目");
     assertIncludesText(html, "剧本");
     assertIncludesText(html, "画布");
     assertIncludesText(html, "整体测试项目");
     assertIncludesText(html, "整体测试项目剧本");
     assertIncludesText(html, "整体测试项目画布");
-    assert.doesNotMatch(html, /测试9剧本/);
-    assert.doesNotMatch(html, /测试9画布/);
   });
 
   it("falls back to the overview suffix when the create member draft suffix is blank", () => {
@@ -2445,6 +2447,55 @@ describe("Worker C team management surfaces", () => {
     assert.match(html, /id="team-edit-member-new-password-input"[\s\S]*?type="text"/);
     assertIncludesText(html, "new-pass-123");
     assert.doesNotMatch(html, /data-action="change-edit-member-confirm-password"/);
+  });
+
+  it("renders the edit member modal with create-style layout and preserved credit controls", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        phone: "13800138002",
+        status: "active",
+        creditBalance: 6000,
+        creditAdjustmentType: "increase",
+        creditAmount: "99",
+      },
+    });
+
+    assert.match(html, /library-team-modal-scroll-edit/);
+    assert.match(html, /library-team-edit-member-identity-grid/);
+    assert.doesNotMatch(html, /library-team-form-grid-edit/);
+    assert.doesNotMatch(html, /library-team-edit-member-identity-grid[\s\S]*成员名称[\s\S]*成员账户/);
+    assert.match(html, /team-edit-member-credit-action-input/);
+    assert.match(html, /team-edit-member-credit-amount-input/);
+    assertIncludesText(html, "当前积分");
+  });
+
+  it("renders the edit member resource picker with real page copy", () => {
+    const html = renderLibraryTeam({
+      route: "team",
+      editMemberModal: {
+        open: true,
+        id: "member-1",
+        resourcePickerType: "project",
+        resourcePickerPage: 2,
+        resourcePagination: {
+          project: { page: 2, pageSize: 10, total: 24, totalPages: 3 },
+        },
+        availableProjects: [
+          { id: "project-11", name: "项目 11" },
+          { id: "project-12", name: "项目 12" },
+        ],
+        projectIds: ["project-11"],
+      },
+    });
+
+    assert.match(html, /子账户可见范围/);
+    assert.match(html, /第 2 \/ 3 页/);
+    assert.match(html, /每页 10 条/);
+    assert.match(html, /项目.*2 \/ 24/);
+    assert.match(html, /项目 11/);
   });
 
   it("renders the team dashboard route without requiring shell DOM", () => {

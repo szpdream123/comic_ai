@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS team_members (
   CHECK (member_account ~ '^[a-z0-9][a-z0-9_-]{2,31}$'),
   CHECK (member_account_suffix ~ '^[a-z0-9][a-z0-9_-]{5,31}$'),
   CHECK (member_login_account = member_account || '@' || member_account_suffix),
-  UNIQUE (user_id, member_account),
   UNIQUE (id, user_id)
 );
 

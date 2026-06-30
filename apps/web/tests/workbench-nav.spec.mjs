@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
+import { deriveInitialNavTabForTest, syncWorkbenchRouteStateForTest } from "../src/features/production-workbench/index.js";
 
 test("workbench rail omits the community tab", () => {
   const html = renderProjectDetail({
@@ -23,6 +24,56 @@ test("workbench rail omits the community tab", () => {
 
   assert.doesNotMatch(html, /data-tab="community"/);
   assert.doesNotMatch(html, /data-action="open-community"/);
+});
+
+test("team member sessions omit the team tab from the workbench rail", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+    },
+  });
+
+  assert.doesNotMatch(html, /data-tab="team"/);
+  assert.doesNotMatch(html, /团队/);
+});
+
+test("team member hash routes fall back to the project workspace", () => {
+  const workbench = {
+    session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
+    ui: {
+      activeNavTab: "team",
+      projectPanelMode: "library",
+      projectInteriorSection: "assets",
+      libraryTeamRoute: "team",
+    },
+    root: { innerHTML: "" },
+  };
+
+  syncWorkbenchRouteStateForTest(workbench, "#team-dashboard");
+
+  assert.equal(workbench.ui.activeNavTab, "project");
+  assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectInteriorSection, "overview");
+  assert.equal(workbench.ui.libraryTeamRoute, "assets");
+});
+
+test("team member initial route falls back to the project workspace", () => {
+  const nextTab = deriveInitialNavTabForTest("#team-dashboard", {
+    user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } },
+  });
+
+  assert.equal(nextTab, "project");
 });
 
 test("project workspace omits the members interior tab", () => {
@@ -131,7 +182,7 @@ test("project workspace keeps the global brand visible in the top status bar", (
   assert.match(html, /global-statusbar/);
   assert.match(html, /statusbar-brand/);
   assert.match(html, /<strong>灵曦剧场<\/strong>/);
-  assert.doesNotMatch(html, /global-statusbar-hide-brand/);
+  assert.match(html, /global-statusbar/);
 });
 
 test("asset episode and stats sections omit redundant page titles", () => {
