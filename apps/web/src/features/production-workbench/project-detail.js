@@ -7801,14 +7801,7 @@ function renderHomeHero({ detailState, session }) {
         <span class="home-starfield-layer layer-two"></span>
         <span class="home-scanline-layer"></span>
       </div>
-      <div class="home-meteor-field" aria-hidden="true">
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-      </div>
+      <div class="home-lightfall-field" data-lightfall-root aria-hidden="true"></div>
       <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
