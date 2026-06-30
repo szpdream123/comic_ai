@@ -3037,7 +3037,7 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.membership?.status ??
     membershipStatus?.subscription?.status ??
     "";
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || String(status).endsWith("_active");
 }
 
 function hasActiveMembershipAccess(workbench) {
@@ -3081,10 +3081,27 @@ function resolveEffectiveTeamSeatSnapshot(workbench) {
 }
 
 function hasActiveTeamAssetLibraryAccess(workbench) {
-  if (workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary !== true) {
-    return false;
+  const configuredEntitlement = resolveMembershipEntitlement(
+    workbench.ui?.membershipStatus,
+    "teamAssetLibrary",
+  );
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && hasActiveMembershipAccess(workbench);
   }
-  return hasActiveMembershipAccess(workbench);
+  return workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary === true &&
+    hasActiveMembershipAccess(workbench);
+}
+
+function hasActiveTeamDashboardAccess(workbench) {
+  const configuredEntitlement = resolveMembershipEntitlement(
+    workbench.ui?.membershipStatus,
+    "teamDashboard",
+  );
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && hasActiveMembershipAccess(workbench);
+  }
+  return hasActiveMembershipAccess(workbench) &&
+    workbench.ui?.teamOverview?.entitlements?.teamDashboard === true;
 }
 
 function normalizeLibraryAssetScope(workbench, scope = workbench.ui?.libraryTeamAssetScope ?? "official") {
@@ -7646,7 +7663,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-team-dashboard") {
-    if (!hasActiveMembershipAccess(workbench) || workbench.ui.teamOverview?.entitlements?.teamDashboard !== true) {
+    if (!hasActiveTeamDashboardAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
@@ -10890,7 +10907,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-team-asset-library") {
-    if (!hasActiveMembershipAccess(workbench)) {
+    if (!hasActiveTeamAssetLibraryAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
@@ -10918,7 +10935,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "switch-episode-asset-library-scope") {
     const requestedScope = target.dataset.libraryScope === "team" ? "team" : "official";
-    if (requestedScope === "team" && !hasActiveMembershipAccess(workbench)) {
+    if (requestedScope === "team" && !hasActiveTeamAssetLibraryAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";

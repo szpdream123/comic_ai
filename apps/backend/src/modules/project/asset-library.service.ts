@@ -1878,8 +1878,19 @@ async function resolveLibraryEntitlement(
       UNION ALL
       SELECT period.id::text AS id
       FROM membership_periods period
+      JOIN membership_plans plan
+        ON plan.id = period.plan_id
       WHERE period.organization_id = $1
-        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND plan.status = 'active'
+        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
+        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
+        AND plan.entitlements_json ? 'team_asset_library'
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
         AND period.status = 'active'
         AND period.period_end_at > $2
         AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'

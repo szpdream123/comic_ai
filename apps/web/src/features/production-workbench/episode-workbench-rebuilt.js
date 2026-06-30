@@ -77,7 +77,7 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "",
   );
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || status.endsWith("_active");
 }
 
 export function renderEpisodeWorkbench({

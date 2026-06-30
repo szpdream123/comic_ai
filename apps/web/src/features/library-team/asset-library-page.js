@@ -322,10 +322,29 @@ export function renderAssetLibraryPage(context = {}) {
 }
 
 function hasUsableTeamAssetLibraryEntitlement(context = {}) {
-  if (context.libraryEntitlement?.hasTeamAssetLibrary !== true) {
-    return false;
+  const configuredEntitlement = resolveMembershipEntitlement(
+    context.membershipStatus,
+    "teamAssetLibrary",
+  );
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && isActiveMembershipStatus(context.membershipStatus);
   }
-  return isActiveMembershipStatus(context.membershipStatus);
+  return context.libraryEntitlement?.hasTeamAssetLibrary === true &&
+    isActiveMembershipStatus(context.membershipStatus);
+}
+
+function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    null;
+  if (!entitlements || typeof entitlements !== "object") {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(entitlements, entitlementKey)
+    ? entitlements[entitlementKey] === true
+    : null;
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -335,7 +354,7 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "",
   );
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || status.endsWith("_active");
 }
 
 export function validateTeamAssetLocalUploadFile(category, file) {
