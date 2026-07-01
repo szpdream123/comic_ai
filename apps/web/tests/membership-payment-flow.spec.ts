@@ -828,6 +828,99 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
+test("paid membership payment silently refreshes the team page entitlement state", async () => {
+  const reloads = [];
+  const workbench = createWorkbench({
+    activeNavTab: "team",
+    libraryTeamRoute: "team",
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
+    teamOverview: {
+      entitlements: { teamMemberManagement: false },
+      team: { activated: false, memberCount: 0 },
+      seats: { used: 0, limit: 0, remaining: 0 },
+      permissions: { canReadMembers: true, canCreateMember: true, canViewDashboard: true },
+    },
+    teamMembers: [],
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+    },
+  }, {
+    async getBillingOrder(orderId) {
+      return {
+        order: {
+          id: orderId,
+          productType: "membership_plan",
+          status: "paid",
+        },
+      };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-membership-1",
+          status: "succeeded",
+        },
+      };
+    },
+    async getMembershipPlans() {
+      return { data: { plans: [] } };
+    },
+    async getMembershipStatus() {
+      return {
+        membership: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+      };
+    },
+    async getTeamOverview() {
+      return {
+        overview: {
+          entitlements: { teamMemberManagement: true },
+          permissions: { canReadMembers: true, canCreateMember: true, canViewDashboard: true },
+          memberCount: 0,
+          seatLimit: 50,
+          remainingSeats: 50,
+        },
+      };
+    },
+    async getTeamMembers() {
+      return { members: [] };
+    },
+  });
+  workbench.requestPageRefreshAfterMembershipPaymentSuccess = () => {
+    reloads.push("reload");
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "refresh-payment-intent",
+      paymentIntentId: "intent-membership-1",
+      orderId: "order-membership-1",
+    },
+  });
+  await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
+
+  assert.deepEqual(reloads, []);
+  assert.equal(workbench.ui.teamOverview.team.memberCount, 0);
+  assert.equal(workbench.ui.teamOverview.seats.limit, 50);
+  assert.match(workbench.root.innerHTML, /创建子账户/);
+  assert.match(workbench.root.innerHTML, /data-action="open-team-member-create"/);
+  assert.doesNotMatch(workbench.root.innerHTML, /开通专业版/);
+});
+
 test("paid membership payment closes the payment modal without forcing a page refresh", async () => {
   const calls = [];
   const reloads = [];
@@ -2010,4 +2103,3 @@ function buildProjectState() {
     exportPreview: null,
   };
 }
-

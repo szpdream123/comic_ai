@@ -78,6 +78,25 @@ test("read API calls coalesce duplicate in-flight requests", async () => {
   assert.deepEqual(secondPayload, { projects: [] });
 });
 
+test("getInviteSummary targets the authenticated invite summary route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ inviteCode: "ABCD12" }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getInviteSummary();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/auth/invite-summary");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.deepEqual(payload, { inviteCode: "ABCD12" });
+});
+
 test("getProjects sends backend pagination query parameters", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -1257,6 +1276,41 @@ test("new envelope errors expose status code, error code, details, and request i
       assert.deepEqual(error.details, { action: "generate" });
       assert.equal(error.requestId, "request-denied");
       assert.equal(error.message, "没有权限执行该操作");
+      return true;
+    },
+  );
+});
+
+test("nested generation error envelopes expose the backend task id", async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    text: async () => JSON.stringify({
+      requestId: "outer-request",
+      data: {
+        requestId: "inner-request",
+        errorCode: "provider_api_key_missing",
+        message: "模型供应商配置缺失",
+        details: {
+          taskId: "70000000-0000-4000-8000-000000000001",
+          workflowId: "70000000-0000-4000-8000-000000000002",
+        },
+      },
+    }),
+  });
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await assert.rejects(
+    () => creatorApi.createImageTask("episode-1", { prompt: "test" }),
+    (error) => {
+      assert.equal(error.status, 502);
+      assert.equal(error.errorCode, "provider_api_key_missing");
+      assert.equal(error.taskId, "70000000-0000-4000-8000-000000000001");
+      assert.deepEqual(error.details, {
+        taskId: "70000000-0000-4000-8000-000000000001",
+        workflowId: "70000000-0000-4000-8000-000000000002",
+      });
+      assert.equal(error.requestId, "outer-request");
       return true;
     },
   );

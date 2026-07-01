@@ -168,6 +168,13 @@ test("membership plan service lists only currently purchasable active plans", as
       validUntil: "2026-06-09T09:00:00.000Z",
       idempotencyKey: "membership-plan-active-expired",
     });
+    await saveValidPlan(service, {
+      code: "internal_invite_trial",
+      status: "active",
+      visibility: "internal",
+      usageScene: "invite_new_user",
+      idempotencyKey: "membership-plan-internal-invite-trial",
+    });
 
     const purchasable = await service.listPurchasablePlans({ now });
 

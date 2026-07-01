@@ -108,6 +108,11 @@ export async function persistGptImageArtifact(
         storageObjectKey: uploaded.storageObject.objectKey,
       });
     }
+    await assertStoredArtifactAvailable(input.runtime, {
+      bucket: available.bucket,
+      objectKey: available.objectKey,
+      sizeBytes: available.sizeBytes,
+    });
 
     const urls = input.resolveUrls
       ? await input.resolveUrls(available)
@@ -380,9 +385,47 @@ function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
 }
 
 function parseContentLength(value: string | null) {
+  if (value == null) {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }
+
+async function assertStoredArtifactAvailable(
+  runtime: UploadSessionRuntime,
+  input: {
+    bucket: string;
+    objectKey: string;
+    sizeBytes: number | null;
+  },
+) {
+  if (typeof runtime.adapter.headObject !== "function") {
+    if (Number.isFinite(input.sizeBytes) && Number(input.sizeBytes) > 0) {
+      return;
+    }
+    throw Object.assign(new Error("gpt_image_storage_object_empty"), {
+      failureCode: "provider_output_upload_failed",
+      storageObjectKey: input.objectKey,
+    });
+  }
+  const remote = await runtime.adapter.headObject({
+    bucket: input.bucket,
+    objectKey: input.objectKey,
+  });
+  const remoteSize = Number(remote.contentLength ?? 0);
+  if (!remote.exists || !Number.isFinite(remoteSize) || remoteSize <= 0) {
+    throw Object.assign(new Error("gpt_image_storage_object_empty"), {
+      failureCode: "provider_output_upload_failed",
+      storageObjectKey: input.objectKey,
+    });
+  }
+}
+
+export const __gptImageArtifactFinalizerTestUtils = {
+  parseContentLength,
+  assertStoredArtifactAvailable,
+};
 
 function delay(ms: number) {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();

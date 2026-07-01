@@ -1,19 +1,19 @@
 export interface CreditLedgerEntryLike {
-  organizationId: string;
+  userId: string;
   availableDelta: number;
   reservedDelta: number;
   consumedDelta: number;
 }
 
 export interface CreditBalanceReadModelLike {
-  organizationId: string;
+  userId: string;
   creditBalanceCached: number;
   creditReservedCached: number;
   creditFrozenCached?: number;
 }
 
 export interface RecomputedCreditBalance {
-  organizationId: string;
+  userId: string;
   available: number;
   reserved: number;
   consumed: number;
@@ -27,9 +27,9 @@ export function recomputeCreditBalance(
 
   for (const entry of ledgerEntries) {
     const current =
-      balances.get(entry.organizationId) ??
+      balances.get(entry.userId) ??
       {
-        organizationId: entry.organizationId,
+        userId: entry.userId,
         available: 0,
         reserved: 0,
         consumed: 0,
@@ -38,7 +38,7 @@ export function recomputeCreditBalance(
     current.available += entry.availableDelta;
     current.reserved += entry.reservedDelta;
     current.consumed += entry.consumedDelta;
-    balances.set(entry.organizationId, current);
+    balances.set(entry.userId, current);
   }
 
   return balances;
@@ -53,9 +53,9 @@ export function findCreditBalanceDrift(
 
   for (const readModel of readModels) {
     const balance =
-      recomputed.get(readModel.organizationId) ??
+      recomputed.get(readModel.userId) ??
       {
-        organizationId: readModel.organizationId,
+        userId: readModel.userId,
         available: 0,
         reserved: 0,
         consumed: 0,

@@ -239,9 +239,62 @@ describe("createDevDb", () => {
     });
   });
 
+  it("preserves admin-edited model config values across dev database startup repair", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET status = 'active',
+              provider_config_json = provider_config_json || '{"endpoint":"/custom/images"}'::jsonb,
+              pricing_json = '{"unit":"image","baseCredits":321}'::jsonb
+          WHERE model_code = 'gpt-image-2'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET status = 'disabled'
+          WHERE model_code = 'gpt-image-2-cn'
+        `,
+      );
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const models = await repairedDb.query<{
+        model_code: string;
+        status: string;
+        endpoint: string | null;
+        base_credits: number | string | null;
+      }>(
+        `
+          SELECT
+            model_code,
+            status,
+            provider_config_json->>'endpoint' AS endpoint,
+            pricing_json->>'baseCredits' AS base_credits
+          FROM ai_model_configs
+          WHERE model_code IN ('gpt-image-2', 'gpt-image-2-cn')
+          ORDER BY model_code
+        `,
+      );
+      await repairedDb.close();
+
+      const byCode = new Map(models.rows.map((row) => [row.model_code, row]));
+      assert.equal(byCode.get("gpt-image-2")?.status, "active");
+      assert.equal(byCode.get("gpt-image-2")?.endpoint, "/custom/images");
+      assert.equal(Number(byCode.get("gpt-image-2")?.base_credits), 321);
+      assert.equal(byCode.get("gpt-image-2-cn")?.status, "disabled");
+    });
+  });
+
   it("repairs existing PostgreSQL databases missing team collaboration tables", async () => {
     await withIsolatedDevSchema(async () => {
       const db = await createDevDb();
+      await db.query("DROP TABLE IF EXISTS team_member_project_records CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_member_auth_sessions CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_member_projects CASCADE");
+      await db.query("DROP TABLE IF EXISTS team_members CASCADE");
       await db.query("DROP TABLE IF EXISTS team_plan_limits CASCADE");
       await db.query("DROP TABLE IF EXISTS team_credit_adjustments CASCADE");
       await db.query("DROP TABLE IF EXISTS team_project_ownerships CASCADE");
@@ -259,8 +312,12 @@ describe("createDevDb", () => {
           WHERE table_schema = current_schema()
             AND table_name IN (
               'organization_entitlements',
+              'team_member_auth_sessions',
               'team_member_groups',
               'team_member_profiles',
+              'team_member_project_records',
+              'team_member_projects',
+              'team_members',
               'team_project_assignments',
               'team_project_ownerships',
               'team_credit_adjustments',
@@ -274,12 +331,109 @@ describe("createDevDb", () => {
       assert.deepEqual(tables.rows.map((row) => row.table_name), [
         "organization_entitlements",
         "team_credit_adjustments",
+        "team_member_auth_sessions",
         "team_member_groups",
         "team_member_profiles",
+        "team_member_project_records",
+        "team_member_projects",
+        "team_members",
         "team_plan_limits",
         "team_project_assignments",
         "team_project_ownerships",
       ]);
+    });
+  });
+
+  it("repairs existing PostgreSQL databases by detaching team member project record project FK", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      const before = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class r ON r.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE n.nspname = current_schema()
+              AND r.relname = 'team_member_project_records'
+              AND c.conname = 'team_member_project_records_member_id_project_id_fkey'
+          ) AS exists
+        `,
+      );
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const after = await repairedDb.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class r ON r.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE n.nspname = current_schema()
+              AND r.relname = 'team_member_project_records'
+              AND c.conname = 'team_member_project_records_member_id_project_id_fkey'
+          ) AS exists
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(before.rows[0]?.exists, true);
+      assert.equal(after.rows[0]?.exists, false);
+    });
+  });
+
+  it("repairs existing PostgreSQL databases missing user team account suffixes", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query("ALTER TABLE users DROP COLUMN IF EXISTS team_account_suffix CASCADE");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const columns = await repairedDb.query<{ column_name: string }>(
+        `
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'users'
+            AND column_name = 'team_account_suffix'
+        `,
+      );
+      const indexes = await repairedDb.query<{ indexname: string }>(
+        `
+          SELECT indexname
+          FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = 'users'
+            AND indexname = 'users_team_account_suffix_key'
+        `,
+      );
+      await repairedDb.close();
+
+      assert.deepEqual(columns.rows.map((row) => row.column_name), ["team_account_suffix"]);
+      assert.deepEqual(indexes.rows.map((row) => row.indexname), ["users_team_account_suffix_key"]);
+    });
+  });
+
+  it("repairs credit reservation lot allocations to allow nullable organization ids", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query("ALTER TABLE credit_reservation_lot_allocations ALTER COLUMN organization_id SET NOT NULL");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const column = await repairedDb.query<{ is_nullable: string }>(
+        `
+          SELECT is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'credit_reservation_lot_allocations'
+            AND column_name = 'organization_id'
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(column.rows[0]?.is_nullable, "YES");
     });
   });
 

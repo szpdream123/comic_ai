@@ -242,6 +242,59 @@ describe("generation model request validator", () => {
     assert.equal(model?.providerConfig.requestPath, "/v1/images/generations");
     assert.equal(model?.providerConfig.apiKey, "sk-test");
   });
+
+  it("resolves provider secret when model stores a blank apiKeyEnv", async () => {
+    const db = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        if (sql.includes("FROM ai_model_configs")) {
+          return {
+            rows: [
+              {
+                id: "lingdong-model-config-1",
+                model_code: "gpt-image-2",
+                display_name: "gpt-image-2",
+                provider_name: "lingdong",
+                provider_model: "gpt-image-2",
+                provider_protocol: "lingdong_api",
+                invocation_mode: "sync",
+                media_type: "image",
+                task_modes_json: ["image.generate"],
+                capabilities_json: {},
+                parameter_schema_json: {},
+                default_params_json: {},
+                provider_config_json: {
+                  baseURL: "https://www.lingdongapi.com",
+                  requestPath: "/v1/images/generations",
+                  apiKeyEnv: "",
+                },
+                pricing_json: {},
+                limits_json: {},
+                ui_config_json: {},
+                status: "active",
+                sort_order: 10,
+                remark: null,
+              },
+            ] as T[],
+          };
+        }
+        if (sql.includes("FROM admin_secret_values")) {
+          return {
+            rows: [
+              {
+                secret_value: "sk-lingdong-test",
+                request_domain: "https://www.lingdongapi.com",
+              },
+            ] as T[],
+          };
+        }
+        return { rows: [] as T[] };
+      },
+    } as const;
+
+    const model = await findActiveAiModelConfigByCode(db, "gpt-image-2");
+    assert.equal(model?.providerConfig.baseURL, "https://www.lingdongapi.com");
+    assert.equal(model?.providerConfig.apiKey, "sk-lingdong-test");
+  });
 });
 
 function assertValidationError(callback: () => void, code: string) {

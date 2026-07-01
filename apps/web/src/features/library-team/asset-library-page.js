@@ -321,23 +321,6 @@ export function renderAssetLibraryPage(context = {}) {
   return renderOfficialTeamLibrary({ ...context, assetScope });
 }
 
-function hasUsableTeamAssetLibraryEntitlement(context = {}) {
-  if (context.libraryEntitlement?.hasTeamAssetLibrary !== true) {
-    return false;
-  }
-  return isActiveMembershipStatus(context.membershipStatus);
-}
-
-function isActiveMembershipStatus(membershipStatus) {
-  const status = String(
-    membershipStatus?.status ??
-    membershipStatus?.membership?.status ??
-    membershipStatus?.subscription?.status ??
-    "",
-  );
-  return status === "experience_active" || status === "professional_active";
-}
-
 export function validateTeamAssetLocalUploadFile(category, file) {
   const config = teamLocalUploadConfigs[category];
   if (!config) {
@@ -369,7 +352,7 @@ export function validateTeamAssetLocalUploadFile(category, file) {
 }
 
 function renderOfficialTeamLibrary(context) {
-  const assetScope = context.assetScope === "team" ? "team" : "official";
+  const assetScope = context.assetScope ?? "official";
   const categories =
     assetScope === "team" ? teamCategories : normalizeCategories(context.libraryCategories);
   const requestedCategory = context.libraryCategory ?? categories[0]?.id ?? "character";
@@ -386,7 +369,8 @@ function renderOfficialTeamLibrary(context) {
     query,
     Boolean(context.libraryFolder),
   );
-  const teamLocked = assetScope === "team" && !hasUsableTeamAssetLibraryEntitlement(context);
+  const teamLocked =
+    assetScope === "team" && !hasTeamAssetLibraryAccess(context);
   const canUseTeamLocalUploads = assetScope === "team" && !teamLocked;
   const localUploads =
     canUseTeamLocalUploads ? normalizeTeamAssetLocalUploads(context, selectedCategory) : [];
@@ -442,6 +426,34 @@ function renderOfficialTeamLibrary(context) {
       })}
     </section>
   `;
+}
+
+function hasTeamAssetLibraryAccess(context = {}) {
+  const membershipStatus = context.membershipStatus ?? null;
+  const overview = context.overview ?? context.teamOverview ?? null;
+  const entitlement = context.libraryEntitlement ?? null;
+  const status =
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "";
+  const tier =
+    membershipStatus?.currentTier ??
+    membershipStatus?.membership?.currentTier ??
+    membershipStatus?.subscription?.currentTier ??
+    "";
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    {};
+  return (
+    entitlement?.hasTeamAssetLibrary === true ||
+    overview?.entitlements?.teamAssetLibrary === true ||
+    entitlements?.teamAssetLibrary === true ||
+    status === "professional_active" ||
+    tier === "professional"
+  );
 }
 
 const ASSET_LIBRARY_PAGE_SIZE = 18;
@@ -776,7 +788,7 @@ function renderLockedTeamPanel() {
 function renderAssetScopeTabs(assetScope, options = {}) {
   const scopes = [
     ["official", "官方资产库"],
-    ...(options.teamEnabled === false ? [] : [["team", "团队资产库", "团队复用"]]),
+    ["team", "团队资产库", "团队复用"],
   ];
 
   return `

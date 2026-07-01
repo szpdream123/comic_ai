@@ -14,6 +14,7 @@ const personalOrganizationId = "10000000-0000-4000-8000-000000001001";
 const personalWorkspaceId = "20000000-0000-4000-8000-000000001001";
 const teamOrganizationId = "10000000-0000-4000-8000-000000001002";
 const teamWorkspaceId = "20000000-0000-4000-8000-000000001002";
+const subaccountId = "32000000-0000-4000-8000-000000001101";
 
 describe("credit recharge center service", { concurrency: false }, () => {
   it("summarizes personal wallet and hides team transfer when there is no real team", async () => {
@@ -21,7 +22,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
     try {
       const session = await seedRechargeFixture(db, { realTeam: false });
       await grantCredits(db, {
-        organizationId: personalOrganizationId,
+        userId,
         amount: 180,
         sourceType: "test",
         sourceId: "90000000-0000-4000-8000-000000001001",
@@ -36,9 +37,9 @@ describe("credit recharge center service", { concurrency: false }, () => {
       });
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.wallets.personal.organizationId, personalOrganizationId);
+      assert.equal(response.body.wallets.personal.accountId, userId);
       assert.equal(response.body.wallets.personal.availableCredits, 180);
-      assert.equal(response.body.wallets.team, null);
+      assert.equal(response.body.wallets.subaccount, null);
       assert.equal(response.body.transfer.canTransferToTeamPool, false);
       assert.equal(response.body.transfer.reason, "no_real_team");
     } finally {
@@ -51,7 +52,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
     try {
       const session = await seedRechargeFixture(db, { realTeam: true });
       await grantCredits(db, {
-        organizationId: personalOrganizationId,
+        userId,
         amount: 220,
         sourceType: "test",
         sourceId: "90000000-0000-4000-8000-000000001002",
@@ -79,7 +80,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
       assert.equal(replay.status, 200);
       assert.equal(replay.body.transfer.id, first.body.transfer.id);
       assert.equal(replay.body.wallets.personal.availableCredits, 145);
-      assert.equal(replay.body.wallets.team?.availableCredits, 75);
+      assert.equal(replay.body.wallets.subaccount?.availableCredits, 75);
 
       const balances = await db.query<{
         id: string;
@@ -87,11 +88,15 @@ describe("credit recharge center service", { concurrency: false }, () => {
       }>(
         `
           SELECT id, credit_balance_cached
-          FROM organizations
-          WHERE id IN ($1, $2)
+          FROM users
+          WHERE id = $1
+          UNION ALL
+          SELECT id, member_credits AS credit_balance_cached
+          FROM team_members
+          WHERE id = $2
           ORDER BY id
         `,
-        [personalOrganizationId, teamOrganizationId],
+        [userId, subaccountId],
       );
       const ledger = await db.query<{ entry_type: string; available_delta: number }>(
         `
@@ -108,8 +113,8 @@ describe("credit recharge center service", { concurrency: false }, () => {
       assert.deepEqual(
         Object.fromEntries(balances.rows.map((row) => [row.id, row.credit_balance_cached])),
         {
-          [personalOrganizationId]: 145,
-          [teamOrganizationId]: 75,
+          [subaccountId]: 75,
+          [userId]: 145,
         },
       );
       assert.deepEqual(ledger.rows, [
@@ -154,7 +159,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
         stalePaymentEntitlement: true,
       });
       await grantCredits(db, {
-        organizationId: personalOrganizationId,
+        userId,
         amount: 120,
         sourceType: "test",
         sourceId: "90000000-0000-4000-8000-000000001004",
@@ -169,7 +174,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
       });
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.wallets.team, null);
+      assert.equal(response.body.wallets.subaccount, null);
       assert.equal(response.body.transfer.canTransferToTeamPool, false);
       assert.equal(response.body.transfer.reason, "no_real_team");
     } finally {
@@ -182,7 +187,7 @@ describe("credit recharge center service", { concurrency: false }, () => {
     try {
       const session = await seedRechargeFixture(db, { realTeam: true });
       await grantCredits(db, {
-        organizationId: personalOrganizationId,
+        userId,
         amount: 25,
         sourceType: "test",
         sourceId: "90000000-0000-4000-8000-000000001003",
@@ -222,7 +227,7 @@ async function seedRechargeFixture(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800199001', 'active')
+      VALUES ($1, '13800199001', 'active')
     `,
     [userId],
   );
@@ -230,10 +235,11 @@ async function seedRechargeFixture(
     `
       INSERT INTO organizations (id, name, status)
       VALUES
-        ($1, 'Personal Wallet', 'active'),
-        ($2, 'Real Team Wallet', 'active')
+        ($1, 'Account Compatibility Shell', 'active'),
+        ($2, 'Personal Wallet', 'active'),
+        ($3, 'Real Team Wallet', 'active')
     `,
-    [personalOrganizationId, teamOrganizationId],
+    [userId, personalOrganizationId, teamOrganizationId],
   );
   await db.query(
     `
@@ -281,52 +287,32 @@ async function seedRechargeFixture(
   }
 
   if (options.realTeam) {
-    const memberUserId = "00000000-0000-4000-8000-000000001101";
     await db.query(
       `
-        INSERT INTO users (id, email, display_name, status)
-        VALUES ($1, 'member@example.local', 'Member', 'active')
-      `,
-      [memberUserId],
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        INSERT INTO team_members (
+          id,
+          user_id,
+          member_account,
+          member_account_suffix,
+          member_login_account,
+          member_name,
+          member_password_hash,
+          member_credits,
+          status
+        )
         VALUES (
-          '30000000-0000-4000-8000-000000001101',
-          $1,
           $2,
-          $3,
-          'sub_account',
+          $1,
+          'member001',
+          'u00101',
+          'member001@u00101',
+          'Member',
+          'hashed-member-password',
+          0,
           'active'
         )
       `,
-      [teamOrganizationId, teamWorkspaceId, memberUserId],
-    );
-    await db.query(
-      `
-        INSERT INTO team_member_profiles (
-          id,
-          organization_id,
-          workspace_id,
-          membership_id,
-          team_account,
-          display_name,
-          business_role,
-          created_by_user_id
-        )
-        VALUES (
-          '32000000-0000-4000-8000-000000001101',
-          $1,
-          $2,
-          '30000000-0000-4000-8000-000000001101',
-          'member001',
-          'Member',
-          'animator',
-          $3
-        )
-      `,
-      [teamOrganizationId, teamWorkspaceId, userId],
+      [userId, subaccountId],
     );
   }
 

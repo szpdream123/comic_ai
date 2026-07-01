@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { settleReservationAllocation } from "../credit-billing/credit-ledger.service.ts";
@@ -47,6 +47,97 @@ interface GptImageTaskRow {
   provider_response_redacted_json?: Record<string, unknown> | string | null;
   reservation_id: string | null;
   amount_reserved: number | string | null;
+}
+
+function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
+  const candidate = snapshot.teamMemberId ?? snapshot.memberId;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<string, unknown>) {
+  const reserved = Number(row.amount_reserved ?? 0);
+  if (Number.isFinite(reserved) && reserved > 0) {
+    return reserved;
+  }
+  const snapshotAmount = Number(snapshot.cost ?? snapshot.estimatedCredits ?? snapshot.amount ?? 0);
+  return Number.isFinite(snapshotAmount) && snapshotAmount > 0 ? snapshotAmount : 0;
+}
+
+async function refundTeamMemberGenerationCredits(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    teamMemberId: string;
+    amount: number;
+    sourceId: string;
+    reason: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return;
+  }
+  await db.query("BEGIN");
+  try {
+    const updatedMember = await queryOne<{ user_id: string }>(
+      db,
+      `
+        UPDATE team_members
+        SET member_credits = member_credits + $2,
+            updated_at = $3
+        WHERE id = $1
+          AND status <> 'deleted'
+        RETURNING user_id
+      `,
+      [input.teamMemberId, input.amount, input.now],
+    );
+    if (!updatedMember) {
+      throw new Error("team_member_refund_target_missing");
+    }
+    await queryOne<{ id: string }>(
+      db,
+      `
+        INSERT INTO credit_ledger_entries (
+          id,
+          organization_id,
+          user_id,
+          reservation_id,
+          allocation_id,
+          entry_type,
+          amount,
+          available_delta,
+          reserved_delta,
+          consumed_delta,
+          source_type,
+          source_id,
+          reason,
+          metadata_json,
+          created_by_user_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
+        RETURNING id
+      `,
+      [
+        randomUUID(),
+        input.organizationId,
+        updatedMember.user_id,
+        input.amount,
+        input.sourceId,
+        input.reason,
+        JSON.stringify({
+          ...input.metadata,
+          memberId: input.teamMemberId,
+        }),
+        input.now,
+      ],
+    );
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function processGptImageSubmitJob(
@@ -187,7 +278,7 @@ export async function processGptImageSubmitJob(
         ...(apiKeyEnv ? { apiKeyEnv } : {}),
       },
       creditSummary: {
-        released: Number(row.amount_reserved ?? 0),
+        released: resolveGptImageBillingAmount(row, snapshot),
         settledAt: input.now.toISOString(),
       },
       now: input.now,
@@ -315,7 +406,7 @@ export async function finalizeGptImageArtifactJob(
         errorMessage: error instanceof Error ? error.message : String(error),
       },
       creditSummary: {
-        released: Number(row.amount_reserved ?? 0),
+        released: resolveGptImageBillingAmount(row, snapshot),
         settledAt: input.now.toISOString(),
       },
       now: input.now,
@@ -528,7 +619,8 @@ async function markGptImageTaskManualReview(
     });
     await aggregateWorkflowStatus(db, input.row.workflow_id);
   }
-  const amount = Number(input.row.amount_reserved ?? 0);
+  const snapshot = parseSnapshot(input.row.input_snapshot_json);
+  const amount = resolveGptImageBillingAmount(input.row, snapshot);
   if (input.row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
       reservationId: input.row.reservation_id,
@@ -541,6 +633,25 @@ async function markGptImageTaskManualReview(
       metadata: input.metadata,
       now: input.now,
     });
+  }
+  if (!input.row.reservation_id && amount > 0) {
+    const memberId = readSnapshotTeamMemberId(snapshot);
+    if (memberId) {
+      await refundTeamMemberGenerationCredits(db, {
+        organizationId: input.row.organization_id,
+        teamMemberId: memberId,
+        amount,
+        sourceId: input.row.task_id,
+        reason: "生成失败返还积分",
+        metadata: buildWorkerBillingMetadata(input.row, snapshot, {
+          billingEvent: "released",
+          outcome: "released",
+          providerRequestId: input.providerRequestId,
+          settledAt: input.now,
+        }),
+        now: input.now,
+      });
+    }
   }
 }
 
@@ -717,7 +828,8 @@ async function failGptImageTask(
     });
     await aggregateWorkflowStatus(db, input.row.workflow_id);
   }
-  const amount = Number(input.row.amount_reserved ?? 0);
+  const snapshot = parseSnapshot(input.row.input_snapshot_json);
+  const amount = resolveGptImageBillingAmount(input.row, snapshot);
   if (input.row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
       reservationId: input.row.reservation_id,
@@ -730,6 +842,20 @@ async function failGptImageTask(
       metadata: input.metadata,
       now: input.now,
     });
+  }
+  if (!input.row.reservation_id && amount > 0) {
+    const memberId = readSnapshotTeamMemberId(snapshot);
+    if (memberId) {
+      await refundTeamMemberGenerationCredits(db, {
+        organizationId: input.row.organization_id,
+        teamMemberId: memberId,
+        amount,
+        sourceId: input.row.task_id,
+        reason: "生成失败返还积分",
+        metadata: input.metadata,
+        now: input.now,
+      });
+    }
   }
 }
 
@@ -826,7 +952,7 @@ function buildWorkerBillingMetadata(
     targetType: readString(snapshot.targetType),
     targetId: readString(snapshot.targetId),
     canvasNodeId: readString(snapshot.canvasNodeId),
-    amount: Number(row.amount_reserved ?? 0),
+    amount: resolveGptImageBillingAmount(row, snapshot),
     requestedAt,
     settledAt,
     durationMs,

@@ -1,16 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
   createTeamTemporaryCredential,
+  createUserPasswordHash,
 } from "../identity/team-account-credentials.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { ActorContext } from "./actor-context.service.ts";
-import {
-  isTeamBusinessRole,
-  type TeamBusinessRole,
-} from "./team-roles.ts";
 
 const DEFAULT_TEAM_SUBACCOUNT_LIMIT = 50;
 const TEAM_SUBACCOUNT_LIMIT_CONFIG_KEY = "team.default_subaccount_limit";
@@ -24,6 +21,8 @@ export type TeamServiceErrorCode =
   | "team_group_scope_violation"
   | "team_project_scope_violation"
   | "team_credit_insufficient"
+  | "team_member_credit_insufficient"
+  | "team_member_project_in_use"
   | "team_member_disabled"
   | "team_member_input_invalid";
 
@@ -37,225 +36,257 @@ export interface TeamMemberSummary {
   membershipId: string;
   userId: string;
   teamAccount: string;
+  memberLoginAccount: string;
   displayName: string;
-  businessRole: TeamBusinessRole;
   memberGroupId: string | null;
-  status: "active" | "invited" | "disabled";
+  projectIds: string[];
+  inheritedProjectIds: string[];
+  scriptIds: string[];
+  canvasIds: string[];
+  status: "active" | "invited" | "disabled" | "deleted";
   creditBalance: number;
   creditUsed: number;
   remark: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CreateTeamMemberInput {
   actor: ActorContext;
   teamAccount: string;
   displayName: string;
-  businessRole: TeamBusinessRole;
+  password?: string | null;
   memberGroupId?: string | null;
   projectIds?: string[];
+  scriptIds?: string[];
+  canvasIds?: string[];
   initialCredits?: number;
   remark?: string | null;
   now: Date;
+}
+
+export interface UpdateTeamMemberInput {
+  actor: ActorContext;
+  memberId: string;
+  displayName?: string | null;
+  projectIds?: string[] | null;
+  scriptIds?: string[] | null;
+  canvasIds?: string[] | null;
+  newPassword?: string | null;
+  status?: "active" | "disabled" | "deleted" | null;
+  creditAdjustmentType?: "increase" | "deduct" | null;
+  creditAmount?: number | null;
+  remark?: string | null;
+  now: Date;
+}
+
+interface TeamMemberRow {
+  id: string;
+  user_id: string;
+  member_account: string;
+  member_account_suffix: string;
+  member_login_account: string;
+  member_name: string;
+  member_credits: number;
+  status: "active" | "disabled" | "deleted";
+  created_at: string | Date;
+  updated_at: string | Date;
+  project_ids: string[] | null;
+  inherited_project_ids?: string[] | null;
+  script_ids?: string[] | null;
+  canvas_ids?: string[] | null;
+}
+
+interface TeamResourceAssignments {
+  projectIds: string[];
+  scripts: { id: string; projectId: string }[];
+  canvases: { id: string; projectId: string | null }[];
 }
 
 export async function createTeamMember(
   db: SqlDatabase,
   input: CreateTeamMemberInput,
 ): Promise<{ member: TeamMemberSummary; temporaryPassword: string }> {
-  const workspaceId = requireTeamWorkspace(input.actor);
-  const memberGroupId = resolveTargetMemberGroupId(
-    input.actor,
-    normalizeNullableText(input.memberGroupId),
-  );
+  requireTeamWorkspace(input.actor);
+  assertCanManageMembers(input.actor);
 
-  assertCanCreateMember(input.actor, memberGroupId);
-  assertBusinessRole(input.businessRole);
-  assertCanAssignBusinessRole(input.actor, input.businessRole);
-
-  const normalizedTeamAccount = normalizeTeamAccount(input.teamAccount);
-  const displayName = normalizeRequiredText(input.displayName);
-  if (!isValidTeamAccount(normalizedTeamAccount) || displayName.length === 0) {
+  const memberAccount = normalizeTeamAccount(input.teamAccount);
+  const memberName = normalizeRequiredText(input.displayName);
+  if (!isValidTeamAccount(memberAccount) || memberName.length === 0) {
     throw new TeamServiceError("team_member_input_invalid");
   }
 
-  const initialCredits = normalizeInitialCredits(input.initialCredits);
-  const projectIds = normalizeProjectIds(input.projectIds ?? []);
-
-  const credential = await createTeamTemporaryCredential();
-  const userId = randomUUID();
-  const membershipId = randomUUID();
-  const profileId = randomUUID();
-  const virtualEmail = buildTeamAccountEmail(normalizedTeamAccount, workspaceId);
+  const memberCredits = normalizeInitialCredits(input.initialCredits);
+  const scriptIds = normalizeResourceIds(input.scriptIds ?? []);
+  const canvasIds = normalizeResourceIds(input.canvasIds ?? []);
+  const assignments = await resolveTeamResourceAssignments(db, {
+    actor: input.actor,
+    projectIds: normalizeProjectIds(input.projectIds ?? []),
+    scriptIds,
+    canvasIds,
+  });
+  const providedPassword = input.password == null ? null : normalizeOptionalPassword(input.password);
+  const credential = providedPassword
+    ? {
+        temporaryPassword: "",
+        passwordHash: await createUserPasswordHash(providedPassword),
+      }
+    : await createTeamTemporaryCredential();
+  const memberId = randomUUID();
+  const memberAccountSuffix = await ensureUserTeamAccountSuffix(db, input.actor.actorId);
+  const memberLoginAccount = buildTeamMemberLoginAccount(memberAccount, memberAccountSuffix);
 
   await runInTransaction(db, async () => {
-    await lockOrganizationForTeamMutation(db, input.actor.organizationId);
-    await assertActiveEntitlement(db, {
-      organizationId: input.actor.organizationId,
-      entitlementKey: "team_member_management",
-      now: input.now,
-    });
-
+    const ownerWallet = await lockOwnerWalletForTeamMutation(db, input.actor.actorId);
     const planLimits = await resolvePlanLimits(db, {
-      organizationId: input.actor.organizationId,
-      now: input.now,
+      userId: input.actor.actorId,
     });
+    assertTeamSeatEnabled(planLimits.seatLimit);
     const usedSeats = await countActiveSubaccounts(db, input.actor);
     if (usedSeats >= planLimits.seatLimit) {
       throw new TeamServiceError("team_seat_limit_reached");
     }
-
-    await assertMemberGroupScope(db, {
-      actor: input.actor,
-      workspaceId,
-      memberGroupId,
-    });
+    if (Number(ownerWallet?.credit_balance_cached ?? 0) < memberCredits) {
+      throw new TeamServiceError("team_credit_insufficient");
+    }
 
     await assertTeamAccountAvailable(db, {
       actor: input.actor,
-      teamAccount: normalizedTeamAccount,
+      teamAccount: memberAccount,
+      memberLoginAccount,
     });
-
     await assertProjectScope(db, {
       actor: input.actor,
-      projectIds,
+      projectIds: assignments.projectIds,
     });
 
-    if (initialCredits > 0) {
-      await assertAllocatableCredits(db, {
-        organizationId: input.actor.organizationId,
-        amount: initialCredits,
-      });
-    }
-
     await db.query(
       `
-        INSERT INTO users (id, email, phone_e164, display_name, password_hash, status)
-        VALUES ($1, $2, NULL, $3, $4, 'active')
-      `,
-      [userId, virtualEmail, displayName, credential.passwordHash],
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (
+        INSERT INTO team_members (
           id,
-          organization_id,
-          workspace_id,
           user_id,
-          role,
-          status
+          member_account,
+          member_account_suffix,
+          member_login_account,
+          member_name,
+          member_password_hash,
+          member_credits,
+          status,
+          created_at,
+          updated_at
         )
-        VALUES ($1, $2, $3, $4, 'sub_account', 'active')
-      `,
-      [membershipId, input.actor.organizationId, workspaceId, userId],
-    );
-    await db.query(
-      `
-        INSERT INTO team_member_profiles (
-          id,
-          organization_id,
-          workspace_id,
-          membership_id,
-          team_account,
-          display_name,
-          business_role,
-          member_group_id,
-          credit_balance_cached,
-          remark,
-          created_by_user_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $9)
       `,
       [
-        profileId,
-        input.actor.organizationId,
-        workspaceId,
-        membershipId,
-        normalizedTeamAccount,
-        displayName,
-        input.businessRole,
-        memberGroupId,
-        initialCredits,
-        normalizeNullableText(input.remark),
+        memberId,
         input.actor.actorId,
+        memberAccount,
+        memberAccountSuffix,
+        memberLoginAccount,
+        memberName,
+        credential.passwordHash,
+        memberCredits,
+        input.now,
       ],
     );
 
-    for (const projectId of projectIds) {
-      await db.query(
+    if (memberCredits > 0) {
+      const adjustmentId = randomUUID();
+      const deducted = await queryOne<{ credit_balance_cached: number | string }>(
+        db,
         `
-          INSERT INTO team_project_assignments (
-            id,
-            organization_id,
-            workspace_id,
-            membership_id,
-            project_id,
-            assigned_by_user_id
-          )
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `,
-        [
-          randomUUID(),
-          input.actor.organizationId,
-          workspaceId,
-          membershipId,
-          projectId,
-          input.actor.actorId,
-        ],
-      );
-    }
-
-    if (initialCredits > 0) {
-      await db.query(
-        `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = credit_balance_cached - $2,
               updated_at = $3
           WHERE id = $1
+            AND credit_balance_cached >= $2
+          RETURNING credit_balance_cached
         `,
-        [input.actor.organizationId, initialCredits, input.now],
+        [input.actor.actorId, memberCredits, input.now],
       );
+      if (!deducted) {
+        throw new TeamServiceError("team_credit_insufficient");
+      }
+
       await db.query(
         `
-          INSERT INTO team_credit_adjustments (
+          INSERT INTO credit_ledger_entries (
             id,
             organization_id,
-            workspace_id,
-            operator_user_id,
-            target_membership_id,
-            adjustment_type,
+            user_id,
+            reservation_id,
+            allocation_id,
+            entry_type,
             amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
             reason,
+            metadata_json,
+            created_by_user_id,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, 'allocate', $6, $7, $8)
+          VALUES ($1, $2, $3, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $5, $6, $7, $8::jsonb, $3, $9)
         `,
         [
-          randomUUID(),
+          adjustmentId,
           input.actor.organizationId,
-          workspaceId,
           input.actor.actorId,
-          membershipId,
-          initialCredits,
-          "initial_member_credit_allocation",
+          memberCredits,
+          "team_member_credit_allocation",
+          adjustmentId,
+          "子账户分配积分",
+          JSON.stringify({
+            memberId,
+            memberAccount,
+            memberLoginAccount,
+            adjustmentType: "allocate",
+            amount: memberCredits,
+          }),
           input.now,
         ],
       );
     }
+
+    await replaceTeamMemberProjects(db, {
+      userId: input.actor.actorId,
+      memberId,
+      projectIds: assignments.projectIds,
+      now: input.now,
+    });
+    await replaceTeamMemberScripts(db, {
+      userId: input.actor.actorId,
+      memberId,
+      scripts: assignments.scripts,
+      now: input.now,
+    });
+    await replaceTeamMemberCanvases(db, {
+      userId: input.actor.actorId,
+      memberId,
+      canvases: assignments.canvases,
+      now: input.now,
+    });
   });
 
   return {
-    member: {
-      membershipId,
-      userId,
-      teamAccount: normalizedTeamAccount,
-      displayName,
-      businessRole: input.businessRole,
-      memberGroupId,
+    member: summaryFromRow({
+      id: memberId,
+      user_id: input.actor.actorId,
+      member_account: memberAccount,
+      member_account_suffix: memberAccountSuffix,
+      member_login_account: memberLoginAccount,
+      member_name: memberName,
+      member_credits: memberCredits,
       status: "active",
-      creditBalance: initialCredits,
-      creditUsed: 0,
-      remark: normalizeNullableText(input.remark),
-    },
+      created_at: input.now,
+      updated_at: input.now,
+      project_ids: assignments.projectIds,
+      inherited_project_ids: inheritedProjectIdsFromAssignments(assignments),
+      script_ids: scriptIds,
+      canvas_ids: canvasIds,
+    }),
     temporaryPassword: credential.temporaryPassword,
   };
 }
@@ -267,8 +298,7 @@ export async function getTeamOverview(
   assertCanViewTeamOverview(input.actor);
 
   const planLimits = await resolvePlanLimits(db, {
-    organizationId: input.actor.organizationId,
-    now: input.now,
+    userId: input.actor.actorId,
   });
   const usedSeats = await countActiveSubaccounts(db, input.actor);
   const credits = await queryOne<{
@@ -278,29 +308,17 @@ export async function getTeamOverview(
     db,
     `
       SELECT credit_balance_cached, credit_reserved_cached
-      FROM organizations
+      FROM users
       WHERE id = $1
     `,
-    [input.actor.organizationId],
+    [input.actor.actorId],
   );
 
   return {
     entitlements: {
-      teamMemberManagement: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_member_management",
-        now: input.now,
-      }),
-      teamAssetLibrary: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_asset_library",
-        now: input.now,
-      }),
-      teamDashboard: await hasActiveEntitlement(db, {
-        organizationId: input.actor.organizationId,
-        entitlementKey: "team_dashboard",
-        now: input.now,
-      }),
+      teamMemberManagement: planLimits.seatLimit > 0,
+      teamAssetLibrary: planLimits.seatLimit > 0,
+      teamDashboard: false,
     },
     seats: {
       used: usedSeats,
@@ -322,6 +340,7 @@ export async function getTeamOverview(
       ),
     },
     permissions: resolveTeamOverviewPermissions(input.actor),
+    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, input.actor.actorId),
   };
 }
 
@@ -329,66 +348,355 @@ export async function listTeamMembers(
   db: SqlDatabase,
   input: { actor: ActorContext },
 ): Promise<TeamMemberSummary[]> {
-  const groupId = resolveReadableMemberGroup(input.actor);
-  const params: unknown[] = [
-    input.actor.organizationId,
-    input.actor.workspaceId,
-  ];
-  let groupScopeSql = "";
+  assertCanReadMembers(input.actor);
 
-  if (groupId) {
-    params.push(groupId);
-    groupScopeSql = "AND profile.member_group_id = $3";
-  }
-
-  const result = await db.query<{
-    membership_id: string;
-    user_id: string;
-    team_account: string;
-    display_name: string;
-    business_role: TeamBusinessRole;
-    member_group_id: string | null;
-    status: "active" | "invited" | "disabled";
-    credit_balance_cached: number;
-    credit_used_cached: number;
-    remark: string | null;
-  }>(
+  const result = await db.query<TeamMemberRow>(
     `
       SELECT
-        membership.id AS membership_id,
-        membership.user_id,
-        profile.team_account,
-        profile.display_name,
-        profile.business_role,
-        profile.member_group_id,
-        membership.status,
-        profile.credit_balance_cached,
-        profile.credit_used_cached,
-        profile.remark
-      FROM team_member_profiles profile
-      JOIN memberships membership
-        ON membership.organization_id = profile.organization_id
-       AND membership.id = profile.membership_id
-      WHERE profile.organization_id = $1
-        AND profile.workspace_id = $2
-        ${groupScopeSql}
-      ORDER BY profile.created_at DESC, profile.id DESC
+        member.id::text AS id,
+        member.user_id::text AS user_id,
+        member.member_account,
+        member.member_account_suffix,
+        member.member_login_account,
+        member.member_name,
+        member.member_credits,
+        member.status,
+        member.created_at,
+        member.updated_at,
+        COALESCE(
+          ARRAY_AGG(DISTINCT project.project_id) FILTER (WHERE project.project_id IS NOT NULL),
+          ARRAY[]::uuid[]
+        )::text[] AS project_ids,
+        COALESCE(
+          ARRAY_AGG(DISTINCT COALESCE(script.project_id, canvas.project_id)) FILTER (
+            WHERE COALESCE(script.project_id, canvas.project_id) IS NOT NULL
+          ),
+          ARRAY[]::uuid[]
+        )::text[] AS inherited_project_ids,
+        COALESCE(
+          ARRAY_AGG(DISTINCT script.script_id) FILTER (WHERE script.script_id IS NOT NULL),
+          ARRAY[]::uuid[]
+        )::text[] AS script_ids,
+        COALESCE(
+          ARRAY_AGG(DISTINCT canvas.canvas_id) FILTER (WHERE canvas.canvas_id IS NOT NULL),
+          ARRAY[]::uuid[]
+        )::text[] AS canvas_ids
+      FROM team_members member
+      LEFT JOIN team_member_projects project
+        ON project.user_id = member.user_id
+       AND project.member_id = member.id
+      LEFT JOIN team_member_scripts script
+        ON script.user_id = member.user_id
+       AND script.member_id = member.id
+      LEFT JOIN team_member_canvases canvas
+        ON canvas.user_id = member.user_id
+       AND canvas.member_id = member.id
+      WHERE member.user_id = $1
+        AND member.status <> 'deleted'
+      GROUP BY member.id
+      ORDER BY member.created_at DESC, member.id DESC
     `,
-    params,
+    [input.actor.actorId],
   );
 
-  return result.rows.map((row) => ({
-    membershipId: row.membership_id,
-    userId: row.user_id,
-    teamAccount: row.team_account,
-    displayName: row.display_name,
-    businessRole: row.business_role,
-    memberGroupId: row.member_group_id,
-    status: row.status,
-    creditBalance: row.credit_balance_cached,
-    creditUsed: row.credit_used_cached,
-    remark: row.remark,
-  }));
+  return result.rows.map(summaryFromRow);
+}
+
+export async function updateTeamMember(
+  db: SqlDatabase,
+  input: UpdateTeamMemberInput,
+): Promise<TeamMemberSummary | null> {
+  requireTeamWorkspace(input.actor);
+  assertCanManageMembers(input.actor);
+
+  const target = await findTeamMemberForActor(db, {
+    actor: input.actor,
+    memberId: input.memberId,
+  });
+  if (!target) {
+    return null;
+  }
+
+  const memberName = input.displayName == null ? null : normalizeRequiredText(input.displayName);
+  if (input.displayName != null && !memberName) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const status = input.status == null ? null : String(input.status);
+  if (status != null && status !== "active" && status !== "disabled" && status !== "deleted") {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const creditAdjustmentType = input.creditAdjustmentType == null ? null : String(input.creditAdjustmentType);
+  if (creditAdjustmentType != null && creditAdjustmentType !== "increase" && creditAdjustmentType !== "deduct") {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+
+  const creditAmount = normalizeOptionalCreditAmount(input.creditAmount);
+  if (!creditAdjustmentType && creditAmount > 0) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  if (creditAdjustmentType && creditAmount <= 0) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  if (creditAdjustmentType === "deduct" && creditAmount > Number(target.member_credits ?? 0)) {
+    throw new TeamServiceError("team_member_credit_insufficient");
+  }
+
+  const shouldRefreshProjectIds =
+    input.projectIds != null ||
+    input.scriptIds != null ||
+    input.canvasIds != null;
+  const scriptIds = input.scriptIds != null ? normalizeResourceIds(input.scriptIds) : null;
+  const canvasIds = input.canvasIds != null ? normalizeResourceIds(input.canvasIds) : null;
+  const assignments = shouldRefreshProjectIds
+    ? await resolveTeamResourceAssignments(db, {
+        actor: input.actor,
+        projectIds: normalizeProjectIds(input.projectIds ?? []),
+        scriptIds: scriptIds ?? [],
+        canvasIds: canvasIds ?? [],
+      })
+    : null;
+  const newPassword = input.newPassword == null ? null : normalizeOptionalPassword(input.newPassword);
+  const nextPasswordHash = newPassword ? await createUserPasswordHash(newPassword) : null;
+
+  let updated: TeamMemberRow | null = null;
+  await runInTransaction(db, async () => {
+    const ownerWallet = await lockOwnerWalletForTeamMutation(db, input.actor.actorId);
+    const planLimits = await resolvePlanLimits(db, {
+      userId: input.actor.actorId,
+    });
+    assertTeamSeatEnabled(planLimits.seatLimit);
+    if (creditAdjustmentType === "increase" && Number(ownerWallet?.credit_balance_cached ?? 0) < creditAmount) {
+      throw new TeamServiceError("team_credit_insufficient");
+    }
+
+    if (assignments != null) {
+      await assertProjectScope(db, {
+        actor: input.actor,
+        projectIds: assignments.projectIds,
+      });
+      await replaceTeamMemberProjects(db, {
+        userId: input.actor.actorId,
+        memberId: input.memberId,
+        projectIds: assignments.projectIds,
+        now: input.now,
+      });
+      await replaceTeamMemberScripts(db, {
+        userId: input.actor.actorId,
+        memberId: input.memberId,
+        scripts: assignments.scripts,
+        now: input.now,
+      });
+      await replaceTeamMemberCanvases(db, {
+        userId: input.actor.actorId,
+        memberId: input.memberId,
+        canvases: assignments.canvases,
+        now: input.now,
+      });
+    }
+
+    if (creditAdjustmentType === "increase" && creditAmount > 0) {
+      const adjustmentId = randomUUID();
+      const deducted = await queryOne<{ credit_balance_cached: number | string }>(
+        db,
+        `
+          UPDATE users
+          SET credit_balance_cached = credit_balance_cached - $2,
+              updated_at = $3
+          WHERE id = $1
+            AND credit_balance_cached >= $2
+          RETURNING credit_balance_cached
+        `,
+        [input.actor.actorId, creditAmount, input.now],
+      );
+      if (!deducted) {
+        throw new TeamServiceError("team_credit_insufficient");
+      }
+
+      await db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id,
+            organization_id,
+            user_id,
+            reservation_id,
+            allocation_id,
+            entry_type,
+            amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
+            reason,
+            metadata_json,
+            created_by_user_id,
+            created_at
+          )
+          VALUES ($1, $2, $3, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $5, $6, $7, $8::jsonb, $3, $9)
+        `,
+        [
+          adjustmentId,
+          input.actor.organizationId,
+          input.actor.actorId,
+          creditAmount,
+          "team_member_credit_allocation",
+          adjustmentId,
+          "子账户分配积分",
+          JSON.stringify({
+            memberId: input.memberId,
+            adjustmentType: "allocate",
+            amount: creditAmount,
+          }),
+          input.now,
+        ],
+      );
+
+    }
+
+    if (creditAdjustmentType === "deduct" && creditAmount > 0) {
+      const adjustmentId = randomUUID();
+      await db.query(
+        `
+          UPDATE users
+          SET credit_balance_cached = credit_balance_cached + $2,
+              updated_at = $3
+          WHERE id = $1
+        `,
+        [input.actor.actorId, creditAmount, input.now],
+      );
+
+      await db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id,
+            organization_id,
+            user_id,
+            reservation_id,
+            allocation_id,
+            entry_type,
+            amount,
+            available_delta,
+            reserved_delta,
+            consumed_delta,
+            source_type,
+            source_id,
+            reason,
+            metadata_json,
+            created_by_user_id,
+            created_at
+          )
+          VALUES ($1, $2, $3, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $5, $6, $7, $8::jsonb, $3, $9)
+        `,
+        [
+          adjustmentId,
+          input.actor.organizationId,
+          input.actor.actorId,
+          creditAmount,
+          "team_member_credit_deduction",
+          adjustmentId,
+          "回收子账户积分",
+          JSON.stringify({
+            memberId: input.memberId,
+            adjustmentType: "recover",
+            amount: creditAmount,
+          }),
+          input.now,
+        ],
+      );
+
+    }
+
+    updated = await queryOne<TeamMemberRow>(
+      db,
+      `
+        UPDATE team_members
+        SET
+          member_name = COALESCE($3, member_name),
+          member_password_hash = COALESCE($4, member_password_hash),
+          member_credits = member_credits
+            + CASE
+              WHEN $5 = 'increase' THEN $6::int
+              WHEN $5 = 'deduct' THEN -($6::int)
+              ELSE 0
+            END,
+          status = COALESCE($7, status),
+          disabled_at = CASE
+            WHEN $7 = 'disabled' THEN $8
+            WHEN $7 = 'active' THEN NULL
+            ELSE disabled_at
+          END,
+          deleted_at = CASE
+            WHEN $7 = 'deleted' THEN $8
+            WHEN $7 = 'active' THEN NULL
+            ELSE deleted_at
+          END,
+          updated_at = $8
+        WHERE id = $1
+          AND user_id = $2
+        RETURNING
+          id::text,
+          user_id::text,
+          member_account,
+          member_account_suffix,
+          member_login_account,
+          member_name,
+          member_credits,
+          status,
+          created_at,
+          updated_at,
+          ARRAY[]::text[] AS project_ids,
+          ARRAY[]::text[] AS inherited_project_ids
+      `,
+      [
+        input.memberId,
+        input.actor.actorId,
+        memberName,
+        nextPasswordHash,
+        creditAdjustmentType,
+        creditAmount,
+        status,
+        input.now,
+      ],
+    );
+    if (!updated) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
+
+    if (status === "disabled" || status === "deleted" || nextPasswordHash) {
+      await revokeTeamMemberSessions(db, {
+        userId: input.actor.actorId,
+        memberId: input.memberId,
+        now: input.now,
+      });
+    }
+  });
+
+  const projectAssignments = await listTeamMemberProjectIds(db, {
+    userId: input.actor.actorId,
+    memberId: input.memberId,
+  });
+  const scriptAssignments = await listTeamMemberScriptIds(db, {
+    userId: input.actor.actorId,
+    memberId: input.memberId,
+  });
+  const canvasAssignments = await listTeamMemberCanvasIds(db, {
+    userId: input.actor.actorId,
+    memberId: input.memberId,
+  });
+  const inheritedProjectAssignments = await listTeamMemberInheritedProjectIds(db, {
+    userId: input.actor.actorId,
+    memberId: input.memberId,
+  });
+
+  return summaryFromRow({
+    ...updated!,
+    project_ids: projectAssignments,
+    inherited_project_ids: inheritedProjectAssignments,
+    script_ids: scriptAssignments,
+    canvas_ids: canvasAssignments,
+  });
 }
 
 function requireTeamWorkspace(actor: ActorContext): string {
@@ -398,85 +706,38 @@ function requireTeamWorkspace(actor: ActorContext): string {
   return actor.workspaceId;
 }
 
-function resolveTargetMemberGroupId(
-  actor: ActorContext,
-  requestedMemberGroupId: string | null,
-) {
-  if (requestedMemberGroupId) {
-    return requestedMemberGroupId;
+function assertCanManageMembers(actor: ActorContext) {
+  if (actor.teamMember) {
+    throw new TeamServiceError("team_permission_missing");
   }
-
-  if (
-    actor.capabilities.includes(capabilities.teamMemberManageGroup) &&
-    !actor.capabilities.includes(capabilities.teamMemberManageAll)
-  ) {
-    return actor.teamProfile?.memberGroupId ?? null;
-  }
-
-  return null;
-}
-
-function assertCanCreateMember(actor: ActorContext, memberGroupId: string | null) {
   if (actor.capabilities.includes(capabilities.teamMemberManageAll)) {
     return;
   }
-
-  if (actor.capabilities.includes(capabilities.teamMemberManageGroup)) {
-    if (actor.teamProfile?.memberGroupId && actor.teamProfile.memberGroupId === memberGroupId) {
-      return;
-    }
-    throw new TeamServiceError("team_group_scope_violation");
-  }
-
   throw new TeamServiceError("team_permission_missing");
 }
 
-async function assertMemberGroupScope(
-  db: SqlDatabase,
-  input: {
-    actor: ActorContext;
-    workspaceId: string;
-    memberGroupId: string | null;
-  },
-) {
-  if (!input.memberGroupId) {
+function assertCanReadMembers(actor: ActorContext) {
+  if (actor.teamMember) {
+    throw new TeamServiceError("team_permission_missing");
+  }
+  if (
+    actor.capabilities.includes(capabilities.teamMemberManageAll) ||
+    actor.capabilities.includes(capabilities.teamMemberRead)
+  ) {
     return;
   }
-
-  if (!isUuid(input.memberGroupId)) {
-    throw new TeamServiceError("team_group_scope_violation");
-  }
-
-  const group = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM team_member_groups
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
-        AND status = 'active'
-      LIMIT 1
-    `,
-    [
-      input.actor.organizationId,
-      input.workspaceId,
-      input.memberGroupId,
-    ],
-  );
-
-  if (!group) {
-    throw new TeamServiceError("team_group_scope_violation");
-  }
+  throw new TeamServiceError("team_permission_missing");
 }
 
 function assertCanViewTeamOverview(actor: ActorContext) {
+  if (actor.teamMember) {
+    throw new TeamServiceError("team_permission_missing");
+  }
   if (
     actor.capabilities.includes(capabilities.teamDashboardViewAll) ||
     actor.capabilities.includes(capabilities.teamDashboardViewGroup) ||
     actor.capabilities.includes(capabilities.teamMemberRead) ||
-    actor.capabilities.includes(capabilities.teamMemberManageAll) ||
-    actor.capabilities.includes(capabilities.teamMemberManageGroup)
+    actor.capabilities.includes(capabilities.teamMemberManageAll)
   ) {
     return;
   }
@@ -485,170 +746,48 @@ function assertCanViewTeamOverview(actor: ActorContext) {
 }
 
 function resolveTeamOverviewPermissions(actor: ActorContext) {
-  const canManageAll = actor.capabilities.includes(capabilities.teamMemberManageAll);
-  const canManageGroup =
-    actor.capabilities.includes(capabilities.teamMemberManageGroup) &&
-    Boolean(actor.teamProfile?.memberGroupId);
+  const canManageAll = !actor.teamMember && actor.capabilities.includes(capabilities.teamMemberManageAll);
 
   return {
     canReadMembers:
       canManageAll ||
-      canManageGroup ||
-      actor.capabilities.includes(capabilities.teamMemberRead),
-    canCreateMember: canManageAll || canManageGroup,
+      (!actor.teamMember && actor.capabilities.includes(capabilities.teamMemberRead)),
+    canCreateMember: canManageAll,
     canViewDashboard:
-      actor.capabilities.includes(capabilities.teamDashboardViewAll) ||
-      actor.capabilities.includes(capabilities.teamDashboardViewGroup),
+      !actor.teamMember &&
+      (actor.capabilities.includes(capabilities.teamDashboardViewAll) ||
+        actor.capabilities.includes(capabilities.teamDashboardViewGroup)),
     canManageAll,
-    canManageGroup,
+    canManageGroup: false,
   };
 }
 
-function resolveReadableMemberGroup(actor: ActorContext) {
-  if (actor.capabilities.includes(capabilities.teamMemberManageAll)) {
-    return null;
-  }
-
-  if (
-    actor.capabilities.includes(capabilities.teamMemberManageGroup) ||
-    actor.capabilities.includes(capabilities.teamMemberRead)
-  ) {
-    if (actor.teamProfile?.memberGroupId) {
-      return actor.teamProfile.memberGroupId;
-    }
-  }
-
-  throw new TeamServiceError("team_permission_missing");
-}
-
-function assertBusinessRole(role: string): asserts role is TeamBusinessRole {
-  if (!isTeamBusinessRole(role)) {
-    throw new TeamServiceError("team_member_input_invalid");
-  }
-}
-
-function assertCanAssignBusinessRole(actor: ActorContext, role: TeamBusinessRole) {
-  if (actor.capabilities.includes(capabilities.teamMemberManageAll)) {
-    return;
-  }
-
-  if (role === "admin") {
-    throw new TeamServiceError("team_permission_missing");
-  }
-}
-
-async function assertActiveEntitlement(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    entitlementKey: string;
-    now: Date;
-  },
-) {
-  if (!(await hasActiveEntitlement(db, input))) {
+function assertTeamSeatEnabled(seatLimit: number) {
+  if (seatLimit <= 0) {
     throw new TeamServiceError("team_member_management_required");
   }
 }
 
-async function hasActiveEntitlement(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    entitlementKey: string;
-    now: Date;
-  },
-): Promise<boolean> {
-  const entitlement = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id::text AS id
-      FROM organization_entitlements
-      WHERE organization_id = $1
-        AND entitlement_key = $2
-        AND status = 'active'
-        AND source IS DISTINCT FROM 'payment'
-        AND (expires_at IS NULL OR expires_at > $3)
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND (period.plan_snapshot_json -> 'entitlements') ? $2
-      UNION ALL
-      SELECT period.id::text AS id
-      FROM membership_periods period
-      JOIN membership_plans plan
-        ON plan.id = period.plan_id
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $3
-        AND plan.tier = 'professional'
-        AND plan.status = 'active'
-        AND (plan.valid_from IS NULL OR plan.valid_from <= $3)
-        AND (plan.valid_until IS NULL OR plan.valid_until > $3)
-        AND plan.entitlements_json ? $2
-      LIMIT 1
-    `,
-    [input.organizationId, input.entitlementKey, input.now],
-  );
-
-  return Boolean(entitlement);
-}
-
 async function resolvePlanLimits(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string },
 ) {
-  const activeProfessionalPlan = await queryOne<{
-    seat_limit: number;
-  }>(
+  const userLimits = await queryOne<{ team_seat_limit: number }>(
     db,
     `
-      SELECT plan.seat_limit
-      FROM membership_periods period
-      JOIN membership_plans plan
-        ON plan.id = period.plan_id
-      WHERE period.organization_id = $1
-        AND period.tier = 'professional'
-        AND period.status = 'active'
-        AND period.period_end_at > $2
-        AND plan.tier = 'professional'
-        AND plan.status = 'active'
-        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
-        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
-        AND plan.entitlements_json ? 'team_member_management'
-      ORDER BY period.period_end_at DESC, period.created_at DESC
+      SELECT team_seat_limit
+      FROM users
+      WHERE id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId],
   );
-  const limits = await queryOne<{
-    seat_limit: number;
-    single_account_concurrency_limit: number;
-  }>(
-    db,
-    `
-      SELECT seat_limit, single_account_concurrency_limit
-      FROM team_plan_limits
-      WHERE organization_id = $1
-      LIMIT 1
-    `,
-    [input.organizationId],
-  );
-  const defaultSeatLimit = await resolveDefaultSubaccountLimit(db);
-  const seatLimit =
-    activeProfessionalPlan
-      ? Number(activeProfessionalPlan.seat_limit ?? 0)
-      : limits
-        ? Number(limits.seat_limit ?? 0)
-        : defaultSeatLimit;
+  const defaultSeatLimit = userLimits ? 0 : await resolveDefaultSubaccountLimit(db);
+  const seatLimit = normalizeSubaccountLimit(userLimits?.team_seat_limit ?? defaultSeatLimit);
 
   return {
     seatLimit,
-    singleAccountConcurrencyLimit: limits?.single_account_concurrency_limit ?? 1,
+    singleAccountConcurrencyLimit: 1,
   };
 }
 
@@ -679,13 +818,11 @@ async function countActiveSubaccounts(db: SqlDatabase, actor: ActorContext) {
     db,
     `
       SELECT COUNT(*) AS count
-      FROM memberships
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND role = 'sub_account'
+      FROM team_members
+      WHERE user_id = $1
         AND status = 'active'
     `,
-    [actor.organizationId, actor.workspaceId],
+    [actor.actorId],
   );
 
   return Number(result?.count ?? 0);
@@ -693,22 +830,20 @@ async function countActiveSubaccounts(db: SqlDatabase, actor: ActorContext) {
 
 async function assertTeamAccountAvailable(
   db: SqlDatabase,
-  input: { actor: ActorContext; teamAccount: string },
+  input: { actor: ActorContext; teamAccount: string; memberLoginAccount: string },
 ) {
-  const existing = await queryOne<{ id: string }>(
+  const loginExisting = await queryOne<{ id: string }>(
     db,
     `
       SELECT id
-      FROM team_member_profiles
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND lower(team_account) = lower($3)
+      FROM team_members
+      WHERE lower(member_login_account) = lower($1)
       LIMIT 1
     `,
-    [input.actor.organizationId, input.actor.workspaceId, input.teamAccount],
+    [input.memberLoginAccount],
   );
 
-  if (existing) {
+  if (loginExisting) {
     throw new TeamServiceError("team_account_duplicate");
   }
 }
@@ -717,73 +852,25 @@ async function assertProjectScope(
   db: SqlDatabase,
   input: { actor: ActorContext; projectIds: string[] },
 ) {
-  const groupScope =
-    input.actor.capabilities.includes(capabilities.teamMemberManageAll)
-      ? null
-      : input.actor.teamProfile?.memberGroupId ?? null;
-
   for (const projectId of input.projectIds) {
     const project = await queryOne<{ id: string }>(
       db,
       `
         SELECT id
         FROM projects
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND id = $3
+        WHERE id = $1
+          AND created_by_user_id = $2
         LIMIT 1
       `,
-      [input.actor.organizationId, input.actor.workspaceId, projectId],
+      [
+        projectId,
+        input.actor.actorId,
+      ],
     );
 
     if (!project) {
       throw new TeamServiceError("team_project_scope_violation");
     }
-
-    if (groupScope) {
-      const ownership = await queryOne<{ id: string }>(
-        db,
-        `
-          SELECT id
-          FROM team_project_ownerships
-          WHERE organization_id = $1
-            AND workspace_id = $2
-            AND project_id = $3
-            AND member_group_id = $4
-          LIMIT 1
-        `,
-        [input.actor.organizationId, input.actor.workspaceId, projectId, groupScope],
-      );
-
-      if (!ownership) {
-        throw new TeamServiceError("team_project_scope_violation");
-      }
-    }
-  }
-}
-
-async function assertAllocatableCredits(
-  db: SqlDatabase,
-  input: { organizationId: string; amount: number },
-) {
-  const organization = await queryOne<{
-    credit_balance_cached: number;
-    credit_reserved_cached: number;
-  }>(
-    db,
-    `
-      SELECT credit_balance_cached, credit_reserved_cached
-      FROM organizations
-      WHERE id = $1
-    `,
-    [input.organizationId],
-  );
-
-  const available =
-    (organization?.credit_balance_cached ?? 0) -
-    (organization?.credit_reserved_cached ?? 0);
-  if (available < input.amount) {
-    throw new TeamServiceError("team_credit_insufficient");
   }
 }
 
@@ -801,18 +888,21 @@ async function runInTransaction(
   }
 }
 
-async function lockOrganizationForTeamMutation(
-  db: SqlDatabase,
-  organizationId: string,
-) {
-  await db.query(
+async function lockOwnerWalletForTeamMutation(db: SqlDatabase, userId: string) {
+  return queryOne<{
+    credit_balance_cached: number | string;
+    credit_reserved_cached: number | string;
+    credit_frozen_cached: number | string;
+  }>(
+    db,
     `
-      SELECT id
-      FROM organizations
+      SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
+      FROM users
       WHERE id = $1
+      LIMIT 1
       FOR UPDATE
     `,
-    [organizationId],
+    [userId],
   );
 }
 
@@ -820,8 +910,59 @@ function normalizeTeamAccount(teamAccount: string) {
   return normalizeRequiredText(teamAccount).toLowerCase();
 }
 
-function buildTeamAccountEmail(teamAccount: string, workspaceId: string) {
-  return `${teamAccount}.${workspaceId.replaceAll("-", "")}@team.local`;
+function buildTeamMemberLoginAccount(teamAccount: string, teamAccountSuffix: string) {
+  return `${teamAccount}@${teamAccountSuffix}`;
+}
+
+export async function ensureUserTeamAccountSuffix(db: SqlDatabase, userId: string) {
+  const existing = await queryOne<{ team_account_suffix: string | null }>(
+    db,
+    `
+      SELECT team_account_suffix
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [userId],
+  );
+  const currentSuffix = normalizeTeamAccountSuffix(existing?.team_account_suffix);
+  if (currentSuffix) {
+    return currentSuffix;
+  }
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const suffix = generateTeamAccountSuffix();
+    const updated = await queryOne<{ team_account_suffix: string }>(
+      db,
+      `
+        UPDATE users
+        SET team_account_suffix = $2
+        WHERE id = $1
+          AND team_account_suffix IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM users
+            WHERE team_account_suffix = $2
+          )
+        RETURNING team_account_suffix
+      `,
+      [userId, suffix],
+    );
+    if (updated?.team_account_suffix) {
+      return updated.team_account_suffix;
+    }
+  }
+
+  throw new TeamServiceError("team_member_input_invalid");
+}
+
+function generateTeamAccountSuffix() {
+  return randomBytes(4).toString("base64url").replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 6).padEnd(6, "0");
+}
+
+function normalizeTeamAccountSuffix(value: unknown) {
+  const suffix = normalizeRequiredText(value).toLowerCase();
+  return /^[a-z0-9]{6}$/.test(suffix) ? suffix : "";
 }
 
 function normalizeInitialCredits(value: unknown) {
@@ -834,6 +975,24 @@ function normalizeInitialCredits(value: unknown) {
     throw new TeamServiceError("team_member_input_invalid");
   }
   return amount;
+}
+
+function normalizeOptionalCreditAmount(value: unknown) {
+  if (value == null || value === "") {
+    return 0;
+  }
+  return normalizeInitialCredits(value);
+}
+
+function normalizeOptionalPassword(value: unknown) {
+  const password = String(value ?? "").trim();
+  if (!password) {
+    return null;
+  }
+  if (password.length < 8) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  return password;
 }
 
 function normalizeProjectIds(projectIds: unknown) {
@@ -850,19 +1009,370 @@ function normalizeProjectIds(projectIds: unknown) {
   return [...new Set(normalized)];
 }
 
+function normalizeResourceIds(resourceIds: unknown) {
+  if (!Array.isArray(resourceIds)) {
+    return [];
+  }
+
+  const normalized = resourceIds.map((resourceId) =>
+    typeof resourceId === "string" ? resourceId.trim() : "",
+  );
+  if (normalized.some((resourceId) => !isUuid(resourceId))) {
+    throw new TeamServiceError("team_member_input_invalid");
+  }
+  return [...new Set(normalized)];
+}
+
+async function resolveTeamResourceAssignments(
+  db: SqlDatabase,
+  input: {
+    actor: ActorContext;
+    projectIds: string[];
+    scriptIds: string[];
+    canvasIds: string[];
+  },
+): Promise<TeamResourceAssignments> {
+  const projectIds = new Set(input.projectIds);
+  const assignedScripts: { id: string; projectId: string }[] = [];
+  const assignedCanvases: { id: string; projectId: string | null }[] = [];
+
+  if (input.scriptIds.length > 0) {
+    const scripts = await db.query<{ id: string; project_id: string }>(
+      `
+        SELECT id::text AS id, project_id::text AS project_id
+        FROM scripts
+        WHERE id = ANY($1::uuid[])
+          AND created_by_user_id = $2
+      `,
+      [input.scriptIds, input.actor.actorId],
+    );
+    if (scripts.rows.length !== input.scriptIds.length) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
+    for (const script of scripts.rows) {
+      const projectId = String(script.project_id);
+      assignedScripts.push({ id: String(script.id), projectId });
+    }
+  }
+
+  if (input.canvasIds.length > 0) {
+    const canvases = await db.query<{ id: string; project_id: string | null }>(
+      `
+        SELECT id::text AS id, project_id::text AS project_id
+        FROM creator_canvas_projects
+        WHERE id = ANY($1::uuid[])
+          AND created_by_user_id = $2
+          AND deleted_at IS NULL
+      `,
+      [input.canvasIds, input.actor.actorId],
+    );
+    if (canvases.rows.length !== input.canvasIds.length) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
+    for (const canvas of canvases.rows) {
+      assignedCanvases.push({
+        id: String(canvas.id),
+        projectId: canvas.project_id ? String(canvas.project_id) : null,
+      });
+    }
+  }
+
+  return {
+    projectIds: [...projectIds],
+    scripts: assignedScripts,
+    canvases: assignedCanvases,
+  };
+}
+
+async function findTeamMemberForActor(
+  db: SqlDatabase,
+  input: { actor: ActorContext; memberId: string },
+) {
+  return queryOne<TeamMemberRow>(
+    db,
+    `
+      SELECT
+        id::text,
+        user_id::text,
+        member_account,
+        member_account_suffix,
+        member_login_account,
+        member_name,
+        member_credits,
+        status,
+        created_at,
+        updated_at,
+        ARRAY[]::text[] AS project_ids
+      FROM team_members
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [input.memberId, input.actor.actorId],
+  );
+}
+
+async function replaceTeamMemberProjects(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; projectIds: string[]; now: Date },
+) {
+  const currentAssignments = await db.query<{ project_id: string }>(
+    `
+      SELECT project_id::text AS project_id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+  const existingRecords = await db.query<{ project_id: string }>(
+    `
+      SELECT DISTINCT project_id::text AS project_id
+      FROM team_member_project_records
+      WHERE user_id = $1
+        AND member_id = $2
+    `,
+    [input.userId, input.memberId],
+  );
+  const currentProjectIds = currentAssignments.rows.map((row) => String(row.project_id));
+  const nextProjectIds = [...new Set(input.projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean))];
+  const nextProjectIdSet = new Set(nextProjectIds);
+  const blockedProjectIds = new Set(existingRecords.rows.map((row) => String(row.project_id)));
+  const removedProjectIds = currentProjectIds.filter((projectId) => !nextProjectIdSet.has(projectId));
+  if (removedProjectIds.length > 0) {
+    const blockedRemovedProjectIds = removedProjectIds.filter((projectId) => blockedProjectIds.has(projectId));
+    if (blockedRemovedProjectIds.length > 0) {
+      throw new TeamServiceError("team_member_project_in_use");
+    }
+    await db.query(
+      `
+        DELETE FROM team_member_projects
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id = ANY($3::uuid[])
+      `,
+      [input.userId, input.memberId, removedProjectIds],
+    );
+  }
+
+  const addedProjectIds = nextProjectIds.filter((projectId) => !currentProjectIds.includes(projectId));
+  for (const projectId of addedProjectIds) {
+    await db.query(
+      `
+        INSERT INTO team_member_projects (
+          id,
+          member_id,
+          user_id,
+          project_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [randomUUID(), input.memberId, input.userId, projectId, input.now],
+    );
+  }
+}
+
+async function replaceTeamMemberScripts(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; scripts: { id: string; projectId: string }[]; now: Date },
+) {
+  await db.query(
+    `
+      DELETE FROM team_member_scripts
+      WHERE user_id = $1
+        AND member_id = $2
+    `,
+    [input.userId, input.memberId],
+  );
+
+  for (const script of input.scripts) {
+    await db.query(
+      `
+        INSERT INTO team_member_scripts (
+          id,
+          member_id,
+          user_id,
+          project_id,
+          script_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `,
+      [randomUUID(), input.memberId, input.userId, script.projectId, script.id, input.now],
+    );
+  }
+}
+
+async function replaceTeamMemberCanvases(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; canvases: { id: string; projectId: string | null }[]; now: Date },
+) {
+  await db.query(
+    `
+      DELETE FROM team_member_canvases
+      WHERE user_id = $1
+        AND member_id = $2
+    `,
+    [input.userId, input.memberId],
+  );
+
+  for (const canvas of input.canvases) {
+    await db.query(
+      `
+        INSERT INTO team_member_canvases (
+          id,
+          member_id,
+          user_id,
+          project_id,
+          canvas_id,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `,
+      [randomUUID(), input.memberId, input.userId, canvas.projectId, canvas.id, input.now],
+    );
+  }
+}
+
+async function listTeamMemberProjectIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ project_id: string }>(
+    `
+      SELECT project_id::text AS project_id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.project_id);
+}
+
+async function listTeamMemberScriptIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ script_id: string }>(
+    `
+      SELECT script_id::text AS script_id
+      FROM team_member_scripts
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.script_id);
+}
+
+async function listTeamMemberCanvasIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ canvas_id: string }>(
+    `
+      SELECT canvas_id::text AS canvas_id
+      FROM team_member_canvases
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.canvas_id);
+}
+
+async function listTeamMemberInheritedProjectIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ project_id: string }>(
+    `
+      SELECT DISTINCT project_id::text AS project_id
+      FROM (
+        SELECT project_id
+        FROM team_member_scripts
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id IS NOT NULL
+        UNION
+        SELECT project_id
+        FROM team_member_canvases
+        WHERE user_id = $1
+          AND member_id = $2
+          AND project_id IS NOT NULL
+      ) inherited
+      ORDER BY project_id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.project_id);
+}
+
+function inheritedProjectIdsFromAssignments(assignments: TeamResourceAssignments) {
+  return [
+    ...new Set([
+      ...assignments.scripts.map((script) => script.projectId),
+      ...assignments.canvases.map((canvas) => canvas.projectId).filter((projectId): projectId is string => Boolean(projectId)),
+    ]),
+  ];
+}
+
+async function revokeTeamMemberSessions(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE team_member_auth_sessions
+      SET status = 'revoked',
+          revoked_at = $3
+      WHERE user_id = $1
+        AND member_id = $2
+        AND status = 'active'
+    `,
+    [input.userId, input.memberId, input.now],
+  );
+}
+
+function summaryFromRow(row: TeamMemberRow): TeamMemberSummary {
+  return {
+    membershipId: row.id,
+    userId: row.user_id,
+    teamAccount: row.member_account,
+    memberLoginAccount: row.member_login_account,
+    displayName: row.member_name,
+    memberGroupId: null,
+    projectIds: Array.isArray(row.project_ids) ? row.project_ids.map(String) : [],
+    inheritedProjectIds: Array.isArray(row.inherited_project_ids) ? row.inherited_project_ids.map(String) : [],
+    scriptIds: Array.isArray(row.script_ids) ? row.script_ids.map(String) : [],
+    canvasIds: Array.isArray(row.canvas_ids) ? row.canvas_ids.map(String) : [],
+    status: row.status,
+    creditBalance: Number(row.member_credits ?? 0),
+    creditUsed: 0,
+    remark: null,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
 function isValidTeamAccount(teamAccount: string) {
   return /^[a-z0-9][a-z0-9_-]{2,31}$/.test(teamAccount);
 }
 
 function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 function normalizeRequiredText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeNullableText(value: unknown) {
-  const text = normalizeRequiredText(value);
-  return text.length > 0 ? text : null;
 }

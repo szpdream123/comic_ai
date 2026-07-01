@@ -193,23 +193,43 @@ async function resolveModelConfigSecretReferences(
   modelConfig: AiModelConfigRecord,
 ): Promise<AiModelConfigRecord> {
   const apiKeyEnv = readString(modelConfig.providerConfig.apiKeyEnv);
-  if (!apiKeyEnv || readString(modelConfig.providerConfig.apiKey)) {
+  if (readString(modelConfig.providerConfig.apiKey)) {
     return modelConfig;
   }
   await ensureAdminSecretValueStore(db);
+  const providerName = readString(modelConfig.providerName) || "";
+  const requestDomain = readProviderRequestDomain(modelConfig.providerConfig) || "";
   const row = await queryOne<{ secret_value: string | null; request_domain: string | null }>(
     db,
     `
       SELECT secret_value, request_domain
       FROM admin_secret_values
-      WHERE secret_key = $1 OR secret_ref = $1
+      WHERE (
+          $1 <> ''
+          AND (secret_key = $1 OR secret_ref = $1)
+        )
+        OR (
+          btrim(secret_value) <> ''
+          AND (
+            ($2 <> '' AND provider_name = $2)
+            OR ($3 <> '' AND rtrim(request_domain, '/') = rtrim($3, '/'))
+          )
+        )
+      ORDER BY
+        CASE
+          WHEN $1 <> '' AND secret_key = $1 THEN 0
+          WHEN $1 <> '' AND secret_ref = $1 THEN 1
+          WHEN $3 <> '' AND rtrim(request_domain, '/') = rtrim($3, '/') THEN 2
+          ELSE 3
+        END,
+        updated_at DESC
       LIMIT 1
     `,
-    [apiKeyEnv],
+    [apiKeyEnv || "", providerName, requestDomain],
   );
   const secretValue = readString(row?.secret_value);
-  const requestDomain = readString(row?.request_domain);
-  if (!secretValue && !requestDomain) {
+  const resolvedRequestDomain = readString(row?.request_domain);
+  if (!secretValue && !resolvedRequestDomain) {
     return modelConfig;
   }
   return {
@@ -217,9 +237,29 @@ async function resolveModelConfigSecretReferences(
     providerConfig: {
       ...modelConfig.providerConfig,
       ...(secretValue ? { apiKey: secretValue } : {}),
-      ...(requestDomain ? { baseURL: requestDomain } : {}),
+      ...(resolvedRequestDomain ? { baseURL: resolvedRequestDomain } : {}),
     },
   };
+}
+
+function readProviderRequestDomain(providerConfig: Record<string, unknown>): string | undefined {
+  return readString(providerConfig.baseURL) ||
+    readAbsoluteHttpOrigin(providerConfig.endpoint) ||
+    readAbsoluteHttpOrigin(providerConfig.requestPath) ||
+    readAbsoluteHttpOrigin(providerConfig.createTaskEndpoint);
+}
+
+function readAbsoluteHttpOrigin(value: unknown): string | undefined {
+  const text = readString(value);
+  if (!text || !/^https?:\/\//i.test(text)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(text);
+    return url.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function findActiveAiModelDispatchPolicyByModelCode(

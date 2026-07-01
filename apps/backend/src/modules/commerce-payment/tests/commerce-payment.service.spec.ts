@@ -201,7 +201,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(consumed.kind, "applied");
       assert.equal(replay.kind, "duplicate");
       assert.equal(ledgerCountAfterConsumer.rows[0]?.count, 1);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
     } finally {
       await db.close();
     }
@@ -351,8 +351,8 @@ describe("commerce payment service", { concurrency: false }, () => {
         "SELECT count(*)::int AS count FROM membership_periods WHERE organization_id = $1",
         [organizationId],
       );
-      const subscriptions = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM organization_membership_subscriptions WHERE organization_id = $1",
+      const memberships = await db.query<{ count: number; membership_tier: string | null }>(
+        "SELECT count(*)::int AS count, max(membership_tier) AS membership_tier FROM memberships WHERE organization_id = $1",
         [organizationId],
       );
       const entitlements = await db.query<{ count: number }>(
@@ -361,7 +361,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       );
 
       assert.equal(membershipPeriods.rows[0]?.count, 0);
-      assert.equal(subscriptions.rows[0]?.count, 0);
+      assert.equal(memberships.rows[0]?.membership_tier, null);
       assert.equal(entitlements.rows[0]?.count, 0);
     } finally {
       await db.close();
@@ -421,6 +421,10 @@ describe("commerce payment service", { concurrency: false }, () => {
       await seedActiveMembershipSubscription(db, {
         currentPeriodEndAt: new Date("2026-06-21T08:35:00.000Z"),
       });
+      const membership = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
+        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
+        [organizationId, ownerUserId],
+      );
       const allowed = await service.createBillingOrder({
         user: { sessionToken: ownerSession.token },
         body: { creditPackageId: directPackageId },
@@ -430,6 +434,7 @@ describe("commerce payment service", { concurrency: false }, () => {
 
       assert.equal(blocked.status, 409);
       assert.equal(blocked.body.error, "membership_required_for_credit_recharge");
+      assert.equal(membership.rows[0]?.membership_tier, "professional");
       assert.equal(allowed.status, 200);
       assert.equal(allowed.body.order.productType, "credit_package");
       assert.equal(allowed.body.order.credits, 500);
@@ -2434,7 +2439,7 @@ async function seedCommerceFixture(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138001', 'active')
+      VALUES ($1, '13800138001', 'active')
     `,
     [ownerUserId],
   );
@@ -2522,41 +2527,22 @@ async function seedActiveMembershipSubscription(
 ) {
   await db.query(
     `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,
-        $2,
-        'professional_active',
-        'professional',
-        $3,
-        $4,
-        NULL,
-        $3,
-        $3
-      )
-      ON CONFLICT (organization_id)
-      DO UPDATE SET
-        status = EXCLUDED.status,
-        current_tier = EXCLUDED.current_tier,
-        current_period_start_at = EXCLUDED.current_period_start_at,
-        current_period_end_at = EXCLUDED.current_period_end_at,
-        updated_at = EXCLUDED.updated_at
+      UPDATE memberships
+      SET membership_tier = 'professional',
+          purchase_at = $1,
+          expires_at = $2,
+          gift_credits = 51000,
+          updated_at = $1
+      WHERE organization_id = $3
+        AND workspace_id = $4
+        AND user_id = $5
     `,
     [
-      "85000000-0000-4000-8000-000000000001",
-      organizationId,
       new Date("2026-05-21T08:00:00.000Z"),
       input.currentPeriodEndAt,
+      organizationId,
+      workspaceId,
+      ownerUserId,
     ],
   );
 }

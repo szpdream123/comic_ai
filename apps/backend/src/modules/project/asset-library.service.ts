@@ -1883,9 +1883,17 @@ async function resolveLibraryEntitlement(
         AND period.status = 'active'
         AND period.period_end_at > $2
         AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'
+      UNION ALL
+      SELECT membership.user_id::text AS id
+      FROM memberships membership
+      WHERE membership.organization_id = $1
+        AND membership.user_id = $3
+        AND membership.status = 'active'
+        AND membership.membership_tier = 'professional'
+        AND membership.expires_at > $2
       LIMIT 1
     `,
-    [input.actor.organizationId, input.now],
+    [input.actor.organizationId, input.now, input.actor.actorId],
   );
 
   return {

@@ -991,7 +991,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }
 
             const creditGrant = await grantCreditsInTransaction(deps.db, {
-              organizationId: order.organization_id,
+              compatibilityOrganizationId: order.organization_id,
               userId: order.created_by_user_id,
               amount: order.credits,
               sourceType: "payment_order",

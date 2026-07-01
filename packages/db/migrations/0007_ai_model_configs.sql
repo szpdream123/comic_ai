@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS ai_model_configs (
     'openai_images',
     'openai_compatible_chat',
     'volcengine_ark_video',
+    'lingdong_api',
     'custom_http'
   )),
   CHECK (invocation_mode IN (
@@ -141,6 +142,19 @@ COMMENT ON COLUMN ai_model_dispatch_policies.circuit_breaker_json IS '熔断策�
 COMMENT ON COLUMN ai_model_dispatch_policies.status IS '策略状态：active 可用，disabled 暂停，archived 归档。';
 COMMENT ON COLUMN ai_model_dispatch_policies.created_at IS '创建时间。';
 COMMENT ON COLUMN ai_model_dispatch_policies.updated_at IS '最后更新时间。';
+
+ALTER TABLE ai_model_configs
+  DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check;
+
+ALTER TABLE ai_model_configs
+  ADD CONSTRAINT ai_model_configs_provider_protocol_check CHECK (provider_protocol IN (
+    'creator_dev',
+    'openai_images',
+    'openai_compatible_chat',
+    'volcengine_ark_video',
+    'lingdong_api',
+    'custom_http'
+  ));
 
 INSERT INTO ai_model_configs (
   id,

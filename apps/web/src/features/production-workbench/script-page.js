@@ -36,8 +36,9 @@ const SCRIPT_SORT_OPTIONS = [
   ["title-asc", "名称 A-Z"],
 ];
 
-export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
+export function renderScriptManagementPage({ state = {}, ui = {}, session = {} } = {}) {
   state = state && typeof state === "object" ? state : {};
+  const isTeamMember = isTeamMemberSession(session);
   const scriptRecord = state.projectDetail?.script ?? state.script ?? null;
   const detailScripts = Array.isArray(state.projectDetail?.scripts) ? state.projectDetail.scripts : [];
   const libraryScripts = Array.isArray(ui.scriptLibraryRecords) ? ui.scriptLibraryRecords : [];
@@ -73,9 +74,11 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
 
   return `
     <section class="script-management-page" aria-label="剧本管理">
-      <section class="script-entry-grid" aria-label="剧本创建入口">
-        ${SCRIPT_ENTRY_GROUPS.map(renderScriptEntryGroup).join("")}
-      </section>
+      ${isTeamMember ? "" : `
+        <section class="script-entry-grid" aria-label="剧本创建入口">
+          ${SCRIPT_ENTRY_GROUPS.map(renderScriptEntryGroup).join("")}
+        </section>
+      `}
 
       <section class="script-library-panel" aria-label="我的剧本">
         ${renderScriptBulkToolbar({ totalCount: filteredCards.length, selectedCount })}
@@ -84,7 +87,7 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
             ? renderScriptRecordTabs(filteredCards, selectedCard, ui)
             : `<div class="script-empty-state">
                 <strong>暂无剧本</strong>
-                <span>从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。</span>
+                <span>${isTeamMember ? "请联系管理员分配" : "从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。"}</span>
               </div>`
         }
       </section>
@@ -94,6 +97,10 @@ export function renderScriptManagementPage({ state = {}, ui = {} } = {}) {
       ${renderScriptStatusToast(ui.toast)}
     </section>
   `;
+}
+
+function isTeamMemberSession(session = {}) {
+  return session?.user?.actorType === "team_member" || session?.actorType === "team_member";
 }
 
 function renderScriptStatusToast(message) {

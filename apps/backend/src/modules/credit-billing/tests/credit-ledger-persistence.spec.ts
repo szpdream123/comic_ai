@@ -18,22 +18,22 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
 
       const first = await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const replay = await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
 
@@ -58,7 +58,7 @@ describe("persistent credit ledger and reservation", () => {
           ORDER BY created_at
         `,
       );
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
 
       assert.equal(ledgerCount?.count, 1);
       assert.equal(outboxEvents.rows.length, 1);
@@ -69,12 +69,12 @@ describe("persistent credit ledger and reservation", () => {
         source_id: ids.paymentOrder,
         amount: 100,
       });
-      assert.equal(organization?.credit_balance_cached, 100);
-      assert.equal(organization?.credit_reserved_cached, 0);
+      assert.equal(user?.credit_balance_cached, 100);
+      assert.equal(user?.credit_reserved_cached, 0);
 
       await assert.rejects(
         grantCredits(db, {
-          organizationId: ids.organization,
+          userId: ids.user,
           amount: 200,
           sourceType: "payment_order",
           sourceId: ids.paymentOrder,
@@ -92,38 +92,38 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
 
       const reserved = await reserveCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 30,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
 
       assert.equal(reserved.reservation.amountTotal, 30);
       assert.equal(reserved.reservation.amountReserved, 30);
       assert.equal(reserved.reservation.status, "active");
       assert.equal(reserved.ledgerEntry.availableDelta, -30);
       assert.equal(reserved.ledgerEntry.reservedDelta, 30);
-      assert.equal(organization?.credit_balance_cached, 70);
-      assert.equal(organization?.credit_reserved_cached, 30);
+      assert.equal(user?.credit_balance_cached, 70);
+      assert.equal(user?.credit_reserved_cached, 30);
 
       await assert.rejects(
         reserveCredits(db, {
-          organizationId: ids.organization,
+          userId: ids.user,
           amount: 80,
           sourceType: "workflow_task",
           sourceId: ids.otherTask,
@@ -141,25 +141,25 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_frozen_cached = 100,
               credit_frozen_at = $2,
               credit_frozen_until = $3
           WHERE id = $1
         `,
         [
-          ids.organization,
+          ids.user,
           new Date("2026-05-10T10:00:00.000Z"),
           new Date("2027-05-10T10:00:00.000Z"),
         ],
@@ -167,11 +167,11 @@ describe("persistent credit ledger and reservation", () => {
 
       await assert.rejects(
         reserveCredits(db, {
-          organizationId: ids.organization,
+          userId: ids.user,
           amount: 10,
           sourceType: "workflow_task",
           sourceId: ids.task,
-          reason: "shot generation reservation",
+          reason: "分镜生成预占积分",
           now: now(),
         }),
         (error) => {
@@ -188,11 +188,11 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
 
       await assert.rejects(
         grantCredits(db, {
-          organizationId: ids.organization,
+          userId: ids.user,
           amount: 100,
           sourceType: "payment_order",
           sourceId: ids.paymentOrder,
@@ -206,25 +206,77 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
+  it("normalizes membership ledger reasons to Chinese before persisting", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+
+      const entry = await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "membership_gift",
+        sourceId: ids.paymentOrder,
+        reason: "membership period gifted credits",
+        now: now(),
+      });
+      const stored = await queryOne<{ reason: string }>(
+        db,
+        "SELECT reason FROM credit_ledger_entries WHERE id = $1",
+        [entry.id],
+      );
+
+      assert.equal(stored?.reason, "会员赠送积分");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps reservation allocation reasons in source form when not normalized", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+
+      const entry = await grantCredits(db, {
+        userId: ids.user,
+        amount: 30,
+        sourceType: "reservation_allocation",
+        sourceId: ids.task,
+        reason: "reservation allocation consumed",
+        now: now(),
+      });
+      const stored = await queryOne<{ reason: string }>(
+        db,
+        "SELECT reason FROM credit_ledger_entries WHERE id = $1",
+        [entry.id],
+      );
+
+      assert.equal(stored?.reason, "reservation allocation consumed");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("settles a reservation allocation at most once", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 50,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -247,7 +299,7 @@ describe("persistent credit ledger and reservation", () => {
         now: now(),
       });
 
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
       const reservation = await readReservation(db, reserved.reservation.id);
       const settleLedgerCount = await queryOne<{ count: number }>(
         db,
@@ -256,8 +308,8 @@ describe("persistent credit ledger and reservation", () => {
 
       assert.equal(replay.allocation.id, first.allocation.id);
       assert.equal(settleLedgerCount?.count, 1);
-      assert.equal(organization?.credit_balance_cached, 50);
-      assert.equal(organization?.credit_reserved_cached, 20);
+      assert.equal(user?.credit_balance_cached, 50);
+      assert.equal(user?.credit_reserved_cached, 20);
       assert.equal(reservation?.amount_consumed, 30);
       assert.equal(reservation?.amount_reserved, 20);
       assert.equal(reservation?.status, "partially_settled");
@@ -270,21 +322,21 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 40,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -298,7 +350,7 @@ describe("persistent credit ledger and reservation", () => {
         now: now(),
       });
 
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
       const reservation = await readReservation(db, reserved.reservation.id);
       const settlementLedgerCount = await queryOne<{ count: number }>(
         db,
@@ -310,8 +362,8 @@ describe("persistent credit ledger and reservation", () => {
       );
 
       assert.equal(settlementLedgerCount?.count, 0);
-      assert.equal(organization?.credit_balance_cached, 60);
-      assert.equal(organization?.credit_reserved_cached, 40);
+      assert.equal(user?.credit_balance_cached, 60);
+      assert.equal(user?.credit_reserved_cached, 40);
       assert.equal(reservation?.status, "manual_review_required");
       assert.equal(reservation?.amount_reserved, 40);
       assert.equal(reservation?.amount_consumed, 0);
@@ -320,25 +372,25 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
-  it("repairs cached organization balances from the ledger fact source", async () => {
+  it("repairs cached user balances from the ledger fact source", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 30,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
       await settleReservationAllocation(db, {
@@ -352,7 +404,7 @@ describe("persistent credit ledger and reservation", () => {
       });
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = 999,
               credit_reserved_cached = 999,
               credit_frozen_cached = 999,
@@ -361,27 +413,27 @@ describe("persistent credit ledger and reservation", () => {
           WHERE id = $1
         `,
         [
-          ids.organization,
+          ids.user,
           new Date("2026-05-10T10:00:00.000Z"),
           new Date("2027-05-10T10:00:00.000Z"),
         ],
       );
 
       const repaired = await repairCreditBalanceCache(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
       });
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
 
       assert.deepEqual(repaired, {
-        organizationId: ids.organization,
+        userId: ids.user,
         available: 70,
         reserved: 20,
         consumed: 10,
         frozen: 0,
       });
-      assert.equal(organization?.credit_balance_cached, 70);
-      assert.equal(organization?.credit_reserved_cached, 20);
-      assert.equal(organization?.credit_frozen_cached, 0);
+      assert.equal(user?.credit_balance_cached, 70);
+      assert.equal(user?.credit_reserved_cached, 20);
+      assert.equal(user?.credit_frozen_cached, 0);
     } finally {
       await db.close();
     }
@@ -391,13 +443,13 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       await db.query(
@@ -406,17 +458,17 @@ describe("persistent credit ledger and reservation", () => {
           SET status = 'frozen',
               frozen_at = $2,
               frozen_until = $3
-          WHERE organization_id = $1
+          WHERE user_id = $1
         `,
         [
-          ids.organization,
+          ids.user,
           new Date("2026-05-10T10:00:00.000Z"),
           new Date("2027-05-10T10:00:00.000Z"),
         ],
       );
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = 0,
               credit_reserved_cached = 0,
               credit_frozen_cached = 7,
@@ -425,27 +477,27 @@ describe("persistent credit ledger and reservation", () => {
           WHERE id = $1
         `,
         [
-          ids.organization,
+          ids.user,
           new Date("2026-05-10T10:00:00.000Z"),
           new Date("2027-05-10T10:00:00.000Z"),
         ],
       );
 
       const repaired = await repairCreditBalanceCache(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
       });
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
 
       assert.deepEqual(repaired, {
-        organizationId: ids.organization,
+        userId: ids.user,
         available: 100,
         reserved: 0,
         consumed: 0,
         frozen: 100,
       });
-      assert.equal(organization?.credit_frozen_cached, 100);
-      assert.ok(organization?.credit_frozen_at);
-      assert.ok(organization?.credit_frozen_until);
+      assert.equal(user?.credit_frozen_cached, 100);
+      assert.ok(user?.credit_frozen_at);
+      assert.ok(user?.credit_frozen_until);
     } finally {
       await db.close();
     }
@@ -455,21 +507,21 @@ describe("persistent credit ledger and reservation", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedOrganization(db);
+      await seedAccount(db);
       await grantCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 100,
         sourceType: "payment_order",
         sourceId: ids.paymentOrder,
-        reason: "paid order credited",
+        reason: "充值套餐增加积分",
         now: now(),
       });
       const reserved = await reserveCredits(db, {
-        organizationId: ids.organization,
+        userId: ids.user,
         amount: 50,
         sourceType: "workflow_task",
         sourceId: ids.task,
-        reason: "shot generation reservation",
+        reason: "分镜生成预占积分",
         now: now(),
       });
 
@@ -492,7 +544,7 @@ describe("persistent credit ledger and reservation", () => {
         now: now(),
       });
 
-      const organization = await readOrganizationCredits(db);
+      const user = await readUserCredits(db);
       const reservation = await readReservation(db, reserved.reservation.id);
       const ledgerTypes = await db.query<{ entry_type: string }>(
         `
@@ -502,8 +554,8 @@ describe("persistent credit ledger and reservation", () => {
         `,
       );
 
-      assert.equal(organization?.credit_balance_cached, 70);
-      assert.equal(organization?.credit_reserved_cached, 0);
+      assert.equal(user?.credit_balance_cached, 70);
+      assert.equal(user?.credit_reserved_cached, 0);
       assert.equal(reservation?.amount_consumed, 30);
       assert.equal(reservation?.amount_reserved, 0);
       assert.equal(reservation?.status, "settled");
@@ -518,7 +570,7 @@ describe("persistent credit ledger and reservation", () => {
 });
 
 const ids = {
-  organization: "10000000-0000-4000-8000-000000000001",
+  user: "10000000-0000-4000-8000-000000000001",
   workspace: "20000000-0000-4000-8000-000000000001",
   workflow: "30000000-0000-4000-8000-000000000001",
   paymentOrder: "71000000-0000-4000-8000-000000000001",
@@ -532,7 +584,7 @@ function now() {
   return new Date("2026-05-09T10:00:00.000Z");
 }
 
-async function seedOrganization(
+async function seedAccount(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
@@ -540,14 +592,21 @@ async function seedOrganization(
       INSERT INTO organizations (id, name, status)
       VALUES ($1, 'Org', 'active')
     `,
-    [ids.organization],
+    [ids.user],
+  );
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
+      VALUES ($1, '13800138001', 'Account', 'active', now(), now())
+    `,
+    [ids.user],
   );
   await db.query(
     `
       INSERT INTO workspaces (id, organization_id, name, status)
       VALUES ($1, $2, 'Workspace', 'active')
     `,
-    [ids.workspace, ids.organization],
+    [ids.workspace, ids.user],
   );
   await db.query(
     `
@@ -562,7 +621,7 @@ async function seedOrganization(
       )
       VALUES ($1, $2, $3, NULL, 'shot_generation', 'running', '{}'::jsonb)
     `,
-    [ids.workflow, ids.organization, ids.workspace],
+    [ids.workflow, ids.user, ids.workspace],
   );
   await db.query(
     `
@@ -593,7 +652,7 @@ async function seedOrganization(
         $1
       )
     `,
-    [ids.task, ids.organization, ids.workspace, ids.workflow],
+    [ids.task, ids.user, ids.workspace, ids.workflow],
   );
   await db.query(
     `
@@ -609,7 +668,7 @@ async function seedOrganization(
       )
       VALUES ($1, $2, $3, NULL, $4, $5, 1, 'running')
     `,
-    [ids.attempt, ids.organization, ids.workspace, ids.workflow, ids.task],
+    [ids.attempt, ids.user, ids.workspace, ids.workflow, ids.task],
   );
   await db.query(
     `
@@ -625,11 +684,11 @@ async function seedOrganization(
       )
       VALUES ($1, $2, $3, NULL, $4, $5, 2, 'running')
     `,
-    [ids.secondAttempt, ids.organization, ids.workspace, ids.workflow, ids.task],
+    [ids.secondAttempt, ids.user, ids.workspace, ids.workflow, ids.task],
   );
 }
 
-async function readOrganizationCredits(
+async function readUserCredits(
   db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
 ) {
   return queryOne<{
@@ -642,10 +701,10 @@ async function readOrganizationCredits(
     db,
     `
       SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached, credit_frozen_at, credit_frozen_until
-      FROM organizations
+      FROM users
       WHERE id = $1
     `,
-    [ids.organization],
+    [ids.user],
   );
 }
 

@@ -99,10 +99,44 @@ function mergeDefaultParameters(
   parameters: Record<string, unknown>,
   parameterSchema: Record<string, unknown> = {},
 ) {
-  return normalizeEnumParameters({
+  const merged = {
     ...defaultParams,
     ...parameters,
-  }, parameterSchema);
+  };
+  return normalizeEnumParameters(
+    pruneParametersToSchema(merged, defaultParams, parameterSchema),
+    parameterSchema,
+  );
+}
+
+function pruneParametersToSchema(
+  parameters: Record<string, unknown>,
+  defaultParams: Record<string, unknown>,
+  parameterSchema: Record<string, unknown>,
+) {
+  const allowedKeys = new Set(Object.keys(parameterSchema ?? {}));
+  const defaultKeys = new Set(Object.keys(defaultParams ?? {}));
+  const preservedKeys = new Set([
+    "mode",
+    "references",
+    "referenceImages",
+    "quickReferences",
+    "mentionReferences",
+    "firstFrame",
+    "lastFrame",
+    "editSourceVideo",
+    "referenceUploads",
+    "imageReference",
+    "localReferenceRoles",
+    "lipSyncConfig",
+  ]);
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parameters)) {
+    if (allowedKeys.has(key) || defaultKeys.has(key) || preservedKeys.has(key)) {
+      next[key] = value;
+    }
+  }
+  return next;
 }
 
 function normalizeEnumParameters(

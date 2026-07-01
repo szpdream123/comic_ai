@@ -56,6 +56,11 @@ interface SeedanceTaskRow {
   amount_reserved: number | string | null;
 }
 
+function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
+  const candidate = snapshot.teamMemberId ?? snapshot.memberId;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
 interface SeedancePollAdapter {
   poll(input: { externalRequestId: string }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
@@ -827,6 +832,24 @@ async function markSeedanceTaskResultUnknown(
       now: input.now,
     });
   }
+  if (!input.row.reservation_id && amount > 0) {
+    const snapshot = parseSnapshot(input.row.input_snapshot_json);
+    const memberId = readSnapshotTeamMemberId(snapshot);
+    if (memberId) {
+      await refundTeamMemberGenerationCredits(db, {
+        organizationId: input.row.organization_id,
+        teamMemberId: memberId,
+        amount,
+        sourceId: input.row.task_id,
+        reason: "生成失败返还积分",
+        metadata: {
+          provider: "seedance",
+          externalRequestId: input.row.external_request_id,
+        },
+        now: input.now,
+      });
+    }
+  }
 }
 
 async function markSeedanceTaskManualReview(
@@ -1440,6 +1463,9 @@ function readArray(value: unknown) {
 }
 
 function parseContentLength(value: string | null) {
+  if (value == null) {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }

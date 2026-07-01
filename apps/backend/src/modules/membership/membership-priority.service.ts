@@ -14,13 +14,12 @@ export type MembershipGenerationPriority =
     };
 
 interface MembershipPriorityRow {
-  plan_snapshot_json: unknown;
   capabilities_json: unknown;
 }
 
 export async function resolveMembershipGenerationPriority(
   db: SqlDatabase,
-  input: { organizationId: string; modelCode: string | null | undefined; now: Date },
+  input: { userId: string; modelCode: string | null | undefined; now: Date },
 ): Promise<MembershipGenerationPriority> {
   const modelCode = input.modelCode?.trim();
   if (!modelCode) {
@@ -31,42 +30,28 @@ export async function resolveMembershipGenerationPriority(
     db,
     `
       SELECT
-        active_period.plan_snapshot_json,
         amc.capabilities_json
       FROM ai_model_configs amc
-      LEFT JOIN LATERAL (
-        SELECT plan_snapshot_json
-        FROM membership_periods
-        WHERE organization_id = $1
-          AND tier = 'professional'
-          AND status = 'active'
-          AND period_end_at > $3
-        ORDER BY period_end_at DESC, created_at DESC
-        LIMIT 1
-      ) active_period ON true
+      JOIN memberships membership
+        ON membership.user_id = $1
       WHERE amc.model_code = $2
         AND amc.status = 'active'
+        AND membership.membership_tier = 'professional'
+        AND membership.expires_at > $3
       LIMIT 1
     `,
-    [input.organizationId, modelCode, input.now],
+    [input.userId, modelCode, input.now],
   );
   if (!row) {
     return normalPriority();
   }
-
   const modelCapabilities = normalizeObject(row.capabilities_json);
-  const planSnapshot = normalizeObject(row.plan_snapshot_json);
-  const priorityRules = normalizeObject(planSnapshot.priorityRules);
-  const planEntitlements = normalizeStringArray(planSnapshot.entitlements);
   const modelFamily = normalizeText(modelCapabilities.modelFamily).toLowerCase();
-  const allowedFamilies = normalizeStringArray(priorityRules.modelFamilies)
-    .map((family) => family.toLowerCase());
 
   const eligible =
-    planEntitlements.includes("priority_generation") &&
     modelCapabilities.membershipPriorityEligible === true &&
     modelFamily.length > 0 &&
-    allowedFamilies.includes(modelFamily);
+    modelFamily === "seedance";
 
   if (!eligible) {
     return normalPriority();
@@ -74,7 +59,7 @@ export async function resolveMembershipGenerationPriority(
 
   return {
     enabled: true,
-    priority: normalizePriority(priorityRules.queuePriority),
+    priority: 1,
     reason: "professional_membership_model_family_priority",
   };
 }

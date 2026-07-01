@@ -237,25 +237,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await constraintAllowsValue(db, "ai_model_configs", "ai_model_configs_provider_protocol_check", "lingdong_api"))) {
       await applySqlMigration(db, process.cwd(), "0047_lingdong_api_provider_protocol.sql");
     }
-    if (!(await seedanceModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0020_seedance_video_model_configs.sql");
-    }
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
       await applySqlMigration(db, process.cwd(), "0021_aliyun_bailian_happyhorse_video_model.sql");
     }
     if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
       await applySqlMigration(db, process.cwd(), "0025_jimeng_image_model_configs.sql");
     }
-    if (!(await gptImageReferenceModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0027_gpt_image_reference_model_config.sql");
-    }
-    if (!(await lingdongModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0049_lingdong_model_configs.sql");
-    }
-    await ensureHappyHorseResolutionConfig(db);
-    await ensureVideoModelCategories(db);
   }
-  await ensureMembershipPriorityModelMetadata(db);
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
     await applySqlMigration(db, process.cwd(), "0008_ai_generation_task_snapshots.sql");
@@ -280,6 +268,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
+  if (
+    !(await columnExists(db, "team_member_profiles", "script_ids")) ||
+    !(await columnExists(db, "team_member_profiles", "canvas_ids"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  }
+  await ensureTeamMemberProfilesBusinessRoleCompatibility(db);
 
   if (!(await tableExists(db, "admin_accounts"))) {
     await applySqlMigrations(db, process.cwd(), { fromName: "0010_admin_management_platform.sql" });
@@ -325,6 +320,16 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (
+    !(await columnExists(db, "membership_plans", "visibility")) ||
+    !(await columnExists(db, "membership_plans", "usage_scene")) ||
+    !(await tableExists(db, "invite_reward_configs")) ||
+    !(await tableExists(db, "user_invite_bindings")) ||
+    !(await tableExists(db, "invite_reward_grants"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0066_user_invite_rewards.sql");
+  }
+
+  if (
     !(await constraintAllowsValue(
       db,
       "organization_entitlements",
@@ -339,6 +344,66 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     ))
   ) {
     await applySqlMigration(db, process.cwd(), "0043_membership_entitlement_keys.sql");
+  }
+
+  if (
+    !(await columnExists(db, "memberships", "membership_tier")) ||
+    !(await columnExists(db, "memberships", "purchase_at")) ||
+    !(await columnExists(db, "memberships", "expires_at")) ||
+    !(await columnExists(db, "memberships", "gift_credits"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0052_user_membership_subscription.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_members")) ||
+    !(await tableExists(db, "team_member_projects"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0053_simple_team_members.sql");
+  } else if (
+    await constraintExistsOnCurrentSchema(db, "team_members", "team_members_user_id_member_account_key")
+  ) {
+    await applySqlMigration(db, process.cwd(), "0062_team_member_login_account_only_unique.sql");
+  }
+  if (
+    !(await tableExists(db, "team_member_scripts")) ||
+    !(await tableExists(db, "team_member_canvases"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0059_team_member_resource_visibility.sql");
+  } else if (
+    await needsTeamMemberResourceProjectNullabilityUpdate(db)
+  ) {
+    await applySqlMigration(db, process.cwd(), "0060_team_member_resource_project_nullable.sql");
+  }
+
+  if (
+    !(await tableExists(db, "team_member_auth_sessions")) ||
+    !(await tableExists(db, "team_member_project_records"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0054_simple_team_member_access.sql");
+  } else if (
+    await constraintExistsOnCurrentSchema(db, "team_member_project_records", "team_member_project_records_member_id_project_id_fkey")
+  ) {
+    await applySqlMigration(db, process.cwd(), "0061_team_member_project_records_detach_project_fk.sql");
+  }
+
+  if (
+    !(await columnExists(db, "users", "team_account_suffix")) ||
+    !(await constraintExists(db, "users", "users_team_account_suffix_format_check")) ||
+    !(await indexExists(db, "users_team_account_suffix_key"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0055_user_team_account_suffix.sql");
+  }
+
+  if (
+    !(await constraintAllowsValue(
+      db,
+      "memberships",
+      "memberships_role_check",
+      "sub_account",
+    ))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0057_memberships_sub_account_role.sql");
   }
 
   if (
@@ -373,7 +438,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await columnExists(db, "credit_ledger_entries", "user_id")) ||
     !(await columnExists(db, "credit_reservations", "user_id")) ||
     !(await columnExists(db, "credit_lots", "user_id")) ||
-    !(await columnExists(db, "credit_reservation_lot_allocations", "user_id"))
+    !(await columnExists(db, "credit_reservation_lot_allocations", "user_id")) ||
+    !(await columnAllowsNull(db, "credit_reservation_lot_allocations", "organization_id"))
   ) {
     await applySqlMigration(db, process.cwd(), "0051_user_credit_wallets.sql");
   }
@@ -650,34 +716,6 @@ async function ensurePaymentProviderConstraints(db: SqlDatabase) {
   });
 }
 
-async function ensureMembershipPriorityModelMetadata(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return;
-  }
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET capabilities_json =
-      capabilities_json
-      || CASE
-        WHEN capabilities_json->>'modelFamily' IS NULL
-        THEN '{"modelFamily":"seedance"}'::jsonb
-        ELSE '{}'::jsonb
-      END
-      || CASE
-        WHEN capabilities_json->>'membershipPriorityEligible' IS NULL
-        THEN '{"membershipPriorityEligible":true}'::jsonb
-        ELSE '{}'::jsonb
-      END,
-      updated_at = now()
-    WHERE model_code = 'seedance-i2v-pro'
-      AND (
-        capabilities_json->>'modelFamily' IS NULL
-        OR capabilities_json->>'membershipPriorityEligible' IS NULL
-      )
-  `);
-}
-
 async function ensureProviderConstraint(
   db: SqlDatabase,
   input: {
@@ -823,23 +861,13 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
       membership_id uuid NOT NULL REFERENCES memberships(id),
       team_account text NOT NULL,
       display_name text NOT NULL,
-      business_role text NOT NULL CHECK (
-        business_role IN (
-          'admin',
-          'group_admin',
-          'director_plus',
-          'animator_plus',
-          'director',
-          'animator',
-          'screenwriter',
-          'editor'
-        )
-      ),
       member_group_id uuid NULL REFERENCES team_member_groups(id),
       credit_balance_cached integer NOT NULL DEFAULT 0 CHECK (credit_balance_cached >= 0),
       credit_used_cached integer NOT NULL DEFAULT 0 CHECK (credit_used_cached >= 0),
       last_credit_consumed_at timestamptz NULL,
       remark text NULL,
+      script_ids text[] NOT NULL DEFAULT '{}'::text[],
+      canvas_ids text[] NOT NULL DEFAULT '{}'::text[],
       created_by_user_id uuid NOT NULL REFERENCES users(id),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -855,7 +883,7 @@ async function ensureTeamCollaborationTables(db: SqlDatabase) {
     );
 
     CREATE INDEX IF NOT EXISTS team_member_profiles_scope_idx
-      ON team_member_profiles (organization_id, workspace_id, business_role, member_group_id);
+      ON team_member_profiles (organization_id, workspace_id, member_group_id);
 
     CREATE TABLE IF NOT EXISTS team_project_assignments (
       id uuid PRIMARY KEY,
@@ -1081,183 +1109,65 @@ async function aiModelConfigExists(db: SqlDatabase, modelCode: string) {
   return result.rows[0]?.exists === true;
 }
 
-async function seedanceModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
+async function needsTeamMemberResourceProjectNullabilityUpdate(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_scripts")) || !(await tableExists(db, "team_member_canvases"))) {
     return false;
   }
 
-  const result = await db.query<{ count: number }>(
+  const scriptColumn = await db.query<{ is_nullable: string }>(
     `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE status = 'active'
-        AND (
-          (model_code = 'Doubao-Seedance-2.0-fast' AND provider_model = 'doubao-seedance-2-0-fast-260128')
-          OR (model_code = 'Doubao-Seedance-2.0' AND provider_model = 'doubao-seedance-2-0-260128')
-          OR (model_code = 'doubao-seedance-1-0-pro-250528' AND provider_model = 'doubao-seedance-1-0-pro-250528')
-        )
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_scripts'
+        AND column_name = 'project_id'
     `,
   );
-
-  return result.rows[0]?.count === 3;
-}
-
-async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return false;
-  }
-
-  const result = await db.query<{ count: number }>(
+  const canvasColumn = await db.query<{ is_nullable: string }>(
     `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE status = 'active'
-        AND (
-          (
-            model_code = 'gpt-image-2-cn'
-            AND provider_protocol = 'openai_images'
-            AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
-          )
-          OR (
-            model_code = 'gpt-image-2-reference-cn'
-            AND provider_protocol = 'openai_images'
-            AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
-            AND provider_config_json->>'baseURL' = 'https://image.shoestravel.xin'
-          )
-        )
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'team_member_canvases'
+        AND column_name = 'project_id'
     `,
   );
-
-  return result.rows[0]?.count === 2;
+  return scriptColumn.rows[0]?.is_nullable === "NO" || canvasColumn.rows[0]?.is_nullable === "NO";
 }
 
-async function lingdongModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return false;
-  }
-
-  const result = await db.query<{ count: number }>(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE provider_protocol = 'lingdong_api'
-        AND model_code = ANY($1::text[])
-    `,
-    [[
-      "gpt-image-2",
-      "gpt-image-2pro",
-      "sd-2-1",
-      "sd-2-2",
-      "sd-2-fast",
-      "sd-2-4",
-      "sd-2-5",
-      "sd-2-6",
-      "sd-2-7",
-      "sd-2-8",
-      "sd-2-9",
-      "sd-2-10",
-      "sd-2-11",
-      "sd-2-12",
-      "sd-2-13",
-      "sd-2-14",
-      "sd-2-15",
-      "sd-2-16",
-      "omni_flash",
-      "omni_flash-v2v",
-      "omni_flash_nowater",
-      "omni_flash_nowater-v2v",
-      "sora-2",
-      "sora-2-openai-12s",
-      "sora-2-openai-4s",
-      "sora-2-openai-8s",
-    ]],
-  );
-
-  return result.rows[0]?.count === 26;
-}
-
-async function ensureVideoModelCategories(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return;
-  }
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["Doubao-Seedance-2.0-fast", "doubao-seedance-1-0-pro-250528"], "first_frame", "首帧视频"]);
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["Doubao-Seedance-2.0"], "first_last_frame", "首尾帧"]);
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["happyhorse-1.0-r2v"], "reference", "全能参考"]);
-}
-
-async function ensureHappyHorseResolutionConfig(db: SqlDatabase) {
-  await db.query(`
-    UPDATE ai_model_configs
-    SET parameter_schema_json = jsonb_set(
-          COALESCE(parameter_schema_json, '{}'::jsonb),
-          '{resolution,options}',
-          '["720P"]'::jsonb,
-          true
-        ),
-        default_params_json = jsonb_set(
-          COALESCE(default_params_json, '{}'::jsonb),
-          '{resolution}',
-          to_jsonb('720P'::text),
-          true
-        ),
-        limits_json = jsonb_set(
-          COALESCE(limits_json, '{}'::jsonb),
-          '{supportedResolutions}',
-          '["720P"]'::jsonb,
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = 'happyhorse-1.0-r2v'
+async function currentSchemaName(db: SqlDatabase) {
+  const schema = await db.query<{ schema_name: string }>(`
+    SELECT current_schema() AS schema_name
   `);
+
+  return schema.rows[0]?.schema_name ?? "public";
 }
 
 async function constraintExists(db: SqlDatabase, tableName: string, constraintName: string) {
+  return constraintExistsOnSchema(db, await currentSchemaName(db), tableName, constraintName);
+}
+
+async function constraintExistsOnCurrentSchema(db: SqlDatabase, tableName: string, constraintName: string) {
+  return constraintExistsOnSchema(db, await currentSchemaName(db), tableName, constraintName);
+}
+
+async function constraintExistsOnSchema(
+  db: SqlDatabase,
+  schemaName: string,
+  tableName: string,
+  constraintName: string,
+) {
   const constraintCheck = await db.query<{ exists: boolean }>(
     `
       SELECT EXISTS (
         SELECT 1
         FROM information_schema.table_constraints
-        WHERE table_schema = current_schema()
-          AND table_name = $1
-          AND constraint_name = $2
+        WHERE table_schema = $1
+          AND table_name = $2
+          AND constraint_name = $3
       ) AS exists
     `,
-    [tableName, constraintName],
+    [schemaName, tableName, constraintName],
   );
 
   return constraintCheck.rows[0]?.exists === true;
@@ -1443,4 +1353,31 @@ async function columnExists(db: SqlDatabase, tableName: string, columnName: stri
   );
 
   return columnCheck.rows[0]?.exists === true;
+}
+
+async function columnAllowsNull(db: SqlDatabase, tableName: string, columnName: string) {
+  const columnCheck = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = $1
+        AND column_name = $2
+    `,
+    [tableName, columnName],
+  );
+
+  return columnCheck.rows[0]?.is_nullable === "YES";
+}
+
+async function ensureTeamMemberProfilesBusinessRoleCompatibility(db: SqlDatabase) {
+  if (!(await tableExists(db, "team_member_profiles"))) {
+    return;
+  }
+  if (!(await columnExists(db, "team_member_profiles", "business_role"))) {
+    return;
+  }
+
+  await db.query("UPDATE team_member_profiles SET business_role = 'director' WHERE business_role IS NULL");
+  await db.query("ALTER TABLE team_member_profiles ALTER COLUMN business_role DROP NOT NULL");
 }

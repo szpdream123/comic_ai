@@ -12,6 +12,7 @@ import {
   friendlyError,
   generateAssetImages,
   generateStoryboardImages,
+  generateStoryboardVideos,
   hasActiveWorkbenchTextSelection,
   handleWorkbenchActionForTest,
   initProductionWorkbench,
@@ -24,6 +25,7 @@ import {
   findProjectCoverInput,
   refreshProductionWorkbenchForTest,
   renderProductionWorkbench,
+  syncTeamMemberCreateDraftFromDomForTest,
   syncCanvasProjectsFromApiForTest,
   syncEpisodeStoryboardMapForTest,
   syncEpisodeAssetDescriptionState,
@@ -31,6 +33,7 @@ import {
   uploadProjectCoverFile,
   syncStoryboards,
 } from "../src/features/production-workbench/index.js";
+import { renderStoryboardStageForPartialUpdate } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 import {
   addStoryboard,
   createStoryboardList,
@@ -457,6 +460,14 @@ describe("production workbench home shell", () => {
       }),
       /资源不存在或无权访问.*request-missing/,
     );
+    assert.equal(
+      friendlyError({
+        status: 409,
+        errorCode: "team_account_duplicate",
+        message: "team_account_duplicate",
+      }),
+      "该成员账户已存在，请更换成员账户后重试。",
+    );
   });
 
   it("formats model reference validation errors with actionable Chinese copy", () => {
@@ -504,7 +515,37 @@ describe("production workbench home shell", () => {
       "有效会员已过期或未开通，请先开通会员。",
     );
   });
+
+  it("hides database constraint errors behind Chinese copy", () => {
+    assert.equal(
+      friendlyError({
+        status: 500,
+        errorCode: "internal_error",
+        message:
+          "new row for relation \"credit_ledger_entries\" violates check constraint \"credit_ledger_entries_delta_shape\"",
+      }),
+      "积分账本数据校验失败，请稍后重试。",
+    );
+    assert.equal(
+      friendlyError({
+        status: 500,
+        errorCode: "internal_error",
+        message: "duplicate key value violates unique constraint \"credit_ledger_entries_source_unique\"",
+      }),
+      "数据已存在，请刷新后重试。",
+    );
+  });
 });
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("episode workbench asset list layout", () => {
   it("keeps character scene and prop sections in one continuous scrollable list", () => {
@@ -2670,6 +2711,13 @@ describe("workbench generation payloads and inspectors", () => {
       assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, 5);
       assert.equal(workbench.ui.videoGenerationResult.taskId, "seedance-video-task-queued");
       assert.equal(workbench.ui.videoGenerationResult.selectedModelId, "seedance-i2v-pro");
+      assert.equal(workbench.ui.prompt, "");
+      assert.deepEqual(workbench.ui.episodeWorkbenchAttachments ?? [], []);
+      assert.equal(workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.firstFrame, null);
+      assert.equal(workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.imageReference, null);
+      assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.quickReferenceItems ?? [], []);
+      assert.equal(workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.lastSubmission?.taskId, "seedance-video-task-queued");
+      assert.equal(workbench.ui.videoGenerationResult.quickReferenceItems?.length, 1);
       assert.equal(timers.length, 1);
       assert.equal(timers[0].delayMs, 0);
 
@@ -3835,7 +3883,21 @@ describe("workbench generation payloads and inspectors", () => {
       },
     };
     const payload = buildVideoGenerationPayload({
-      state: { project: { aspectRatio: "16:9", resolution: "1080p" } },
+      state: {
+        project: { id: "project-clear-composer", aspectRatio: "16:9", resolution: "1080p" },
+        shots: [],
+        projectDetail: {
+          project: { id: "project-clear-composer", projectId: "project-clear-composer", name: "clear" },
+          episodes: [{ id: "episode-clear-composer", title: "清空测试", status: "draft" }],
+          shots: [],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        },
+      },
       ui: {
         storyboards: [storyboard],
         selectedStoryboardId: storyboard.id,
@@ -3873,7 +3935,21 @@ describe("workbench generation payloads and inspectors", () => {
       generationState: {},
     };
     const payload = buildVideoGenerationPayload({
-      state: { project: { aspectRatio: "16:9", resolution: "1080p" } },
+      state: {
+        project: { id: "project-clear-composer", aspectRatio: "16:9", resolution: "1080p" },
+        shots: [],
+        projectDetail: {
+          project: { id: "project-clear-composer", projectId: "project-clear-composer", name: "clear" },
+          episodes: [{ id: "episode-clear-composer", title: "清空测试", status: "draft" }],
+          shots: [],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        },
+      },
       ui: {
         storyboards: [storyboard],
         selectedStoryboardId: storyboard.id,
@@ -3900,6 +3976,562 @@ describe("workbench generation payloads and inspectors", () => {
     });
 
     assert.equal(payload.model, "seedance-i2v-fast");
+  });
+
+  it("submits only parameters actually configured for the selected video model", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-sora-2",
+      description: "selected video model shot",
+      generationState: {},
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { aspectRatio: "9:16", resolution: "1080p" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: "",
+        selectedModelId: "sora-2",
+        videoGenerationMode: "first-frame",
+        videoCount: 1,
+        videoResolution: "720p",
+        videoDurationSec: "4",
+        imageAspectRatio: "9:16",
+        generationParameterValues: {
+          durationSec: "4",
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          size: "1280x720",
+        },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sora-2",
+          models: [
+            {
+              modelCode: "sora-2",
+              mediaType: "video",
+              supportedModes: ["first-frame", "image_to_video"],
+              parameterSchema: {
+                size: { options: ["1024x1024", "1280x720", "720x1280"] },
+                durationSec: { options: ["4", "8", "12"] },
+              },
+              defaultParams: {
+                durationSec: 4,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(payload.model, "sora-2");
+    assert.equal(payload.parameters.size, "1280x720");
+    assert.equal(payload.parameters.durationSec, 4);
+    assert.ok(!("resolution" in payload.parameters));
+    assert.ok(!("aspectRatio" in payload.parameters));
+    assert.ok(!("imageSize" in payload.parameters));
+  });
+
+  it("keeps first-frame video submissions to the selected image when hidden quick references contain more images", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-first-frame-only",
+      description: "first frame only",
+      generationState: {
+        firstFrame: {
+          id: "quick-ref-1",
+          name: "selected.png",
+          kind: "image",
+          url: "/uploads/selected.png",
+          preview: "/uploads/selected.png",
+        },
+        imageReference: {
+          id: "quick-ref-1",
+          name: "selected.png",
+          kind: "image",
+          url: "/uploads/selected.png",
+          preview: "/uploads/selected.png",
+        },
+        quickReferenceItems: [
+          { id: "quick-ref-1", kind: "image", url: "/uploads/selected.png", preview: "/uploads/selected.png" },
+          { id: "quick-ref-2", kind: "image", url: "/uploads/hidden-2.png", preview: "/uploads/hidden-2.png" },
+          { id: "quick-ref-3", kind: "image", url: "/uploads/hidden-3.png", preview: "/uploads/hidden-3.png" },
+        ],
+        referenceUploads: [
+          { id: "quick-ref-2", kind: "image", url: "/uploads/hidden-2.png", preview: "/uploads/hidden-2.png" },
+          { id: "quick-ref-3", kind: "image", url: "/uploads/hidden-3.png", preview: "/uploads/hidden-3.png" },
+        ],
+      },
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { aspectRatio: "16:9", resolution: "1080p" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: "walk forward",
+        selectedModelId: "sora-2",
+        videoGenerationMode: "first-frame",
+        videoDurationSec: "12",
+        generationParameterValues: {
+          size: "1280x720",
+          durationSec: "12",
+        },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sora-2",
+          models: [
+            {
+              modelCode: "sora-2",
+              mediaType: "video",
+              supportedModes: ["first-frame", "image_to_video"],
+              parameterSchema: {
+                size: { options: ["1280x720"] },
+                durationSec: { options: ["12"] },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    assert.deepEqual(
+      payload.parameters.quickReferences.map((item) => item.url),
+      ["/uploads/selected.png"],
+    );
+    assert.deepEqual(payload.parameters.referenceUploads, []);
+    assert.equal(payload.parameters.firstFrame.url, "/uploads/selected.png");
+    assert.equal(payload.parameters.imageReference.url, "/uploads/selected.png");
+  });
+
+  it("clears storyboard composer prompt and media after video task submission starts", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-clear-composer",
+      linkedShotId: "shot-clear-composer",
+      description: "clear composer",
+      generationState: {
+        prompt: "old prompt",
+        firstFrame: { id: "first", kind: "image", url: "/uploads/first.png" },
+        imageReference: { id: "first", kind: "image", url: "/uploads/first.png" },
+        referenceUploads: [{ id: "ref", kind: "image", url: "/uploads/ref.png" }],
+        quickReferenceItems: [{ id: "quick", kind: "image", url: "/uploads/quick.png" }],
+        localReferenceRoles: ["character"],
+      },
+    };
+    const workbench = {
+      state: {
+        project: { id: "project-clear-composer", aspectRatio: "16:9", resolution: "1080p" },
+        shots: [],
+        projectDetail: {
+          project: { id: "project-clear-composer", projectId: "project-clear-composer", name: "clear" },
+          episodes: [{ id: "episode-clear-composer", title: "清空测试", status: "draft" }],
+          shots: [],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        },
+      },
+      api: {
+        async createVideoTask() {
+          return {
+            taskId: "video-clear-composer-task",
+            status: "queued",
+            workflowStatus: "queued",
+            result: {},
+          };
+        },
+        async getGenerationTask() {
+          return { taskId: "video-clear-composer-task", status: "queued", workflowStatus: "queued", result: {} };
+        },
+      },
+      ui: {
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-clear-composer",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: {
+          "episode-clear-composer": [storyboard],
+        },
+        prompt: "生成用文案",
+        selectedModelId: "sora-2",
+        episodeWorkbenchAttachments: [{ id: "audio-1", kind: "audio", url: "/uploads/audio.wav" }],
+        episodeWorkbenchSelectedAttachmentIds: ["audio-1"],
+        lipSyncAudioItems: [{ id: "audio-1", kind: "audio", url: "/uploads/audio.wav" }],
+        generationParameterValues: {
+          size: "1280x720",
+          durationSec: "12",
+        },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sora-2",
+          models: [
+            {
+              modelCode: "sora-2",
+              mediaType: "video",
+              supportedModes: ["first-frame", "image_to_video"],
+              parameterSchema: {
+                size: { options: ["1280x720"] },
+                durationSec: { options: ["12"] },
+              },
+            },
+          ],
+        },
+        validationMessage: "",
+        toast: "",
+        busy: false,
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        return { callback, delayMs };
+      },
+      clearTimeout() {},
+    };
+
+    try {
+      await generateStoryboardVideos(workbench);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    const updatedStoryboard = workbench.ui.episodeStoryboardMap["episode-clear-composer"][0];
+    assert.equal(workbench.ui.prompt, "");
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
+    assert.deepEqual(workbench.ui.lipSyncAudioItems, []);
+    assert.equal(updatedStoryboard.generationState.prompt, "");
+    assert.equal(updatedStoryboard.generationState.firstFrame, null);
+    assert.equal(updatedStoryboard.generationState.imageReference, null);
+    assert.deepEqual(updatedStoryboard.generationState.referenceUploads, []);
+    assert.deepEqual(updatedStoryboard.generationState.quickReferenceItems, []);
+    assert.equal(updatedStoryboard.generationState.lastSubmission?.taskId, "video-clear-composer-task");
+    assert.equal(workbench.ui.videoGenerationResult?.quickReferenceItems?.length, 1);
+  });
+
+  it("keeps video submission snapshot aligned with the actual configured payload fields", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-sora-snapshot",
+      linkedShotId: "shot-sora-snapshot",
+      description: "snapshot check",
+      generationState: {
+        lastSubmission: null,
+      },
+    };
+    const workbench = {
+      state: { project: { aspectRatio: "9:16", resolution: "1080p" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        selectedModelId: "sora-2",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        videoCount: 1,
+        videoResolution: "1080p",
+        videoDurationSec: "12",
+        imageAspectRatio: "16:9",
+        prompt: "snapshot payload",
+        episodeWorkbenchAttachments: [],
+        generationParameterValues: {
+          size: "1280x720",
+          durationSec: "12",
+          resolution: "1080p",
+          aspectRatio: "16:9",
+        },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sora-2",
+          models: [
+            {
+              modelCode: "sora-2",
+              mediaType: "video",
+              supportedModes: ["first-frame", "image_to_video"],
+              parameterSchema: {
+                size: { options: ["1024x1024", "1280x720", "720x1280"] },
+                durationSec: { options: ["4", "8", "12"] },
+              },
+              defaultParams: {
+                durationSec: 4,
+              },
+            },
+          ],
+        },
+        videoGenerationResult: {
+          resolution: "1280x720",
+          aspectRatio: null,
+          durationSec: 12,
+        },
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        status: "running",
+        taskId: "task-sora-snapshot",
+        targetType: "storyboard",
+        targetId: storyboard.linkedShotId,
+        parameters: buildVideoGenerationPayload(workbench).parameters,
+      },
+      storyboard.id,
+      "video",
+      { persistConversation: false },
+    );
+
+    assert.equal(workbench.ui.videoGenerationResult?.resolution, "1280x720");
+    assert.equal(workbench.ui.videoGenerationResult?.aspectRatio, null);
+    assert.equal(workbench.ui.videoGenerationResult?.durationSec, 12);
+  });
+
+  it("renders generation task progress percent in the task status badge without footer time", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-timezone",
+      description: "timezone check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        createdAt: "2026-07-01T03:15:28.926Z",
+        taskId: "task-timezone",
+        status: "provider_submitted",
+        selectedModelId: "sora-2",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        creditCost: 300,
+      },
+      [],
+    );
+
+    assert.match(html, /episode-replica-task-status provider_submitted[^>]*>50%/);
+    assert.doesNotMatch(html, /<article class="episode-replica-result-panel visible">[\s\S]*?<time>/);
+    assert.doesNotMatch(html, /class="episode-replica-progress-box"/);
+  });
+
+  it("maps storyboard generation stages to compact progress percents", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-progress-percent",
+      description: "progress percent check",
+      generationState: {},
+    };
+    const renderPercent = (status, failureCode = "") => renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        taskId: `task-${status}`,
+        status,
+        failureCode,
+        selectedModelId: "sora-2",
+      },
+      [],
+    );
+
+    assert.match(renderPercent("submitted"), /episode-replica-task-status submitted[^>]*>0%/);
+    assert.match(renderPercent("queued"), /episode-replica-task-status queued[^>]*>20%/);
+    assert.match(renderPercent("provider_submitted"), /episode-replica-task-status provider_submitted[^>]*>50%/);
+    assert.match(renderPercent("running", "provider_output_upload_failed"), /episode-replica-task-status running[^>]*>80%/);
+    assert.match(renderPercent("completed"), /episode-replica-task-status completed[^>]*>100%/);
+  });
+
+  it("hides the system badge and task progress panel once storyboard video is available", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-video-ready",
+      description: "video ready check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        taskId: "task-video-ready",
+        status: "completed",
+        selectedModelId: "sora-2",
+        fixedVideos: [
+          {
+            id: "video-ready-1",
+            url: "https://example.com/video-ready.mp4",
+          },
+        ],
+      },
+      [],
+    );
+
+    assert.match(html, /class="episode-replica-fixed-results video-result"/);
+    assert.match(html, /https:\/\/example\.com\/video-ready\.mp4/);
+    assert.match(html, /class="episode-replica-stage-actions"/);
+    assert.match(html, /data-result-action="edit"/);
+    assert.match(html, /data-result-action="set-storyboard-video"/);
+    assert.doesNotMatch(html, /class="episode-replica-message-badge">系统</);
+    assert.doesNotMatch(html, /class="episode-replica-result-panel visible"/);
+    assert.doesNotMatch(html, /任务ID：task-video-ready/);
+  });
+
+  it("renders storyboard generation failures with the same result card style as image generation", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-style-failure",
+      description: "style failure check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        createdAt: "2026-07-01T03:15:28.926Z",
+        taskId: "task-style-failure",
+        status: "failed",
+        selectedModelId: "sora-2",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        creditCost: 300,
+        failure: {
+          displayMessage: "生成任务超过平台等待时间，请重新生成。",
+        },
+      },
+      [],
+    );
+
+    assert.match(html, /class="episode-replica-fixed-results failure-result storyboard-failure-result"/);
+    assert.match(html, /class="episode-replica-fixed-image-card failure-card"/);
+    assert.match(html, /错误原因:生成任务超过平台等待时间，请重新生成。/);
+    assert.match(html, /data-result-action="edit"/);
+    assert.match(html, /data-result-action="delete"/);
+    assert.doesNotMatch(html, /class="episode-replica-progress-box"/);
+    assert.doesNotMatch(html, /class="episode-replica-result-panel visible"/);
+    assert.doesNotMatch(html, /episode-replica-task-failure/);
+  });
+
+  it("renders empty-pool failures as failed storyboard results without task actions", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-empty-pool",
+      description: "empty pool check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        createdAt: "2026-07-01T03:15:28.926Z",
+        taskId: "task-empty-pool",
+        status: "failed",
+        selectedModelId: "sora-2",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        creditCost: 300,
+        failure: {
+          displayMessage: "号池已空",
+        },
+      },
+      [],
+    );
+
+    assert.match(html, /class="episode-replica-fixed-results failure-result storyboard-failure-result"/);
+    assert.match(html, /错误原因:生成失败，请重新编辑后再试，失败记录会保留在当前结果区。/);
+    assert.doesNotMatch(html, /任务ID：task-empty-pool/);
+    assert.doesNotMatch(html, /episode-replica-task-status failed/);
+    assert.doesNotMatch(html, /class="episode-replica-result-panel visible"/);
+    assert.doesNotMatch(html, /class="episode-replica-stage-actions"/);
+    assert.match(html, /data-result-action="edit"/);
+    assert.match(html, /data-result-action="delete"/);
+    assert.doesNotMatch(html, /class="episode-replica-progress-box"/);
+    assert.doesNotMatch(html, /号池已空/);
+    assert.doesNotMatch(html, /episode-replica-task-failure/);
+    assert.doesNotMatch(html, /episode-replica-progress-message/);
+  });
+
+  it("keeps storyboard task, failure, and video result cards compact", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const compactResultPanelBlock = css.slice(css.lastIndexOf(".episode-replica-result-panel {"));
+    const compactTaskCardBlock = css.slice(css.lastIndexOf(".episode-replica-result-panel .task-card {"));
+    const fixedResultBlock = css.slice(css.indexOf(".episode-replica-fixed-results {"));
+    const storyboardFailureBlock = css.slice(css.indexOf(".episode-replica-system-message .storyboard-failure-result {"));
+    const videoRule = css.match(/\.episode-replica-fixed-video-card video\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+
+    assert.match(compactResultPanelBlock, /width:\s*min\(100%,\s*28\.75rem\)/);
+    assert.match(compactResultPanelBlock, /max-width:\s*28\.75rem/);
+    assert.match(compactResultPanelBlock, /justify-self:\s*start/);
+    assert.match(compactTaskCardBlock, /padding:\s*0\.56rem 0\.72rem/);
+    assert.match(compactTaskCardBlock, /border-radius:\s*1\.2rem/);
+    assert.match(fixedResultBlock, /\.episode-replica-fixed-image-card\.failure-card\s*\{[\s\S]*?width:\s*min\(100%,\s*8\.8rem\)/);
+    assert.match(fixedResultBlock, /\.episode-replica-fixed-video-card\s*\{[\s\S]*?width:\s*min\(100%,\s*11\.2rem\)/);
+    assert.match(fixedResultBlock, /\.episode-replica-fixed-video-card\s*\{[\s\S]*?aspect-ratio:\s*1\s*\/\s*1/);
+    assert.match(videoRule, /position:\s*absolute/);
+    assert.match(videoRule, /inset:\s*0/);
+    assert.match(videoRule, /height:\s*100%/);
+    assert.match(videoRule, /object-fit:\s*cover/);
+    assert.match(storyboardFailureBlock, /max-width:\s*18rem/);
+    assert.match(storyboardFailureBlock, /\.storyboard-failure-result \.failure-card\s*\{[\s\S]*?width:\s*min\(100%,\s*8\.8rem\)/);
+  });
+
+  it("keeps storyboard user request cards compact above results", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(css, /\.episode-replica-user-message,\s*\.episode-replica-system-message\s*\{[\s\S]*?gap:\s*0\.34rem/);
+    assert.match(css, /\.episode-replica-user-message\s*\{[\s\S]*?padding:\s*0\.56rem 0\.72rem/);
+    assert.match(css, /\.episode-replica-user-message-copy\.clamp-3\s*\{[\s\S]*?-webkit-line-clamp:\s*3/);
+    assert.match(css, /\.episode-replica-user-message-footer\s*\{[\s\S]*?gap:\s*0\.28rem/);
+  });
+
+  it("renders storyboard task cards with prompt preview and aligned typography", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-task-preview",
+      description: "task preview check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        taskId: "task-preview-1",
+        status: "provider_submitted",
+        promptPreview: "【总时长】15.0秒 【场景分析】场景：城门口，黄昏，天边火红晚霞，光线温暖，人来人往。",
+        selectedModelId: "sora-2",
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        creditCost: 300,
+      },
+      [],
+    );
+
+    assert.match(html, /class="episode-replica-task-copy clamp-3">/);
+    assert.match(html, /【总时长】15\.0秒/);
+    assert.match(html, /episode-replica-task-status provider_submitted[^>]*>50%/);
   });
 
   it("builds lip-sync video payload with selected voice and text-based credit estimate", () => {
@@ -4047,6 +4679,7 @@ describe("workbench generation payloads and inspectors", () => {
 
   it("opens prompt mention suggestions from project detail assets when episode imported assets are still empty", () => {
     const workbench = {
+      root: { innerHTML: "", querySelector() { return null; } },
       state: {
         projectDetail: {
           assetsByType: {
@@ -4075,7 +4708,13 @@ describe("workbench generation payloads and inspectors", () => {
           character: [],
           scene: [],
           prop: [],
-          other: { image: [], video: [] },
+          other: {
+            audio: [
+              { id: "voice-1", name: "女/稚嫩", sourceUrl: "/uploads/voice-1.mp3" },
+            ],
+            image: [],
+            video: [],
+          },
         },
         promptMentionMenuOpen: false,
         promptMentionQuery: "",
@@ -4362,7 +5001,13 @@ describe("workbench generation payloads and inspectors", () => {
           character: [],
           scene: [],
           prop: [],
-          other: { image: [], video: [] },
+          other: {
+            audio: [
+              { id: "voice-1", name: "女/稚嫩", sourceUrl: "/uploads/voice-1.mp3" },
+            ],
+            image: [],
+            video: [],
+          },
         },
         episodeWorkbenchAttachments: [],
       },
@@ -4632,6 +5277,128 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.prompt, "");
   });
 
+  it("does not auto-fill the prompt from storyboard text when selecting a storyboard card", async () => {
+    const [firstStoryboard, secondStoryboard] = addStoryboard(addStoryboard([]));
+    const storyboards = [
+      {
+        ...firstStoryboard,
+        description: "第一条分镜描述",
+        generationState: {
+          prompt: "第一条生成草稿",
+          videoPrompt: "第一条生成草稿",
+        },
+      },
+      {
+        ...secondStoryboard,
+        description: "第二条分镜描述不应进入生成框",
+        generationState: {},
+      },
+    ];
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "剧一", phase: "asset_review" },
+        shots: [],
+      },
+      api: {},
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-primary",
+        storyboards,
+        episodeStoryboardMap: {
+          "episode-primary": storyboards,
+        },
+        selectedStoryboardId: storyboards[0].id,
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        prompt: "第一条生成草稿",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-storyboard",
+        storyboardId: storyboards[1].id,
+      },
+    });
+
+    assert.equal(workbench.ui.selectedStoryboardId, storyboards[1].id);
+    assert.equal(workbench.ui.prompt, "");
+    assert.notEqual(workbench.ui.prompt, "第二条分镜描述不应进入生成框");
+  });
+
+  it("renders an empty prompt after selecting a storyboard that has a saved generation draft", async () => {
+    const [firstStoryboard, secondStoryboard] = addStoryboard(addStoryboard([]));
+    const storyboards = [
+      {
+        ...firstStoryboard,
+        generationState: {
+          prompt: "第一条旧生成草稿",
+          videoPrompt: "第一条旧生成草稿",
+        },
+      },
+      {
+        ...secondStoryboard,
+        description: "【总时长】15.0秒\n【场景分析】不应自动进入生成框",
+        generationState: {
+          prompt: "【总时长】15.0秒\n【场景分析】旧动态视频草稿不应自动进入生成框",
+          videoPrompt: "【总时长】15.0秒\n【场景分析】旧动态视频草稿不应自动进入生成框",
+        },
+      },
+    ];
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "剧一", phase: "asset_review" },
+        shots: [],
+      },
+      api: {},
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-primary",
+        storyboards,
+        episodeStoryboardMap: {
+          "episode-primary": storyboards,
+        },
+        selectedStoryboardId: storyboards[0].id,
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        prompt: "第一条旧生成草稿",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-storyboard",
+        storyboardId: storyboards[1].id,
+      },
+    });
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: workbench.ui,
+    });
+
+    assert.equal(workbench.ui.prompt, "");
+    assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求"><\/textarea>/);
+    assert.doesNotMatch(html, /旧动态视频草稿不应自动进入生成框<\/textarea>/);
+  });
+
   it("renders voice preview controls inside the voice picker modal", () => {
     const state = {
       project: {
@@ -4644,6 +5411,17 @@ describe("workbench generation payloads and inspectors", () => {
       assetReview: { readyForGeneration: true },
       calibration: { id: "cal-1" },
       assetCandidates: { characters: [], scenes: [], props: [] },
+      projectDetail: {
+        assetsByType: {
+          other: {
+            audio: [
+              { id: "voice-1", name: "女/稚嫩", sourceUrl: "/uploads/voice-1.mp3" },
+            ],
+            image: [],
+            video: [],
+          },
+        },
+      },
       shots: [],
       exportPreview: null,
     };
@@ -4686,6 +5464,70 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, /data-action="select-episode-voice"/);
     assert.match(html, /episode-voice-card-radio/);
     assert.match(html, /已选中/);
+  });
+
+  it("renders batch delete controls inside the voice picker modal", () => {
+    const state = {
+      project: {
+        id: "project-1",
+        name: "try",
+        phase: "asset_review",
+        aspectRatio: "16:9",
+        resolution: "1080p",
+      },
+      assetReview: { readyForGeneration: true },
+      calibration: { id: "cal-1" },
+      assetCandidates: { characters: [], scenes: [], props: [] },
+      projectDetail: {
+        assetsByType: {
+          other: {
+            audio: [
+              { id: "voice-1", name: "女/稚嫩", sourceUrl: "/uploads/voice-1.mp3" },
+            ],
+            image: [],
+            video: [],
+          },
+        },
+      },
+      shots: [],
+      exportPreview: null,
+    };
+    const storyboards = addStoryboard([]);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-new",
+        customEpisodes: [{ id: "episode-new", title: "Episode Draft", storyboardCount: 1, status: "draft" }],
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0]?.id ?? null,
+        episodeStoryboardMap: {
+          "episode-new": storyboards,
+        },
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeWorkbenchAttachments: [],
+        episodeVoiceModal: {
+          scope: "lip-sync",
+          tab: "system",
+          voiceName: "女/稚嫩",
+          previewVoiceName: "女/稚嫩",
+        },
+      },
+    });
+
+    assert.doesNotMatch(html, /全选本页/);
+    assert.doesNotMatch(html, /反选本页/);
+    assert.doesNotMatch(html, /删除所选/);
   });
 
   it("renders configured asset voice buttons as a two-segment chip with edit affordance", () => {
@@ -4740,6 +5582,62 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, /class="voice configured"/);
     assert.match(html, /<strong>女\/稚嫩<\/strong>/);
     assert.match(html, />编辑<\/span>/);
+  });
+
+  it("supports toggling the current voice off from the same card", async () => {
+    const workbench = {
+      state: {
+        projectDetail: {
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: {
+              audio: [
+                { id: "voice-1", name: "女/稚嫩", sourceUrl: "/uploads/voice-1.mp3" },
+              ],
+              image: [],
+              video: [],
+            },
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        selectedEpisodeId: "episode-new",
+        lipSyncVoiceId: "voice-1",
+        lipSyncVoiceName: "女/稚嫩",
+        lipSyncVoiceSource: "custom",
+        episodeVoiceModal: {
+          scope: "lip-sync",
+          assetId: "",
+          assetName: "当前分镜",
+          assetKind: "character",
+          voiceId: "voice-1",
+          voiceName: "女/稚嫩",
+          previewVoiceId: "",
+          previewVoiceName: "",
+          page: 1,
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-episode-voice",
+        voiceId: "voice-1",
+        voiceName: "女/稚嫩",
+        voiceSource: "custom",
+      },
+    });
+
+    assert.equal(workbench.ui.lipSyncVoiceId, "");
+    assert.equal(workbench.ui.lipSyncVoiceName, "");
+    assert.equal(workbench.ui.lipSyncVoiceSource, "");
+    assert.equal(workbench.ui.episodeVoiceModal, null);
   });
 
   it("keeps selected episode voice state when reopening the modal for a real episode asset", async () => {
@@ -7412,6 +8310,274 @@ describe("production workbench project tab", () => {
     ]);
   });
 
+  it("resumes polling unfinished storyboard video tasks after selecting a refreshed storyboard card", async () => {
+    const storyboard = {
+      id: "storyboard-pending-video",
+      linkedShotId: "shot-pending-video",
+      shotId: "shot-pending-video",
+      index: 1,
+      title: "1",
+      description: "雨夜行走",
+      previewImageUrl: "/uploads/storyboard-pending-video.png",
+    };
+    const timers = [];
+    const taskCalls = [];
+    const historyCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "episode-2",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 1,
+              createdAt: "2026-06-02T08:00:00.000Z",
+            },
+          ],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          shots: [],
+        },
+        shots: [],
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-2",
+        selectedStoryboardId: "storyboard-other",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        episodeStoryboardMap: {
+          "episode-2": [storyboard],
+        },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+      }),
+      api: {
+        async getStoryboardConversationHistory(episodeId, storyboardId, mediaKind) {
+          historyCalls.push({ episodeId, storyboardId, mediaKind });
+          assert.equal(episodeId, "episode-2");
+          assert.equal(storyboardId, "storyboard-pending-video");
+          assert.equal(mediaKind, "video");
+          return {
+            entries: [
+              {
+                storyboardId: "storyboard-pending-video",
+                mediaKind: "video",
+                taskId: "pending-video-task-1",
+                status: "queued",
+                promptPreview: "参考图中的人物在雨夜街道自然行走",
+                selectionContext: {
+                  selectedStoryboardId: "storyboard-pending-video",
+                },
+              },
+            ],
+          };
+        },
+        async getGenerationTask(taskId) {
+          taskCalls.push(taskId);
+          return {
+            taskId,
+            status: "running",
+            workflowStatus: "running",
+            targetType: "storyboard",
+            targetId: "shot-pending-video",
+            platform: {
+              workflowStatus: "running",
+              tasks: [{ taskId }],
+            },
+          };
+        },
+        async getCreatorState() {
+          return workbench.state;
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: { hash: "" },
+      setTimeout(callback, delayMs) {
+        const timer = { callback, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    };
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "select-storyboard",
+          storyboardId: "storyboard-pending-video",
+        },
+      });
+
+      assert.deepEqual(historyCalls, [
+        { episodeId: "episode-2", storyboardId: "storyboard-pending-video", mediaKind: "video" },
+      ]);
+      assert.equal(workbench.ui.videoGenerationResult?.taskId, "pending-video-task-1");
+      assert.equal(workbench.ui.videoGenerationResult?.status, "queued");
+      assert.equal(workbench.ui.generationPollingActive, true);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskCalls, ["pending-video-task-1"]);
+      assert.equal(workbench.ui.videoGenerationResult?.status, "running");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("resumes polling unfinished storyboard video tasks after lazy history hydration", async () => {
+    const storyboard = {
+      id: "storyboard-lazy-pending-video",
+      linkedShotId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+      shotId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+      index: 1,
+      title: "1",
+      description: "刷新后恢复轮询",
+      previewImageUrl: "/uploads/storyboard-lazy-pending-video.png",
+    };
+    const timers = [];
+    const taskCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "episode-2",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 1,
+              createdAt: "2026-06-02T08:00:00.000Z",
+            },
+          ],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          shots: [],
+        },
+        shots: [],
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-2",
+        selectedStoryboardId: "storyboard-lazy-pending-video",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        episodeStoryboardMap: {
+          "episode-2": [storyboard],
+        },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+      }),
+      api: {
+        async getStoryboardConversationHistory(episodeId, storyboardId, mediaKind) {
+          assert.equal(episodeId, "episode-2");
+          assert.equal(storyboardId, "21c474ee-2f4f-4720-8d40-75b359472bf6");
+          assert.equal(mediaKind, "video");
+          return {
+            entries: [
+              {
+                storyboardId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+                mediaKind: "video",
+                taskId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+                status: "queued",
+                promptPreview: "刷新后卡片已显示排队中",
+              },
+            ],
+          };
+        },
+        async getGenerationTask(taskId) {
+          taskCalls.push(taskId);
+          return {
+            taskId,
+            status: "running",
+            workflowStatus: "running",
+            targetType: "storyboard",
+            targetId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+            platform: {
+              workflowStatus: "running",
+              tasks: [{ taskId }],
+            },
+          };
+        },
+        async getCreatorState() {
+          return workbench.state;
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: { hash: "" },
+      setTimeout(callback, delayMs) {
+        const timer = { callback, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    };
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "set-episode-media-mode",
+          mode: "video",
+        },
+      });
+
+      assert.equal(workbench.ui.videoGenerationResult?.taskId, "21c474ee-2f4f-4720-8d40-75b359472bf6");
+      assert.equal(workbench.ui.generationPollingActive, true);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskCalls, ["21c474ee-2f4f-4720-8d40-75b359472bf6"]);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it("reopens the previously selected storyboard when re-entering the same episode workbench", async () => {
     const conversationCalls = [];
     const workbench = {
@@ -8456,19 +9622,844 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-action="open-create-member"/);
   });
 
-  it("opens team member creation from active professional membership when overview is stale", async () => {
+  it("shows a toast when team overview has not granted team member management yet", async () => {
     const workbench = {
-      state: buildProjectState(),
-      session: { user: { phone: "+86 13800138000" } },
       root: {
         innerHTML: "",
-        querySelector() {
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
           return null;
         },
-        querySelectorAll() {
-          return [];
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.isTeamMemberCreateOpen, true);
+    assert.equal(workbench.ui.teamMemberCreateNotice, "");
+    assert.equal(workbench.ui.teamMemberDraft.password, "");
+    assert.equal(workbench.ui.toast, "当前账号尚未开通团队成员管理权限，请先开通会员后再创建成员。");
+  });
+
+  it("clamps team member initial credits to zero while editing the draft", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-password") {
+            return { value: "password123" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "-1111" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        isTeamMemberCreateOpen: true,
+        teamMemberDraft: {
+          teamAccountSuffix: "team001",
+          memberLoginAccount: "director001@team001",
+          teamAccount: "director001",
+          displayName: "导演一号",
+          password: "password123",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+        },
+      }),
+      api: {},
+    };
+
+    syncTeamMemberCreateDraftFromDomForTest(workbench);
+
+    assert.equal(workbench.ui.teamMemberDraft.initialCredits, 0);
+  });
+
+  it("preloads assignable resources when opening the team member create modal", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {
+        async getProjects() {
+          calls.push("getProjects");
+          return {
+            projects: [{ id: "project-1", name: "整体测试项目", createdAt: "2026-06-28T00:00:00.000Z" }],
+            pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
+          };
+        },
+        async getWorkspaceScripts() {
+          calls.push("getWorkspaceScripts");
+          return {
+            scripts: [{ id: "script-1", title: "整体测试项目剧本", projectId: "project-1" }],
+          };
+        },
+        async getCanvasProjects() {
+          calls.push("getCanvasProjects");
+          return {
+            projects: [{ id: "canvas-1", title: "整体测试项目画布", projectId: "project-1", createdAt: "2026/06/28", status: "草稿" }],
+          };
         },
       },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.deepEqual(calls, ["getProjects", "getWorkspaceScripts", "getCanvasProjects"]);
+    assert.equal(workbench.ui.projectLibrary.length, 1);
+    assert.equal(workbench.ui.scriptLibraryRecords.length, 1);
+    assert.equal(workbench.ui.canvasProjects.length, 1);
+    assert.equal(workbench.ui.canvasProjects[0].projectId, "project-1");
+
+    const unfilteredHtml = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+
+    assert.match(unfilteredHtml, /整体测试项目剧本/);
+    assert.match(unfilteredHtml, /整体测试项目画布/);
+
+    workbench.ui.teamMemberDraft = {
+      ...workbench.ui.teamMemberDraft,
+      projectIds: ["project-1"],
+    };
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+
+    assert.match(html, /整体测试项目剧本/);
+    assert.match(html, /整体测试项目画布/);
+  });
+
+  it("updates the edit member resource picker with the requested page data", async () => {
+    const requests = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 0, remaining: 5 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [{ id: "member-1", membershipId: "member-1", status: "active" }],
+        teamError: "",
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          status: "active",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          resourcePickerType: "project",
+          resourcePickerPage: 1,
+          resourcePagination: {
+            project: { page: 1, pageSize: 10, total: 24, totalPages: 3 },
+          },
+          availableProjects: [],
+          availableScripts: [],
+          availableCanvases: [],
+        },
+      }),
+      api: {
+        async getTeamMemberAssignableResources({ type, page }) {
+          requests.push({ type, page });
+          return {
+            resources: page === 2
+              ? [{ id: "project-11", name: "项目 11" }]
+              : [{ id: "project-1", name: "项目 1" }],
+            pagination: { page, pageSize: 10, total: 24, totalPages: 3 },
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "page-edit-member-resource-picker", page: "2" },
+    });
+
+    assert.deepEqual(requests, [{ type: "project", page: 2 }]);
+    assert.equal(workbench.ui.editMemberModal.resourcePickerPage, 2);
+    assert.equal(workbench.ui.editMemberModal.resourcePagination.project.page, 2);
+    assert.deepEqual(workbench.ui.editMemberModal.availableProjects.map((item) => item.id), ["project-11"]);
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /项目 11/);
+    assert.doesNotMatch(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /项目 1/);
+  });
+
+  it("shows only directly selected projects in the edit member project picker count", async () => {
+    const projectIds = ["project-1", "project-2", "project-3", "project-4", "project-5", "project-6"];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 1, remaining: 4 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [
+          {
+            id: "member-1",
+            membershipId: "member-1",
+            memberLoginAccount: "director001@team001",
+            displayName: "导演一号",
+            projectIds,
+            inheritedProjectIds: ["project-5", "project-6"],
+            scriptIds: ["script-1"],
+            canvasIds: ["canvas-1"],
+            status: "active",
+          },
+        ],
+        teamError: "",
+        projectLibrary: projectIds.map((id, index) => ({ id, name: `项目 ${index + 1}` })),
+        scriptLibraryRecords: [{ id: "script-1", title: "剧本一", projectId: "project-5" }],
+        canvasProjects: [{ id: "canvas-1", title: "画布一", projectId: "project-6" }],
+      }),
+      api: {
+        async getTeamMemberAssignableResources({ type }) {
+          if (type === "project") {
+            return {
+              resources: projectIds.map((id, index) => ({ id, name: `项目 ${index + 1}` })),
+              pagination: { page: 1, pageSize: 10, total: 19, totalPages: 2 },
+            };
+          }
+          if (type === "script") {
+            return {
+              resources: [{ id: "script-1", title: "剧本一", projectId: "project-5" }],
+              pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+            };
+          }
+          return {
+            resources: [{ id: "canvas-1", title: "画布一", projectId: "project-6" }],
+            pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member", memberId: "member-1" },
+    });
+
+    assert.deepEqual(workbench.ui.editMemberModal.directProjectIds, ["project-1", "project-2", "project-3", "project-4"]);
+    assert.equal(workbench.ui.editMemberModal.resourceCounts.project, 19);
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /<strong>4 \/ 19<\/strong>/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member-resource-picker", resourceType: "project" },
+    });
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+    const selectedProjectRows = html.match(/data-action="toggle-edit-member-project"[\s\S]*?checked/g) ?? [];
+
+    assert.match(html, /<strong>4 \/ 19<\/strong>/);
+    assert.match(html, /已选 4 \/ 19/);
+    assert.equal(selectedProjectRows.length, 4);
+  });
+
+  it("subtracts inherited script and canvas projects from the edit member project count", async () => {
+    const projectIds = Array.from({ length: 11 }, (_, index) => `project-${index + 1}`);
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 5 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 5, used: 1, remaining: 4 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [
+          {
+            id: "member-1",
+            membershipId: "member-1",
+            memberLoginAccount: "director001@team001",
+            displayName: "导演一号",
+            projectIds,
+            inheritedProjectIds: ["project-10", "project-11"],
+            scriptIds: ["script-1", "script-2"],
+            canvasIds: ["canvas-1"],
+            status: "active",
+          },
+        ],
+        teamError: "",
+        projectLibrary: projectIds.slice(0, 10).map((id, index) => ({ id, name: `项目 ${index + 1}` })),
+      }),
+      api: {
+        async getTeamMemberAssignableResources({ type }) {
+          if (type === "project") {
+            return {
+              resources: projectIds.slice(0, 10).map((id, index) => ({ id, name: `项目 ${index + 1}` })),
+              pagination: { page: 1, pageSize: 10, total: 19, totalPages: 2 },
+            };
+          }
+          if (type === "script") {
+            return {
+              resources: [],
+              pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+            };
+          }
+          return {
+            resources: [],
+            pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member", memberId: "member-1" },
+    });
+
+    assert.deepEqual(workbench.ui.editMemberModal.directProjectIds, [
+      "project-1",
+      "project-2",
+      "project-3",
+      "project-4",
+      "project-5",
+      "project-6",
+      "project-7",
+      "project-8",
+      "project-9",
+    ]);
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /<strong>9 \/ 19<\/strong>/);
+  });
+
+  it("does not report seat limit when membership seats are available but overview seats are stale", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 0, used: 0, remaining: 0 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.teamMemberCreateNotice, "");
+  });
+
+  it("does not show a generic success toast when toggling team member resource checkboxes", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "director001",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-team-member-project", projectId: "project-1" },
+      matches: (selector) => selector === 'input[data-action="toggle-team-member-project"]',
+      checked: true,
+    });
+
+    assert.notEqual(workbench.ui.toast, "操作已完成。");
+  });
+
+  it("keeps the full member login account when toggling team member resource checkboxes", async () => {
+    const accountInput = { value: "director001@team001" };
+    const nameInput = { value: "导演一号" };
+    const creditsInput = { value: "0" };
+    const remarkInput = { value: "" };
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return accountInput;
+          }
+          if (selector === "#team-member-display-name") {
+            return nameInput;
+          }
+          if (selector === "#team-member-initial-credits") {
+            return creditsInput;
+          }
+          if (selector === "#team-member-remark") {
+            return remarkInput;
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "",
+          memberLoginAccount: "",
+          displayName: "",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-team-member-project", projectId: "project-1" },
+      matches: (selector) => selector === 'input[data-action="toggle-team-member-project"]',
+      checked: true,
+    });
+
+    assert.equal(workbench.ui.teamMemberDraft.memberLoginAccount, "director001@team001");
+    assert.equal(workbench.ui.teamMemberDraft.teamAccount, "director001");
+  });
+
+  it("handles team member resource checkbox change events", () => {
+    const source = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
+    const changeBlock = source.match(/root\.addEventListener\("change", async \(event\) => \{[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(changeBlock, /toggle-team-member-project/);
+    assert.match(changeBlock, /toggle-team-member-script/);
+    assert.match(changeBlock, /toggle-team-member-canvas/);
+    assert.match(changeBlock, /updateTeamMemberCreateResourceSelection\(workbench, target\)/);
+  });
+
+  it("handles edit member resource checkbox change events", () => {
+    const source = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
+    const changeBlock = source.match(/root\.addEventListener\("change", async \(event\) => \{[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(changeBlock, /toggle-edit-member-project/);
+    assert.match(changeBlock, /toggle-edit-member-script/);
+    assert.match(changeBlock, /toggle-edit-member-canvas/);
+    assert.match(changeBlock, /updateEditMemberResourceSelection\(workbench, target\)/);
+  });
+
+  it("shows a toast instead of inline notice when required team member fields are missing", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        isTeamMemberCreateOpen: true,
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "",
+          memberLoginAccount: "",
+          displayName: "",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {},
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(workbench.ui.teamMemberCreateNotice, "");
+    assert.equal(workbench.ui.toast, "请填写成员账户和成员名称。");
+  });
+
+  it("blocks team member creation submit before calling the api when entitlement is missing", async () => {
+    let createCalled = false;
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        isTeamMemberCreateOpen: true,
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: false },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember() {
+          createCalled = true;
+          return { temporaryPassword: "temp-pass-1" };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalled, false);
+    assert.equal(workbench.ui.toast, "当前账号尚未开通团队成员管理权限，请先开通会员后再创建成员。");
+  });
+
+  it("allows team member creation submit when membership status is active and team overview is stale", async () => {
+    let createCalled = false;
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        isTeamMemberCreateOpen: true,
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: false },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [],
+        teamError: "",
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember() {
+          createCalled = true;
+          return { temporaryPassword: "temp-pass-1" };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalled, true);
+  });
+
+  it("submits selected scripts and canvases by auto-including their owning projects", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
         activeNavTab: "team",
         libraryTeamRoute: "team",
@@ -8479,22 +10470,294 @@ describe("production workbench project tab", () => {
           team: { seatLimit: 50 },
         },
         teamOverview: {
-          entitlements: { teamMemberManagement: false },
-          seats: { total: 0, used: 0, remaining: 0 },
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
           permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
         },
         teamMembers: [],
         teamError: "",
+        scriptLibraryRecords: [
+          { id: "script-1", title: "御魂之前-第一卷", projectId: "project-1" },
+        ],
+        canvasProjects: [
+          { id: "canvas-1", title: "画布项目 委屈", projectId: "project-2", createdAt: "2026/06/28", status: "草稿" },
+        ],
+        teamMemberDraft: {
+          teamAccount: "",
+          memberLoginAccount: "",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: ["script-1"],
+          canvasIds: ["canvas-1"],
+          teamAccountSuffix: "team001",
+        },
       }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "temp-pass-1" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
     };
 
     await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "open-team-member-create" },
+      dataset: { action: "submit-team-member-create" },
     });
 
-    assert.equal(workbench.ui.isTeamMemberCreateOpen, true);
-    assert.equal(workbench.ui.isLibraryPricingModalOpen, false);
-    assert.equal(workbench.ui.toast, "");
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].teamAccount, "director001");
+    assert.deepEqual(createCalls[0].projectIds.sort(), ["project-1", "project-2"]);
+  });
+
+  it("passes the initial password when creating a team member", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        membershipStatus: {
+          status: "professional_active",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          password: "password123",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].password, "password123");
+    assert.equal(workbench.ui.teamMemberCreateNotice, "成员账号已创建，可使用设置的初始密码登录。");
+  });
+
+  it("uses the default team member password when the password field is blank", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        membershipStatus: {
+          status: "professional_active",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamMemberDraft: {
+          teamAccount: "director001",
+          memberLoginAccount: "director001@team001",
+          displayName: "导演一号",
+          password: "",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return { members: [] };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].password, "12345678");
+  });
+
+  it("closes the create member modal and renders the full login account after a successful create", async () => {
+    const createCalls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-member-team-account" || selector === "#team-member-team-account-input") {
+            return { value: "director001@team001" };
+          }
+          if (selector === "#team-member-display-name") {
+            return { value: "导演一号" };
+          }
+          if (selector === "#team-member-initial-credits") {
+            return { value: "0" };
+          }
+          if (selector === "#team-member-remark") {
+            return { value: "" };
+          }
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "team",
+        libraryTeamRoute: "team",
+        isTeamMemberCreateOpen: true,
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: { teamMemberManagement: true },
+          team: { seatLimit: 50 },
+        },
+        teamOverview: {
+          entitlements: { teamMemberManagement: true },
+          seats: { total: 50, used: 0, remaining: 50 },
+          permissions: { canCreateMember: true },
+          teamAccountSuffix: "team001",
+        },
+        teamMembers: [
+          {
+            id: "member-1",
+            teamAccount: "director001",
+            teamAccountSuffix: "team001",
+            memberName: "导演一号",
+            businessRole: "director",
+            status: "active",
+          },
+        ],
+        teamMemberDraft: {
+          teamAccount: "",
+          memberLoginAccount: "",
+          displayName: "导演一号",
+          businessRole: "director",
+          initialCredits: 0,
+          remark: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          teamAccountSuffix: "team001",
+        },
+      }),
+      api: {
+        async createTeamMember(input) {
+          createCalls.push(input);
+          return { temporaryPassword: "temp-pass-1" };
+        },
+        async getTeamOverview() {
+          return {
+            overview: {
+              entitlements: { teamMemberManagement: true },
+              seats: { total: 50, used: 1, remaining: 49 },
+              permissions: { canCreateMember: true },
+              teamAccountSuffix: "team001",
+            },
+          };
+        },
+        async getTeamMembers() {
+          return {
+            members: [
+              {
+                id: "member-1",
+                teamAccount: "director001",
+                teamAccountSuffix: "team001",
+                memberName: "导演一号",
+                businessRole: "director",
+                status: "active",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-team-member-create" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    assert.equal(workbench.ui.isTeamMemberCreateOpen, false);
+    assert.equal(workbench.ui.teamTemporaryPassword, "temp-pass-1");
+    assert.match(renderProductionWorkbench(workbench), /director001@team001/);
   });
 
   it("opens membership pricing and creates a membership payment order", async () => {
@@ -10845,7 +13108,6 @@ describe("production workbench project tab", () => {
   });
 
   it("restores generation task results without reposting conversation messages", () => {
-    const saveCalls = [];
     const workbench = {
       ui: {
         projectPanelMode: "episode-workbench",
@@ -11493,6 +13755,61 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-task-1");
     assert.equal(workbench.ui.generationPollingActive, true);
     assert.equal(collectedEvents.find((event) => event.eventType === "generation.submit")?.payload?.payload?.model, "jimeng-4-5");
+  });
+
+  it("avoids re-sending fallback ratio and resolution when the configured image model already provides an explicit size", () => {
+    const payload = buildImageGenerationPayload({
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "9:16", resolution: "1080p" },
+      },
+      ui: buildProjectUi({
+        museScopeMode: "assets",
+        imageGenerationMode: "single-image",
+        selectedModelId: "gpt-image-2-cn",
+        imageResolution: "1080p",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "1080p",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+          count: 1,
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                quality: { label: "质量", type: "enum", options: ["1080p"] },
+                resolution: { label: "清晰度", type: "enum", options: ["1080p"] },
+                aspectRatio: { label: "比例", type: "enum", options: ["16:9", "9:16"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                quality: "1080p",
+                resolution: "1080p",
+                aspectRatio: "16:9",
+                count: 1,
+              },
+              pricing: { baseCredits: 20 },
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.equal(payload.parameters.size, "1280x720");
+    assert.equal(payload.parameters.count, 1);
+    assert.equal("quality" in payload.parameters, false);
+    assert.equal("resolution" in payload.parameters, false);
+    assert.equal("aspectRatio" in payload.parameters, false);
   });
 
   it("restores the previous asset prompt and quick references when re-editing a saved result", async () => {
@@ -13704,11 +16021,9 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /episode-replica-shot-status-badge generating/);
-    assert.match(html, />模型生成中</);
-    assert.match(html, /episode-replica-progress-track/);
-    assert.match(html, />已提交</);
-    assert.match(html, /模型正在生成/);
-    assert.match(html, /episode-replica-progress-step[^"]*active/);
+    assert.match(html, /episode-replica-task-status provider_submitted[^>]*>50%/);
+    assert.doesNotMatch(html, /episode-replica-progress-track/);
+    assert.doesNotMatch(html, /模型正在生成/);
   });
 
   it("renders backend failure reasons inside generation progress", () => {
@@ -13760,9 +16075,8 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /episode-replica-shot-status-badge failed/);
-    assert.match(html, /保存到云存储/);
     assert.match(html, /视频已生成，但保存到平台存储失败，积分已返还。/);
-    assert.match(html, /episode-replica-progress-step[^"]*active[^"]*failed/);
+    assert.doesNotMatch(html, /episode-replica-progress-track/);
   });
 
   it("writes generated image prompt into the selected storyboard description when setting it as storyboard image", async () => {
@@ -14851,6 +17165,90 @@ describe("production workbench project tab", () => {
     }
   });
 
+  it("preserves structured backend failure details for batch image submissions", async () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+      body: {
+        classList: {
+          toggle() {},
+        },
+      },
+    };
+    const saveCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createImageTask() {
+          const error = new Error("服务内部错误");
+          error.taskId = "backend-batch-image-task-1";
+          error.errorCode = "provider_result_unknown";
+          error.requestId = "req-batch-1";
+          error.providerStatus = "failed";
+          error.providerErrorCode = "upstream_timeout";
+          error.providerMessage = "provider timeout";
+          error.details = { raw: "timeout", traceId: "trace-1" };
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedEpisodeAssetIds: ["character-1"],
+        selectedEpisodeCardId: "character-1",
+        selectedEpisodeAssetId: "character-1",
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小草", kind: "character" }],
+          scene: [],
+          prop: [],
+        },
+        episodeBatchModal: {
+          show: true,
+          scope: "asset",
+          mode: "image",
+          imageModelId: "gpt-image-2-cn",
+          imageAspectRatio: "1:1",
+          imageClarity: "2K",
+          items: [
+            { id: "character-1", name: "任小草", kind: "character", description: "角色固定图。" },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-episode-batch-modal" },
+      });
+
+      const failedTaskId = workbench.ui.episodeBatchResults?.["character-1"]?.taskId;
+      assert.equal(failedTaskId, "backend-batch-image-task-1");
+      assert.doesNotMatch(failedTaskId, /^local-/);
+      assert.equal(workbench.ui.imageGenerationResult?.taskId, failedTaskId);
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failureCode, "provider_result_unknown");
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.providerRequestId, "req-batch-1");
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.providerErrorCode, "upstream_timeout");
+      assert.deepEqual(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.details, {
+        raw: "timeout",
+        traceId: "trace-1",
+      });
+    } finally {
+      globalThis.document = previousDocument;
+    }
+  });
+
   it("reconciles a cached pending asset generation result when selecting the asset again", async () => {
     const taskRequests = [];
     const workbench = {
@@ -15874,14 +18272,54 @@ describe("production workbench project tab", () => {
     assert.match(html, /全部画布\(0\)/);
     assert.match(html, /请输入项目名称/);
     assert.doesNotMatch(html, /data-action="open-canvas-project"/);
-    assert.match(html, /data-action="create-canvas-project"/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
     assert.doesNotMatch(html, /创建时间：2026\/06\/10/);
     assert.doesNotMatch(html, /canvas-project-card-actions/);
     assert.doesNotMatch(html, /data-action="toggle-canvas-project-menu"/);
     assert.doesNotMatch(html, /创建人：/);
-    assert.match(html, /创建画布/);
+    assert.match(html, /请联系管理员分配/);
+    assert.doesNotMatch(html, /创建画布/);
     assert.doesNotMatch(html, /canvas-workspace/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
+  });
+
+  it("hides canvas creation for team member sessions", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [],
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /全部画布\(0\)/);
+    assert.match(html, /请联系管理员分配/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
+    assert.doesNotMatch(html, /创建画布/);
+    assert.doesNotMatch(html, /开通会员后创建画布/);
+    assert.doesNotMatch(html, /data-action="toggle-canvas-project-menu"/);
+  });
+
+  it("hides the assignment note when team member sessions already have canvas projects", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [
+          { id: "canvas-project-a", title: "画布项目 A", createdAt: "2026/06/12", status: "草稿" },
+        ],
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /全部画布\(1\)/);
+    assert.doesNotMatch(html, /请联系管理员分配/);
+    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
   });
 
   it("does not render gallery node totals", () => {
@@ -23929,7 +26367,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.quickReferenceItems?.length, 2);
   });
 
-  it("wires asset conversation post-render effects to scroll the latest entry into view", () => {
+  it("wires episode conversation post-render effects to scroll the latest entry into view", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
@@ -23941,11 +26379,48 @@ describe("production workbench project tab", () => {
     );
     assert.match(source, /\.episode-replica-stage-body/);
     assert.match(source, /\.episode-replica-asset-conversation-entry:last-of-type/);
+    assert.match(source, /\.episode-replica-storyboard-conversation-list > \.episode-replica-generated-stage:last-of-type/);
     assert.match(
       source,
       /latestConversationEntry\.scrollIntoView\(\{ block: "end", inline: "nearest", behavior: "smooth" \}\);/,
     );
     assert.match(source, /workbench\.ui\.episodeWorkbenchConversationScrollMode = null;/);
+  });
+
+  it("keeps episode polling refreshes silent by preserving the stage body scroll", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /function preserveEpisodeWorkbenchStageBodyScroll\(stageBody, renderContent\)/);
+    assert.match(source, /const previousScrollTop = Number\(stageBody\?\.scrollTop \?\? 0\);/);
+    assert.match(source, /stageBody\.scrollTop = Math\.min\(/);
+    assert.match(source, /function renderEpisodeWorkbenchPollingUpdate\(workbench\)/);
+    assert.match(source, /if \(renderEpisodeWorkbenchGenerationEntryUpdate\(workbench\)\) \{/);
+    assert.match(source, /function renderEpisodeWorkbenchGenerationEntryUpdate\(workbench\)/);
+    assert.match(source, /existing\.outerHTML = replacementHtml;/);
+    assert.match(source, /renderEpisodeWorkbenchStageBodyOnly\(workbench\);/);
+    assert.match(source, /renderAssetGeneratedStage\(selectedAsset, activeAssetTab, assetResult/);
+    assert.match(source, /if \(shouldContinue\) \{\s*renderEpisodeWorkbenchPollingUpdate\(workbench\);/);
+    assert.match(source, /renderEpisodeWorkbenchPollingUpdate\(workbench\);\s*scheduleSelectedAssetGenerationPolling/);
+  });
+
+  it("keeps system messages left aligned and user messages right aligned in episode conversations", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const referenceStoryboardBlock = css.slice(css.indexOf("/* Reference storyboard desktop composition */"));
+    const conversationAlignmentBlock = css.slice(css.indexOf(".episode-replica-stage-body .episode-replica-message-thread"));
+
+    assert.match(referenceStoryboardBlock, /\.episode-replica-stage-body\s*\{[\s\S]*?justify-items:\s*stretch/);
+    assert.match(referenceStoryboardBlock, /\.episode-replica-generated-stage\s*\{[\s\S]*?width:\s*100%[\s\S]*?max-width:\s*none[\s\S]*?justify-self:\s*stretch/);
+    assert.match(conversationAlignmentBlock, /\.episode-replica-stage-body \.episode-replica-message-thread,\s*\.episode-replica-stage-body \.episode-replica-message-row\s*\{[\s\S]*?width:\s*100%/);
+    assert.match(conversationAlignmentBlock, /\.episode-replica-stage-body \.episode-replica-message-row\.system\s*\{[\s\S]*?justify-content:\s*flex-start/);
+    assert.match(conversationAlignmentBlock, /\.episode-replica-stage-body \.episode-replica-message-row\.user\s*\{[\s\S]*?justify-content:\s*flex-end/);
+    assert.match(conversationAlignmentBlock, /\.episode-replica-stage-body \.episode-replica-system-message\s*\{[\s\S]*?margin-left:\s*0[\s\S]*?margin-right:\s*auto[\s\S]*?justify-self:\s*start/);
+    assert.match(conversationAlignmentBlock, /\.episode-replica-stage-body \.episode-replica-user-message\s*\{[\s\S]*?margin-left:\s*auto[\s\S]*?margin-right:\s*0[\s\S]*?justify-self:\s*end/);
   });
 
   it("requests the episode workbench conversation to scroll to bottom after button clicks", () => {
@@ -23957,6 +26432,9 @@ describe("production workbench project tab", () => {
     assert.match(source, /function requestEpisodeWorkbenchConversationScroll\(workbench\)/);
     assert.match(source, /workbench\.ui\.episodeWorkbenchConversationScrollMode = "bottom";/);
     assert.match(source, /requestEpisodeWorkbenchConversationScroll\(workbench\);\s+void handleAction\(workbench, actionTarget\)/);
+    assert.match(source, /if \(action === "set-muse-scope-mode"\)[\s\S]*requestEpisodeWorkbenchConversationScroll\(workbench\);[\s\S]*render\(workbench\);/);
+    assert.match(source, /if \(action === "set-episode-media-mode"\)[\s\S]*requestEpisodeWorkbenchConversationScroll\(workbench\);[\s\S]*render\(workbench\);/);
+    assert.match(source, /if \(action === "set-project-asset-tab"\)[\s\S]*requestEpisodeWorkbenchConversationScroll\(workbench\);[\s\S]*render\(workbench\);/);
     assert.match(
       source,
       /conversationContainer\.scrollTo\(\{ top: conversationContainer\.scrollHeight, behavior: "smooth" \}\);/,
@@ -24055,7 +26533,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /class="episode-replica-user-message-meta">任务ID：asset-image-character-1/);
     assert.doesNotMatch(html, /class="episode-replica-message-row system"/);
     assert.doesNotMatch(html, /class="episode-replica-message-badge">系统</);
-    assert.match(html, /class="episode-replica-user-message-copy">一位约28岁的中国男性，身穿紧实粗糙的麻袋式上衣。</);
+    assert.match(html, /class="episode-replica-user-message-copy clamp-3">一位约28岁的中国男性，身穿紧实粗糙的麻袋式上衣。</);
     assert.match(html, /class="episode-replica-user-message-refs"/);
     assert.match(html, /class="episode-replica-user-ref-card"/);
     assert.match(html, /测试甲/);
@@ -24067,6 +26545,346 @@ describe("production workbench project tab", () => {
     assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求"><\/textarea>/);
     assert.match(html, /0 \/ 5000/);
     assert.match(html, /placeholder="请输入您的生图要求"/);
+  });
+
+  it("uses configured model credits and explicit image size in asset generation snapshots", async () => {
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        customEpisodes: [
+          {
+            id: "episode-2",
+            title: "真实剧集",
+            status: "Draft",
+            storyboardCount: 0,
+          },
+        ],
+        projectAssetTab: "character",
+        museScopeMode: "assets",
+        selectedEpisodeCardId: "character-2",
+        selectedEpisodeAssetId: "character-2",
+        selectedModelId: "gpt-image-2-cn",
+        imageGenerationMode: "single-image",
+        imageResolution: "1080p",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "1080p",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+          count: 1,
+        },
+        prompt: "旧提示词，不应该发送",
+        imageGenerationResult: null,
+        episodeBatchResults: {},
+        importedAssets: {
+          character: [
+            {
+              id: "character-2",
+              name: "叙言",
+              description: "中年男性，深色皮甲。",
+              previewUrl: "https://example.com/character-2.png",
+            },
+          ],
+          scene: [],
+          prop: [],
+        },
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "旧提示词，不应该发送",
+          quickReferenceItems: [],
+          mentionReferences: [],
+          selectionContext: {
+            assetTab: "character",
+            selectedAssetId: "character-2",
+            selectedAssetName: "叙言",
+          },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                quality: { label: "质量", type: "enum", options: ["1080p"] },
+                resolution: { label: "清晰度", type: "enum", options: ["1080p"] },
+                aspectRatio: { label: "画面比例", type: "enum", options: ["16:9", "9:16"] },
+                count: { label: "生成数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                quality: "1080p",
+                resolution: "1080p",
+                aspectRatio: "16:9",
+                count: 1,
+              },
+              pricing: { baseCredits: 20 },
+              displayBaseCost: 20,
+            },
+          ],
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "episode-2",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 0,
+              createdAt: "2026-05-31T08:00:00.000Z",
+            },
+          ],
+          shots: [],
+        },
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async collectEpisodeEvent() {},
+        async createImageTask(_episodeId, payload) {
+          return {
+            taskId: "asset-image-task-credit",
+            status: "queued",
+            workflowStatus: "queued",
+            cost: 20,
+            parameters: payload.parameters,
+            result: {},
+            platform: {
+              workflowStatus: "queued",
+              tasks: [{ taskId: "asset-image-task-credit", status: "queued" }],
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === "#video-prompt-input") {
+            return { value: "框内最新提示词，必须发送给所选模型。" };
+          }
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        return { callback, delayMs };
+      },
+      clearTimeout() {},
+    };
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "generate-images" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.imageGenerationResult?.creditCost, 20);
+    assert.equal(workbench.ui.imageGenerationResult?.resolution, "1280x720");
+    assert.equal(workbench.ui.imageGenerationResult?.aspectRatio, "16:9");
+  });
+
+  it("does not display image ratio when the selected backend model has no ratio parameter", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "gpt-image-2",
+        imageResolution: "1024x1024",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1024x1024",
+        },
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小草", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        imageGenerationResult: {
+          taskId: "task-no-ratio-1",
+          status: "queued",
+          mediaKind: "image",
+          promptPreview: "角色设计展示图",
+          selectedModelId: "gpt-image-2",
+          resolution: "1024x1024",
+          creditCost: 20,
+          selectionContext: {
+            assetTab: "character",
+            selectedAssetId: "character-1",
+            selectedAssetName: "任小草",
+          },
+        },
+        episodeBatchModal: {
+          show: true,
+          scope: "asset",
+          mode: "image",
+          imageModelId: "gpt-image-2",
+          imageModelOptions: [
+            {
+              value: "gpt-image-2",
+              label: "gpt-image-2",
+              supportedResolutions: ["1024x1024"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1024x1024"] },
+              },
+            },
+          ],
+          imageAspectRatio: "",
+          imageClarity: "1024x1024",
+          publicStyles: [],
+          customStyles: [],
+          items: [{ id: "character-1", name: "任小草", kind: "character" }],
+          totalCredits: 20,
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2",
+          models: [
+            {
+              modelCode: "gpt-image-2",
+              modelLabel: "gpt-image-2",
+              mediaType: "image",
+              supportedModes: ["image.generate", "multi-image"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1024x1024"] },
+              },
+              defaultParams: {
+                size: "1024x1024",
+              },
+              displayBaseCost: 20,
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.doesNotMatch(html, /比例：16:9/);
+    assert.doesNotMatch(html, /data-field="imageAspectRatio"/);
+    assert.doesNotMatch(html, /<span>比例<\/span>/);
+    assert.match(html, /1024x1024/);
+  });
+
+  it("updates asset prompt dock display when switching image models", async () => {
+    const storyboards = createStoryboardList(buildProjectState());
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0].id,
+        storyboards,
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "gpt-image-2-cn",
+        imageGenerationMode: "single-image",
+        imageResolution: "2K",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "2K",
+          aspectRatio: "16:9",
+          count: 1,
+        },
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小野", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                count: 1,
+              },
+              displayBaseCost: 20,
+            },
+            {
+              modelCode: "jimeng-5-0",
+              modelLabel: "即梦 5.0",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                quality: { label: "清晰度", type: "enum", options: ["720x1280", "1280x720"] },
+                aspectRatio: { label: "比例", type: "enum", options: ["9:16", "16:9"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                quality: "720x1280",
+                aspectRatio: "9:16",
+                count: 1,
+              },
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-video-model",
+        modelId: "jimeng-5-0",
+        modelName: "即梦 5.0",
+      },
+    });
+
+    assert.equal(workbench.ui.selectedModelId, "jimeng-5-0");
+    assert.equal(workbench.ui.imageResolution, "720x1280");
+    assert.equal(workbench.ui.imageAspectRatio, "9:16");
+    assert.equal(workbench.ui.generationParameterValues?.size, undefined);
+
+    const html = renderProductionWorkbench(workbench);
+    assert.match(html, /即梦 5\.0/);
+    assert.match(html, /720x1280/);
+    assert.match(html, /9:16/);
+    assert.match(html, /<span>50<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
   });
 
   it("renders all repeated asset generation conversations as an ordered list", () => {
@@ -24276,6 +27094,62 @@ describe("production workbench project tab", () => {
     assert.match(html, /错误原因:生成任务超过 15 分钟未完成/);
     assert.match(html, /data-result-action="delete" data-task-id="asset-image-failed-1"/);
     assert.doesNotMatch(html, /episode-replica-task-failure/);
+  });
+
+  it("shows actionable content safety guidance without provider codes", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          museScopeMode: "assets",
+          episodeMediaMode: "image",
+          selectedEpisodeId: "episode-primary",
+          selectedEpisodeAssetId: "character-1",
+          selectedEpisodeCardId: "character-1",
+          importedAssets: {
+            character: [{ id: "character-1", name: "白野", kind: "character" }],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          assetConversationHistory: {
+            "image:character-1": [
+              {
+                taskId: "asset-image-failed-provider-1",
+                status: "failed",
+                failureCode: "provider_failed",
+                failure: {
+                  failureCode: "provider_failed",
+                  displayMessage: "模型供应商返回失败：lingdong api image 400:api error:",
+                  providerMessage: "lingdong api image 400:api error:这个描述包含明显的血腥残肢与破碎尸体等重度暴力细节，不适合生成此类画面。",
+                  providerErrorCode: "api_error",
+                },
+                promptPreview: "角色设定图",
+                selectedModelId: "gpt-image-2-cn",
+                aspectRatio: "16:9",
+                resolution: "1024x1024",
+                creditCost: 20,
+                selectionContext: {
+                  assetTab: "character",
+                  selectedAssetId: "character-1",
+                  selectedAssetName: "白野",
+                },
+                fixedImages: [],
+              },
+            ],
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /错误原因:提示词包含血腥、残肢或重度暴力内容/);
+    assert.match(html, /战后遗迹、诡异荒城或氛围场景/);
+    assert.doesNotMatch(html, /lingdong/i);
+    assert.doesNotMatch(html, /api error/i);
+    assert.doesNotMatch(html, /api_error/i);
   });
 
   it("renders repeated storyboard generation conversations as a vertical history list", () => {
@@ -29092,6 +31966,462 @@ describe("production workbench project tab", () => {
 });
 
 describe("account settings drawer interactions", () => {
+  it("closes the edit member modal after saving a member password reset", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return {
+            member: {
+              membershipId: memberId,
+              memberLoginAccount: "director001@u185715",
+              displayName: "导演一号",
+              projectIds: ["project-1"],
+              creditBalance: 22,
+              status: "active",
+            },
+          };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        teamMembers: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          newPassword: "new-pass-123",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests, [
+      {
+        memberId: "member-1",
+        input: {
+          displayName: "导演一号",
+          newPassword: "new-pass-123",
+          remark: "",
+          creditAdjustmentType: null,
+          creditAmount: null,
+        },
+      },
+    ]);
+    assert.equal(workbench.ui.editMemberModal, null);
+    assert.equal(workbench.ui.toast, "成员信息已更新。");
+  });
+
+  it("filters stale resource ids when saving edited member visibility", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return { member: { membershipId: memberId, status: "active" } };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: ["script-valid", "script-stale"],
+          canvasIds: ["canvas-valid", "canvas-stale"],
+          availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+          availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-3" }],
+          resourceSelectionDirty: true,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests[0]?.input.scriptIds, ["script-valid"]);
+    assert.deepEqual(requests[0]?.input.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(requests[0]?.input.projectIds.sort(), ["project-1", "project-2", "project-3"]);
+  });
+
+  it("does not resend resource ids when editing profile fields only", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return { member: { membershipId: memberId, status: "active" } };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: ["script-valid"],
+          canvasIds: ["canvas-valid"],
+          availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+          availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-2" }],
+          resourceSelectionDirty: false,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.equal("projectIds" in (requests[0]?.input ?? {}), false);
+    assert.equal("scriptIds" in (requests[0]?.input ?? {}), false);
+    assert.equal("canvasIds" in (requests[0]?.input ?? {}), false);
+  });
+
+  it("keeps edit member credit fields after saving profile-only changes", async () => {
+    const requests = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-edit-member-credit-action-input") {
+            return { value: "increase" };
+          }
+          if (selector === "#team-edit-member-credit-amount-input") {
+            return { value: "999" };
+          }
+          return null;
+        },
+      },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return {
+            member: {
+              membershipId: memberId,
+              memberLoginAccount: "director001@u185715",
+              displayName: "导演一号",
+              status: "active",
+            },
+          };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          resourceSelectionDirty: false,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "increase",
+          creditAmount: "999",
+        },
+      },
+    };
+
+    const actionPromise = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.equal(workbench.ui.editMemberModal?.creditAdjustmentType, "deduct");
+    assert.equal(workbench.ui.editMemberModal?.creditAmount, "120");
+
+    deferred.resolve({
+      member: {
+        membershipId: "member-1",
+        memberLoginAccount: "director001@u185715",
+        displayName: "导演一号",
+        status: "active",
+      },
+    });
+
+    await actionPromise;
+
+    assert.equal(requests[0]?.input.creditAdjustmentType, "deduct");
+    assert.equal(requests[0]?.input.creditAmount, 120);
+    assert.equal(workbench.ui.editMemberModal, null);
+  });
+
+  it("preserves edit member credit fields while saving", async () => {
+    const requests = [];
+    const deferred = createDeferred();
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: (selector) => {
+          if (selector === "#team-edit-member-credit-action-input") {
+            return { value: "deduct" };
+          }
+          if (selector === "#team-edit-member-credit-amount-input") {
+            return { value: "120" };
+          }
+          return null;
+        },
+      },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return deferred.promise;
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        teamMembers: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          resourceSelectionDirty: false,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    const actionPromise = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    deferred.resolve({
+      member: {
+        membershipId: "member-1",
+        memberLoginAccount: "director001@u185715",
+        displayName: "导演一号",
+        status: "active",
+      },
+    });
+
+    assert.equal(workbench.ui.editMemberModal?.creditAdjustmentType, "deduct");
+    assert.equal(workbench.ui.editMemberModal?.creditAmount, "120");
+
+    await actionPromise;
+
+    assert.equal(requests[0]?.input.creditAdjustmentType, "deduct");
+    assert.equal(requests[0]?.input.creditAmount, 120);
+  });
+
+  it("keeps edited member resource selections when reopening edit", async () => {
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId) {
+          return {
+            member: {
+              membershipId: memberId,
+              memberLoginAccount: "director001@u185715",
+              displayName: "导演一号",
+              status: "active",
+            },
+          };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        teamOverview: { teamAccountSuffix: "u185715" },
+        teamMembers: [
+          {
+            membershipId: "member-1",
+            memberLoginAccount: "director001@u185715",
+            displayName: "导演一号",
+            projectIds: ["project-1"],
+            scriptIds: [],
+            canvasIds: [],
+            status: "active",
+          },
+        ],
+        projectLibrary: [{ id: "project-1", title: "项目一" }, { id: "project-2", title: "项目二" }],
+        scriptLibraryRecords: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+        canvasProjects: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-2" }],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: ["project-1"],
+          scriptIds: ["script-valid"],
+          canvasIds: ["canvas-valid"],
+          availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
+          availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-2" }],
+          resourceSelectionDirty: true,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member", memberId: "member-1" },
+    });
+
+    assert.deepEqual(workbench.ui.teamMembers[0]?.scriptIds, ["script-valid"]);
+    assert.deepEqual(workbench.ui.teamMembers[0]?.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(workbench.ui.editMemberModal?.scriptIds, ["script-valid"]);
+    assert.deepEqual(workbench.ui.editMemberModal?.canvasIds, ["canvas-valid"]);
+  });
+
+  it("submits resource visibility after editing only project checkboxes", async () => {
+    const requests = [];
+    const workbench = {
+      root: { innerHTML: "" },
+      state: { project: { id: "project-1" } },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async updateTeamMember(memberId, input) {
+          requests.push({ memberId, input });
+          return { member: { membershipId: memberId, status: "active" } };
+        },
+        async getProjectStats() {
+          return { stats: null };
+        },
+      },
+      ui: {
+        activeNavTab: "team",
+        projectPanelMode: "workspace",
+        toast: "",
+        storyboards: [],
+        editMemberModal: {
+          open: true,
+          id: "member-1",
+          memberLoginAccount: "director001@u185715",
+          displayName: "导演一号",
+          note: "",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [],
+          availableScripts: [],
+          availableCanvases: [],
+          resourceSelectionDirty: false,
+          newPassword: "",
+          status: "active",
+          creditBalance: 22,
+          creditAdjustmentType: "",
+          creditAmount: "",
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-edit-member-project", projectId: "project-1" },
+      checked: true,
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-edit-member" },
+    });
+
+    assert.deepEqual(requests[0]?.input.projectIds, ["project-1"]);
+    assert.deepEqual(requests[0]?.input.scriptIds, []);
+    assert.deepEqual(requests[0]?.input.canvasIds, []);
+  });
+
   it("opens the account settings drawer from the account menu action", async () => {
     const workbench = {
       root: { innerHTML: "" },
@@ -29113,6 +32443,96 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.accountSettingsDirty, false);
     assert.equal(workbench.ui.accountSettingsForm.displayName, "灵曦导演");
     assert.equal(workbench.ui.accountSettingsForm.email, "creator@lingxi.ai");
+  });
+
+  it("opens invite gift from the account menu and loads invite summary", async () => {
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: { user: { phone: "+86 13800138000", displayName: "灵曦导演" } },
+      api: {
+        async getInviteSummary() {
+          return {
+            inviteCode: "FT3NRNNTG9",
+            inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=FT3NRNNTG9",
+            invitedCount: 0,
+            rewardedInvitedCount: 0,
+            totalRewardCredits: 0,
+            rebateCredits: 0,
+            details: [],
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        toast: "",
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-invite-gift" },
+    });
+
+    assert.equal(workbench.ui.inviteGiftOpen, true);
+    assert.equal(workbench.ui.accountSettingsOpen, false);
+    assert.equal(workbench.ui.accountInviteSummary.inviteCode, "FT3NRNNTG9");
+  });
+
+  it("loads and copies the account invite link from account settings", async () => {
+    const clipboardWrites = [];
+    const originalNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        clipboard: {
+          async writeText(value) {
+            clipboardWrites.push(value);
+          },
+        },
+      },
+    });
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: { user: { phone: "+86 13800138000", displayName: "灵曦导演" } },
+      api: {
+        async getInviteSummary() {
+          return {
+            inviteCode: "ABCD12",
+            inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=ABCD12",
+            invitedCount: 1,
+            rewardedInvitedCount: 1,
+            totalRewardCredits: 40,
+            rebateCredits: 3,
+            details: [],
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        toast: "",
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-account-settings" },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "copy-account-invite-link" },
+      });
+    } finally {
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: originalNavigator,
+      });
+    }
+
+    assert.equal(workbench.ui.accountInviteSummary.inviteCode, "ABCD12");
+    assert.deepEqual(clipboardWrites, ["http://127.0.0.1:4310/login.html?inviteCode=ABCD12"]);
+    assert.deepEqual(workbench.ui.toast, { tone: "success", message: "邀请链接已复制。" });
   });
 
   it("updates account settings draft fields before submit", async () => {
@@ -29438,6 +32858,76 @@ describe("storyboard state", () => {
     assert.deepEqual(configCalls, [{ fresh: true }]);
     assert.match(workbench.root.innerHTML, /AI 智能分镜 35积分/);
     assert.doesNotMatch(workbench.root.innerHTML, /AI 智能分镜 200积分/);
+  });
+
+  it("opens the single-episode script picker and applies a selected script without runtime errors", async () => {
+    let fetchCount = 0;
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      state: {
+        project: { id: "project-1", name: "灵曦剧场" },
+        projectDetail: {
+          project: { id: "project-1", name: "灵曦剧场" },
+          script: {
+            id: "script-main",
+            projectId: "project-1",
+            title: "项目剧本",
+            inputText: "项目剧本正文",
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getWorkspaceScripts() {
+          fetchCount += 1;
+          return {
+            scripts: [
+              {
+                id: "script-library",
+                projectId: "project-1",
+                title: "剧本库一号",
+                inputText: "剧本库正文",
+                episodes: [
+                  { id: "episode-1", title: "第一集", scriptText: "第一集正文" },
+                ],
+              },
+            ],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        isSingleEpisodeModalOpen: true,
+        singleEpisodeScript: "",
+        singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "" },
+      }),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-single-episode-script-picker" },
+    });
+
+    assert.equal(fetchCount, 1);
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, true);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-single-episode-script-source",
+        scriptId: "script-library",
+      },
+    });
+
+    assert.equal(workbench.ui.singleEpisodeScript, "第一集正文");
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, true);
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-library");
+    assert.equal(workbench.ui.singleEpisodeNotice, "");
   });
 
   it("adds storyboard 3 with draft status", () => {

@@ -1084,7 +1084,8 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
             ui_config_json = $16::jsonb,
             sort_order = $17,
             remark = $18,
-            updated_at = $19
+            status = $19,
+            updated_at = $20
         WHERE id = $1
       `,
       [
@@ -1106,6 +1107,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         JSON.stringify(merged.uiConfig ?? {}),
         Number(merged.sortOrder ?? existing.sortOrder),
         merged.remark ?? null,
+        readString(merged.status) || existing.status,
         input.now,
       ],
     );

@@ -3,15 +3,16 @@ import { normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { resolveActorContext, type ActorContext } from "../organization/actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
-import type { TeamBusinessRole } from "../organization/team-roles.ts";
 import {
   createTeamMember as createTeamMemberRecord,
+  ensureUserTeamAccountSuffix,
   getTeamOverview as getTeamOverviewRecord,
   listTeamMembers as listTeamMemberRecords,
   TeamServiceError,
+  updateTeamMember as updateTeamMemberRecord,
 } from "../organization/team.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -532,11 +533,16 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       user: AuthenticatedCreatorUser;
       body: {
         teamAccount?: string | null;
+        memberAccount?: string | null;
         displayName?: string | null;
-        businessRole?: TeamBusinessRole | string | null;
+        memberName?: string | null;
+        password?: string | null;
         memberGroupId?: string | null;
         projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
         initialCredits?: number | null;
+        memberCredits?: number | null;
         remark?: string | null;
       };
       now: Date;
@@ -549,12 +555,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         });
         const created = await createTeamMemberRecord(deps.db, {
           actor,
-          teamAccount: input.body.teamAccount ?? "",
-          displayName: input.body.displayName ?? "",
-          businessRole: (input.body.businessRole ?? "") as TeamBusinessRole,
+          teamAccount: input.body.memberAccount ?? input.body.teamAccount ?? "",
+          displayName: input.body.memberName ?? input.body.displayName ?? "",
+          password: input.body.password ?? null,
           memberGroupId: input.body.memberGroupId ?? null,
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : [],
-          initialCredits: input.body.initialCredits ?? 0,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : [],
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : [],
+          initialCredits: input.body.memberCredits ?? input.body.initialCredits ?? 0,
           remark: input.body.remark ?? null,
           now: input.now,
         });
@@ -591,6 +599,116 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             body: { members: [] },
           };
         }
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async updateTeamMember(input: {
+      user: AuthenticatedCreatorUser;
+      memberId: string;
+      body: {
+        displayName?: string | null;
+        projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
+        newPassword?: string | null;
+        status?: "active" | "disabled" | "deleted" | null;
+        creditAdjustmentType?: "increase" | "deduct" | null;
+        creditAmount?: number | null;
+        remark?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const member = await updateTeamMemberRecord(deps.db, {
+          actor,
+          memberId: input.memberId,
+          displayName: input.body.displayName ?? null,
+          projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
+          newPassword: input.body.newPassword ?? null,
+          status: input.body.status ?? null,
+          creditAdjustmentType: input.body.creditAdjustmentType ?? null,
+          creditAmount: input.body.creditAmount ?? null,
+          remark: input.body.remark ?? null,
+          now: input.now,
+        });
+
+        if (!member) {
+          return {
+            status: 404,
+            body: {
+              error: "member_not_found",
+            },
+          };
+        }
+
+        return {
+          status: 200,
+          body: { member },
+        };
+      } catch (error) {
+        return teamServiceErrorResponse(error);
+      }
+    },
+
+    async updateTeamMember(input: {
+      user: AuthenticatedCreatorUser;
+      memberId: string;
+      body: {
+        displayName?: string | null;
+        projectIds?: string[] | null;
+        scriptIds?: string[] | null;
+        canvasIds?: string[] | null;
+        newPassword?: string | null;
+        status?: "active" | "disabled" | "deleted" | null;
+        creditAdjustmentType?: "increase" | "deduct" | null;
+        creditAmount?: number | null;
+        remark?: string | null;
+      };
+      now: Date;
+    }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
+      try {
+        const actor = await resolveActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          workspaceId: deps.workspaceId,
+          now: input.now,
+        });
+        const member = await updateTeamMemberRecord(deps.db, {
+          actor,
+          memberId: input.memberId,
+          displayName: input.body.displayName ?? null,
+          projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
+          scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
+          canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
+          newPassword: input.body.newPassword ?? null,
+          status: input.body.status ?? null,
+          creditAdjustmentType: input.body.creditAdjustmentType ?? null,
+          creditAmount: input.body.creditAmount ?? null,
+          remark: input.body.remark ?? null,
+          now: input.now,
+        });
+
+        if (!member) {
+          return {
+            status: 404,
+            body: {
+              error: "member_not_found",
+            },
+          };
+        }
+
+        return {
+          status: 200,
+          body: { member },
+        };
+      } catch (error) {
         return teamServiceErrorResponse(error);
       }
     },
@@ -632,13 +750,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         workspaceId: deps.workspaceId,
         now: input.now,
       });
+      const visibleScriptIds = actor.teamMember?.id
+        ? await listTeamMemberScriptIds(deps.db, {
+            userId: actor.actorId,
+            memberId: actor.teamMember.id,
+          })
+        : null;
       const scripts = await listScriptsForWorkspace(deps.db, {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
       });
+      const scopedScripts = visibleScriptIds
+        ? scripts.filter((script) => visibleScriptIds.includes(script.id))
+        : scripts;
       const signedScripts = deps.storageRuntime
         ? await Promise.all(
-            scripts.map((script) =>
+            scopedScripts.map((script) =>
               hydrateScriptCoverUrl(deps.db, {
                 script,
                 sessionToken: input.user.sessionToken,
@@ -648,7 +775,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               }),
             ),
           )
-        : scripts;
+        : scopedScripts;
 
       return {
         status: 200,
@@ -671,6 +798,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       const handleCreateProject = createSqlProjectCommandHandler({ db: deps.db });
+      const actor = await resolveActorContext(deps.db, {
+        sessionToken: input.user.sessionToken,
+        workspaceId: deps.workspaceId,
+        now: input.now,
+      });
+      if (actor.teamMember) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_project_create_forbidden",
+            },
+          },
+        };
+      }
       const result = await handleCreateProject({
         auth: { sessionToken: input.user.sessionToken },
         body: {
@@ -721,6 +864,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         workspaceId: deps.workspaceId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return {
+          status: 403,
+          body: {
+            error: "permission_denied",
+            details: {
+              reason: "member_script_import_forbidden",
+            },
+          },
+        };
+      }
       const scriptInput = String(input.body.scriptInput ?? "").trim();
       if (!scriptInput) {
         return { status: 400, body: { error: "script_text_required" } };
@@ -829,12 +983,18 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const page = normalizeCreatorProjectPage(input.page);
       const pageSize = normalizeCreatorProjectPageSize(input.pageSize);
       const keyword = normalizeCreatorProjectKeyword(input.keyword);
+      const visibleProjectIds = actor.teamMember?.id
+        ? await listTeamMemberProjectIds(deps.db, {
+            userId: actor.actorId,
+            memberId: actor.teamMember.id,
+          })
+        : null;
       const projectPage = await listProjectsForWorkspace(deps.db, {
-        organizationId: actor.organizationId,
-        workspaceId: deps.workspaceId,
+        ownerUserId: actor.actorId,
         page,
         pageSize,
         keyword,
+        visibleProjectIds,
       });
       const signedProjects = deps.storageRuntime
         ? await Promise.all(
@@ -872,14 +1032,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
+        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const bundle = await loadProjectBundleFromSql(deps.db, {
         projectId: input.projectId,
         scriptId: null,
       });
-      if (!bundle || bundle.project?.workspaceId !== actor.workspaceId) {
+      if (!bundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: bundle.project?.createdByUserId ?? null }))) {
         return { status: 404, body: { error: "project_not_found" } };
       }
 
@@ -922,16 +1082,24 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
+        workspaceId: deps.workspaceId,
         now: input.now,
       });
+      const projectBundle = await loadProjectBundleFromSql(deps.db, {
+        projectId: input.projectId,
+        scriptId: null,
+      });
+      if (!projectBundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: projectBundle.project?.createdByUserId ?? null }))) {
+        return { status: 404, body: { error: "project_not_found" } };
+      }
       const detail = await buildProjectDetail(deps.db, {
-        organizationId: actor.organizationId,
+        organizationId: projectBundle.project.organizationId,
         projectId: input.projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
         signedUrlExpiresInSeconds,
         now: input.now,
+        projectBundle,
       });
       if (!detail.project) {
         return { status: 404, body: { error: "project_not_found" } };
@@ -3713,6 +3881,7 @@ function teamServiceErrorResponse(
     "team_account_duplicate",
     "team_seat_limit_reached",
     "team_credit_insufficient",
+    "team_member_credit_insufficient",
   ]);
   const status =
     error.code === "team_member_input_invalid"
@@ -3743,10 +3912,9 @@ async function getLimitedTeamOverview(
     now: input.now,
   });
   const [planLimits, usedSeats, credits] = await Promise.all([
-    resolveLimitedTeamPlanLimits(db, actor.organizationId),
+    resolveLimitedTeamPlanLimits(db, { userId: actor.actorId }),
     countLimitedTeamSubaccounts(db, {
-      organizationId: actor.organizationId,
-      workspaceId: actor.workspaceId,
+      userId: actor.actorId,
     }),
     queryOne<{
       credit_balance_cached: number;
@@ -3755,30 +3923,18 @@ async function getLimitedTeamOverview(
       db,
       `
         SELECT credit_balance_cached, credit_reserved_cached
-        FROM organizations
+        FROM users
         WHERE id = $1
       `,
-      [actor.organizationId],
+      [actor.actorId],
     ),
   ]);
 
   return {
     entitlements: {
-      teamMemberManagement: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_member_management",
-        now: input.now,
-      }),
-      teamAssetLibrary: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_asset_library",
-        now: input.now,
-      }),
-      teamDashboard: await hasLimitedTeamEntitlement(db, {
-        organizationId: actor.organizationId,
-        entitlementKey: "team_dashboard",
-        now: input.now,
-      }),
+      teamMemberManagement: planLimits.seatLimit > 0,
+      teamAssetLibrary: planLimits.seatLimit > 0,
+      teamDashboard: false,
     },
     seats: {
       used: usedSeats,
@@ -3806,66 +3962,45 @@ async function getLimitedTeamOverview(
       canManageAll: false,
       canManageGroup: false,
     },
+    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, actor.actorId),
   };
 }
 
-async function hasLimitedTeamEntitlement(
+async function resolveLimitedTeamPlanLimits(
   db: SqlDatabase,
-  input: { organizationId: string; entitlementKey: string; now: Date },
+  input: { userId: string },
 ) {
-  const entitlement = await queryOne<{ id: string }>(
+  const limits = await queryOne<{ team_seat_limit: number }>(
     db,
     `
-      SELECT id
-      FROM organization_entitlements
-      WHERE organization_id = $1
-        AND entitlement_key = $2
-        AND status = 'active'
-        AND (expires_at IS NULL OR expires_at > $3)
+      SELECT team_seat_limit
+      FROM users
+      WHERE id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.entitlementKey, input.now],
+    [input.userId],
   );
-
-  return Boolean(entitlement);
-}
-
-async function resolveLimitedTeamPlanLimits(db: SqlDatabase, organizationId: string) {
-  const limits = await queryOne<{
-    seat_limit: number;
-    single_account_concurrency_limit: number;
-  }>(
-    db,
-    `
-      SELECT seat_limit, single_account_concurrency_limit
-      FROM team_plan_limits
-      WHERE organization_id = $1
-      LIMIT 1
-    `,
-    [organizationId],
-  );
+  const seatLimit = Number(limits?.team_seat_limit ?? 0);
 
   return {
-    seatLimit: Number(limits?.seat_limit ?? 50),
-    singleAccountConcurrencyLimit: Number(limits?.single_account_concurrency_limit ?? 1),
+    seatLimit,
+    singleAccountConcurrencyLimit: 1,
   };
 }
 
 async function countLimitedTeamSubaccounts(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string | null },
+  input: { userId: string },
 ) {
   const result = await queryOne<{ count: string | number }>(
     db,
     `
       SELECT COUNT(*) AS count
-      FROM memberships
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND role = 'sub_account'
+      FROM team_members
+      WHERE user_id = $1
         AND status = 'active'
     `,
-    [input.organizationId, input.workspaceId],
+    [input.userId],
   );
 
   return Number(result?.count ?? 0);
@@ -4205,12 +4340,11 @@ async function appendCalibrationAuditEvent(
 
 async function listProjectsForWorkspace(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string; page: number; pageSize: number; keyword: string },
+  input: { ownerUserId: string; page: number; pageSize: number; keyword: string; visibleProjectIds?: string[] | null },
 ) {
-  const params: unknown[] = [input.organizationId, input.workspaceId];
+  const params: unknown[] = [input.ownerUserId];
   const whereClauses = [
-    "organization_id = $1",
-    "workspace_id = $2",
+    "created_by_user_id = $1",
     `NOT EXISTS (
           SELECT 1
           FROM creator_canvas_projects ccp
@@ -4230,6 +4364,18 @@ async function listProjectsForWorkspace(
   if (input.keyword) {
     params.push(input.keyword);
     whereClauses.push(`POSITION($${params.length} IN LOWER(projects.name)) > 0`);
+  }
+  if (Array.isArray(input.visibleProjectIds)) {
+    if (!input.visibleProjectIds.length) {
+      return {
+        projects: [],
+        page: 1,
+        pageSize: input.pageSize,
+        total: 0,
+      };
+    }
+    params.push(input.visibleProjectIds);
+    whereClauses.push(`projects.id = ANY($${params.length}::uuid[])`);
   }
   const whereSql = whereClauses.join("\n        AND ");
   const totalRow = await queryOne<{ total: number | string }>(
@@ -4295,6 +4441,29 @@ async function listProjectsForWorkspace(
     pageSize: input.pageSize,
     total,
   };
+}
+
+async function isProjectVisibleToActor(
+  db: SqlDatabase,
+  input: { actor: ActorContext; projectId: string; projectOwnerUserId: string | null },
+) {
+  if (!input.actor.teamMember) {
+    return input.projectOwnerUserId === input.actor.actorId;
+  }
+
+  const assignment = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+        AND project_id = $3
+      LIMIT 1
+    `,
+    [input.actor.actorId, input.actor.teamMember.id, input.projectId],
+  );
+  return Boolean(assignment);
 }
 
 function normalizeCreatorProjectPage(value: unknown) {
@@ -5273,10 +5442,9 @@ async function deleteProjectRecord(
   await db.query(
     `
       DELETE FROM credit_reservation_lot_allocations
-      WHERE organization_id = $1
-        AND reservation_id IN (
-          SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-        )
+      WHERE reservation_id IN (
+        SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+      )
     `,
     [input.organizationId, input.projectId],
   );
@@ -5652,14 +5820,13 @@ async function releaseProjectCreditReservationLots(
           allocation.credit_lot_id,
           sum(allocation.amount)::int AS allocated_amount
         FROM credit_reservation_lot_allocations allocation
-        WHERE allocation.organization_id = $1
-          AND allocation.reservation_id IN (
-            SELECT id
-            FROM credit_reservations
-            WHERE organization_id = $1
-              AND project_id = $2
-              AND amount_reserved > 0
-          )
+        WHERE allocation.reservation_id IN (
+          SELECT id
+          FROM credit_reservations
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND amount_reserved > 0
+        )
         GROUP BY allocation.credit_lot_id
       ),
       releasable AS (
@@ -6560,6 +6727,60 @@ async function listScriptsForWorkspace(
     projectUpdatedAt: new Date(script.project_updated_at),
     sectionCount: Number(script.section_count ?? 0),
   }));
+}
+
+async function listTeamMemberProjectIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ project_id: string }>(
+    `
+      SELECT project_id::text AS project_id
+      FROM team_member_projects
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.project_id);
+}
+
+async function listTeamMemberScriptIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ script_id: string }>(
+    `
+      SELECT script_id::text AS script_id
+      FROM team_member_scripts
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.script_id);
+}
+
+async function listTeamMemberCanvasIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ canvas_id: string }>(
+    `
+      SELECT canvas_id::text AS canvas_id
+      FROM team_member_canvases
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+
+  return result.rows.map((row) => row.canvas_id);
 }
 
 async function buildSignedExportRecord(

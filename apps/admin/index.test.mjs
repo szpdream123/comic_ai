@@ -311,6 +311,14 @@ test("model editor lets admins choose a secret reference for providerConfig apiK
   assert.match(script, /form\.elements\.providerConfig\.value = JSON\.stringify\(config, null, 2\)/);
 });
 
+test("model lists show api key names only when a secret reference exists", () => {
+  assert.match(script, /<th>API秘钥<\/th>/);
+  assert.match(script, /function modelApiKeyName\(model\)/);
+  assert.match(script, /secret\?\.(?:secretRef|envName)/);
+  assert.match(script, /apiKeyName \? escapeHtml\(apiKeyName\) : ""/);
+  assert.doesNotMatch(script, /apiKeyName \? escapeHtml\(apiKeyName\) : "-"/);
+});
+
 test("secret reference purpose is optional and hidden from the settings list row", () => {
   assert.match(script, /name="purpose" rows="4" placeholder=/);
   assert.doesNotMatch(script, /name="purpose" rows="4" required/);
@@ -459,8 +467,7 @@ test("admin model management uses parameter templates and a simplified model edi
   assert.match(script, /navButton\("parameterTemplates", "\\u53c2\\u6570\\u6a21\\u677f"\)/);
   assert.match(script, /providerProtocol: fixed\.providerProtocol/);
   assert.match(script, /invocationMode: fixed\.invocationMode/);
-  assert.match(script, /taskModes: kind\.taskModes/);
-  assert.doesNotMatch(script, /filter\(\(template\) => template\.mediaTypes\.includes\(mediaType\)\)/);
+  assert.match(script, /taskModes = kind\.mediaType === "video" \? resolveVideoTaskModes\(kind, existing\) : kind\.taskModes/);
 });
 
 test("admin user credit table keeps edit and status actions in the row action bar", () => {

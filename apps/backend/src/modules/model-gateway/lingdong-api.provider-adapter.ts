@@ -12,6 +12,47 @@ import {
 
 const defaultImageModel = "gpt-image-2";
 const defaultVideoModel = "sora-2";
+const lingdongVideoModelProfiles: Record<string, {
+  media: Array<"images" | "videos" | "audios">;
+  fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+}> = {
+  "sora-2": {
+    media: ["images"],
+    fields: ["duration", "orientation", "size", "seed"],
+  },
+  "sd-2-1": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "orientation", "size", "seed"],
+  },
+  "sd-2-2": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "orientation", "size", "seed"],
+  },
+  "sd-2-3": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "seed"],
+  },
+  "sd-2-4": {
+    media: ["images", "videos"],
+    fields: ["duration", "ratio", "orientation", "seed"],
+  },
+  "sd-2-7": {
+    media: ["images", "audios"],
+    fields: ["duration", "ratio", "aspect_ratio", "resolution", "seed"],
+  },
+  "sd-2-11": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "seed"],
+  },
+  "seedance-2.0": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution", "seed"],
+  },
+  "sd-2-17": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "aspect_ratio", "seed"],
+  },
+};
 
 export class LingdongApiProviderAdapter implements ProviderAdapter {
   constructor(
@@ -200,6 +241,8 @@ function buildLingdongVideoPayload(
   input: ProviderSubmissionInput,
   model?: string,
 ): Record<string, unknown> {
+  const resolvedModel = model ?? defaultVideoModel;
+  const profile = lingdongVideoModelProfiles[resolvedModel] ?? null;
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
@@ -228,19 +271,42 @@ function buildLingdongVideoPayload(
   ]);
 
   return {
-    model: model ?? defaultVideoModel,
+    model: resolvedModel,
     prompt,
-    ...(images.length ? { images } : {}),
-    ...(videos.length ? { videos } : {}),
-    ...(audios.length ? { audios } : {}),
-    ...optionalPayloadField("duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration)),
-    ...optionalPayloadField("resolution", readString(parameters.resolution)),
-    ...optionalPayloadField("ratio", readString(parameters.ratio) ?? readString(parameters.aspectRatio)),
-    ...optionalPayloadField("aspect_ratio", readString(parameters.aspect_ratio)),
-    ...optionalPayloadField("orientation", readString(parameters.orientation)),
-    ...optionalPayloadField("size", readString(parameters.size)),
-    ...optionalPayloadField("seed", readInteger(parameters.seed)),
+    ...(shouldIncludeLingdongVideoMedia(profile, "images") && images.length ? { images } : {}),
+    ...(shouldIncludeLingdongVideoMedia(profile, "videos") && videos.length ? { videos } : {}),
+    ...(shouldIncludeLingdongVideoMedia(profile, "audios") && audios.length ? { audios } : {}),
+    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration)),
+    ...optionalLingdongVideoField(profile, "resolution", readString(parameters.resolution)),
+    ...optionalLingdongVideoField(profile, "ratio", readString(parameters.ratio)),
+    ...optionalLingdongVideoField(profile, "aspect_ratio", readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio)),
+    ...optionalLingdongVideoField(profile, "orientation", readString(parameters.orientation)),
+    ...optionalLingdongVideoField(profile, "size", readString(parameters.size) ?? readString(parameters.imageSize)),
+    ...optionalLingdongVideoField(profile, "seed", readInteger(parameters.seed)),
   };
+}
+
+function shouldIncludeLingdongVideoMedia(
+  profile: {
+    media: Array<"images" | "videos" | "audios">;
+    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+  } | null,
+  key: "images" | "videos" | "audios",
+) {
+  return !profile || profile.media.includes(key);
+}
+
+function optionalLingdongVideoField(
+  profile: {
+    media: Array<"images" | "videos" | "audios">;
+    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+  } | null,
+  key: "duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed",
+  value: unknown,
+) {
+  return !profile || profile.fields.includes(key)
+    ? optionalPayloadField(key, value)
+    : {};
 }
 
 function resolveLingdongVideoContentUrl(

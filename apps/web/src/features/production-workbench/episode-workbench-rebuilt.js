@@ -21,7 +21,7 @@ const ASSET_TABS = [
 ];
 const EPISODE_ASSET_TAB_IDS = new Set(ASSET_TABS.map((tab) => tab.id));
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
-const EPISODE_VOICE_PAGE_SIZE = 10;
+export const EPISODE_VOICE_PAGE_SIZE = 10;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
 
@@ -659,8 +659,7 @@ function renderEpisodeTeamLibraryLocked() {
   return `
     <section class="episode-library-team-locked">
       <div class="episode-library-lock-icon" aria-hidden="true">✦</div>
-      <strong>团队资产库为专业版会员权益，开通后使用该功能。</strong>
-      <button type="button" data-action="open-pricing">立即开通</button>
+      <strong>请等待管理员分配</strong>
     </section>
   `;
 }
@@ -1078,7 +1077,7 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
     return historyEntries;
   }
   const taskId = resolveGenerationTaskId(generationResult);
-  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+  if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
     return historyEntries;
   }
   return [...historyEntries, generationResult];
@@ -1095,13 +1094,13 @@ function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, med
     return historyEntries;
   }
   const taskId = resolveGenerationTaskId(generationResult);
-  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+  if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
     return historyEntries;
   }
   return [...historyEntries, generationResult];
 }
 
-function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
+export function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
   const entries = Array.isArray(generationHistory) && generationHistory.length
     ? generationHistory
     : (generationResult ? [generationResult] : []);
@@ -1117,21 +1116,26 @@ function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, medi
   return `
     <div class="episode-replica-generated-stage visible asset-scope">
       <div class="episode-replica-asset-conversation-list">
-        ${entries.map((entry) => renderAssetConversationEntry(entry, activeAssetTab)).join("")}
+        ${entries.map((entry) => renderAssetConversationEntry(entry, activeAssetTab, mediaMode)).join("")}
       </div>
     </div>
   `;
 }
 
-function renderAssetConversationEntry(generationResult, assetKind = "character") {
+function renderAssetConversationEntry(generationResult, assetKind = "character", mediaMode = "image") {
   const fullPromptPreview = String(generationResult?.promptPreview ?? "").trim();
   const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const userMeta = buildAssetGenerationUserMeta(generationResult);
   const quickReferenceItems = generationResult?.quickReferenceItems ?? [];
   const failureMessage = resolveGenerationResultFailureMessage(generationResult);
   const hasFixedImages = Array.isArray(generationResult?.fixedImages) && generationResult.fixedImages.length > 0;
+  const taskId = resolveGenerationTaskId(generationResult);
+  const mediaKind = generationResult?.mediaKind ?? mediaMode;
+  const taskAttrs = taskId
+    ? ` data-generation-task-id="${escapeAttr(String(taskId))}" data-generation-media-kind="${escapeAttr(String(mediaKind))}"`
+    : "";
   return `
-    <section class="episode-replica-asset-conversation-entry">
+    <section class="episode-replica-asset-conversation-entry"${taskAttrs}>
       <div class="episode-replica-message-thread">
         ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems, fullPromptPreview) : ""}
       </div>
@@ -1141,26 +1145,28 @@ function renderAssetConversationEntry(generationResult, assetKind = "character")
   `;
 }
 
+export function renderAssetConversationEntryForPolling(generationResult, assetKind = "character", mediaMode = "image") {
+  return renderAssetConversationEntry(generationResult, assetKind, mediaMode);
+}
+
 function resolveGenerationTaskId(generationResult) {
   return (
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
-    "local-asset-fixed-image-task"
+    null
   );
 }
 
 function buildAssetGenerationUserMeta(generationResult) {
   const taskId = resolveGenerationTaskId(generationResult);
-  const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
   const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
   return [
-    `任务ID：${taskId}`,
-    modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    taskId ? `任务ID：${taskId}` : null,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
     workflowStatus && workflowStatus !== "completed" && workflowStatus !== "succeeded"
       ? `状态：${resolveWorkflowStatusLabel(workflowStatus)}`
@@ -1170,23 +1176,47 @@ function buildAssetGenerationUserMeta(generationResult) {
     .join(" / ");
 }
 
+function formatGenerationDisplayDate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const legacyUtcLike = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+  const parsed = legacyUtcLike.test(raw)
+    ? new Date(raw.replace(" ", "T") + "Z")
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(parsed);
+}
+
 function renderAssetResultPanel(generationResult, quickReferenceItems = [], selectionContext = {}) {
   const createdAt =
     generationResult?.createdAt ??
     generationResult?.completedAt ??
-    new Date().toISOString().slice(0, 19).replace("T", " ");
+    new Date().toISOString();
   const taskId =
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
-    "local-asset-fixed-image-task";
-  const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+    null;
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
+  const fullPromptPreview = String(generationResult?.promptPreview ?? "").trim();
+  const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const extraMeta = [
-    modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
   ]
     .filter(Boolean)
@@ -1200,16 +1230,17 @@ function renderAssetResultPanel(generationResult, quickReferenceItems = [], sele
         </div>
         <div class="episode-replica-task-meta">
           <div class="episode-replica-task-line">
-            <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
+            <strong class="episode-replica-task-id">${taskId ? `任务ID：${escapeHtml(String(taskId))}` : "任务ID：待创建"}</strong>
             <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(resolveWorkflowStatusLabel(workflowStatus))}</span>
           </div>
           <div class="episode-replica-task-line muted">
             ${selectionContext ? renderSelectionContextInline(selectionContext) : ""}
             <span>${escapeHtml(extraMeta)}</span>
           </div>
+          ${promptPreview ? `<div class="episode-replica-task-copy clamp-3">${escapeHtml(promptPreview)}</div>` : ""}
         </div>
       </div>
-      <time>${escapeHtml(String(createdAt))}</time>
+      <time>${escapeHtml(formatGenerationDisplayDate(createdAt))}</time>
     </article>
   `;
 }
@@ -1343,8 +1374,19 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     generationResult?.id ??
     "";
   const actionTaskAttr = taskId ? ` data-task-id="${escapeAttr(String(taskId))}"` : "";
+  const workflowStatus = String(
+    generationResult?.status ??
+      generationResult?.platform?.workflowStatus ??
+      selectedStoryboard?.generationState?.lastSubmission?.status ??
+      "",
+  ).toLowerCase();
+  const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
+  const isFailure = isGenerationFailureStatus(workflowStatus);
+  const hasVideoResult = isVideo && Boolean(resolveGeneratedVideoUrl(generationResult, null));
+  const hasImageResult = !isVideo && Array.isArray(generationResult?.fixedImages) && generationResult.fixedImages.length > 0;
+  const showResultActions = hasVideoResult || hasImageResult;
   return `
-    <div class="episode-replica-generated-stage visible">
+    <div class="episode-replica-generated-stage visible"${taskId ? ` data-generation-task-id="${escapeAttr(String(taskId))}" data-generation-media-kind="${isVideo ? "video" : "image"}"` : ""}>
       ${renderResultMessageThread({
         promptPreview,
         fullPromptPreview,
@@ -1363,21 +1405,41 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
           taskId,
         modelLabel: resolveGenerationModelLabel(generationResult?.selectedModelId),
         systemContent: `
-          ${isVideo ? renderFixedVideoResult(generationResult, null) : ""}
-          <div class="episode-replica-stage-actions">
-            <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>重新编辑</button>
-            ${
-              isVideo
-                ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video"${actionTaskAttr}>设为分镜视频</button>`
-                : `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-image" data-media-kind="image"${actionTaskAttr}>设为分镜图</button>`
-            }
-            <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>下载</button>
-            <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>删除</button>
-          </div>
-          ${renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
-          ${isVideo ? "" : renderFixedImageResults(generationResult)}
+          ${
+            isFailure
+              ? renderFailedStoryboardGenerationResult(generationResult, isVideo, failureMessage)
+              : `
+                ${isVideo ? renderFixedVideoResult(generationResult, null) : ""}
+                ${showResultActions ? renderStoryboardResultActions(isVideo, actionTaskAttr) : ""}
+                ${hasVideoResult ? "" : renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems, attachmentItems)}
+                ${isVideo ? "" : renderFixedImageResults(generationResult)}
+              `
+          }
         `,
       })}
+    </div>
+  `;
+}
+
+export function renderStoryboardGenerationEntryForPolling(selectedStoryboard, generationResult, mediaKind = "image") {
+  return renderGeneratedStage(selectedStoryboard, mediaKind === "video", generationResult);
+}
+
+function isGenerationFailureStatus(status) {
+  return ["failed", "canceled", "manual_review_required", "result_unknown"].includes(String(status ?? "").toLowerCase());
+}
+
+function renderStoryboardResultActions(isVideo, actionTaskAttr = "") {
+  return `
+    <div class="episode-replica-stage-actions">
+      <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>重新编辑</button>
+      ${
+        isVideo
+          ? `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-video" data-media-kind="video"${actionTaskAttr}>设为分镜视频</button>`
+          : `<button type="button" data-action="episode-result-action" data-result-action="set-storyboard-image" data-media-kind="image"${actionTaskAttr}>设为分镜图</button>`
+      }
+      <button type="button" data-action="episode-result-action" data-result-action="download" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>下载</button>
+      <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${isVideo ? "video" : "image"}"${actionTaskAttr}>删除</button>
     </div>
   `;
 }
@@ -1430,23 +1492,23 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       ? quickReferenceItems.slice(0, 5)
       : (selectedStoryboard?.references ?? []).slice(0, 5)),
   ].slice(0, 6);
-  const createdAt =
-    generationResult?.createdAt ??
-    generationResult?.completedAt ??
-    selectedStoryboard?.generationState?.lastSubmission?.createdAt ??
-    new Date().toISOString().slice(0, 19).replace("T", " ");
   const taskId =
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
     "local-fixed-image-task";
-  const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
+  const fullPromptPreview = String(
+    generationResult?.promptPreview ??
+      selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
+      selectedStoryboard?.description ??
+      "",
+  ).trim();
+  const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const extraMeta = [
-    modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
     generationResult?.mediaKind === "video" && generationResult?.durationSec
       ? `时长：${generationResult.durationSec}秒`
@@ -1462,6 +1524,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
   ).toLowerCase();
   const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
   const progressState = resolveGenerationProgressState(generationResult, selectedStoryboard, workflowStatus, failureMessage);
+  const progressLabel = `${progressState.percent}%`;
   return `
     <article class="episode-replica-result-panel visible">
       <div class="assets task-card">
@@ -1471,17 +1534,16 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
         <div class="episode-replica-task-meta">
           <div class="episode-replica-task-line">
             <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
-            <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(resolveWorkflowStatusLabel(workflowStatus))}</span>
+            <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(progressLabel)}</span>
           </div>
           <div class="episode-replica-task-line muted">
             ${selectionContext ? renderSelectionContextInline(selectionContext) : ""}
             <span>${escapeHtml(extraMeta)}</span>
           </div>
+          ${promptPreview ? `<div class="episode-replica-task-copy clamp-3">${escapeHtml(promptPreview)}</div>` : ""}
         </div>
       </div>
-      ${renderGenerationProgressTrack(progressState)}
       ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
-      <time>${escapeHtml(String(createdAt))}</time>
     </article>
   `;
 }
@@ -1506,17 +1568,39 @@ function resolveGenerationProgressState(generationResult, selectedStoryboard, wo
   );
   const activeStep = resolveGenerationProgressStep(status, failureCode);
   const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
-  const message = resolveGenerationProgressMessage({
-    status,
-    activeStep,
-    failureCode,
-    failureMessage,
-  });
+  const message = shouldSuppressGenerationFailureNotice(generationResult, failureMessage)
+    ? ""
+    : resolveGenerationProgressMessage({
+        status,
+        activeStep,
+        failureCode,
+        failureMessage,
+      });
   return {
     activeStep,
     failed,
     message,
+    percent: resolveGenerationProgressPercent(activeStep),
   };
+}
+
+function resolveGenerationProgressPercent(activeStep) {
+  if (activeStep === "submitted") {
+    return 0;
+  }
+  if (activeStep === "queued") {
+    return 20;
+  }
+  if (activeStep === "provider") {
+    return 50;
+  }
+  if (activeStep === "storage" || activeStep === "persist") {
+    return 80;
+  }
+  if (activeStep === "done") {
+    return 100;
+  }
+  return 0;
 }
 
 function resolveGenerationProgressStep(status, failureCode = "") {
@@ -1605,7 +1689,7 @@ function renderGenerationProgressTrack(progressState) {
           `;
         }).join("")}
       </div>
-      <p class="episode-replica-progress-message">${escapeHtml(progressState.message)}</p>
+      ${progressState.message ? `<p class="episode-replica-progress-message">${escapeHtml(progressState.message)}</p>` : ""}
     </div>
   `;
 }
@@ -1639,7 +1723,6 @@ function renderResultMessageThread({
       }
       <div class="episode-replica-message-row system">
         <article class="episode-replica-system-message">
-          <span class="episode-replica-message-badge">系统</span>
           ${systemContent}
         </article>
       </div>
@@ -1666,7 +1749,7 @@ function renderEnhancedUserMessage({
   ];
   const compactVisualItems = visualItems.slice(0, 3);
   const compactAudioItems = audioItems.slice(0, 1);
-  const taskMeta = [taskId ? `任务id:${taskId}` : null, modelLabel || null].filter(Boolean).join("/");
+  const taskMeta = taskId ? `任务id:${taskId}` : "";
   const fullPrompt = String(fullPromptPreview || promptPreview || "").trim();
   return `
     <div class="episode-replica-message-row user">
@@ -1687,7 +1770,7 @@ function renderEnhancedUserMessage({
                   taskMeta || createdAt
                     ? `<div class="episode-replica-user-message-meta">
                         ${taskMeta ? `<span class="episode-replica-user-task-inline">${escapeHtml(taskMeta)}</span>` : ""}
-                        ${createdAt ? `<time class="episode-replica-user-time">${escapeHtml(createdAt)}</time>` : ""}
+                        ${createdAt ? `<time class="episode-replica-user-time">${escapeHtml(formatGenerationDisplayDate(createdAt))}</time>` : ""}
                       </div>`
                     : ""
                 }
@@ -1791,6 +1874,44 @@ function resolveGenerationFailureMessage(status, failureCode) {
   return "生成失败，请重新编辑后再试，失败记录会保留在当前结果区。";
 }
 
+function isProviderDiagnosticLikeMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return false;
+  }
+  if (/模型供应商返回失败[:：]/.test(value)) {
+    return true;
+  }
+  if (/[A-Za-z]{3,}/.test(value)) {
+    return true;
+  }
+  if (/[a-z0-9_.-]+:[a-z0-9_.-]+/i.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+function resolveContentSafetyFailureMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/(血腥|残肢|尸体|断肢|头颅破碎|重度暴力|明显的血|不适合生成|内容安全|安全策略|审核拒绝|违规|敏感内容|content policy|safety|moderation)/i.test(value)) {
+    return "提示词包含血腥、残肢或重度暴力内容，请改成非血腥的战后遗迹、诡异荒城或氛围场景后重试。";
+  }
+  return "";
+}
+
+function shouldSuppressGenerationFailureNotice(generationResult, failureMessage = "") {
+  const candidates = [
+    failureMessage,
+    generationResult?.failure?.displayMessage,
+    generationResult?.failure?.providerMessage,
+    generationResult?.failure?.errorMessage,
+  ];
+  return candidates.some((candidate) => String(candidate ?? "").trim().includes("号池已空"));
+}
+
 function resolveGenerationResultFailureMessage(generationResult, statusOverride = null) {
   const workflowStatus = String(
     statusOverride ??
@@ -1801,24 +1922,26 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
   if (!["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus)) {
     return "";
   }
-  const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
-  if (displayMessage) {
-    return displayMessage;
-  }
-  const providerMessage = String(generationResult?.failure?.providerMessage ?? "").trim();
-  if (providerMessage) {
-    return providerMessage;
-  }
-  const providerErrorCode = String(generationResult?.failure?.providerErrorCode ?? "").trim();
-  if (providerErrorCode) {
-    return providerErrorCode;
-  }
   const failureCode = String(
     generationResult?.failureCode ??
       generationResult?.failure?.failureCode ??
       generationResult?.result?.failureCode ??
       "",
   );
+  const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
+  const providerMessage = String(generationResult?.failure?.providerMessage ?? generationResult?.failure?.errorMessage ?? "").trim();
+  if (shouldSuppressGenerationFailureNotice(generationResult, displayMessage) || shouldSuppressGenerationFailureNotice(generationResult, providerMessage)) {
+    return "";
+  }
+  const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
+  if (contentSafetyMessage) {
+    return contentSafetyMessage;
+  }
+  if (displayMessage) {
+    return isProviderDiagnosticLikeMessage(displayMessage)
+      ? resolveGenerationFailureMessage(workflowStatus, failureCode)
+      : displayMessage;
+  }
   return resolveGenerationFailureMessage(workflowStatus, failureCode);
 }
 
@@ -1862,15 +1985,39 @@ function renderFailedFixedImageResult(generationResult, assetKind = "character",
         <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新生成</button>
         <span class="episode-replica-error-reason-wrap">
           <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`错误原因：${fullReason}`)}">错误原因:${escapeHtml(reason)}</button>
-          <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true">
-            <div class="episode-replica-error-reason-popover-head">
-              <strong>错误原因</strong>
-              <span>${[...fullReason].length} 字</span>
-            </div>
-            <p>${escapeHtml(fullReason)}</p>
-          </aside>
+          <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true"><p>${escapeHtml(fullReason)}</p></aside>
         </span>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderFailedStoryboardGenerationResult(generationResult, isVideo = false, failureMessage = "") {
+  const taskId = resolveGenerationTaskId(generationResult);
+  const mediaKind = isVideo ? "video" : "image";
+  const actionTaskAttr = taskId ? ` data-task-id="${escapeAttr(String(taskId))}"` : "";
+  const fallbackReason = resolveGenerationFailureMessage(
+    generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "failed",
+    generationResult?.failureCode ?? generationResult?.failure?.failureCode ?? "",
+  );
+  const reason = truncateDisplayText(failureMessage || fallbackReason, 48);
+  const fullReason = String(failureMessage || fallbackReason).trim();
+  return `
+    <div class="episode-replica-fixed-results failure-result storyboard-failure-result" role="group" aria-label="生成失败结果">
+      <article class="episode-replica-fixed-image-card failure-card">
+        <span class="episode-replica-fixed-image-badge failure">失败</span>
+        <div class="episode-replica-failure-preview" aria-hidden="true">
+          <span class="episode-replica-failure-mark"></span>
+        </div>
+      </article>
+      <div class="episode-replica-fixed-actions failure-actions">
+        <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${escapeAttr(mediaKind)}"${actionTaskAttr}>重新编辑</button>
+        <span class="episode-replica-error-reason-wrap">
+          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`错误原因：${fullReason}`)}">错误原因:${escapeHtml(reason)}</button>
+          <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true"><p>${escapeHtml(fullReason)}</p></aside>
+        </span>
+        <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${escapeAttr(mediaKind)}"${actionTaskAttr}>删除</button>
       </div>
     </div>
   `;
@@ -1906,7 +2053,7 @@ function resolveGenerationModelLabel(modelId) {
     "seedance-2-0-vip": "SeeDance 2.0 VIP",
     "happy-horse": "Happy Horse",
   };
-  return catalog[modelId] ?? modelId ?? "默认模型";
+  return catalog[modelId] ?? "默认模型";
 }
 
 function renderStageCanvas(selectedStoryboard, generationResult, video = false) {
@@ -2037,10 +2184,7 @@ export function renderPromptDock({
   const nonAudioAttachmentCards = attachmentCards.filter((card) => !card.includes('episode-replica-ref-card attachment audio'));
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
-  const generateCost =
-    scopeMode === "assets" && mediaMode === "image"
-      ? 50
-      : resolveGenerateCost(mediaMode, generationControls, selectedModel);
+  const generateCost = resolveGenerateCost(mediaMode, generationControls, selectedModel);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -2574,7 +2718,9 @@ function buildModelParameterControls({
   const entries = Object.entries(schema)
     .filter(([key, parameter]) => shouldRenderModelParameterControl(key, parameter));
   if (!entries.length) {
-    return buildFallbackParameterControls({
+    return Object.keys(schema).length
+      ? []
+      : buildFallbackParameterControls({
       selectedModel,
       isVideoMode,
       generationControls,
@@ -2606,7 +2752,7 @@ function buildFallbackParameterControls({
   generationControls = {},
   openGenerationSelectMenu,
 }) {
-  const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
+  const aspectRatio = generationControls.imageAspectRatio ?? "";
   const resolution = isVideoMode
     ? (generationControls.videoResolution ?? "1080p")
     : (generationControls.imageResolution ?? "2K");
@@ -2621,7 +2767,7 @@ function buildFallbackParameterControls({
   );
   const durationOptions = optionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
   return [
-    renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions),
+    aspectRatio ? renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions) : "",
     renderControlMenu(isVideoMode ? "videoResolution" : "imageResolution", resolution, openGenerationSelectMenu, qualityOptions),
     isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, durationOptions) : "",
   ].filter(Boolean);
@@ -2859,7 +3005,7 @@ function renderEpisodeVoicePagination(totalCount = 0, currentPage = 1, totalPage
   `;
 }
 
-function resolveEpisodeVoiceAssets(projectDetail = null, importedAssets = null) {
+export function resolveEpisodeVoiceAssets(projectDetail = null, importedAssets = null) {
   const detailAssets = projectDetail?.assetsByType;
   const assets = [];
   if (detailAssets && typeof detailAssets === "object") {
@@ -3259,6 +3405,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
   const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
+  const hasAspectRatioParameter = Boolean(selectedImageModel?.parameterSchema?.aspectRatio);
   const ratioOptions = buildBatchImageOptionItems(selectedImageModel?.supportedRatios, ["16:9", "9:16", "1:1"]);
   const clarityOptions = buildBatchImageOptionItems(
     [...(selectedImageModel?.supportedQuality ?? []), ...(selectedImageModel?.supportedResolutions ?? [])],
@@ -3290,7 +3437,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
       <section class="episode-batch-config-panel">
         <div class="episode-batch-section-title">其他配置</div>
         <div class="episode-batch-config-grid">
-          ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions)}
+          ${hasAspectRatioParameter ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions) : ""}
           ${renderEpisodeBatchInfoCard("清晰度", modal.imageClarity ?? "2K", modal.openField === "imageClarity", "imageClarity", clarityOptions)}
         </div>
       </section>
@@ -3312,7 +3459,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
       <div class="episode-batch-video-config-grid">
         ${renderEpisodeBatchInfoCard("视频模型", resolveBatchVideoModelLabel(modal.videoModelId), modal.openField === "videoModelId", "videoModelId", options)}
         ${renderEpisodeBatchInfoCard("预设", "无预设", false)}
-        ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9")}
+        ${modal.imageAspectRatio ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio) : ""}
         ${renderEpisodeBatchInfoCard("分辨率", modal.videoResolution ?? "720P", modal.openField === "videoResolution", "videoResolution", [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }])}
       </div>
       <div class="episode-batch-selection-grid compact">
@@ -3410,6 +3557,7 @@ function normalizeBatchImageModelOptions(options) {
         supportedRatios: normalizeOptionValues(option?.supportedRatios),
         supportedQuality: normalizeOptionValues(option?.supportedQuality),
         supportedResolutions: normalizeOptionValues(option?.supportedResolutions),
+        parameterSchema: normalizeParameterSchema(option?.parameterSchema),
       };
     })
     .filter(Boolean);

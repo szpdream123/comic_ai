@@ -80,13 +80,24 @@ async function fetchJson(url, options = {}) {
     }
 
     if (!response.ok) {
+      const errorPayload =
+        payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+          ? payload.data
+          : payload;
       const error = new Error(
-        payload.message ?? payload.error ?? payload.errorCode ?? `request_failed:${response.status}`,
+        errorPayload.message ?? errorPayload.error ?? errorPayload.errorCode ?? `request_failed:${response.status}`,
       );
       error.status = response.status;
-      error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
-      error.details = payload.details ?? null;
+      error.errorCode = errorPayload.errorCode ?? errorPayload.error ?? `request_failed:${response.status}`;
+      error.details = errorPayload.details ?? null;
       error.requestId = payload.requestId ?? null;
+      error.data = errorPayload;
+      error.taskId =
+        typeof errorPayload.taskId === "string" && errorPayload.taskId.trim()
+          ? errorPayload.taskId.trim()
+          : typeof errorPayload.details?.taskId === "string" && errorPayload.details.taskId.trim()
+            ? errorPayload.details.taskId.trim()
+            : null;
       throw error;
     }
 
@@ -680,6 +691,10 @@ export const creatorApi = {
     return result;
   },
 
+  getInviteSummary() {
+    return fetchJson("/api/auth/invite-summary");
+  },
+
   logout() {
     return postJson("/api/auth/logout");
   },
@@ -689,8 +704,12 @@ export const creatorApi = {
   },
 
   getCreditLedger(options = {}) {
-    const pageSize = Number(options.pageSize ?? 50);
+    const page = Number(options.page ?? 1);
+    const pageSize = Number(options.pageSize ?? 10);
     const params = new URLSearchParams();
+    if (Number.isFinite(page) && page > 0) {
+      params.set("page", String(Math.max(1, Math.round(page))));
+    }
     if (Number.isFinite(pageSize) && pageSize > 0) {
       params.set("pageSize", String(Math.min(100, Math.round(pageSize))));
     }
@@ -722,10 +741,28 @@ export const creatorApi = {
     return fetchJson("/api/creator/team/members", { dedupeKey: "GET /api/creator/team/members" });
   },
 
+  getTeamMemberAssignableResources(input = {}) {
+    const type = String(input.type ?? "").trim();
+    const page = Number(input.page ?? 1);
+    const pageSize = Number(input.pageSize ?? 10);
+    const params = new URLSearchParams();
+    if (type) {
+      params.set("type", type);
+    }
+    params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
+    params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 10));
+    const path = `/api/creator/team/assignable-resources?${params.toString()}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
   createTeamMember(input) {
     return postJsonWithIdempotency("/api/creator/team/members", input, {
       action: "team.member.create",
     });
+  },
+
+  updateTeamMember(memberId, input) {
+    return patchJson(`/api/creator/team/members/${encodeURIComponent(memberId)}`, input);
   },
 
   createProject(input) {

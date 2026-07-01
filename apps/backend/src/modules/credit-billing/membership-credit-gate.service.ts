@@ -22,7 +22,6 @@ export async function verifyMembershipAndConsumeCredits(
   input: {
     userId: string;
     requiredCredits: number;
-    organizationId?: string | null;
     workspaceId?: string | null;
     projectId?: string | null;
     idempotencyKey?: string | null;
@@ -39,18 +38,8 @@ export async function verifyMembershipAndConsumeCredits(
     return null;
   }
 
-  const scope = input.organizationId
-    ? {
-        organizationId: input.organizationId,
-        workspaceId: input.workspaceId ?? null,
-      }
-    : await resolveUserCreditScope(db, input.userId);
-  if (!scope) {
-    throw new MembershipCreditGateError("membership_required", "请充值会员。", 403);
-  }
-
   const membershipStatus = await resolveMembershipStatus(db, {
-    organizationId: scope.organizationId,
+    userId: input.userId,
     now: input.now,
   });
   if (membershipStatus === "none") {
@@ -62,9 +51,8 @@ export async function verifyMembershipAndConsumeCredits(
 
   try {
     const reservation = await reserveCredits(db, {
-      organizationId: scope.organizationId,
       userId: input.userId,
-      workspaceId: scope.workspaceId,
+      workspaceId: input.workspaceId ?? null,
       projectId: input.projectId ?? null,
       amount: Math.round(amount),
       sourceType: input.sourceType,
@@ -91,49 +79,21 @@ export async function verifyMembershipAndConsumeCredits(
   }
 }
 
-async function resolveUserCreditScope(db: SqlDatabase, userId: string) {
-  const row = await queryOne<{
-    organization_id: string;
-    workspace_id: string | null;
-  }>(
-    db,
-    `
-      SELECT m.organization_id, m.workspace_id
-      FROM memberships m
-      LEFT JOIN team_member_profiles tp ON tp.membership_id = m.id
-      WHERE m.user_id = $1
-        AND m.status = 'active'
-      ORDER BY
-        CASE WHEN tp.id IS NULL AND m.role = 'owner_admin' THEN 0 ELSE 1 END,
-        m.created_at ASC
-      LIMIT 1
-    `,
-    [userId],
-  );
-  return row
-    ? {
-        organizationId: row.organization_id,
-        workspaceId: row.workspace_id,
-      }
-    : null;
-}
-
 async function resolveMembershipStatus(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string; now: Date },
 ): Promise<"active" | "expired" | "none"> {
   const activePeriod = await queryOne<{ id: string }>(
     db,
     `
       SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
-        AND status = 'active'
-        AND period_start_at <= $2
-        AND period_end_at > $2
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId, input.now],
   );
   if (activePeriod) {
     return "active";
@@ -143,11 +103,12 @@ async function resolveMembershipStatus(
     db,
     `
       SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
       LIMIT 1
     `,
-    [input.organizationId],
+    [input.userId],
   );
   return anyPeriod ? "expired" : "none";
 }

@@ -20,7 +20,8 @@ import {
 } from "./canvas/canvas-state.js";
 
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
-const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
+const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 15;
+const PROJECT_GALLERY_ROWS = 3;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_VIDEO_GENERATION_MODES = [
@@ -360,11 +361,47 @@ function isAssetGeneratorFailureStatus(status) {
   return ["failed", "canceled", "manual_review_required", "result_unknown"].includes(String(status ?? "").trim().toLowerCase());
 }
 
+function isProviderDiagnosticLikeMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return false;
+  }
+  if (/模型供应商返回失败[:：]/.test(value)) {
+    return true;
+  }
+  if (/[A-Za-z]{3,}/.test(value)) {
+    return true;
+  }
+  if (/[a-z0-9_.-]+:[a-z0-9_.-]+/i.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+function resolveContentSafetyFailureMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/(血腥|残肢|尸体|断肢|头颅破碎|重度暴力|明显的血|不适合生成|内容安全|安全策略|审核拒绝|违规|敏感内容|content policy|safety|moderation)/i.test(value)) {
+    return "提示词包含血腥、残肢或重度暴力内容，请改成非血腥的战后遗迹、诡异荒城或氛围场景后重试。";
+  }
+  return "";
+}
+
 function resolveAssetGeneratorTaskFailureMessage(asset) {
   const task = asset?.generationResult ?? asset ?? null;
   const apiKeyEnv = String(task?.failure?.apiKeyEnv ?? task?.details?.apiKeyEnv ?? "").trim();
   const displayMessage = String(task?.failure?.displayMessage ?? "").trim();
+  const providerMessage = String(task?.failure?.providerMessage ?? task?.failure?.errorMessage ?? "").trim();
+  const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
+  if (contentSafetyMessage) {
+    return contentSafetyMessage;
+  }
   if (displayMessage) {
+    if (isProviderDiagnosticLikeMessage(displayMessage)) {
+      return "任务失败，请稍后重试";
+    }
     return apiKeyEnv ? `${displayMessage} 缺失项：${apiKeyEnv}` : displayMessage;
   }
   const failureCode = String(task?.failureCode ?? task?.failure?.failureCode ?? "").trim();
@@ -377,14 +414,6 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
   );
   if (finalizeMessage) {
     return finalizeMessage;
-  }
-  const providerMessage = String(task?.failure?.providerMessage ?? "").trim();
-  if (providerMessage) {
-    return providerMessage;
-  }
-  const providerErrorCode = String(task?.failure?.providerErrorCode ?? "").trim();
-  if (providerErrorCode) {
-    return providerErrorCode;
   }
   return failureCode || "任务失败，请稍后重试";
 }
@@ -600,7 +629,7 @@ export function renderProjectDetail(context = {}) {
     `);
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab)}
+        ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode">
           ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
           ${workspaceContent}
@@ -640,7 +669,7 @@ export function renderProjectDetail(context = {}) {
     );
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab)}
+        ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode episode-workbench-main">
           ${episodeWorkbenchContent}
         </section>
@@ -678,7 +707,7 @@ export function renderProjectDetail(context = {}) {
     : "";
   return `
     <section class="production-workbench">
-      ${renderWorkbenchRail(activeNavTab)}
+      ${renderWorkbenchRail(activeNavTab, session)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
         ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
@@ -750,6 +779,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderGlobalPricingModal(ui)}
     ${renderOverlayWorkspaceStatusToast(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
+    ${renderInviteGiftDrawer(ui)}
   `;
 }
 
@@ -843,25 +873,23 @@ function renderCreditLedgerDrawer(ui = {}) {
   const summary = ui.creditLedgerSummary ?? {};
   const loading = ui.creditLedgerLoading === true;
   const error = String(ui.creditLedgerError ?? "").trim();
+  const pagination = normalizeCreditLedgerPagination(ui, rows.length);
   return `
     <div class="credit-ledger-backdrop" data-action="close-credit-ledger" aria-hidden="true"></div>
     <aside class="credit-ledger-drawer" role="dialog" aria-modal="true" aria-labelledby="credit-ledger-title">
       <header class="credit-ledger-header">
-        <div>
-          <p class="credit-ledger-kicker">Credit Ledger</p>
+        <div class="credit-ledger-header-copy">
           <h2 id="credit-ledger-title">积分明细</h2>
-          <p>每一次充值、生成扣减与返还都会记录在这里。</p>
+          <p>每一次积分变动都会记录在这里。</p>
         </div>
-        <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+        <div class="credit-ledger-header-actions">
+          <button class="credit-ledger-close" type="button" data-action="close-credit-ledger" aria-label="关闭积分明细">×</button>
+        </div>
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
         ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
-      <div class="credit-ledger-toolbar">
-        <span>${escapeHtml(String(ui.creditLedgerMeta?.total ?? rows.length))} 条最近记录</span>
-        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
-      </div>
       ${error ? `<p class="credit-ledger-notice error">${escapeHtml(error)}</p>` : ""}
       <div class="credit-ledger-scroll">
         ${loading && !rows.length ? renderCreditLedgerLoadingRows() : ""}
@@ -876,7 +904,9 @@ function renderCreditLedgerDrawer(ui = {}) {
             <thead>
               <tr>
                 <th>时间</th>
+                <th>账户</th>
                 <th>类型</th>
+                <th>内容</th>
                 <th>积分变化</th>
               </tr>
             </thead>
@@ -886,7 +916,36 @@ function renderCreditLedgerDrawer(ui = {}) {
           </table>
         ` : ""}
       </div>
+      ${renderCreditLedgerPagination(pagination, loading)}
     </aside>
+  `;
+}
+
+function normalizeCreditLedgerPagination(ui = {}, currentCount = 0) {
+  const meta = ui.creditLedgerMeta && typeof ui.creditLedgerMeta === "object" ? ui.creditLedgerMeta : {};
+  const pageSize = Math.max(1, Number(meta.pageSize ?? 10));
+  const total = Math.max(0, Number(meta.total ?? currentCount));
+  const reportedTotalPages = Math.max(1, Number(meta.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const requestedPage = Math.max(1, Number(meta.page ?? ui.creditLedgerPage ?? 1));
+  const hasPossibleNextPage = currentCount >= pageSize;
+  const totalPages = Math.max(reportedTotalPages, hasPossibleNextPage ? requestedPage + 1 : requestedPage);
+  const page = Math.min(totalPages, requestedPage);
+  return { page, pageSize, total, totalPages, hasPossibleNextPage };
+}
+
+function renderCreditLedgerPagination(pagination, loading = false) {
+  const canPrev = pagination.page > 1 && !loading;
+  const canNext = (pagination.page < pagination.totalPages || pagination.hasPossibleNextPage) && !loading;
+  return `
+    <footer class="credit-ledger-pagination" aria-label="积分明细分页">
+      <span>共 ${escapeHtml(String(pagination.total))} 条</span>
+      <div class="credit-ledger-page-actions">
+        <button type="button" data-action="refresh-credit-ledger" ${loading ? "disabled" : ""}>刷新</button>
+        <button type="button" data-action="change-credit-ledger-page" data-page="${escapeAttr(String(pagination.page - 1))}" ${canPrev ? "" : "disabled"}>上一页</button>
+        <strong>${escapeHtml(String(pagination.page))} / ${escapeHtml(String(pagination.totalPages))}</strong>
+        <button type="button" data-action="change-credit-ledger-page" data-page="${escapeAttr(String(pagination.page + 1))}" ${canNext ? "" : "disabled"}>下一页</button>
+      </div>
+    </footer>
   `;
 }
 
@@ -904,7 +963,9 @@ function renderCreditLedgerRow(row = {}) {
   return `
     <tr>
       <td><time>${escapeHtml(formatLedgerDate(entry.createdAt))}</time></td>
+      <td><span class="credit-ledger-account ${escapeAttr(entry.accountTone)}">${escapeHtml(entry.accountLabel)}</span></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
+      <td><span class="credit-ledger-content">${escapeHtml(entry.content)}</span></td>
       <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
@@ -934,19 +995,26 @@ function normalizeCreditLedgerEntry(row = {}) {
   const content = promptPreview ? `内容：${promptPreview}` : "";
   const failure = creditLedgerFailureLabel(failureCode, errorMessage);
   const result = creditLedgerResultLabel({ event, failure });
+  const accountType = String(row.accountType ?? metadata.accountType ?? "").trim().toLowerCase();
+  const accountLabel = resolveCreditLedgerAccountLabel(row, metadata);
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
   const description = failure
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
   const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
+  const teamCreditType = normalizeTeamMemberCreditLedgerType(sourceType, creditType);
   return {
-    label: creditType.label,
-    tone: creditType.tone,
-    valueTone: creditType.valueTone,
+    label: teamCreditType.label,
+    tone: teamCreditType.tone,
+    valueTone: teamCreditType.valueTone,
     displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
     amount: signedDelta,
     availableDelta: signedDelta,
     createdAt: row.createdAt,
     taskId: task || String(row.sourceId ?? "").trim(),
+    accountTone: accountType === "subaccount" ? "subaccount" : "owner",
+    accountLabel,
+    content: translateCreditLedgerContent(row, metadata, title),
     title,
     detail: description,
     result,
@@ -954,11 +1022,24 @@ function normalizeCreditLedgerEntry(row = {}) {
   };
 }
 
+function normalizeTeamMemberCreditLedgerType(sourceType, fallbackType) {
+  if (sourceType === "team_member_credit_allocation") {
+    return { ...fallbackType, label: "分配", tone: "grant" };
+  }
+  if (sourceType === "team_member_credit_deduction") {
+    return { ...fallbackType, label: "收回", tone: "consume" };
+  }
+  return fallbackType;
+}
+
 function normalizeCreditLedgerType(type, signedDelta) {
   if (type === "consume") {
     return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
   }
   if (type === "reservation" || type === "reserve") {
+    if (signedDelta < 0) {
+      return { label: "消耗", tone: "consume", valueTone: "negative", displayAsAbsolute: false };
+    }
     return { label: "预占", tone: "reserve", valueTone: "reserve", displayAsAbsolute: false };
   }
   if (type === "release") {
@@ -1084,6 +1165,40 @@ function translateCreditLedgerReason(reason, metadata = {}) {
     return mediaType === "video" ? "视频生成积分扣减" : "图片生成积分扣减";
   }
   return reason;
+}
+
+function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
+  const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  if (sourceType === "team_member_credit_allocation") {
+    return "主账号分配积分";
+  }
+  if (sourceType === "team_member_credit_deduction") {
+    return "主账号收回积分";
+  }
+  const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  if (
+    sourceType === "team_member_generation_task" ||
+    (sourceType === "episode_generation_task" && (taskType.includes("storyboard_preview") || taskType.includes("ai_storyboard")))
+  ) {
+    return "AI分镜积分消耗";
+  }
+  if (sourceType === "team_member_generation_refund") {
+    return "AI分镜失败返还";
+  }
+  const explicit = String(row.content ?? metadata.content ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  return fallback || "积分变动";
+}
+
+function resolveCreditLedgerAccountLabel(row = {}, metadata = {}) {
+  const explicit = String(row.accountLabel ?? metadata.accountLabel ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const accountType = String(row.accountType ?? metadata.accountType ?? "").trim().toLowerCase();
+  return accountType === "subaccount" ? "子账户" : "主账户";
 }
 
 function creditLedgerFailureLabel(code, message) {
@@ -1355,15 +1470,180 @@ function normalizeAccountSettingsForm(form = {}, session = {}, membershipStatus 
   };
 }
 
+function renderInviteGiftDrawer(ui = {}) {
+  if (!ui.inviteGiftOpen) {
+    return "";
+  }
+  const inviteSummary = normalizeInviteSummary(ui.accountInviteSummary);
+  return `
+    <div class="account-settings-backdrop" data-action="close-invite-gift" aria-hidden="true"></div>
+    <aside class="account-settings-drawer invite-gift-drawer" role="dialog" aria-modal="true" aria-labelledby="invite-gift-title">
+      <header class="account-settings-header">
+        <div>
+          <p class="account-settings-kicker">Invite</p>
+          <h2 id="invite-gift-title">邀请有礼</h2>
+        </div>
+        <button class="account-settings-close" type="button" data-action="close-invite-gift" aria-label="关闭邀请有礼">×</button>
+      </header>
+      <div class="account-settings-scroll invite-gift-scroll">
+        ${renderAccountInviteCard(inviteSummary)}
+      </div>
+    </aside>
+  `;
+}
+
+function normalizeInviteSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return {
+      loading: false,
+      loaded: false,
+      error: "",
+      inviteCode: "",
+      inviteLink: "",
+      invitedCount: 0,
+      rewardedInvitedCount: 0,
+      totalRewardCredits: 0,
+      rebateCredits: 0,
+      details: [],
+    };
+  }
+  return {
+    loading: summary.loading === true,
+    loaded: summary.loaded === true,
+    error: String(summary.error ?? "").trim(),
+    inviteCode: String(summary.inviteCode ?? "").trim(),
+    inviteLink: String(summary.inviteLink ?? "").trim(),
+    invitedCount: Number(summary.invitedCount ?? 0),
+    rewardedInvitedCount: Number(summary.rewardedInvitedCount ?? 0),
+    totalRewardCredits: Number(summary.totalRewardCredits ?? 0),
+    rebateCredits: Number(summary.rebateCredits ?? 0),
+    details: Array.isArray(summary.details) ? summary.details : [],
+  };
+}
+
+function renderAccountInviteCard(summary) {
+  const statusCopy = summary.error
+    ? "邀请数据暂时不可用"
+    : summary.loading
+      ? "正在同步邀请数据"
+      : "新用户通过链接注册后自动生效";
+  const inviteCode = summary.inviteCode || "生成中";
+  const inviteLink = summary.inviteLink || "";
+  return `
+    <section class="account-settings-card account-invite-card">
+      <div class="account-invite-link-box">
+        <div>
+          <span>专属邀请码</span>
+          <strong>${escapeHtml(inviteCode)}</strong>
+        </div>
+        <button type="button" data-action="copy-account-invite-link" ${inviteLink ? "" : "disabled"}>复制链接</button>
+      </div>
+      <div class="account-invite-url" title="${escapeAttr(inviteLink || statusCopy)}">
+        ${escapeHtml(inviteLink || statusCopy)}
+      </div>
+      <div class="account-invite-metrics" aria-label="邀请统计">
+        <div>
+          <span>已邀请</span>
+          <strong>${formatAccountInviteInteger(summary.invitedCount)}</strong>
+        </div>
+        <div>
+          <span>已生效</span>
+          <strong>${formatAccountInviteInteger(summary.rewardedInvitedCount)}</strong>
+        </div>
+        <div>
+          <span>奖励积分</span>
+          <strong>${formatAccountInviteInteger(summary.totalRewardCredits)}</strong>
+        </div>
+        <div>
+          <span>充值返利</span>
+          <strong>${formatAccountInviteInteger(summary.rebateCredits)}</strong>
+        </div>
+      </div>
+      ${renderAccountInviteDetails(summary)}
+    </section>
+  `;
+}
+
+function renderAccountInviteDetails(summary) {
+  if (summary.error) {
+    return `<p class="account-invite-empty">${escapeHtml(summary.error)}</p>`;
+  }
+  if (summary.loading && !summary.loaded) {
+    return `<p class="account-invite-empty">正在加载邀请明细...</p>`;
+  }
+  if (!summary.details.length) {
+    return `<p class="account-invite-empty">还没有邀请记录。</p>`;
+  }
+  return `
+    <div class="account-invite-table-wrap">
+      <table class="account-invite-table">
+        <thead>
+          <tr>
+            <th>用户</th>
+            <th>注册时间</th>
+            <th>状态</th>
+            <th>返利</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${summary.details.map(renderAccountInviteDetailRow).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAccountInviteDetailRow(detail = {}) {
+  const label = String(detail.invitedUserLabel ?? detail.maskedPhone ?? "新用户").trim() || "新用户";
+  const status = detail.newUserRewardStatus === "granted" || detail.inviterRewardStatus === "granted"
+    ? "已生效"
+    : detail.status === "active"
+      ? "已绑定"
+      : "未生效";
+  const rebate = Number(detail.rebateCredits ?? 0);
+  return `
+    <tr>
+      <td>${escapeHtml(label)}</td>
+      <td>${escapeHtml(formatAccountInviteDate(detail.boundAt))}</td>
+      <td><span class="account-invite-status">${escapeHtml(status)}</span></td>
+      <td>${rebate > 0 ? `+${formatAccountInviteInteger(rebate)}` : "-"}</td>
+    </tr>
+  `;
+}
+
+function formatAccountInviteInteger(value) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Math.round(number));
+}
+
+function formatAccountInviteDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 function resolveAccountSettingsAvatarLabel(form, session = {}) {
   const preferred = String(form.displayName || session?.user?.displayName || session?.user?.phone || "我").trim();
   return [...preferred].slice(0, 2).join("");
 }
 
 function resolveStatusbarAccountLabel(session = {}) {
-  const displayName = String(session?.user?.displayName ?? "").trim();
+  const teamMember = session?.user?.teamMember ?? null;
+  const displayName = String(teamMember?.memberName ?? session?.user?.displayName ?? "").trim();
   if (displayName) {
     return displayName;
+  }
+  const loginAccount = String(teamMember?.memberLoginAccount ?? "").trim();
+  if (loginAccount) {
+    return loginAccount;
   }
   const phone = String(session?.user?.phone ?? "").trim();
   const phoneTail = phone.slice(-8);
@@ -1399,31 +1679,33 @@ function resolveMembershipPlanLabel(membershipStatus = null) {
 
 function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   const user = session.user ?? {};
-  const displayName = String(user.displayName ?? user.nickname ?? "").trim();
+  const teamMember = user.teamMember ?? null;
+  const displayName = String(teamMember?.memberName ?? user.displayName ?? user.nickname ?? "").trim();
+  const loginAccount = String(teamMember?.memberLoginAccount ?? "").trim();
   const phone = String(user.phone ?? user.phoneE164 ?? "").trim();
-  const primaryText = displayName || phone || "未命名创作者";
+  const primaryText = displayName || loginAccount || phone || "未命名创作者";
   const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
   const periodEndAt =
     membershipStatus?.currentPeriodEndAt ??
     membershipStatus?.membership?.currentPeriodEndAt ??
     null;
   const dateLabel = formatMembershipDate(periodEndAt);
+  const membershipLabel =
+    status === "professional_active"
+      ? `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`
+      : status === "experience_active"
+        ? `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`
+        : "当前套餐：未开通";
 
-  if (status === "professional_active") {
+  if (loginAccount) {
     return {
       primaryText,
-      secondaryText: `当前套餐：专业版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
-    };
-  }
-  if (status === "experience_active") {
-    return {
-      primaryText,
-      secondaryText: `当前套餐：体验版${dateLabel ? `（${dateLabel} 到期）` : ""}`,
+      secondaryText: `${loginAccount} · ${membershipLabel}`,
     };
   }
   return {
     primaryText,
-    secondaryText: "当前套餐：未开通",
+    secondaryText: membershipLabel,
   };
 }
 
@@ -1447,7 +1729,7 @@ function renderWorkspaceStatusToast(message, extraClassName = "") {
 }
 
 function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
-  if (ui.accountSettingsOpen) {
+  if (ui.accountSettingsOpen || ui.inviteGiftOpen) {
     return "";
   }
   return renderWorkspaceStatusToast(ui.toast, extraClassName);
@@ -1455,10 +1737,10 @@ function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
 
 function renderOverlayWorkspaceStatusToast(ui = {}) {
   const toast = normalizeWorkspaceToast(ui.toast);
-  if (!ui.accountSettingsOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
+  if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
-  return renderWorkspaceStatusToast(toast, ui.accountSettingsOpen ? "account-settings-toast" : "");
+  return renderWorkspaceStatusToast(toast, ui.accountSettingsOpen || ui.inviteGiftOpen ? "account-settings-toast" : "");
 }
 
 function normalizeWorkspaceToast(message) {
@@ -1550,11 +1832,13 @@ function resolveMembershipPaymentState(ui) {
   };
 }
 
-function renderWorkbenchRail(activeNavTab) {
+function renderWorkbenchRail(activeNavTab, session = {}) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
-        ${NAV_TABS.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
+        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
       </nav>
       <button class="rail-item rail-bottom" type="button" data-action="logout">退出</button>
     </aside>
@@ -1974,7 +2258,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
       </main>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
-      ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui) : ""}
+      ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui, state) : ""}
       ${renderEpisodeRenameModal(ui)}
       ${renderEpisodeDeleteModal(ui)}
       ${renderImportedAssetRenameModal(ui)}
@@ -2261,27 +2545,29 @@ function renderEpisodeHubMenu(episode) {
   `;
 }
 
-function renderSingleEpisodeModal(ui) {
+function renderSingleEpisodeModal(ui, state = {}) {
   const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
   const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
   const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
+  const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
-      <div class="single-episode-modal single-episode-studio">
+        <div class="single-episode-modal single-episode-studio">
         <div class="single-episode-modal-head">
           <div class="single-episode-modal-heading">
-            <p>Single Episode</p>
             <h2>请输入您的剧本开始创作</h2>
           </div>
           <button class="modal-close" type="button" data-action="close-single-episode-modal" aria-label="关闭">×</button>
         </div>
         <p class="single-episode-lead">从一句设定、一段对白或完整剧情开始，我们会为你生成新的单集创作工作台。</p>
+        ${renderSingleEpisodeScriptImport(scriptPicker, isCheckingAiStoryboard)}
         <label class="single-episode-field single-episode-script-field">
           <textarea id="single-episode-script-input" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(ui.singleEpisodeScript ?? "")}</textarea>
           <span class="single-episode-count">${[...(ui.singleEpisodeScript ?? "")].length}/5000</span>
         </label>
+        ${ui.singleEpisodeNotice ? `<p class="single-episode-inline-notice">${escapeHtml(ui.singleEpisodeNotice)}</p>` : ""}
         ${isCheckingAiStoryboard ? `
           <div class="single-episode-checking" role="status" aria-live="polite">
             <span class="single-episode-checking-spinner" aria-hidden="true"></span>
@@ -2311,6 +2597,165 @@ function renderSingleEpisodeModal(ui) {
         </div>
       </div>
     </section>
+  `;
+}
+
+function resolveSingleEpisodeScriptPicker(state = {}, ui = {}) {
+  const rawPicker = ui.singleEpisodeScriptPicker && typeof ui.singleEpisodeScriptPicker === "object"
+    ? ui.singleEpisodeScriptPicker
+    : {};
+  const scripts = resolveSingleEpisodeScriptLibrary(state, ui);
+  const scriptId = String(rawPicker.scriptId ?? "").trim();
+  const selectedScript = scriptId ? scripts.find((script) => script.id === scriptId) ?? null : null;
+  const items = selectedScript
+    ? (selectedScript.sections?.length ? selectedScript.sections : selectedScript.episodes ?? [])
+    : scripts;
+  return {
+    open: rawPicker.open === true,
+    scriptId,
+    selectedScript,
+    items,
+    scripts,
+    selectedLabel: String(rawPicker.selectedLabel ?? "").trim(),
+  };
+}
+
+function renderSingleEpisodeScriptImport(picker, isDisabled) {
+  const selectedSummary = picker.selectedLabel
+    ? `<div class="single-episode-script-import-selection">已导入：${escapeHtml(picker.selectedLabel)}</div>`
+    : "";
+  return `
+    <div class="single-episode-script-import">
+      <div class="single-episode-script-import-head">
+        <div>
+          <strong>从已有剧本导入</strong>
+          <p>选择剧本后会自动写入当前创作输入框，方便继续细化。</p>
+        </div>
+        <button
+          class="single-episode-script-import-trigger"
+          type="button"
+          data-action="toggle-single-episode-script-picker"
+          ${isDisabled ? "disabled" : ""}
+        >${picker.open ? "收起剧本库" : "从剧本库导入"}</button>
+      </div>
+      ${selectedSummary}
+      ${picker.open ? renderSingleEpisodeScriptPickerPanel(picker) : ""}
+    </div>
+  `;
+}
+
+function renderSingleEpisodeScriptPickerPanel(picker) {
+  const title = picker.selectedScript ? "选择章节内容" : "选择剧本";
+  return `
+    <div class="single-episode-script-picker" aria-label="${escapeAttr(title)}">
+      <header>
+        ${picker.selectedScript ? `<button type="button" data-action="back-single-episode-script-picker" aria-label="返回剧本列表">${renderCanvasIcon("collapse")}</button>` : ""}
+        <strong>${escapeHtml(title)}</strong>
+      </header>
+      <div class="single-episode-script-picker-list">
+        ${picker.items.length
+          ? picker.items.map((item) => picker.selectedScript
+            ? renderSingleEpisodeScriptEpisodeItem(item, picker)
+            : renderSingleEpisodeScriptPickerItem(item)).join("")
+          : `<p>${escapeHtml(picker.selectedScript ? "当前剧本暂无可导入章节" : "暂无可导入剧本")}</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
+  const currentProjectScript = state?.projectDetail?.script
+    ? normalizeSingleEpisodeScriptRecord(state.projectDetail.script, state.projectDetail.episodes)
+    : null;
+  const currentStateScript = state?.script
+    ? normalizeSingleEpisodeScriptRecord(state.script, state?.projectDetail?.episodes ?? [])
+    : null;
+  const scriptRecords = [
+    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
+    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
+    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
+    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
+  ];
+  const records = [];
+  const pushRecord = (record) => {
+    if (!record?.id || records.some((item) => item.id === record.id)) {
+      return;
+    }
+    records.push(record);
+  };
+  pushRecord(currentProjectScript);
+  pushRecord(currentStateScript);
+  scriptRecords.forEach((record) => pushRecord(normalizeSingleEpisodeScriptRecord(record.script ?? record, record.episodes ?? record.script?.episodes ?? [])));
+  return records;
+}
+
+function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
+  const id = String(script.id ?? script.scriptId ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  const sections = Array.isArray(episodes) && episodes.length
+    ? episodes.map((episode, index) => ({
+        id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
+        title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
+        text: String(
+          episode.scriptText ??
+          episode.inputText ??
+          episode.text ??
+          episode.summary ??
+          script.inputText ??
+          script.text ??
+          script.content ??
+          "",
+        ),
+        storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
+      }))
+    : [];
+  return {
+    id,
+    title: String(script.title ?? script.name ?? "项目剧本"),
+    type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
+    text: String(script.inputText ?? script.text ?? script.content ?? ""),
+    sections,
+    episodes: sections.length ? sections : [{
+      id: "episode-primary",
+      title: "剧一",
+      text: String(script.inputText ?? script.text ?? script.content ?? ""),
+      storyboardCount: 0,
+    }],
+  };
+}
+
+function renderSingleEpisodeScriptPickerItem(script = {}) {
+  const subtitle = script.type || (script.sections?.length || script.episodes?.length ? "含章节内容" : "原始剧本");
+  return `
+    <button type="button" data-action="select-single-episode-script-source" data-script-id="${escapeAttr(script.id)}">
+      ${renderCanvasIcon("book")}
+      <span>
+        <strong>${escapeHtml(script.title || "未命名剧本")}</strong>
+        <small>${escapeHtml(subtitle)}</small>
+      </span>
+    </button>
+  `;
+}
+
+function renderSingleEpisodeScriptEpisodeItem(episode = {}, picker = {}) {
+  const summary = episode.storyboardCount ? `${String(episode.storyboardCount)} 分镜` : "写入章节文本";
+  return `
+    <button
+      type="button"
+      data-action="apply-single-episode-script"
+      data-script-id="${escapeAttr(picker.scriptId)}"
+      data-episode-id="${escapeAttr(episode.id)}"
+    >
+      ${renderCanvasIcon("story")}
+      <span>
+        <strong>${escapeHtml(episode.title || "未命名章节")}</strong>
+        <small>${escapeHtml(summary)}</small>
+      </span>
+    </button>
   `;
 }
 
@@ -3508,7 +3953,7 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
         : "全部";
 
   return `
-    <section class="project-asset-library" aria-label="资产">
+    <section class="project-asset-library ${isOther ? "other-mode-layout" : ""}" aria-label="资产">
       <header class="asset-library-head">
         <div class="asset-library-tabs" role="tablist" aria-label="资产类型">
           ${ASSET_TABS.map((item) => renderProjectAssetTab(item, item.id === tab.id)).join("")}
@@ -5312,6 +5757,7 @@ function renderCommunityPage({ ui, session }) {
   const sortedFeatures = [...features]
     .sort((left, right) => Number(right.votes || 0) - Number(left.votes || 0))
     .slice(0, 10);
+  const totalVotes = features.reduce((sum, feature) => sum + Number(feature.votes || 0), 0);
   const postRows = visiblePosts.length
     ? visiblePosts.map((post) => renderCommunityPost(post, session, ui)).join("")
     : `<article class="community-empty"><strong>还没有社区反馈</strong><span>提交你的第一个问题或想法，管理员会在后台看到。</span></article>`;
@@ -5348,14 +5794,25 @@ function renderCommunityPage({ ui, session }) {
 
   return `
     <section class="community-page" aria-label="灵曦社区">
+      <div class="community-overview" aria-label="社区概览">
+        <div>
+          <span>共创社区</span>
+          <strong>把生成体验、问题反馈和功能优先级集中到一处。</strong>
+        </div>
+        <dl>
+          <div><dt>发布</dt><dd>${sortedPosts.length}</dd></div>
+          <div><dt>建议</dt><dd>${features.length}</dd></div>
+          <div><dt>投票</dt><dd>${totalVotes}</dd></div>
+        </dl>
+      </div>
       <section class="community-layout">
-        <section class="community-column">
-          <div class="community-section-head"><div><h2>社区发布</h2><p>分享视频提示词心得，或记录 Bug、体验卡点、内容生成异常。</p></div></div>
+        <section class="community-column community-feed-column">
+          <div class="community-section-head"><div><span>Feedback</span><h2>社区发布</h2><p>分享视频提示词心得，或记录 Bug、体验卡点、内容生成异常。</p></div></div>
           <div class="community-feed">${postRows}</div>
           ${pagination}
         </section>
-        <aside class="community-column">
-          <div class="community-section-head"><div><h2>功能投票</h2><p>自发提出想让我们优先开发的功能，也可以给已有建议投票。</p></div></div>
+        <aside class="community-column community-feature-column">
+          <div class="community-section-head"><div><span>Roadmap</span><h2>功能投票</h2><p>自发提出想让我们优先开发的功能，也可以给已有建议投票。</p></div></div>
           <div class="community-feature-list">${featureRows}</div>
         </aside>
       </section>
@@ -5654,7 +6111,7 @@ function renderCommunityPost(post, session = {}, ui = {}) {
   const replyTarget = String(ui.communityReplyTarget ?? "");
   return `
     <article class="community-post">
-      <div class="community-post-head"><h3>${escapeHtml(post.title || "未命名反馈")}</h3><span class="community-tag">${escapeHtml(post.category || "问题反馈")}</span></div>
+      <div class="community-post-head"><span class="community-tag">${escapeHtml(post.category || "问题反馈")}</span><h3>${escapeHtml(post.title || "未命名反馈")}</h3></div>
       <p>${escapeHtml(post.content || "")}</p>
       <footer><span>${escapeHtml(post.author || "灵曦用户")}</span><span>${escapeHtml(post.createdAtLabel || post.createdAt || "")}</span></footer>
       <div class="community-post-actions">
@@ -5844,7 +6301,7 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (activeNavTab === "home") {
-    return renderHomeHero({ detailState });
+    return renderHomeHero({ detailState, session });
   }
 
   if (activeNavTab === "script") {
@@ -5903,13 +6360,12 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "tools") {
     return `
-      ${renderToolsPanel(ui, state)}
+      ${renderToolsPanel(ui, state, session)}
     `;
   }
 
   if (activeNavTab === "team") {
     return renderScrollableWorkbenchSurface("team", `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui })}
       ${renderLibraryTeam({
         route: ui.libraryTeamRoute ?? "team",
         pricingOpen: Boolean(ui.isLibraryPricingModalOpen),
@@ -5921,7 +6377,22 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
-        createMemberModal: ui.createMemberModal ?? null,
+        memberConfirmModal: ui.teamMemberConfirmModal ?? null,
+        createMemberModal: ui.isTeamMemberCreateOpen
+          ? {
+              open: true,
+              draft: ui.teamMemberDraft ?? {},
+              notice: ui.teamMemberCreateNotice ?? "",
+              temporaryPassword: ui.teamTemporaryPassword ?? "",
+              availableProjects: ui.projectLibrary ?? [],
+              availableScripts: ui.scriptLibraryRecords ?? [],
+              availableCanvases: ui.canvasProjects ?? [],
+              resourcePickerType: ui.teamMemberDraft?.resourcePickerType ?? "",
+              resourcePickerPage: ui.teamMemberDraft?.resourcePickerPage ?? 1,
+              resourcePagination: ui.teamMemberDraft?.resourcePagination ?? {},
+              resourceCounts: ui.teamMemberDraft?.resourceCounts ?? {},
+            }
+          : null,
         editMemberModal: ui.editMemberModal ?? null,
         dashboardTab: ui.teamDashboardTab ?? "member-consumption",
         dashboardDateRange: ui.teamDashboardDateRange ?? "today",
@@ -5954,7 +6425,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {
-    return renderProjectGallery({ ui });
+    return renderProjectGallery({ ui, session });
   }
 
   return `
@@ -6096,9 +6567,9 @@ function renderWorkbenchHeader({ state, session, detailState, progress, ui, comp
   `;
 }
 
-function renderToolsPanel(ui = {}, state = {}) {
+function renderToolsPanel(ui = {}, state = {}, session = null) {
   if (ui.canvasProjectView !== "detail") {
-    return renderCanvasProjectGallery(ui);
+    return renderCanvasProjectGallery({ ...ui, session });
   }
   const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
     projectId: ui.selectedProjectCardId ?? "",
@@ -6215,7 +6686,7 @@ function renderToolsPanel(ui = {}, state = {}) {
 
 function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
-  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus);
+  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus) && !isTeamMemberSession(ui.session);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -6235,12 +6706,20 @@ function renderCanvasProjectGallery(ui = {}) {
         ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
       <div class="canvas-project-aurora" aria-hidden="true"></div>
-      <button class="canvas-create-project-button" type="button" data-action="${canCreateCanvasProject ? "create-canvas-project" : "open-pricing"}">
-        <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
-        ${canCreateCanvasProject ? "创建画布" : "开通会员后创建画布"}
-      </button>
+      ${canCreateCanvasProject
+        ? `<button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
+            <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
+            创建画布
+          </button>`
+        : projects.length === 0
+          ? `<p class="canvas-project-empty-note">请联系管理员分配</p>`
+          : ``}
     </section>
   `;
+}
+
+function isTeamMemberSession(session) {
+  return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -7568,6 +8047,8 @@ function renderStatusbarActionIcon(icon) {
 function renderGlobalStatusbar(session, options = {}) {
   const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const walletLabel = isTeamMember ? "子账户积分" : "积分";
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -7586,13 +8067,15 @@ function renderGlobalStatusbar(session, options = {}) {
         <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
           <span>商务合作</span>
         </button>
+        ${isTeamMember ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
           <span>购物车</span>
         </button>
+        `}
         <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
-          <span>积分</span>
+          <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
         </button>
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
@@ -7619,6 +8102,7 @@ function renderGlobalStatusbar(session, options = {}) {
               <span>${escapeHtml(accountCard.secondaryText)}</span>
             </div>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
+            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-invite-gift">邀请有礼</button>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>
@@ -7628,7 +8112,8 @@ function renderGlobalStatusbar(session, options = {}) {
   `;
 }
 
-function renderHomeHero({ detailState }) {
+function renderHomeHero({ detailState, session }) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   return `
     <section class="home-hero" aria-label="首页">
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
@@ -7659,7 +8144,7 @@ function renderHomeHero({ detailState }) {
           <span>小成本成就大爆款</span>
         </div>
         <div class="hero-actions">
-          <button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>
+          ${isTeamMember ? "" : `<button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>`}
         </div>
         <div class="hero-status-strip">
           <span>${escapeHtml(detailState.project.statusLabel)}</span>
@@ -7680,7 +8165,8 @@ function renderScrollableWorkbenchSurface(surface, content) {
   `;
 }
 
-function renderProjectGallery({ ui }) {
+function renderProjectGallery({ ui, session }) {
+  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   const snapshot = getProjectGallerySnapshot(ui);
   const selectedIds = normalizeSelectedProjectIds(ui.selectedProjectIds);
   const selectedCount = snapshot.pageProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;
@@ -7729,7 +8215,7 @@ function renderProjectGallery({ ui }) {
       ${renderInlineWorkspaceStatusToast(ui)}
       ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.projectsPerPage) : ""}
       <div class="project-gallery-footer">
-        <button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>
+        ${isTeamMember ? "" : `<button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>`}
       </div>
     </section>
   `;
@@ -7742,6 +8228,9 @@ export function getProjectGallerySnapshot(ui = {}) {
   const totalProjects = pagination.total;
   const totalPages = pagination.totalPages;
   const currentPage = Math.min(Math.max(1, Number(ui.projectLibraryPage ?? pagination.page)), totalPages);
+  const pageProjects = projects.length <= pagination.pageSize
+    ? projects
+    : projects.slice((currentPage - 1) * pagination.pageSize, currentPage * pagination.pageSize);
   return {
     searchQuery,
     filteredProjects: projects,
@@ -7749,19 +8238,31 @@ export function getProjectGallerySnapshot(ui = {}) {
     totalProjects,
     totalPages,
     currentPage,
-    pageProjects: projects,
+    pageProjects,
   };
 }
 
 export function resolveProjectGalleryPageSize(ui = {}) {
-  return normalizeProjectGalleryPagination(ui.projectLibraryPagination, 0).pageSize;
+  const measuredColumns = Math.max(
+    1,
+    Math.min(
+      PROJECT_GALLERY_MAX_COLUMNS,
+      Math.floor(Number(ui.projectLibraryColumns ?? PROJECT_GALLERY_DEFAULT_COLUMNS)) || PROJECT_GALLERY_DEFAULT_COLUMNS,
+    ),
+  );
+  const fallbackPageSize = Math.max(PROJECT_GALLERY_ROWS, measuredColumns * PROJECT_GALLERY_ROWS);
+  return normalizeProjectGalleryPagination(
+    ui.projectLibraryPagination,
+    0,
+    fallbackPageSize,
+  ).pageSize;
 }
 
-function normalizeProjectGalleryPagination(value, fallbackTotal) {
-  const candidatePageSize = Math.floor(Number(value?.pageSize ?? PROJECT_GALLERY_DEFAULT_PAGE_SIZE));
+function normalizeProjectGalleryPagination(value, fallbackTotal, fallbackPageSize = PROJECT_GALLERY_DEFAULT_PAGE_SIZE) {
+  const candidatePageSize = Math.floor(Number(value?.pageSize ?? fallbackPageSize));
   const pageSize = Number.isFinite(candidatePageSize) && candidatePageSize > 0
     ? candidatePageSize
-    : PROJECT_GALLERY_DEFAULT_PAGE_SIZE;
+    : fallbackPageSize;
   const total = Math.max(0, Number(value?.total ?? fallbackTotal ?? 0));
   const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
   const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? 1)));

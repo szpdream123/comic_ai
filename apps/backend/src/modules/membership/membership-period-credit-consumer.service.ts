@@ -65,12 +65,12 @@ export async function consumeMembershipPeriodCreditGrant(
         }
 
         const grant = await grantCreditsInTransaction(db, {
-          organizationId: period.organization_id,
+          compatibilityOrganizationId: period.organization_id,
           userId: period.created_by_user_id,
           amount: period.gift_credits,
           sourceType: "membership_gift",
           sourceId: period.id,
-          reason: "membership period gifted credits",
+          reason: "会员赠送积分",
           metadata: {
             orderId: period.order_id,
             orderNo: period.order_no,

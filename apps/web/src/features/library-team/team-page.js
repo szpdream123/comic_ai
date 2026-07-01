@@ -2,162 +2,113 @@ import { escapeAttr, escapeHtml } from "./markup.js";
 import { renderMemberRulesModal } from "./member-rules-modal.js";
 import { renderPricingModal } from "./pricing-modal.js";
 import { dashboardDateShortcuts, memberFilters, memberTableColumns, teamFixture } from "./team-fixtures.js";
-import { legacyRoleLabels, teamRoleOptions } from "../../shared/permissions-fixtures.js";
 
 const DASHBOARD_TABS = [
   { id: "member-consumption", label: "成员创作与消耗" },
   { id: "project-cost", label: "项目资产与成本" },
   { id: "ranking", label: "排行榜" },
 ];
-const dashboardTabs = DASHBOARD_TABS;
-const dashboardTabIds = new Set(dashboardTabs.map((tab) => tab.id));
-const dashboardDateRanges = [
-  { id: "today", label: "今天" },
-  { id: "yesterday", label: "昨天" },
-  { id: "week", label: "本周" },
-  { id: "month", label: "本月" },
-  { id: "last-month", label: "上月" },
-  { id: "year", label: "今年" },
-];
-const dashboardDateRangeIds = new Set(dashboardDateRanges.map((range) => range.id));
-const DASHBOARD_EXPORT_MESSAGE = "团队数据导出会在报表接口接入后开放。";
-
-function isActiveMembershipStatus(membershipStatus) {
-  const status = String(
-    membershipStatus?.status ??
-    membershipStatus?.membership?.status ??
-    membershipStatus?.subscription?.status ??
-    "",
-  );
-  return status === "experience_active" || status === "professional_active";
-}
+const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 
 export function renderTeamPage(context = {}) {
   const team = context.team ?? {};
+  const overview = resolveEffectiveTeamOverview(
+    context.overview ?? team.overview ?? null,
+    context.membershipStatus ?? null,
+  );
   const members = Array.isArray(context.members)
     ? context.members
     : (Array.isArray(team.members) ? team.members : teamFixture.members);
-  const hasAuthoritativeTeamState = Boolean(context.overview ?? team.overview ?? context.membershipStatus);
-  const overview = resolveEffectiveTeamOverview(
-    context.overview ?? team.overview ?? (hasAuthoritativeTeamState ? null : createPrototypeTeamOverview(members)),
-    context.membershipStatus ?? null,
-  );
   const createState = resolveCreateMemberState(overview);
+  const seatSummary = resolveTeamSeatSummary(overview, members);
   const canCreateMember = createState.canCreate;
-  const canReadMembers = overview?.permissions?.canReadMembers !== false && overview?.entitlements?.teamMemberManagement === true;
-  const visibleMembers = canReadMembers ? members : [];
-  const canViewTeamDashboard =
-    overview?.permissions?.canViewDashboard !== false &&
-    overview?.entitlements?.teamDashboard === true;
-  const metrics = resolveTeamMetrics(
-    context.stats ?? overview?.stats ?? overview?.metrics ?? overview,
-    visibleMembers,
-  );
   const teamActivated = createState.teamActivated;
-  const showTeamDashboardActions = canViewTeamDashboard && teamActivated;
+  const showTeamHero = context.showTeamHero === true && canCreateMember !== true;
   const createAction = createState.action;
   const createActionMessage = createState.message;
-  const memberManagementTabActive = String(context.teamPanelTab ?? "members") !== "credits";
   const commercePrototypeNotice = team.error ? `团队数据加载失败：${team.error}` : "";
   const memberSearchQuery = String(context.memberSearchQuery ?? "");
   const memberRoleFilter = String(context.memberRoleFilter ?? "all");
   const memberStatusFilter = String(context.memberStatusFilter ?? "all");
-  const filteredMembers = filterMembers(visibleMembers, {
+  const filteredMembers = filterMembers(members, {
     memberSearchQuery,
     memberRoleFilter,
     memberStatusFilter,
   });
-  const roleOptions = ["all", ...new Set(visibleMembers.map((member) => String(member?.role ?? "").trim()).filter(Boolean))];
-  const statusOptions = ["all", ...new Set(visibleMembers.map((member) => String(member?.status ?? "").trim()).filter(Boolean))];
+  const memberPageSize = 10;
+  const memberTotal = filteredMembers.length;
+  const memberTotalPages = Math.max(1, Math.ceil(memberTotal / memberPageSize));
+  const requestedMemberPage = Math.max(1, Number(context.memberPage ?? 1));
+  const memberPage = Math.min(memberTotalPages, requestedMemberPage);
+  const memberPageMembers = filteredMembers.slice((memberPage - 1) * memberPageSize, memberPage * memberPageSize);
+  const roleOptions = ["all", ...new Set(members.map((member) => String(member?.role ?? "").trim()).filter(Boolean))];
+  const statusOptions = ["all", ...new Set(members.map((member) => String(member?.status ?? "").trim()).filter(Boolean))];
   const createMemberModal = context.createMemberModal ?? null;
   const editMemberModal = context.editMemberModal ?? null;
-  const ownerAccount = context.ownerAccount ?? team.ownerAccount ?? null;
-  const memberGroups = Array.isArray(context.memberGroups)
-    ? context.memberGroups
-    : (Array.isArray(team.memberGroups) ? team.memberGroups : []);
-  const projectName = String(context.projectName ?? team.projectName ?? "");
+  const memberConfirmModal = context.memberConfirmModal ?? null;
+  const teamAccountSuffix = String(overview?.teamAccountSuffix ?? overview?.team_account_suffix ?? "").trim().toLowerCase();
+  const teamCreateMemberModal = createMemberModal
+    ? {
+        ...createMemberModal,
+        draft: {
+          ...(createMemberModal.draft ?? {}),
+          teamAccountSuffix: String(createMemberModal.draft?.teamAccountSuffix ?? "").trim().toLowerCase() || teamAccountSuffix,
+        },
+      }
+    : null;
 
   return `
-    <section class="library-team-page team-page" aria-labelledby="team-page-title">
+    <section class="library-team-page team-page${teamActivated ? " is-team-activated" : ""}" aria-label="团队成员管理">
       <div class="library-team-shell">
-        <header class="library-team-command-strip team-ops-hero">
-          <div class="team-ops-hero-copy">
-            <h1 id="team-page-title">${canCreateMember ? "团队成员管理已开通" : "团队功能为专业版会员专属权益，请开通专业版会员后使用该功能"}</h1>
-            <p>${canCreateMember ? "已获得团队协作资格，可创建成员账号并使用团队钱包积分协作生产。" : "开通后可创建成员账号、分配团队积分，并统一管理项目协作权限。"}</p>
-            <button class="library-team-button team-ops-hero-cta" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(canCreateMember ? createState.buttonLabel : "去开通")}</button>
-          </div>
-          <div class="team-ops-dashboard-card">
-            <strong>团队运营看板</strong>
-            <span>${teamActivated ? "查看成员消耗、项目成本和团队排行" : "创建成员后查看团队协作数据"}</span>
-            <button class="library-team-button" type="button" ${showTeamDashboardActions ? 'data-action="open-team-dashboard"' : `data-action="show-library-placeholder" data-placeholder-message="${canCreateMember ? "创建第一个成员账号后，可进入团队运营看板。" : "开通专业版并创建成员后，可进入团队运营看板。"}"`}>点击进入</button>
-          </div>
-        </header>
-        <section class="library-team-command-strip" aria-label="团队运行">
-          <div class="library-team-command-copy">
-            <p class="library-team-kicker">团队运行</p>
-            <h2>${escapeHtml(projectName || "团队协作")}</h2>
-          </div>
-          <dl class="library-team-command-meta">
-            ${renderCommandChip("成员目录", `${visibleMembers.length} 人`, memberManagementTabActive ? "is-active" : "")}
-            ${renderCommandChip("数据看板", canViewTeamDashboard ? "可查看" : "未开通", canViewTeamDashboard ? "is-active" : "is-locked")}
-          </dl>
-        </section>
-        <div class="library-team-workspace-grid" aria-hidden="true"></div>
+        ${showTeamHero ? `
+          <header class="library-team-command-strip team-ops-hero">
+            <div class="team-ops-hero-copy">
+              <h1 id="team-page-title">${canCreateMember ? "团队成员管理已开通" : "团队功能为专业版会员专属权益，请开通专业版会员后使用该功能"}</h1>
+              <button class="library-team-button team-ops-hero-cta" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(canCreateMember ? createState.buttonLabel : "去开通")}</button>
+            </div>
+          </header>
+        ` : ""}
         <section class="library-team-card team-member-section" aria-labelledby="member-management-title">
           <header class="team-member-panel-head">
             <div class="team-member-panel-tabs" role="tablist" aria-label="团队管理">
-              <button class="team-member-panel-tab${memberManagementTabActive ? " is-active" : ""}" type="button" role="tab" aria-selected="${memberManagementTabActive ? "true" : "false"}" data-action="set-team-panel-tab" data-team-panel-tab="members">成员管理</button>
-              <button class="team-member-panel-tab${memberManagementTabActive ? "" : " is-active"}" type="button" role="tab" aria-selected="${memberManagementTabActive ? "false" : "true"}" data-action="set-team-panel-tab" data-team-panel-tab="credits">积分管理</button>
+              <button id="member-management-title" class="team-member-panel-tab is-active" type="button" role="tab" aria-selected="true" data-action="set-team-panel-tab" data-team-panel-tab="members">成员管理</button>
             </div>
-            <button class="library-team-link-button" type="button" data-action="open-member-rules">规则说明</button>
           </header>
-          ${
-            memberManagementTabActive
-              ? renderMemberManagementPanel({
-                  createAction,
-                  createActionMessage,
-                  createState,
-                  filteredMembers,
-                  memberRoleFilter,
-                  memberSearchQuery,
-                  memberStatusFilter,
-                  ownerAccount,
-                  roleOptions,
-                  statusOptions,
-                  visibleMembers,
-                })
-              : renderCreditManagementPanel({
-                  rows: context.creditLedgerRows ?? team.creditLedgerRows ?? [],
-                  operationFilter: context.teamCreditOperationFilter ?? team.creditOperationFilter ?? "all",
-                  searchQuery: context.teamCreditSearchQuery ?? team.creditSearchQuery ?? "",
-                  dateShortcut: context.teamCreditDateShortcut ?? team.creditDateShortcut ?? "近7天",
-                })
-          }
+          <div class="team-member-panel-tools">
+            <form class="library-team-filterbar" aria-label="成员筛选器">
+              <div class="library-team-filter-fields">
+                ${memberFilters.map((label) =>
+                  renderMemberFilter(label, {
+                    memberSearchQuery,
+                    memberRoleFilter,
+                    memberStatusFilter,
+                    roleOptions,
+                    statusOptions,
+                  }),
+                ).join("")}
+              </div>
+            </form>
+            <div class="team-member-action-cluster">
+              ${renderTeamSeatSummary(seatSummary)}
+              <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
+            </div>
+          </div>
+          <div class="library-team-table-wrap">
+            <table>
+              <thead>
+                <tr>${memberTableColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+              </thead>
+              <tbody>
+                ${
+                  memberPageMembers.length
+                    ? memberPageMembers.map((member, index) => renderMemberRow(member, index, createState)).join("")
+                    : renderMemberEmptyRow(createState, { hasMembers: members.length > 0 })
+                }
+              </tbody>
+            </table>
+          </div>
+          ${renderMemberPagination({ total: memberTotal, page: memberPage, pageSize: memberPageSize, totalPages: memberTotalPages }, filteredMembers.length > memberPageSize)}
         </section>
-        <div class="library-team-operations-band">
-          ${renderTeamGate(createState)}
-          <section class="library-team-metrics" aria-labelledby="team-metrics-title">
-            <header>
-              <div>
-                <p class="library-team-kicker">${teamActivated ? "实时总览" : "协作准备"}</p>
-                <h2 id="team-metrics-title">${teamActivated ? "数据管理" : "权益与席位"}</h2>
-              </div>
-              <div class="library-team-section-actions">
-                <button class="library-team-icon-button library-team-refresh-icon" type="button" aria-label="刷新团队数据" data-action="refresh-team">刷新</button>
-                ${showTeamDashboardActions ? '<button class="library-team-button" type="button" data-action="open-team-dashboard">查看详细数据看板</button>' : ""}
-              </div>
-            </header>
-            <dl class="library-team-metric-grid">
-              ${renderMetric("团队项目", metrics.projects)}
-              ${renderMetric("团队席位", metrics.seats, canCreateMember ? "扩容" : "")}
-              ${renderMetric("单账号任务并发", metrics.concurrency, canCreateMember ? "扩容" : "")}
-              ${renderMetric("团队消耗积分", metrics.consumedCredits)}
-              ${renderMetric("团队剩余积分", metrics.remainingCredits)}
-              ${renderMetric("团队剩余可分配积分", metrics.distributableCredits, canCreateMember ? "加量" : "")}
-            </dl>
-          </section>
-        </div>
-        ${renderTeamPolicyPanel({ createState, metrics })}
         ${commercePrototypeNotice ? `<p class="library-team-commerce-notice is-error">${escapeHtml(commercePrototypeNotice)}</p>` : ""}
         ${renderPricingModal({
           open: context.pricingOpen === true,
@@ -171,11 +122,57 @@ export function renderTeamPage(context = {}) {
           pricingTab: context.pricingTab ?? "membership",
         })}
         ${renderMemberRulesModal({ open: context.rulesOpen === true })}
-        ${renderCreateMemberModal(createMemberModal, { memberGroups })}
-        ${renderEditMemberModal(editMemberModal, { memberGroups })}
+        ${renderFixtureCreateMemberModal(teamCreateMemberModal)}
+        ${renderEditMemberModal(editMemberModal)}
+        ${renderMemberConfirmModal(memberConfirmModal)}
       </div>
     </section>
   `;
+}
+
+function renderMemberPagination(pagination, hasPossibleNextPage = false) {
+  const canPrev = pagination.page > 1;
+  const canNext = pagination.page < pagination.totalPages || hasPossibleNextPage;
+  return `
+    <footer class="team-member-pagination" aria-label="成员分页">
+      <span>共 ${escapeHtml(String(pagination.total))} 条</span>
+      <div class="team-member-pagination-actions">
+        <span>${escapeHtml(String(pagination.page))} / ${escapeHtml(String(pagination.totalPages))}</span>
+        <button type="button" data-action="change-team-member-page" data-page="${escapeAttr(String(Math.max(1, pagination.page - 1)))}" ${canPrev ? "" : "disabled"}>上一页</button>
+        <button type="button" data-action="change-team-member-page" data-page="${escapeAttr(String(pagination.page + 1))}" ${canNext ? "" : "disabled"}>下一页</button>
+      </div>
+    </footer>
+  `;
+}
+
+function renderTeamSeatSummary(summary) {
+  return `
+    <div class="team-seat-summary" aria-label="团队席位：已使用 ${escapeAttr(summary.used)}，合计 ${escapeAttr(summary.total)}">
+      <span class="team-seat-summary-label">席位</span>
+      <strong class="team-seat-summary-value">${escapeHtml(summary.used)} / ${escapeHtml(summary.total)}</strong>
+      <span class="team-seat-summary-caption">已使用 / 合计</span>
+    </div>
+  `;
+}
+
+function resolveTeamSeatSummary(overview, members) {
+  const seats = overview?.seats ?? {};
+  const used = resolveSeatCount(seats.used, Array.isArray(members) ? members.length : 0);
+  const limit = resolveSeatCount(seats.limit, null);
+  const total = limit === null ? resolveSeatCount(seats.total, null) : limit;
+  return {
+    used: String(used),
+    total: total === null ? "--" : String(total),
+  };
+}
+
+function resolveSeatCount(value, fallback) {
+  const rawValue = value ?? fallback;
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return fallback;
+  }
+  const count = Number(rawValue);
+  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : fallback;
 }
 
 function renderCommandChip(label, value, state = "") {
@@ -188,78 +185,43 @@ function renderCommandChip(label, value, state = "") {
   `;
 }
 
-function createPrototypeTeamOverview(members) {
-  const memberCount = Array.isArray(members) ? members.length : 0;
-  return {
-    prototypeFrontend: true,
-    entitlements: {
-      teamMemberManagement: true,
-      teamAssetLibrary: true,
-      teamDashboard: true,
-    },
-    team: {
-      activated: true,
-      memberCount,
-    },
-    seats: {
-      used: memberCount,
-      limit: 50,
-      remaining: Math.max(0, 50 - memberCount),
-    },
-    credits: {
-      allocatable: 0,
-      remaining: 0,
-    },
-    permissions: {
-      canReadMembers: true,
-      canCreateMember: true,
-      canViewDashboard: true,
-    },
-  };
-}
-
 function resolveEffectiveTeamOverview(overview, membershipStatus) {
   const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
-  const currentTier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
+  const tier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
   const entitlements = membershipStatus?.entitlements ?? membershipStatus?.membership?.entitlements ?? {};
-  const hasActiveMembership = isActiveMembershipStatus(membershipStatus);
-  const isProfessionalActive = status === "professional_active" || (hasActiveMembership && currentTier === "professional");
+  const isProfessionalActive = status === "professional_active" || (!status && tier === "professional");
   const hasTeamMemberManagement =
-    hasActiveMembership && isProfessionalActive && entitlements?.teamMemberManagement === true;
-  const hasTeamDashboard =
-    (hasTeamMemberManagement && overview?.permissions?.canViewDashboard === true && overview?.entitlements?.teamDashboard === true) ||
-    (hasActiveMembership && isProfessionalActive && entitlements?.teamDashboard === true);
-  const hasTeamAssetLibrary =
-    hasActiveMembership && isProfessionalActive && entitlements?.teamAssetLibrary === true;
+    overview?.entitlements?.teamMemberManagement === true ||
+    (isProfessionalActive && entitlements?.teamMemberManagement === true);
+  if (!hasTeamMemberManagement) {
+    return overview;
+  }
+
   const seats = overview?.seats ?? {};
   const membershipSeatLimit = Number(membershipStatus?.team?.seatLimit ?? membershipStatus?.membership?.team?.seatLimit ?? 0);
-  const limit = hasTeamMemberManagement
-    ? Math.max(
-        Number(seats.limit ?? seats.total ?? 0),
-        Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
-      )
-    : Number(seats.limit ?? seats.total ?? 0);
+  const limit = Math.max(
+    Number(seats.limit ?? seats.total ?? 0),
+    Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
+  );
   const used = Number(seats.used ?? 0);
   const remaining = Number(seats.remaining ?? (limit > 0 ? Math.max(0, limit - used) : 0));
   return {
     ...(overview ?? {}),
     entitlements: {
       ...(overview?.entitlements ?? {}),
-      teamMemberManagement: hasTeamMemberManagement,
-      teamDashboard: hasTeamDashboard,
-      teamAssetLibrary: hasTeamAssetLibrary,
+      teamMemberManagement: true,
+      teamDashboard: overview?.entitlements?.teamDashboard === true || entitlements?.teamDashboard === true,
+      teamAssetLibrary: overview?.entitlements?.teamAssetLibrary === true || entitlements?.teamAssetLibrary === true,
+    },
+    permissions: {
+      ...(overview?.permissions ?? {}),
+      canCreateMember: true,
     },
     seats: {
       ...seats,
       used,
       limit,
       remaining: limit > 0 ? Math.max(0, limit - used) : remaining,
-    },
-    permissions: {
-      ...(overview?.permissions ?? {}),
-      canReadMembers: hasTeamMemberManagement,
-      canCreateMember: hasTeamMemberManagement,
-      canViewDashboard: hasTeamDashboard,
     },
   };
 }
@@ -320,11 +282,11 @@ function resolveCreateMemberState(overview) {
     canCreate: true,
     teamActivated,
     reason: teamActivated ? "" : "team_setup",
-    action: overview?.prototypeFrontend === true ? "open-create-member" : "open-team-member-create",
+    action: "open-team-member-create",
     message: "",
     badgeLabel: teamActivated ? "团队已启用" : "可开启",
-    buttonLabel: "创建成员账号",
-    secondaryLabel: teamActivated ? "创建成员账号" : "开启团队协作",
+    buttonLabel: "创建子账户",
+    secondaryLabel: teamActivated ? "创建子账户" : "开启团队协作",
     statusText: teamActivated ? "可创建成员账号" : "已获得团队协作资格，尚未创建成员",
   };
 }
@@ -335,181 +297,16 @@ function renderActionAttrs(action, message = "") {
   return `data-action="${escapeAttr(safeAction)}"${messageAttr}`;
 }
 
-function renderMemberManagementPanel({
-  createAction,
-  createActionMessage,
-  createState,
-  filteredMembers,
-  memberRoleFilter,
-  memberSearchQuery,
-  memberStatusFilter,
-  ownerAccount,
-  roleOptions,
-  statusOptions,
-  visibleMembers,
-}) {
-  const hasOwnerAccount = Boolean(ownerAccount?.phone || ownerAccount?.displayName || ownerAccount?.userId);
-  const rows = [
-    hasOwnerAccount ? renderOwnerMemberRow(ownerAccount) : "",
-    ...(filteredMembers.length ? filteredMembers.map(renderMemberRow) : []),
-  ].filter(Boolean);
-
-  return `
-    <div class="team-member-panel" data-team-panel="members">
-      <div class="team-member-panel-tools">
-        <form class="library-team-filterbar" aria-label="成员筛选器">
-          <div class="library-team-filter-fields">
-            ${memberFilters.map((label) =>
-              renderMemberFilter(label, {
-                memberSearchQuery,
-                memberRoleFilter,
-                memberStatusFilter,
-                roleOptions,
-                statusOptions,
-              }),
-            ).join("")}
-            <button class="library-team-link-button compact" type="button" data-action="reset-team-member-filters">重置</button>
-          </div>
-        </form>
-        <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
-      </div>
-      <div class="library-team-table-wrap">
-        <table>
-          <thead>
-            <tr>${memberTableColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
-          </thead>
-          <tbody>
-            ${
-              rows.length
-                ? rows.join("")
-                : renderMemberEmptyRow(createState, { hasMembers: visibleMembers.length > 0 })
-            }
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-function renderCreditManagementPanel({
-  rows = [],
-  operationFilter = "all",
-  searchQuery = "",
-  dateShortcut = "近7天",
-} = {}) {
-  const shortcuts = ["昨天", "近7天", "近30天"];
-  const operationOptions = [
-    { value: "all", label: "全部" },
-    { value: "allocate", label: "分配积分" },
-    { value: "recover", label: "回收积分" },
-    { value: "consume", label: "消耗积分" },
-    { value: "expire", label: "过期回收" },
-  ];
-
-  return `
-    <div class="team-credit-panel" data-team-panel="credits">
-      <div class="team-member-panel-tools">
-        <form class="library-team-filterbar" aria-label="积分流水筛选器">
-          <div class="library-team-filter-fields">
-            <label class="library-team-field">
-              <span>操作类型</span>
-              <select data-action="set-team-credit-operation-filter" aria-label="操作类型">
-                ${operationOptions.map((option) => `<option value="${escapeAttr(option.value)}" ${operationFilter === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-              </select>
-            </label>
-            <label class="library-team-field">
-              <span>搜索账号 / 名称</span>
-              <input type="text" value="${escapeAttr(searchQuery)}" placeholder="搜索账号 / 名称" data-action="search-team-credit-ledger" />
-            </label>
-          </div>
-          <div class="library-team-date-shortcuts">
-            ${shortcuts.map((shortcut) => `
-              <button class="library-team-tab${shortcut === dateShortcut ? " is-active" : ""}" type="button" data-action="set-team-credit-date-shortcut" data-team-credit-date-shortcut="${escapeAttr(shortcut)}">${escapeHtml(shortcut)}</button>
-            `).join("")}
-          </div>
-        </form>
-      </div>
-      <div class="library-team-table-wrap">
-        <table>
-          <thead>
-            <tr>${["操作时间", "被操作人", "被操作人账号", "操作类型", "变更积分", "操作人", "操作人账号", "备注"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
-          </thead>
-          <tbody>
-            ${
-              Array.isArray(rows) && rows.length
-                ? rows.map(renderCreditLedgerRow).join("")
-                : `<tr><td colspan="8"><div class="library-team-empty-state"><div class="library-team-empty-icon" aria-hidden="true">0</div><div><h3>暂无积分管理记录</h3><p>分配、回收和消耗流水接入后会显示在这里。</p></div></div></td></tr>`
-            }
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-function renderCreditLedgerRow(row = {}) {
-  return `
-    <tr>
-      <td>${escapeHtml(row.createdAt ?? row.time ?? "-")}</td>
-      <td>${escapeHtml(row.targetName ?? row.memberName ?? "-")}</td>
-      <td>${escapeHtml(row.targetAccount ?? row.memberAccount ?? "-")}</td>
-      <td>${escapeHtml(row.operationLabel ?? row.operationType ?? "-")}</td>
-      <td>${escapeHtml(row.deltaCredits ?? row.credits ?? 0)}</td>
-      <td>${escapeHtml(row.operatorName ?? "-")}</td>
-      <td>${escapeHtml(row.operatorAccount ?? "-")}</td>
-      <td>${escapeHtml(row.remark ?? row.note ?? "-")}</td>
-    </tr>
-  `;
-}
-
-function renderOwnerMemberRow(ownerAccount = {}) {
-  const displayName = ownerAccount.displayName ?? "主账号";
-  const account = ownerAccount.phone ?? ownerAccount.userId ?? "-";
-  const credits = ownerAccount.creditBalance ?? ownerAccount.credits ?? "-";
-  return `
-    <tr class="library-team-owner-row">
-      <td><span class="library-team-row-check is-locked" aria-hidden="true"></span></td>
-      <td>
-        <strong>${escapeHtml(displayName)}</strong>
-        <small>团队拥有者</small>
-      </td>
-      <td>${escapeHtml(account)}</td>
-      <td>主账号</td>
-      <td>团队直属</td>
-      <td>默认参与团队全部项目</td>
-      <td>${escapeHtml(credits)}</td>
-      <td>不占子账号席位</td>
-      <td><span class="library-team-muted">锁定</span></td>
-    </tr>
-  `;
-}
-
 export function renderTeamDashboardPage(context = {}) {
-  const team = context.team ?? {};
-  const hasOverview = Boolean(context.overview ?? context.team?.overview ?? context.membershipStatus);
-  const overview = resolveEffectiveTeamOverview(
-    context.overview ?? context.team?.overview ?? null,
-    context.membershipStatus ?? null,
-  );
-  if (hasOverview && (overview?.entitlements?.teamDashboard !== true || overview?.permissions?.canViewDashboard === false)) {
-    return renderTeamPage({
-      ...context,
-      overview,
-      members: [],
-    });
-  }
-  const stats = context.stats ?? overview?.stats ?? overview?.metrics ?? overview ?? {};
+  const stats = context.stats ?? {};
   const members = Array.isArray(context.members) ? context.members : [];
-  const dashboardTab = normalizeDashboardTab(context.dashboardTab ?? team.dashboardTab);
-  const dashboardDateRange = normalizeDashboardDateRange(context.dashboardDateRange ?? team.dashboardDateRange);
-  const dashboardDateShortcut = String(context.dashboardDateShortcut ?? team.dashboardDateShortcut ?? dashboardDateShortcuts[0] ?? "today");
+  const dashboardTab = String(context.dashboardTab ?? "member-consumption");
+  const dashboardDateShortcut = String(context.dashboardDateShortcut ?? dashboardDateShortcuts[0] ?? "today");
   const dashboardRoleFilter = String(context.dashboardRoleFilter ?? "all");
   const dashboardStatusFilter = String(context.dashboardStatusFilter ?? "all");
-  const dashboardSearchQuery = String(context.dashboardSearchQuery ?? team.dashboardSearchQuery ?? "");
   const filteredMembers = filterDashboardMembers(members, {
     role: dashboardRoleFilter,
     status: dashboardStatusFilter,
-    query: dashboardSearchQuery,
   });
   const selectedDashboardMemberId = String(context.selectedDashboardMemberId ?? filteredMembers[0]?.id ?? "");
   const activeMember =
@@ -517,10 +314,6 @@ export function renderTeamDashboardPage(context = {}) {
     filteredMembers[0] ??
     null;
   const dashboardSummary = buildDashboardSummary(stats, filteredMembers);
-  const dashboardSummaryTitleId =
-    dashboardTab === "project-cost"
-      ? "dashboard-project-cost-title"
-      : (dashboardTab === "ranking" ? "dashboard-ranking-title" : "dashboard-member-consumption-title");
   const roleOptions = ["all", ...new Set(members.map((member) => String(member?.role ?? "").trim()).filter(Boolean))];
   const statusOptions = ["all", ...new Set(members.map((member) => String(member?.status ?? "").trim()).filter(Boolean))];
 
@@ -537,15 +330,17 @@ export function renderTeamDashboardPage(context = {}) {
         </header>
         <nav class="library-team-tabs" role="tablist" aria-label="团队数据看板">
           ${DASHBOARD_TABS.map((tab) => `
-            <button class="library-team-tab${tab.id === dashboardTab ? " is-active" : ""}" type="button" role="tab" data-action="set-team-dashboard-tab" data-dashboard-tab="${escapeAttr(tab.id)}" aria-selected="${tab.id === dashboardTab ? "true" : "false"}">${escapeHtml(tab.label)}</button>
+            <button class="library-team-tab${tab.id === dashboardTab ? " is-active" : ""}" type="button" role="tab" aria-selected="${tab.id === dashboardTab ? "true" : "false"}" data-action="set-team-dashboard-tab" data-dashboard-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>
           `).join("")}
         </nav>
-        <section class="library-team-card" data-dashboard-panel="${escapeAttr(dashboardTab)}" aria-labelledby="${dashboardSummaryTitleId}">
+        <section class="library-team-card" aria-labelledby="dashboard-summary-title">
           <p class="library-team-kicker">总览</p>
-          <h2 id="${dashboardSummaryTitleId}">${escapeHtml(resolveDashboardTabTitle(dashboardTab))}</h2>
-          ${dashboardTab === "ranking" ? '<div class="library-team-ranking-grid"></div>' : ""}
+          <h2 id="dashboard-summary-title">${escapeHtml(resolveDashboardTabTitle(dashboardTab))}</h2>
           <dl class="library-team-metric-grid compact">
-            ${renderDashboardSummaryMetrics(dashboardTab, dashboardSummary, stats)}
+            ${renderMetric("成员数", dashboardSummary.memberCount)}
+            ${renderMetric("启用成员数", dashboardSummary.enabledMemberCount)}
+            ${renderMetric("成员总消耗积分", dashboardSummary.totalCredits)}
+            ${renderMetric("成员均消耗积分", dashboardSummary.averageCredits)}
           </dl>
         </section>
         <section class="library-team-card" aria-labelledby="dashboard-detail-title">
@@ -556,23 +351,35 @@ export function renderTeamDashboardPage(context = {}) {
             </div>
             <button class="library-team-button library-team-button-primary" type="button" data-action="export-team-dashboard">导出</button>
           </header>
-          ${renderDashboardFilters({
-            dashboardTab,
-            dashboardDateRange,
-            dashboardDateShortcut,
-            dashboardRoleFilter,
-            dashboardSearchQuery,
-            dashboardStatusFilter,
-            roleOptions,
-            statusOptions,
-          })}
-          ${renderDashboardDetailContent({
-            dashboardTab,
-            dashboardDateRange,
-            filteredMembers,
-            selectedDashboardMemberId,
-            stats,
-          })}
+          <div class="library-team-filterbar">
+            <label class="library-team-field">
+              <span>角色</span>
+              <select data-action="set-team-dashboard-role-filter">${renderSelectOptions(roleOptions, dashboardRoleFilter)}</select>
+            </label>
+            <label class="library-team-field">
+              <span>状态</span>
+              <select data-action="set-team-dashboard-status-filter">${renderSelectOptions(statusOptions, dashboardStatusFilter)}</select>
+            </label>
+            <div class="library-team-date-shortcuts">
+              ${dashboardDateShortcuts.map((shortcut) => `
+                <button class="library-team-tab${shortcut === dashboardDateShortcut ? " is-active" : ""}" type="button" data-action="set-team-dashboard-date-shortcut" data-dashboard-date-shortcut="${escapeAttr(shortcut)}">${escapeHtml(shortcut)}</button>
+              `).join("")}
+            </div>
+          </div>
+          <div class="library-team-table-wrap">
+            <table>
+              <thead>
+                <tr>${["账号", "成员名称", "角色", "总消耗积分", "创作剧本数", "项目均消耗积分", "创作项目数", "项目均消耗积分", "操作"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+              </thead>
+              <tbody>
+                ${
+                  filteredMembers.length
+                    ? filteredMembers.map((member, index) => renderDashboardRow(member, index, selectedDashboardMemberId)).join("")
+                    : `<tr><td colspan="9"><div class="library-team-empty-state"><div class="library-team-empty-icon" aria-hidden="true">0</div><div><h3>暂无数据</h3><p>开始团队协作后，这里会显示成员消耗和项目成本。</p></div></div></td></tr>`
+                }
+              </tbody>
+            </table>
+          </div>
           ${renderDashboardInspector(activeMember, dashboardTab, dashboardDateShortcut)}
         </section>
       </div>
@@ -588,187 +395,6 @@ function normalizeDashboardTab(tab) {
 function normalizeDashboardDateRange(range) {
   const normalizedRange = String(range ?? "");
   return dashboardDateRangeIds.has(normalizedRange) ? normalizedRange : "today";
-}
-
-function renderDashboardSummaryMetrics(tabId, summary, stats = {}) {
-  if (tabId === "project-cost") {
-    const projectCount = Number(stats.projectCount ?? stats.projects ?? stats.metrics?.projects ?? 0);
-    const totalCredits = Number(stats.projectTotalCredits ?? stats.totalCredits ?? summary.totalCredits ?? 0);
-    const averageProjectCredits = projectCount > 0 ? Math.round(totalCredits / projectCount) : Number(stats.projectAverageCredits ?? 0);
-    return [
-      renderMetric("项目总数", projectCount),
-      renderMetric("项目总消耗积分", totalCredits),
-      renderMetric("项目均消耗积分", averageProjectCredits),
-      renderMetric("角色/场景/道具均消耗积分", Number(stats.assetAverageCredits ?? 0)),
-      renderMetric("剧集均消耗积分", Number(stats.episodeAverageCredits ?? 0)),
-    ].join("");
-  }
-
-  if (tabId === "ranking") {
-    return [
-      renderMetric("成员数", summary.memberCount),
-      renderMetric("成员总消耗积分", summary.totalCredits),
-      renderMetric("成员均消耗积分", summary.averageCredits),
-      renderMetric("项目总消耗积分", Number(stats.projectTotalCredits ?? stats.totalCredits ?? summary.totalCredits ?? 0)),
-    ].join("");
-  }
-
-  return [
-    renderMetric("成员数", summary.memberCount),
-    renderMetric("启用成员数", summary.enabledMemberCount),
-    renderMetric("成员总消耗积分", summary.totalCredits),
-    renderMetric("成员均消耗积分", summary.averageCredits),
-  ].join("");
-}
-
-function renderDashboardFilters({
-  dashboardTab,
-  dashboardDateRange,
-  dashboardDateShortcut,
-  dashboardRoleFilter,
-  dashboardSearchQuery,
-  dashboardStatusFilter,
-  roleOptions,
-  statusOptions,
-}) {
-  const memberFiltersHtml = dashboardTab === "member-consumption"
-    ? `
-      <label class="library-team-field">
-        <span>搜索成员名称</span>
-        <input type="text" value="${escapeAttr(dashboardSearchQuery)}" placeholder="搜索成员名称" data-action="search-team-dashboard-members" />
-      </label>
-      <label class="library-team-field">
-        <span>角色</span>
-        <select data-action="set-team-dashboard-role-filter">${renderSelectOptions(roleOptions, dashboardRoleFilter)}</select>
-      </label>
-      <label class="library-team-field">
-        <span>状态</span>
-        <select data-action="set-team-dashboard-status-filter">${renderSelectOptions(statusOptions, dashboardStatusFilter)}</select>
-      </label>
-    `
-    : "";
-
-  return `
-    <div class="library-team-filterbar">
-      ${memberFiltersHtml}
-      <div class="library-team-date-shortcuts">
-        ${dashboardDateShortcuts.map((shortcut) => `
-          <button class="library-team-tab${shortcut === dashboardDateShortcut ? " is-active" : ""}" type="button" data-action="set-team-dashboard-date-shortcut" data-dashboard-date-shortcut="${escapeAttr(shortcut)}">${escapeHtml(shortcut)}</button>
-        `).join("")}
-      </div>
-      ${renderDashboardDateShortcuts(dashboardDateRange)}
-    </div>
-  `;
-}
-
-function renderDashboardDetailContent({
-  dashboardTab,
-  dashboardDateRange,
-  filteredMembers,
-  selectedDashboardMemberId,
-  stats,
-}) {
-  if (dashboardTab === "project-cost") {
-    return renderProjectCostDashboardTable(stats);
-  }
-  if (dashboardTab === "ranking") {
-    return renderRankingDashboardCards(filteredMembers, dashboardDateRange);
-  }
-  return renderMemberConsumptionDashboardTable(filteredMembers, selectedDashboardMemberId);
-}
-
-function renderMemberConsumptionDashboardTable(filteredMembers, selectedDashboardMemberId) {
-  return `
-    <div class="library-team-table-wrap">
-      <table>
-        <thead>
-          <tr>${["账号", "成员名", "角色", "创作项目数", "创作剧本数", "创作剧集数", "总消耗积分", "项目均消耗积分", "操作"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
-        </thead>
-        <tbody>
-          ${
-            filteredMembers.length
-              ? filteredMembers.map((member, index) => renderDashboardRow(member, index, selectedDashboardMemberId)).join("")
-              : renderDashboardEmptyRow(9, "开始团队协作后，这里会显示成员消耗和项目成本。")
-          }
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderProjectCostDashboardTable(stats = {}) {
-  const projectRows = Array.isArray(stats.projects) ? stats.projects : [];
-  return `
-    <div class="library-team-table-wrap">
-      <table>
-        <thead>
-          <tr>${["项目名称", "所属成员组", "剧本字数", "积分消耗最高成员", "项目总消耗积分", "资产数", "资产总消耗积分", "资产均消耗积分", "剧集数", "剧集均消耗积分"].map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
-        </thead>
-        <tbody>
-          ${
-            projectRows.length
-              ? projectRows.map(renderProjectCostRow).join("")
-              : renderDashboardEmptyRow(10, "项目统计会在项目消耗流水接入后显示。")
-          }
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderProjectCostRow(project = {}) {
-  return `
-    <tr>
-      <td>${escapeHtml(project.name ?? "-")}</td>
-      <td>${escapeHtml(project.memberGroup ?? "团队直属")}</td>
-      <td>${escapeHtml(project.scriptWordCount ?? 0)}</td>
-      <td>${escapeHtml(project.topConsumerName ?? "-")}</td>
-      <td>${escapeHtml(project.totalCredits ?? 0)}</td>
-      <td>${escapeHtml(project.assetCount ?? 0)}</td>
-      <td>${escapeHtml(project.assetTotalCredits ?? 0)}</td>
-      <td>${escapeHtml(project.assetAverageCredits ?? 0)}</td>
-      <td>${escapeHtml(project.episodeCount ?? 0)}</td>
-      <td>${escapeHtml(project.episodeAverageCredits ?? 0)}</td>
-    </tr>
-  `;
-}
-
-function renderRankingDashboardCards(members, activeDateRange) {
-  const memberRows = members
-    .slice()
-    .sort((left, right) => Number(right.creditQuota ?? right.consumedCredits ?? 0) - Number(left.creditQuota ?? left.consumedCredits ?? 0))
-    .slice(0, 10);
-  return `
-    <div class="library-team-ranking-grid">
-      ${renderRankingCard({
-        title: "成员组集均消耗排行榜",
-        columns: ["序号", "成员组", "积分"],
-        body: renderDashboardEmptyRow(3, "暂无成员组消耗排行。", { compact: true }),
-        activeDateRange,
-      })}
-      ${renderRankingCard({
-        title: "成员积分消耗排行榜",
-        columns: ["序号", "账号", "成员名称", "积分"],
-        body: memberRows.length
-          ? memberRows.map((member, index) => `
-              <tr>
-                <td>${escapeHtml(index + 1)}</td>
-                <td>${escapeHtml(member.phone ?? member.userId ?? "-")}</td>
-                <td>${escapeHtml(member.displayName ?? member.note ?? "-")}</td>
-                <td>${escapeHtml(member.creditQuota ?? member.consumedCredits ?? 0)}</td>
-              </tr>
-            `).join("")
-          : renderDashboardEmptyRow(4, "暂无成员消耗排行。", { compact: true }),
-        activeDateRange,
-      })}
-      ${renderRankingCard({
-        title: "项目积分消耗排行榜",
-        columns: ["序号", "项目名称", "积分"],
-        body: renderDashboardEmptyRow(3, "暂无项目消耗排行。", { compact: true }),
-        activeDateRange,
-      })}
-    </div>
-  `;
 }
 
 function renderDashboardTabs(activeTab) {
@@ -1006,9 +632,9 @@ function renderTeamGate(createState) {
         <div>
           <p class="library-team-kicker">团队协作资格</p>
           <h2>已获得团队协作资格</h2>
-          <p>当前仍按个人专业版使用。创建第一个成员账号后，再开启团队成员管理、项目范围分配和团队数据看板。</p>
+          <p>当前仍按个人专业版使用。创建子账户后，再开启团队成员管理、项目范围分配和团队数据看板。</p>
         </div>
-        <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>创建成员账号</button>
+        <button class="library-team-button library-team-button-primary" type="button" data-action="open-team-member-create">创建子账户</button>
       </section>
     `;
   }
@@ -1021,7 +647,7 @@ function renderTeamGate(createState) {
           <h2>专业版已开通</h2>
           <p>可创建成员账号、分配项目范围和积分额度。临时密码只在创建或重置时显示。</p>
         </div>
-        <button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>创建成员账号</button>
+        <button class="library-team-button library-team-button-primary" type="button" data-action="open-team-member-create">创建子账户</button>
       </section>
     `;
   }
@@ -1111,7 +737,6 @@ function renderFixtureMemberRow(member) {
     <tr>
       <td>${escapeHtml(member.teamAccount)}</td>
       <td>${escapeHtml(member.displayName)}</td>
-      <td>${escapeHtml(mapMemberRoleLabel(member.businessRole))}</td>
       <td>${escapeHtml(projectScopeLabel(member))}</td>
       <td>${escapeHtml(member.memberGroupId ? "成员组" : "团队直属")}</td>
       <td><span class="library-team-status-pill">${escapeHtml(statusLabel(member.status))}</span></td>
@@ -1127,7 +752,6 @@ function renderDashboardMemberRow(member) {
     <tr>
       <td>${escapeHtml(member.teamAccount)}</td>
       <td>${escapeHtml(member.displayName)}</td>
-      <td>${escapeHtml(mapMemberRoleLabel(member.businessRole))}</td>
       <td>${escapeHtml(member.creditUsed ?? 0)}</td>
       <td>0</td>
       <td>0</td>
@@ -1141,9 +765,7 @@ function renderDashboardMemberRow(member) {
 function renderMemberEmptyRow(createState, options = {}) {
   const hasMembers = options.hasMembers === true;
   const title = hasMembers ? "未找到匹配成员" : "创建成员开始团队协作";
-  const message = hasMembers
-    ? "尝试调整关键词、角色或状态筛选。"
-    : "邀请成员后，这里会显示账号、角色、项目范围与积分额度。";
+  const message = hasMembers ? "尝试调整关键词、角色或状态筛选。" : "";
   const action = hasMembers
     ? ""
     : `<button class="library-team-button library-team-button-primary" type="button" ${renderActionAttrs(createState.action, createState.message)}>${escapeHtml(createState.buttonLabel)}</button>`;
@@ -1155,7 +777,7 @@ function renderMemberEmptyRow(createState, options = {}) {
           <div class="library-team-empty-icon" aria-hidden="true">成员</div>
           <div>
             <h3>${escapeHtml(title)}</h3>
-            <p>${escapeHtml(message)}</p>
+            ${message ? `<p>${escapeHtml(message)}</p>` : ""}
           </div>
           ${action}
         </div>
@@ -1164,18 +786,50 @@ function renderMemberEmptyRow(createState, options = {}) {
   `;
 }
 
-function renderFixtureCreateMemberModal({ open, draft = {}, notice = "", temporaryPassword = "" }) {
+function renderFixtureCreateMemberModal(modal = {}) {
+  const { open, draft = {}, notice = "", temporaryPassword = "" } = modal ?? {};
   if (!open) {
     return "";
   }
 
+  const suffix = String(draft.teamAccountSuffix ?? "").trim().toLowerCase();
+  const teamAccount = String(draft.teamAccount ?? "");
+  const loginAccount = String(
+    draft.memberLoginAccount ??
+    draft.member_login_account ??
+    (suffix && teamAccount ? `${teamAccount}@${suffix}` : ""),
+  ).trim();
+  const accountPrefix = suffix
+    ? (teamAccount || loginAccount.replace(new RegExp(`@${suffix}$`, "i"), "").split("@")[0].trim())
+    : (loginAccount || teamAccount);
+  const roleOptions = [
+    ["director", "导演"],
+    ["producer", "制片"],
+    ["viewer", "查看者"],
+  ];
   const safeDraft = {
-    teamAccount: draft.teamAccount ?? "",
+    teamAccount,
     displayName: draft.displayName ?? "",
-    businessRole: draft.businessRole ?? "director",
+    password: draft.password ?? "",
     initialCredits: draft.initialCredits ?? 0,
     remark: draft.remark ?? "",
+    projectIds: Array.isArray(draft.projectIds) ? draft.projectIds.map((item) => String(item ?? "")) : [],
+    scriptIds: Array.isArray(draft.scriptIds) ? draft.scriptIds.map((item) => String(item ?? "")) : [],
+    canvasIds: Array.isArray(draft.canvasIds) ? draft.canvasIds.map((item) => String(item ?? "")) : [],
   };
+  const selectedProjectIds = new Set(safeDraft.projectIds.filter(Boolean));
+  const selectedScriptIds = new Set(safeDraft.scriptIds.filter(Boolean));
+  const selectedCanvasIds = new Set(safeDraft.canvasIds.filter(Boolean));
+  const availableProjects = Array.isArray(modal.availableProjects) ? modal.availableProjects : [];
+  const availableScripts = Array.isArray(modal.availableScripts) ? modal.availableScripts : [];
+  const availableCanvases = Array.isArray(modal.availableCanvases) ? modal.availableCanvases : [];
+  const resourceCounts = modal.resourceCounts ?? {};
+  const selectedProjectCount = selectedProjectIds.size;
+  const selectedScriptCount = selectedScriptIds.size;
+  const selectedCanvasCount = selectedCanvasIds.size;
+  const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
+  const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
+  const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
 
   return `
     <div class="library-team-modal-backdrop" data-modal="team-member-create">
@@ -1187,35 +841,63 @@ function renderFixtureCreateMemberModal({ open, draft = {}, notice = "", tempora
       >
         <header class="library-team-modal-header">
           <div>
-            <p class="library-team-kicker">成员账号</p>
             <h2 id="team-member-create-title">创建成员账号</h2>
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-team-member-create" aria-label="关闭创建成员弹窗">×</button>
         </header>
         <div class="library-team-form-grid">
           <label class="library-team-field stacked">
-            <span>账号</span>
-            <input id="team-member-team-account" type="text" value="${escapeAttr(safeDraft.teamAccount)}" placeholder="director001" autocomplete="off" />
+            <span>成员账户 / 登录账户</span>
+            <span class="library-team-account-input-group">
+              <input id="team-member-team-account" type="text" value="${escapeAttr(accountPrefix)}" placeholder="director001" autocomplete="off" />
+              ${suffix ? `<strong>@${escapeHtml(suffix)}</strong>` : ""}
+            </span>
           </label>
           <label class="library-team-field stacked">
             <span>成员名称</span>
             <input id="team-member-display-name" type="text" value="${escapeAttr(safeDraft.displayName)}" placeholder="导演一号" autocomplete="off" />
           </label>
           <label class="library-team-field stacked">
-            <span>角色</span>
-            <select id="team-member-business-role">
-              ${teamRoleOptions.map((role) => `<option value="${escapeAttr(role.key)}"${safeDraft.businessRole === role.key ? " selected" : ""}>${escapeHtml(role.label)}</option>`).join("")}
-            </select>
+            <span>初始密码</span>
+            <input id="team-member-password" type="text" value="${escapeAttr(safeDraft.password)}" placeholder="至少8位，不填默认密码为：12345678" autocomplete="new-password" />
           </label>
           <label class="library-team-field stacked">
             <span>初始积分</span>
-            <input id="team-member-initial-credits" type="number" min="0" step="1" value="${escapeAttr(safeDraft.initialCredits)}" />
+            <input id="team-member-initial-credits" type="number" min="0" step="1" value="${escapeAttr(Math.max(0, Number(safeDraft.initialCredits) || 0))}" />
           </label>
           <label class="library-team-field stacked wide">
             <span>备注</span>
             <textarea id="team-member-remark" rows="3" placeholder="可填写成员职责或项目范围">${escapeHtml(safeDraft.remark)}</textarea>
           </label>
+          <div class="library-team-field stacked wide">
+            <span>可分配资源</span>
+            <div class="team-member-resource-launch-grid">
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "project",
+                label: "项目",
+                selectedCount: selectedProjectCount,
+                totalCount: totalProjectCount,
+              })}
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "script",
+                label: "剧本",
+                selectedCount: selectedScriptCount,
+                totalCount: totalScriptCount,
+              })}
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "canvas",
+                label: "画布",
+                selectedCount: selectedCanvasCount,
+                totalCount: totalCanvasCount,
+              })}
+            </div>
+            <p class="team-member-resource-hint">点击资源类型后勾选可见范围；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
+          </div>
         </div>
+        ${notice ? `<p class="library-team-inline-status" role="status">${escapeHtml(notice)}</p>` : ""}
         ${
           temporaryPassword
             ? `<div class="library-team-secret-note" role="status">
@@ -1225,12 +907,20 @@ function renderFixtureCreateMemberModal({ open, draft = {}, notice = "", tempora
               </div>`
             : ""
         }
-        ${notice ? `<p class="library-team-inline-status" role="status">${escapeHtml(notice)}</p>` : ""}
         <footer class="library-team-modal-actions">
           <button class="library-team-button" type="button" data-action="close-team-member-create">取消</button>
           <button class="library-team-button library-team-button-primary" type="button" data-action="submit-team-member-create">创建成员账号</button>
         </footer>
       </section>
+      ${renderCreateMemberResourcePickerModal({
+        modal,
+        selectedProjectIds,
+        selectedScriptIds,
+        selectedCanvasIds,
+        availableProjects,
+        availableScripts,
+        availableCanvases,
+      })}
     </div>
   `;
 }
@@ -1254,6 +944,11 @@ function buildTeamMetrics(overview, members, fallback) {
     remainingCredits: allocatableCredits,
     distributableCredits: allocatableCredits,
   };
+}
+
+function resolveResourceTotalCount(value, fallback) {
+  const total = Number(value ?? fallback ?? 0);
+  return Number.isFinite(total) && total >= 0 ? Math.floor(total) : 0;
 }
 
 function renderMetric(label, value, actionLabel) {
@@ -1350,16 +1045,20 @@ function filterMembers(members, filters = {}) {
       return true;
     }
     return [
+      member?.teamAccount,
+      member?.displayName,
       member?.phone,
       member?.userId,
       member?.role,
       member?.status,
-      mapMemberRoleLabel(member?.role),
       mapMemberStatusLabel(member?.status),
+      member?.creditBalance,
+      member?.creditUsed,
       member?.consumedCredits,
       member?.scriptCount,
       member?.projectCount,
       member?.projectAverageCredits,
+      member?.remark,
       member?.note,
     ]
       .filter(Boolean)
@@ -1367,31 +1066,73 @@ function filterMembers(members, filters = {}) {
   });
 }
 
-function renderMemberRow(member, index) {
-  const name = member.phone ?? member.userId ?? `成员 ${index + 1}`;
-  const note = member.note ?? "-";
+function renderMemberRow(member, index, createState = {}) {
+  const name = member.memberName ?? member.displayName ?? member.phone ?? member.userId ?? `成员 ${index + 1}`;
+  const teamAccount = String(member.teamAccount ?? member.memberAccount ?? member.member_account ?? member.phone ?? member.userId ?? "-").trim();
+  const account = renderTeamMemberLoginAccount(member);
+  const note = member.remark ?? member.note ?? "-";
   const projectScope = member.projectScope ?? "当前工作区";
   const memberGroup = member.memberGroup ?? "默认组";
-  const creditQuota = member.creditQuota ?? member.consumedCredits ?? 0;
+  const creditQuota = member.creditQuota ?? member.creditBalance ?? member.consumedCredits ?? 0;
   const legacyScriptCount = member.scriptCount ?? "";
   const legacyProjectCount = member.projectCount ?? "";
-  const roleLabel = mapMemberRoleLabel(member.role);
-  const roleCell = isLegacyMemberRole(member.role)
-    ? `<span>${escapeHtml(roleLabel)}</span><small>建议迁移到新角色</small>`
-    : escapeHtml(roleLabel);
+  const isEntitlementLocked = createState?.reason === "entitlement";
+  const actionLabel = isEntitlementLocked ? "开通专业版" : "编辑";
+  const memberId = member.membershipId ?? member.id ?? "";
+  const memberStatus = String(member.status ?? "");
+  const nextStatus = memberStatus === "disabled" ? "active" : "disabled";
+  const statusActionLabel = nextStatus === "disabled" ? "禁用" : "启动";
+  const actionAttrs = isEntitlementLocked
+    ? renderActionAttrs("open-pricing")
+    : `data-action="open-edit-member" data-member-id="${escapeAttr(memberId)}"`;
+  const statusActionAttrs = isEntitlementLocked
+    ? renderActionAttrs("open-pricing")
+    : `data-action="toggle-team-member-status" data-member-id="${escapeAttr(memberId)}" data-next-status="${escapeAttr(nextStatus)}"`;
+  const deleteActionAttrs = isEntitlementLocked
+    ? renderActionAttrs("open-pricing")
+    : `data-action="delete-team-member" data-member-id="${escapeAttr(memberId)}"`;
   return `
     <tr data-member-script-count="${escapeAttr(legacyScriptCount)}" data-member-project-count="${escapeAttr(legacyProjectCount)}">
       <td><span class="library-team-row-check" aria-hidden="true"></span></td>
+      <td>${escapeHtml(teamAccount)}</td>
+      <td>${escapeHtml(account)}</td>
       <td>${escapeHtml(name)}</td>
-      <td>${escapeHtml(member.phone ?? member.userId ?? "-")}</td>
-      <td class="${isLegacyMemberRole(member.role) ? "library-team-role-legacy" : ""}">${roleCell}</td>
-      <td>${escapeHtml(memberGroup)}</td>
-      <td>${escapeHtml(projectScope)}</td>
       <td>${escapeHtml(creditQuota)}</td>
       <td>${escapeHtml(mapMemberStatusLabel(member.status) ?? (member.status ? String(member.status) : "未知"))}</td>
-      <td><button class="library-team-link-button" type="button" data-action="open-edit-member" data-member-id="${escapeAttr(member.id ?? "")}">${escapeHtml(note === "-" ? "查看" : note)}</button></td>
+      <td>${escapeHtml(member.createdAt ?? member.created_at ?? "-")}</td>
+      <td>${escapeHtml(member.updatedAt ?? member.updated_at ?? "-")}</td>
+      <td>
+        <div class="library-team-actions-inline">
+          <button class="library-team-link-button" type="button" ${actionAttrs}>${escapeHtml(actionLabel)}</button>
+          <button class="library-team-link-button compact" type="button" ${statusActionAttrs}>${escapeHtml(statusActionLabel)}</button>
+          <button class="library-team-link-button compact danger" type="button" ${deleteActionAttrs}>删除</button>
+        </div>
+      </td>
     </tr>
   `;
+}
+
+function renderTeamMemberLoginAccount(member) {
+  const fullAccount = String(member?.memberLoginAccount ?? member?.member_login_account ?? "").trim();
+  if (fullAccount) {
+    return fullAccount;
+  }
+
+  const teamAccount = String(member?.teamAccount ?? member?.memberAccount ?? member?.member_account ?? "").trim();
+  const suffix = String(
+    member?.teamAccountSuffix ??
+    member?.team_account_suffix ??
+    member?.accountSuffix ??
+    member?.memberAccountSuffix ??
+    member?.member_account_suffix ??
+    member?.userTeamAccountSuffix ??
+    "",
+  ).trim().toLowerCase();
+  if (teamAccount && suffix) {
+    return `${teamAccount}@${suffix}`;
+  }
+
+  return teamAccount ? `${teamAccount}@` : member?.phone || member?.userId || "-";
 }
 
 function renderDashboardRow(member, index, selectedDashboardMemberId) {
@@ -1401,11 +1142,10 @@ function renderDashboardRow(member, index, selectedDashboardMemberId) {
     <tr${selected ? ' class="is-selected"' : ""}>
       <td>${escapeHtml(member.phone ?? member.userId ?? "-")}</td>
       <td>${escapeHtml(name)}</td>
-      <td>${escapeHtml(mapMemberRoleLabel(member.role))}</td>
-      <td>${escapeHtml(member.projectCount ?? 0)}</td>
-      <td>${escapeHtml(member.scriptCount ?? 0)}</td>
-      <td>${escapeHtml(member.episodeCount ?? 0)}</td>
       <td>${escapeHtml(member.creditQuota ?? member.consumedCredits ?? 0)}</td>
+      <td>${escapeHtml(member.scriptCount ?? 0)}</td>
+      <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
+      <td>${escapeHtml(member.projectCount ?? 0)}</td>
       <td>${escapeHtml(member.projectAverageCredits ?? 0)}</td>
       <td><button class="library-team-link-button" type="button" data-action="view-team-dashboard-member" data-member-id="${escapeAttr(member.id ?? "")}">查看</button></td>
     </tr>
@@ -1415,7 +1155,6 @@ function renderDashboardRow(member, index, selectedDashboardMemberId) {
 function filterDashboardMembers(members, filters = {}) {
   const roleFilter = String(filters.role ?? "all");
   const statusFilter = String(filters.status ?? "all");
-  const query = String(filters.query ?? "").trim().toLocaleLowerCase();
   return members.filter((member) => {
     if (roleFilter !== "all" && String(member?.role ?? "") !== roleFilter) {
       return false;
@@ -1423,17 +1162,7 @@ function filterDashboardMembers(members, filters = {}) {
     if (statusFilter !== "all" && String(member?.status ?? "") !== statusFilter) {
       return false;
     }
-    if (!query) {
-      return true;
-    }
-    return [
-      member?.phone,
-      member?.userId,
-      member?.displayName,
-      member?.note,
-      mapMemberRoleLabel(member?.role),
-      mapMemberStatusLabel(member?.status),
-    ].filter(Boolean).some((value) => String(value).toLocaleLowerCase().includes(query));
+    return true;
   });
 }
 
@@ -1483,52 +1212,39 @@ function renderDashboardInspector(member, tabId, dateShortcut) {
   `;
 }
 
-function renderCreateMemberModal(modal, options = {}) {
+function renderCreateMemberModal(modal) {
   if (!modal?.open) {
     return "";
   }
-  const memberGroups = Array.isArray(options.memberGroups) ? options.memberGroups : [];
-  const selectedRole = normalizeNewMemberRole(modal.role);
-  const selectedGroupId = String(modal.memberGroupId ?? "");
-
+  const suffix = String(modal.teamAccountSuffix ?? "").trim().toLowerCase();
+  const teamAccount = String(modal.teamAccount ?? "").trim();
   return `
     <div class="library-team-modal-backdrop" data-modal="create-member">
       <section
-        class="library-team-modal"
+        class="library-team-modal library-team-member-create-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-member-title"
       >
         <header class="library-team-modal-header">
           <div>
-            <p class="library-team-kicker">成员账号</p>
             <h2 id="create-member-title">创建成员账号</h2>
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-create-member" aria-label="关闭创建成员弹窗">×</button>
         </header>
         <div class="library-team-modal-scroll">
           <label class="library-team-field">
-            <span>手机号</span>
-            <input
-              id="team-member-phone-input"
-              type="text"
-              value="${escapeAttr(modal.phone ?? "")}"
-              placeholder="请输入中国大陆手机号"
-              data-action="change-create-member-phone"
-            />
-          </label>
-          <label class="library-team-field">
-            <span>角色</span>
-            <select id="team-member-role-input" data-action="change-create-member-role" aria-label="角色">
-              ${teamRoleOptions.map((role) => `<option value="${escapeAttr(role.key)}" ${role.key === selectedRole ? "selected" : ""}>${escapeHtml(role.label)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="library-team-field">
-            <span>成员组</span>
-            <select id="team-member-group-input" data-action="change-create-member-group" aria-label="成员组">
-              <option value="" ${selectedGroupId ? "" : "selected"}>团队直属</option>
-              ${memberGroups.map((group) => `<option value="${escapeAttr(group.id ?? group.name ?? "")}" ${String(group.id ?? group.name ?? "") === selectedGroupId ? "selected" : ""}>${escapeHtml(group.name ?? group.id ?? "未命名成员组")}</option>`).join("")}
-            </select>
+            <span>成员账户</span>
+            <span class="library-team-account-input-group">
+              <input
+                id="team-member-team-account-input"
+                type="text"
+                value="${escapeAttr(teamAccount)}"
+                placeholder="director001"
+                data-action="change-create-member-team-account"
+              />
+              ${suffix ? `<strong>@${escapeHtml(suffix)}</strong>` : ""}
+            </span>
           </label>
           <label class="library-team-field">
             <span>备注</span>
@@ -1551,19 +1267,35 @@ function renderCreateMemberModal(modal, options = {}) {
   `;
 }
 
-function renderEditMemberModal(modal, options = {}) {
+function renderEditMemberModal(modal) {
   if (!modal?.open) {
     return "";
   }
 
   const statusLabel = mapMemberStatusLabel(modal.status) ?? (modal.status ? String(modal.status) : "未知");
-  const memberGroups = Array.isArray(options.memberGroups) ? options.memberGroups : [];
-  const selectedRole = normalizeNewMemberRole(modal.role);
-  const selectedGroupId = String(modal.memberGroupId ?? "");
+  const selectedProjectIds = new Set(
+    (Array.isArray(modal.directProjectIds) ? modal.directProjectIds : modal.projectIds ?? []).map((item) => String(item ?? "")).filter(Boolean),
+  );
+  const selectedScriptIds = new Set(
+    (Array.isArray(modal.scriptIds) ? modal.scriptIds : []).map((item) => String(item ?? "")).filter(Boolean),
+  );
+  const selectedCanvasIds = new Set(
+    (Array.isArray(modal.canvasIds) ? modal.canvasIds : []).map((item) => String(item ?? "")).filter(Boolean),
+  );
+  const availableProjects = Array.isArray(modal.availableProjects) ? modal.availableProjects : [];
+  const availableScripts = Array.isArray(modal.availableScripts) ? modal.availableScripts : [];
+  const availableCanvases = Array.isArray(modal.availableCanvases) ? modal.availableCanvases : [];
+  const selectedProjects = availableProjects.filter((project) => selectedProjectIds.has(String(project?.id ?? "")));
+  const selectedScripts = availableScripts.filter((script) => selectedScriptIds.has(String(script?.id ?? "")));
+  const selectedCanvases = availableCanvases.filter((canvas) => selectedCanvasIds.has(String(canvas?.id ?? "")));
+  const resourceCounts = modal.resourceCounts ?? {};
+  const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
+  const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
+  const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
   return `
     <div class="library-team-modal-backdrop" data-modal="edit-member">
       <section
-        class="library-team-modal"
+        class="library-team-modal library-team-member-modal library-team-member-modal-edit"
         role="dialog"
         aria-modal="true"
         aria-labelledby="edit-member-title"
@@ -1571,81 +1303,415 @@ function renderEditMemberModal(modal, options = {}) {
         <header class="library-team-modal-header">
           <div>
             <p class="library-team-kicker">成员维护</p>
-            <h2 id="edit-member-title">成员详情与权限</h2>
+            <h2 id="edit-member-title">编辑成员</h2>
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-edit-member" aria-label="关闭成员详情弹窗">×</button>
         </header>
-        <div class="library-team-modal-scroll">
-          <label class="library-team-field">
-            <span>手机号</span>
-            <input type="text" value="${escapeAttr(modal.phone ?? "")}" disabled />
-          </label>
-          <label class="library-team-field">
-            <span>角色</span>
-            <select id="team-edit-member-role-input" data-action="change-edit-member-role" aria-label="编辑成员角色">
-              ${teamRoleOptions.map((role) => `<option value="${escapeAttr(role.key)}" ${role.key === selectedRole ? "selected" : ""}>${escapeHtml(role.label)}</option>`).join("")}
-            </select>
-          </label>
-          ${
-            isLegacyMemberRole(modal.role)
-              ? `<p class="library-team-commerce-notice">当前为${escapeHtml(mapMemberRoleLabel(modal.role))}，保存时建议迁移到新角色。</p>`
-              : ""
-          }
-          <label class="library-team-field">
-            <span>成员组</span>
-            <select id="team-edit-member-group-input" data-action="change-edit-member-group" aria-label="编辑成员组">
-              <option value="" ${selectedGroupId ? "" : "selected"}>团队直属</option>
-              ${memberGroups.map((group) => `<option value="${escapeAttr(group.id ?? group.name ?? "")}" ${String(group.id ?? group.name ?? "") === selectedGroupId ? "selected" : ""}>${escapeHtml(group.name ?? group.id ?? "未命名成员组")}</option>`).join("")}
-            </select>
-          </label>
-          <label class="library-team-field">
+        <div class="library-team-modal-scroll library-team-modal-scroll-edit">
+          <div class="library-team-edit-member-identity-grid">
+            <label class="library-team-field stacked">
+              <span>成员账户</span>
+              <input
+                class="library-team-readonly-field"
+                type="text"
+                value="${escapeAttr(
+                  modal.memberLoginAccount ??
+                  modal.member_login_account ??
+                  ((modal.teamAccount || modal.memberAccount) && modal.teamAccountSuffix
+                    ? `${modal.teamAccount ?? modal.memberAccount}@${String(modal.teamAccountSuffix ?? "").trim().toLowerCase()}`
+                    : "") ??
+                  modal.phone ??
+                  ""
+                )}"
+                readonly
+              />
+            </label>
+            <label class="library-team-field stacked">
+              <span>成员名称</span>
+              <input
+                id="team-edit-member-display-name-input"
+                type="text"
+                value="${escapeAttr(modal.displayName ?? "")}"
+                placeholder="请输入成员名称"
+                data-action="change-edit-member-display-name"
+              />
+            </label>
+          </div>
+          <label class="library-team-field stacked wide">
             <span>备注</span>
-            <input
+            <textarea
               id="team-edit-member-note-input"
-              type="text"
-              value="${escapeAttr(modal.note ?? "")}"
+              rows="3"
               placeholder="补充成员职责或协作说明"
               data-action="change-edit-member-note"
+            >${escapeHtml(modal.note ?? "")}</textarea>
+          </label>
+          <label class="library-team-field stacked">
+            <span>新密码</span>
+            <input
+              id="team-edit-member-new-password-input"
+              type="text"
+              placeholder="至少 8 位，留空则不修改"
+              autocomplete="new-password"
+              data-action="change-edit-member-new-password"
+              value="${escapeAttr(modal.newPassword ?? "")}"
             />
           </label>
-          <p class="library-team-commerce-notice">当前状态：${escapeHtml(statusLabel)}。停用后该成员无法继续进入当前工作区，但历史数据会保留。</p>
-          <p class="library-team-commerce-notice">${escapeHtml(modal.notice ?? "")}</p>
+          <div class="library-team-member-inline-grid">
+            <label class="library-team-field stacked">
+              <span>当前积分</span>
+              <input type="text" value="${escapeAttr(modal.creditBalance ?? 0)}" disabled />
+            </label>
+            <label class="library-team-field stacked">
+              <span>积分操作</span>
+              <select id="team-edit-member-credit-action-input" data-action="change-edit-member-credit-adjustment-type" aria-label="编辑成员积分操作">
+                ${[
+                  ["", "不调整"],
+                  ["increase", "分配积分"],
+                  ["deduct", "收回积分"],
+                ].map(([value, label]) => `<option value="${escapeAttr(value)}" ${value === (modal.creditAdjustmentType ?? "") ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="library-team-field stacked">
+              <span>积分数量</span>
+              <input
+                id="team-edit-member-credit-amount-input"
+                type="number"
+                min="0"
+                step="1"
+                value="${escapeAttr(modal.creditAmount ?? "")}"
+                placeholder="不调整可留空"
+                data-action="change-edit-member-credit-amount"
+              />
+            </label>
+          </div>
+          <div class="library-team-field stacked wide">
+            <div class="library-team-member-section-head library-team-member-section-head-compact">
+              <div>
+                <p class="library-team-kicker">资源权限</p>
+                <h3>子账户可见范围</h3>
+              </div>
+              <span class="library-team-member-scope-badge">项目 / 画布 / 剧本</span>
+            </div>
+            <div class="team-member-resource-launch-grid">
+              ${renderEditMemberResourceLaunchButton({
+                type: "project",
+                label: "项目",
+                selectedCount: selectedProjectIds.size,
+                totalCount: totalProjectCount,
+              })}
+              ${renderEditMemberResourceLaunchButton({
+                type: "script",
+                label: "剧本",
+                selectedCount: selectedScriptIds.size,
+                totalCount: totalScriptCount,
+              })}
+              ${renderEditMemberResourceLaunchButton({
+                type: "canvas",
+                label: "画布",
+                selectedCount: selectedCanvasIds.size,
+                totalCount: totalCanvasCount,
+              })}
+            </div>
+            <p class="team-member-resource-hint">三类资源都支持重新勾选；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
+          </div>
         </div>
-        <footer class="library-team-modal-actions">
-          <button class="library-team-button" type="button" data-action="close-edit-member">关闭</button>
-          <button class="library-team-button" type="button" data-action="toggle-member-status">
+        <p class="library-team-inline-status" role="status">${escapeHtml(modal.notice ?? "")}</p>
+        <footer class="library-team-modal-actions library-team-modal-actions-edit">
+          <button class="library-team-button library-team-button-ghost library-team-button-modal-secondary" type="button" data-action="close-edit-member">关闭</button>
+          <button class="library-team-button library-team-button-modal-warning" type="button" data-action="toggle-member-status">
             ${escapeHtml(modal.status === "disabled" ? "恢复成员" : "停用成员")}
           </button>
-          <button class="library-team-button library-team-button-primary" type="button" data-action="submit-edit-member">保存修改</button>
+          <button class="library-team-button library-team-button-primary library-team-button-modal-primary" type="button" data-action="submit-edit-member">保存修改</button>
+        </footer>
+      </section>
+      ${renderEditMemberResourcePickerModal({
+        modal,
+        selectedProjectIds,
+        selectedScriptIds,
+        selectedCanvasIds,
+        availableProjects,
+        availableScripts,
+        availableCanvases,
+      })}
+    </div>
+  `;
+}
+
+function renderEditMemberResourceLaunchButton({ type, label, selectedCount, totalCount }) {
+  return renderTeamMemberResourceLaunchButton({
+    action: "open-edit-member-resource-picker",
+    type,
+    label,
+    selectedCount,
+    totalCount,
+  });
+}
+
+function renderTeamMemberResourceLaunchButton({ action, type, label, selectedCount, totalCount }) {
+  return `
+    <button
+      class="team-member-resource-launch"
+      type="button"
+      data-action="${escapeAttr(action)}"
+      data-resource-type="${escapeAttr(type)}"
+    >
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(selectedCount))} / ${escapeHtml(String(totalCount))}</strong>
+    </button>
+  `;
+}
+
+function renderCreateMemberResourcePickerModal({
+  modal,
+  selectedProjectIds,
+  selectedScriptIds,
+  selectedCanvasIds,
+  availableProjects,
+  availableScripts,
+  availableCanvases,
+}) {
+  const resourceType = String(modal.resourcePickerType ?? "").trim();
+  const config = resolveTeamMemberResourcePickerConfig(resourceType, {
+    selectedProjectIds,
+    selectedScriptIds,
+    selectedCanvasIds,
+    availableProjects,
+    availableScripts,
+    availableCanvases,
+  }, {
+    project: "toggle-team-member-project",
+    script: "toggle-team-member-script",
+    canvas: "toggle-team-member-canvas",
+  });
+  if (!config) {
+    return "";
+  }
+
+  const pagination = resolveResourcePagination(modal.resourcePagination?.[resourceType], config.items.length);
+  const selectedCount = config.selectedIds.size;
+  return `
+    <div class="library-team-modal-backdrop library-team-resource-picker-backdrop" data-modal="team-member-resource-picker">
+      <section
+        class="library-team-modal library-team-resource-picker-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="team-member-resource-picker-title"
+      >
+        <header class="library-team-modal-header library-team-resource-picker-header">
+          <div>
+            <p class="library-team-kicker">可分配资源</p>
+            <h3 id="team-member-resource-picker-title">选择${escapeHtml(config.label)}</h3>
+          </div>
+          <button class="library-team-icon-button" type="button" data-action="close-team-member-resource-picker" aria-label="关闭资源选择弹窗">×</button>
+        </header>
+        <div class="library-team-resource-picker-summary">
+          <span>已选 ${escapeHtml(String(selectedCount))} / ${escapeHtml(String(pagination.total))}</span>
+          <span>每页 10 条</span>
+        </div>
+        <div class="team-member-resource-list team-member-resource-list-selectable library-team-resource-picker-list">
+          ${
+            config.items.length
+              ? config.items.map((item) => renderEditMemberResourcePickerItem(item, config)).join("")
+              : `<p class="team-member-resource-empty">暂无可分配${escapeHtml(config.label)}</p>`
+          }
+        </div>
+        <footer class="library-team-resource-picker-footer">
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-team-member-resource-picker"
+            data-page="${escapeAttr(String(pagination.page - 1))}"
+            ${pagination.page <= 1 ? "disabled" : ""}
+          >上一页</button>
+          <span>第 ${escapeHtml(String(pagination.page))} / ${escapeHtml(String(pagination.totalPages))} 页</span>
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-team-member-resource-picker"
+            data-page="${escapeAttr(String(pagination.page + 1))}"
+            ${pagination.page >= pagination.totalPages ? "disabled" : ""}
+          >下一页</button>
         </footer>
       </section>
     </div>
   `;
 }
 
-function mapMemberRoleLabel(role) {
-  const normalizedRole = String(role ?? "");
-  const newRole = teamRoleOptions.find((option) => option.key === normalizedRole || option.label === normalizedRole);
-  if (newRole) {
-    return newRole.label;
+function renderEditMemberResourcePickerModal({
+  modal,
+  selectedProjectIds,
+  selectedScriptIds,
+  selectedCanvasIds,
+  availableProjects,
+  availableScripts,
+  availableCanvases,
+}) {
+  const resourceType = String(modal.resourcePickerType ?? "").trim();
+  const config = resolveTeamMemberResourcePickerConfig(resourceType, {
+    selectedProjectIds,
+    selectedScriptIds,
+    selectedCanvasIds,
+    availableProjects,
+    availableScripts,
+    availableCanvases,
+  }, {
+    project: "toggle-edit-member-project",
+    script: "toggle-edit-member-script",
+    canvas: "toggle-edit-member-canvas",
+  });
+  if (!config) {
+    return "";
   }
-  if (legacyRoleLabels[normalizedRole]) {
-    return legacyRoleLabels[normalizedRole];
-  }
-  if (normalizedRole === "制片" || normalizedRole === "查看者" || normalizedRole === "创作者") {
-    return `历史角色：${normalizedRole}`;
-  }
-  return normalizedRole || "未设置";
+
+  const pagination = resolveResourcePagination(modal.resourcePagination?.[resourceType], config.items.length);
+  const totalPages = pagination.totalPages;
+  const requestedPage = Math.max(1, Number(modal.resourcePickerPage ?? 1) || 1);
+  const page = Math.min(totalPages, requestedPage);
+  const pageItems = config.items;
+  const selectedCount = config.selectedIds.size;
+  return `
+    <div class="library-team-modal-backdrop library-team-resource-picker-backdrop" data-modal="edit-member-resource-picker">
+      <section
+        class="library-team-modal library-team-resource-picker-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-member-resource-picker-title"
+      >
+        <header class="library-team-modal-header library-team-resource-picker-header">
+          <div>
+            <p class="library-team-kicker">资源权限</p>
+            <h3 id="edit-member-resource-picker-title">子账户可见范围</h3>
+          </div>
+          <button class="library-team-icon-button" type="button" data-action="close-edit-member-resource-picker" aria-label="关闭资源选择弹窗">×</button>
+        </header>
+        <div class="library-team-resource-picker-summary">
+          <span>已选 ${escapeHtml(String(selectedCount))} / ${escapeHtml(String(pagination.total))}</span>
+          <span>第 ${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))} 页</span>
+        </div>
+        <div class="team-member-resource-list team-member-resource-list-selectable library-team-resource-picker-list">
+          ${
+            pageItems.length
+              ? pageItems.map((item) => renderEditMemberResourcePickerItem(item, config)).join("")
+              : `<p class="team-member-resource-empty">暂无可分配${escapeHtml(config.label)}</p>`
+          }
+        </div>
+        <footer class="library-team-resource-picker-footer">
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-edit-member-resource-picker"
+            data-page="${escapeAttr(String(page - 1))}"
+            ${page <= 1 ? "disabled" : ""}
+          >上一页</button>
+          <span>每页 10 条</span>
+          <button
+            class="library-team-button library-team-button-ghost"
+            type="button"
+            data-action="page-edit-member-resource-picker"
+            data-page="${escapeAttr(String(page + 1))}"
+            ${page >= totalPages ? "disabled" : ""}
+          >下一页</button>
+        </footer>
+      </section>
+    </div>
+  `;
 }
 
-function normalizeNewMemberRole(role) {
-  const normalizedRole = String(role ?? "");
-  return teamRoleOptions.some((option) => option.key === normalizedRole) ? normalizedRole : "director";
+function resolveResourcePagination(pagination, fallbackTotal) {
+  const total = resolveResourceTotalCount(pagination?.total, fallbackTotal);
+  const pageSize = resolveResourceTotalCount(pagination?.pageSize, TEAM_MEMBER_RESOURCE_PAGE_SIZE) || TEAM_MEMBER_RESOURCE_PAGE_SIZE;
+  const totalPages = Math.max(1, Number(pagination?.totalPages ?? Math.ceil(total / pageSize)) || 1);
+  const requestedPage = Math.max(1, Number(pagination?.page ?? 1) || 1);
+  return {
+    page: Math.min(totalPages, requestedPage),
+    pageSize,
+    total,
+    totalPages,
+  };
 }
 
-function isLegacyMemberRole(role) {
-  const normalizedRole = String(role ?? "");
-  return Boolean(legacyRoleLabels[normalizedRole]) || normalizedRole === "制片" || normalizedRole === "查看者" || normalizedRole === "创作者";
+function resolveTeamMemberResourcePickerConfig(resourceType, resources, actions) {
+  if (resourceType === "project") {
+    return {
+      label: "项目",
+      items: resources.availableProjects,
+      selectedIds: resources.selectedProjectIds,
+      action: actions.project,
+      idKey: "projectId",
+      fallbackLabel: "未命名项目",
+      getLabel: (item) => item?.name ?? item?.title,
+    };
+  }
+  if (resourceType === "script") {
+    return {
+      label: "剧本",
+      items: resources.availableScripts,
+      selectedIds: resources.selectedScriptIds,
+      action: actions.script,
+      idKey: "scriptId",
+      fallbackLabel: "未命名剧本",
+      getLabel: (item) => item?.title ?? item?.name,
+    };
+  }
+  if (resourceType === "canvas") {
+    return {
+      label: "画布",
+      items: resources.availableCanvases,
+      selectedIds: resources.selectedCanvasIds,
+      action: actions.canvas,
+      idKey: "canvasId",
+      fallbackLabel: "未命名画布",
+      getLabel: (item) => item?.title ?? item?.name,
+    };
+  }
+  return null;
+}
+
+function renderEditMemberResourcePickerItem(item, config) {
+  const resourceId = String(item?.id ?? "");
+  const checked = config.selectedIds.has(resourceId);
+  const label = String(config.getLabel(item) ?? resourceId ?? config.fallbackLabel);
+  return `
+    <label class="team-member-resource-item${checked ? " is-selected" : ""}">
+      <input
+        type="checkbox"
+        data-action="${escapeAttr(config.action)}"
+        data-${escapeAttr(kebabCase(config.idKey))}="${escapeAttr(resourceId)}"
+        ${checked ? "checked" : ""}
+      />
+      <span>${escapeHtml(label || config.fallbackLabel)}</span>
+    </label>
+  `;
+}
+
+function kebabCase(value) {
+  return String(value ?? "").replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
+}
+
+function renderMemberConfirmModal(modal) {
+  if (!modal?.open) {
+    return "";
+  }
+
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="${escapeAttr(modal.title ?? "确认操作")}">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon warning">!</div>
+          <div>
+            <h2>${escapeHtml(modal.title ?? "确认操作")}</h2>
+            <p>${escapeHtml(modal.text ?? "")}</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-member-confirm-modal">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-member-confirm-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="${escapeAttr(modal.confirmAction ?? "confirm-member-action")}">${escapeHtml(modal.confirmLabel ?? "确定")}</button>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function mapMemberStatusLabel(status) {
@@ -1659,4 +1725,18 @@ function mapMemberStatusLabel(status) {
     return "待激活";
   }
   return null;
+}
+
+function mapMemberRoleLabel(role) {
+  const labels = {
+    admin: "管理员",
+    manager: "组管理员",
+    director: "导演",
+    producer: "制片",
+    animator: "动画师",
+    writer: "编剧",
+    editor: "剪辑师",
+    viewer: "查看者",
+  };
+  return labels[String(role ?? "").trim()] ?? null;
 }
