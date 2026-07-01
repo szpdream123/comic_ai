@@ -3245,24 +3245,50 @@
   --home-pointer-x: 50%;
   --home-pointer-y: 46%;
   background:
+    radial-gradient(circle at 53% -8%, oklch(82% 0.18 225 / 0.56), transparent 20rem),
     radial-gradient(circle at 16% 16%, oklch(62% 0.27 292 / 0.34), transparent 25rem),
     radial-gradient(circle at 82% 14%, oklch(73% 0.22 316 / 0.24), transparent 27rem),
     radial-gradient(circle at 58% 74%, oklch(76% 0.17 220 / 0.16), transparent 24rem),
-    linear-gradient(135deg, oklch(9% 0.04 285), oklch(5% 0.03 258) 44%, oklch(8% 0.04 308));
+    linear-gradient(135deg, oklch(8% 0.04 285), oklch(4.5% 0.035 258) 44%, oklch(7% 0.045 308));
   isolation: isolate;
+}
+
+.home-hero::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent 0 14%, oklch(72% 0.16 224 / 0.06) 14.08% 14.16%, transparent 14.32% 36%, oklch(72% 0.16 224 / 0.05) 36.08% 36.16%, transparent 36.32% 64%, oklch(72% 0.16 224 / 0.05) 64.08% 64.16%, transparent 64.32% 86%, oklch(72% 0.16 224 / 0.06) 86.08% 86.16%, transparent 86.32% 100%),
+    linear-gradient(180deg, oklch(100% 0 0 / 0.032) 0 1px, transparent 1px 100%);
+  background-size: 100% 100%, 100% 5.5rem;
+  mask-image: radial-gradient(circle at 50% 38%, black 0 42%, transparent 78%);
+  mix-blend-mode: screen;
+  content: "";
 }
 
 .home-liquid-ether {
   position: absolute;
   inset: -8%;
   z-index: 0;
-  opacity: 0.92;
+  opacity: 1;
   pointer-events: none;
-  filter: saturate(1.22) contrast(1.08);
+  filter: saturate(1.42) contrast(1.12) blur(0.16px);
+}
+
+.home-liquid-ether::before {
+  position: absolute;
+  inset: 4% 9% 16%;
+  background:
+    radial-gradient(ellipse at 50% 28%, oklch(78% 0.18 222 / 0.24), transparent 38%),
+    radial-gradient(ellipse at 40% 62%, oklch(63% 0.28 303 / 0.16), transparent 44%);
+  filter: blur(1.25rem);
+  mix-blend-mode: screen;
+  content: "";
 }
 
 .home-cinematic-sky,
-.home-meteor-field,
+.home-lightfall-field,
 .home-cursor-aura {
   position: absolute;
   inset: 0;
@@ -3272,7 +3298,7 @@
 .home-cinematic-sky {
   z-index: 1;
   overflow: hidden;
-  opacity: 0.88;
+  opacity: 0.94;
 }
 
 .home-starfield-layer,
@@ -3300,82 +3326,61 @@
 }
 
 .home-scanline-layer {
-  opacity: 0.18;
+  opacity: 0.14;
   background:
-    linear-gradient(90deg, transparent, oklch(76% 0.18 226 / 0.2), transparent),
-    repeating-linear-gradient(180deg, transparent 0 0.85rem, oklch(100% 0 0 / 0.08) 0.9rem, transparent 0.95rem);
-  transform: skewY(-8deg) translateY(12%);
+    linear-gradient(90deg, transparent, oklch(76% 0.18 226 / 0.14), transparent),
+    repeating-linear-gradient(90deg, transparent 0 6.4rem, oklch(100% 0 0 / 0.055) 6.48rem, transparent 6.58rem);
+  transform: translateY(8%);
   mask-image: linear-gradient(90deg, transparent, black 26%, black 74%, transparent);
 }
 
-.home-meteor-field {
-  z-index: 2;
+.home-lightfall-field {
+  z-index: 3;
+  inset: -12% -7% -6%;
   overflow: hidden;
+  opacity: 0.98;
+  mix-blend-mode: screen;
+  mask-image:
+    radial-gradient(circle at 52% 34%, black 0 58%, transparent 86%),
+    linear-gradient(90deg, transparent, black 7%, black 93%, transparent);
 }
 
-.home-meteor-field span {
+.home-lightfall-field::before {
   position: absolute;
-  top: -12%;
-  left: var(--meteor-left, 20%);
-  width: var(--meteor-width, 11rem);
-  height: 2px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, oklch(92% 0.1 230 / 0.2), oklch(100% 0 0 / 0.96));
-  filter: drop-shadow(0 0 0.75rem oklch(78% 0.18 225 / 0.46));
-  opacity: 0;
-  transform: rotate(-28deg) translate3d(0, 0, 0);
-  animation: homeMeteorFall var(--meteor-duration, 7s) linear infinite;
-  animation-delay: var(--meteor-delay, 0s);
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 53% 3%, oklch(87% 0.16 221 / 0.34), transparent 28%),
+    radial-gradient(ellipse at 23% 24%, oklch(62% 0.29 294 / 0.16), transparent 37%),
+    radial-gradient(ellipse at 84% 30%, oklch(57% 0.26 281 / 0.14), transparent 40%);
+  filter: blur(0.4rem);
+  opacity: 0.82;
+  content: "";
 }
 
-.home-meteor-field span:nth-child(1) {
-  --meteor-left: 18%;
-  --meteor-width: 10rem;
-  --meteor-duration: 6.8s;
-  --meteor-delay: 0.4s;
+.home-lightfall-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.home-meteor-field span:nth-child(2) {
-  --meteor-left: 42%;
-  --meteor-width: 14rem;
-  --meteor-duration: 8.6s;
-  --meteor-delay: 2.7s;
-}
-
-.home-meteor-field span:nth-child(3) {
-  --meteor-left: 70%;
-  --meteor-width: 8rem;
-  --meteor-duration: 7.4s;
-  --meteor-delay: 4.8s;
-}
-
-.home-meteor-field span:nth-child(4) {
-  --meteor-left: 88%;
-  --meteor-width: 12rem;
-  --meteor-duration: 9.2s;
-  --meteor-delay: 1.6s;
-}
-
-.home-meteor-field span:nth-child(5) {
-  --meteor-left: 28%;
-  --meteor-width: 7rem;
-  --meteor-duration: 10.5s;
-  --meteor-delay: 6.1s;
-}
-
-.home-meteor-field span:nth-child(6) {
-  --meteor-left: 58%;
-  --meteor-width: 11rem;
-  --meteor-duration: 11.4s;
-  --meteor-delay: 8s;
+.home-lightfall-field[data-lightfall-state="failed"] {
+  background:
+    radial-gradient(ellipse at 53% 6%, oklch(84% 0.18 224 / 0.35), transparent 28%),
+    linear-gradient(110deg, transparent 0 17%, oklch(92% 0.08 231 / 0.28) 17.2% 17.34%, transparent 17.6% 44%, oklch(84% 0.15 292 / 0.24) 44.1% 44.25%, transparent 44.5% 69%, oklch(94% 0.06 230 / 0.24) 69.1% 69.24%, transparent 69.5% 100%);
 }
 
 .home-cursor-aura {
-  z-index: 3;
-  opacity: 0.74;
+  z-index: 4;
+  opacity: 0.82;
   background:
-    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), oklch(78% 0.2 224 / 0.28), transparent 10rem),
-    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), oklch(68% 0.29 300 / 0.2), transparent 18rem);
+    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), oklch(80% 0.18 224 / 0.32), transparent 9rem),
+    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), oklch(69% 0.27 300 / 0.2), transparent 17rem),
+    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), oklch(88% 0.11 190 / 0.12), transparent 25rem);
   mix-blend-mode: screen;
   transition: background-position 160ms ease-out;
 }
@@ -3383,17 +3388,18 @@
 .hero-overlay {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: 5;
   pointer-events: none;
   background:
-    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), transparent 0, transparent 8rem, oklch(0% 0 0 / 0.12) 27rem),
-    radial-gradient(circle at 52% 42%, transparent 0, transparent 14rem, oklch(0% 0 0 / 0.28) 35rem),
-    linear-gradient(180deg, oklch(0% 0 0 / 0.08), oklch(0% 0 0 / 0.72));
+    radial-gradient(circle at var(--home-pointer-x) var(--home-pointer-y), transparent 0, transparent 8rem, oklch(0% 0 0 / 0.08) 27rem),
+    radial-gradient(circle at 52% 42%, transparent 0, transparent 12rem, oklch(0% 0 0 / 0.28) 35rem),
+    linear-gradient(90deg, oklch(0% 0 0 / 0.46), transparent 26%, transparent 70%, oklch(0% 0 0 / 0.46)),
+    linear-gradient(180deg, oklch(0% 0 0 / 0.08), oklch(0% 0 0 / 0.68));
 }
 
 .hero-content {
   position: relative;
-  z-index: 5;
+  z-index: 6;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -3541,24 +3547,6 @@
   }
 }
 
-@keyframes homeMeteorFall {
-  0% {
-    opacity: 0;
-    transform: rotate(-28deg) translate3d(0, 0, 0);
-  }
-  8% {
-    opacity: 0.95;
-  }
-  18% {
-    opacity: 0;
-    transform: rotate(-28deg) translate3d(-18rem, 38rem, 0);
-  }
-  100% {
-    opacity: 0;
-    transform: rotate(-28deg) translate3d(-18rem, 38rem, 0);
-  }
-}
-
 @keyframes heroCtaSweep {
   0%,
   46% {
@@ -3572,13 +3560,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .home-starfield-layer,
-  .home-meteor-field span,
   .hero-cta::before {
     animation: none;
-  }
-
-  .home-meteor-field {
-    display: none;
   }
 }
 
@@ -17060,8 +17043,8 @@
   }
 
   .workbench-main.home-mode .global-statusbar {
-    left: calc(var(--workbench-rail-width) + 0.55rem);
-    right: 0.7rem;
+    left: 0.85rem;
+    right: 0.85rem;
     top: 0.8rem;
     align-items: flex-start;
     justify-content: flex-start;
@@ -17104,6 +17087,21 @@
   }
 
   .workbench-main.home-mode .statusbar-quick-action.text-action span:not(.statusbar-action-icon) {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-quick-action.credit-action span:not(.statusbar-action-icon) {
+    display: none;
+  }
+
+  .workbench-main.home-mode .statusbar-quick-action.wallet-action {
+    width: 4rem;
+    min-width: 4rem;
+    gap: 0.3rem;
+    padding: 0 0.55rem;
+  }
+
+  .workbench-main.home-mode .statusbar-quick-action.wallet-action span:not(.statusbar-action-icon) {
     display: none;
   }
 
@@ -17156,6 +17154,20 @@
 
   .script-bulk-actions > .script-bulk-button {
     width: 100%;
+  }
+
+  .home-liquid-ether {
+    inset: -18%;
+    opacity: 0.72;
+  }
+
+  .home-lightfall-field {
+    inset: -10% -16% -8%;
+    opacity: 0.78;
+  }
+
+  .home-cursor-aura {
+    opacity: 0.62;
   }
 
   .overview-strip {
