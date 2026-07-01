@@ -1211,30 +1211,6 @@ function assertMembershipPlanSnapshot(value: unknown): NormalizedMembershipPlanS
   };
 }
 
-function professionalCompatibilitySnapshot(
-  snapshot: NormalizedMembershipPlanSnapshot,
-): NormalizedMembershipPlanSnapshot {
-  if (snapshot.tier !== "professional") {
-    return snapshot;
-  }
-  const entitlements = normalizeProfessionalCompatibilityEntitlements(snapshot.entitlements);
-  return {
-    ...snapshot,
-    entitlements,
-  };
-}
-
-function normalizeProfessionalCompatibilityEntitlements(entitlements: string[]) {
-  const normalized = normalizeStringArray(entitlements);
-  if (
-    normalized.includes("team_member_management") &&
-    !normalized.includes("team_asset_library")
-  ) {
-    return [...normalized, "team_asset_library"];
-  }
-  return normalized;
-}
-
 function assertPaidAt(value: Date | string | null): Date {
   if (!value) {
     throw new Error("membership_order_missing_paid_at");
