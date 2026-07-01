@@ -211,8 +211,8 @@ export class CreditReservationBalanceError extends Error {
 export async function grantCredits(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    userId: string;
+    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
@@ -244,8 +244,8 @@ export async function grantCredits(
 export async function grantCreditsInTransaction(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    userId: string;
+    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
@@ -258,40 +258,40 @@ export async function grantCreditsInTransaction(
 ): Promise<CreditLedgerEntryRecord> {
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
-  const walletUserId = resolveCreditWalletUserId(input.userId, input.createdByUserId, input.metadata);
+  const walletUserId = input.userId;
+  const compatibilityOrganizationId = resolveCompatibilityOrganizationId(input, walletUserId);
   const inserted = await insertLedgerEntry(db, {
-      organizationId: input.organizationId,
-      userId: walletUserId,
-      reservationId: null,
-      allocationId: null,
-      entryType: "grant",
-      amount: input.amount,
-      availableDelta: input.amount,
-      reservedDelta: 0,
-      consumedDelta: 0,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      reason,
-      metadata: input.metadata ?? {},
-      createdByUserId: input.createdByUserId ?? walletUserId,
-      now: input.now,
-    });
+    compatibilityOrganizationId,
+    userId: walletUserId,
+    reservationId: null,
+    allocationId: null,
+    entryType: "grant",
+    amount: input.amount,
+    availableDelta: input.amount,
+    reservedDelta: 0,
+    consumedDelta: 0,
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    reason,
+    metadata: input.metadata ?? {},
+    createdByUserId: input.createdByUserId ?? walletUserId,
+    now: input.now,
+  });
 
   if (inserted.kind === "inserted") {
     await incrementCreditWallet(db, {
-      organizationId: input.organizationId,
       userId: walletUserId,
       availableDelta: input.amount,
       reservedDelta: 0,
       now: input.now,
     });
     await appendCreditGrantCreatedOutboxEvent(db, {
-      organizationId: input.organizationId,
+      compatibilityOrganizationId,
       ledgerEntry: inserted.entry,
       now: input.now,
     });
     await createCreditLotInTransaction(db, {
-      organizationId: input.organizationId,
+      compatibilityOrganizationId,
       userId: walletUserId,
       sourceType: input.lot?.sourceType ?? input.sourceType,
       sourceId: input.lot?.sourceId ?? input.sourceId,
@@ -317,11 +317,11 @@ export class WalletFrozenMembershipRequiredError extends Error {
   }
 }
 
-export async function transferCreditsBetweenOrganizationsInTransaction(
+export async function transferCreditsBetweenUsersInTransaction(
   db: SqlDatabase,
   input: {
-    sourceOrganizationId: string;
-    targetOrganizationId: string;
+    sourceUserId: string;
+    targetUserId: string;
     amount: number;
     sourceId: string;
     reason?: string | null;
@@ -335,13 +335,13 @@ export async function transferCreditsBetweenOrganizationsInTransaction(
 }> {
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
-  if (input.sourceOrganizationId === input.targetOrganizationId) {
+  if (input.sourceUserId === input.targetUserId) {
     throw new CreditLedgerConflictError();
   }
 
   const sourceEntry = await insertLedgerEntry(db, {
-    organizationId: input.sourceOrganizationId,
-    userId: null,
+    compatibilityOrganizationId: input.sourceUserId,
+    userId: input.sourceUserId,
     reservationId: null,
     allocationId: null,
     entryType: "transfer_out",
@@ -357,8 +357,8 @@ export async function transferCreditsBetweenOrganizationsInTransaction(
     now: input.now,
   });
   const targetEntry = await insertLedgerEntry(db, {
-    organizationId: input.targetOrganizationId,
-    userId: null,
+    compatibilityOrganizationId: input.targetUserId,
+    userId: input.targetUserId,
     reservationId: null,
     allocationId: null,
     entryType: "transfer_in",
@@ -377,24 +377,24 @@ export async function transferCreditsBetweenOrganizationsInTransaction(
   if (sourceEntry.kind === "inserted") {
     await db.query(
       `
-        UPDATE organizations
+        UPDATE users
         SET credit_balance_cached = credit_balance_cached - $2,
             updated_at = $3
         WHERE id = $1
       `,
-      [input.sourceOrganizationId, input.amount, input.now],
+      [input.sourceUserId, input.amount, input.now],
     );
   }
 
   if (targetEntry.kind === "inserted") {
     await db.query(
       `
-        UPDATE organizations
+        UPDATE users
         SET credit_balance_cached = credit_balance_cached + $2,
             updated_at = $3
         WHERE id = $1
       `,
-      [input.targetOrganizationId, input.amount, input.now],
+      [input.targetUserId, input.amount, input.now],
     );
   }
 
@@ -407,8 +407,8 @@ export async function transferCreditsBetweenOrganizationsInTransaction(
 export async function reserveCredits(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     userId?: string | null;
+    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
@@ -428,11 +428,12 @@ export async function reserveCredits(
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
   const walletUserId = resolveCreditWalletUserId(input.userId, input.createdByUserId, input.metadata);
+  const compatibilityOrganizationId = resolveCompatibilityOrganizationId(input, walletUserId);
 
   await db.query("BEGIN");
   try {
     const existing = await findReservationBySource(db, {
-      organizationId: input.organizationId,
+      userId: walletUserId,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
     });
@@ -443,7 +444,7 @@ export async function reserveCredits(
       }
 
       const existingLedger = await findLedgerEntryBySource(db, {
-        organizationId: input.organizationId,
+        compatibilityOrganizationId,
         entryType: "reservation",
         sourceType: input.sourceType,
         sourceId: input.sourceId,
@@ -496,7 +497,7 @@ export async function reserveCredits(
       `,
       [
         reservationId,
-        input.organizationId,
+        compatibilityOrganizationId,
         walletUserId,
         input.workspaceId ?? null,
         input.projectId ?? null,
@@ -513,7 +514,6 @@ export async function reserveCredits(
     );
 
     const wallet = await findCreditWalletForUpdate(db, {
-      organizationId: input.organizationId,
       userId: walletUserId,
     });
 
@@ -525,7 +525,6 @@ export async function reserveCredits(
     }
 
     const lotAllocation = await allocateCreditLotsForReservation(db, {
-      organizationId: input.organizationId,
       userId: walletUserId,
       reservationId,
       amount: input.amount,
@@ -536,7 +535,6 @@ export async function reserveCredits(
     }
 
     await incrementCreditWallet(db, {
-      organizationId: input.organizationId,
       userId: walletUserId,
       availableDelta: -input.amount,
       reservedDelta: input.amount,
@@ -544,7 +542,7 @@ export async function reserveCredits(
     });
 
     const ledger = await insertLedgerEntry(db, {
-      organizationId: input.organizationId,
+      compatibilityOrganizationId,
       userId: walletUserId,
       reservationId,
       allocationId: null,
@@ -717,7 +715,6 @@ export async function settleReservationAllocationInTransaction(
     now: input.now,
   });
   await applyLotSettlement(db, {
-    organizationId: reservation.organizationId,
     userId: reservation.userId,
     reservationId: reservation.id,
     amount: input.amount,
@@ -726,7 +723,7 @@ export async function settleReservationAllocationInTransaction(
   });
 
   const ledger = await insertLedgerEntry(db, {
-    organizationId: reservation.organizationId,
+    compatibilityOrganizationId: reservation.organizationId,
     userId: reservation.userId,
     reservationId: reservation.id,
     allocationId,
@@ -742,7 +739,6 @@ export async function settleReservationAllocationInTransaction(
   });
 
   await incrementCreditWallet(db, {
-    organizationId: reservation.organizationId,
     userId: reservation.userId,
     availableDelta: input.outcome === "released" ? input.amount : 0,
     reservedDelta: -input.amount,
@@ -770,10 +766,8 @@ export async function settleReservationAllocationInTransaction(
 
 export async function repairCreditBalanceCache(
   db: SqlDatabase,
-  input: { organizationId: string; userId?: string | null },
+  input: { userId: string },
 ): Promise<RecomputedCreditBalance> {
-  const userFilter = input.userId ? "AND user_id = $2" : "";
-  const params = input.userId ? [input.organizationId, input.userId] : [input.organizationId];
   const balance = await queryOne<{
     available: number;
     reserved: number;
@@ -790,8 +784,7 @@ export async function repairCreditBalanceCache(
           COALESCE(sum(reserved_delta), 0)::int AS reserved,
           COALESCE(sum(consumed_delta), 0)::int AS consumed
         FROM credit_ledger_entries
-        WHERE organization_id = $1
-          ${userFilter}
+        WHERE user_id = $1
       ),
       frozen_lots AS (
         SELECT
@@ -799,8 +792,7 @@ export async function repairCreditBalanceCache(
           min(frozen_at) AS frozen_at,
           max(frozen_until) AS frozen_until
         FROM credit_lots
-        WHERE organization_id = $1
-          ${userFilter}
+        WHERE user_id = $1
           AND status = 'frozen'
           AND available_amount > 0
       )
@@ -814,45 +806,21 @@ export async function repairCreditBalanceCache(
       FROM ledger_balance
       CROSS JOIN frozen_lots
     `,
-    params,
+    [input.userId],
   );
 
   const frozen = Number(balance?.frozen ?? 0);
   const recomputed = {
-    organizationId: input.organizationId,
+    userId: input.userId,
     available: balance?.available ?? 0,
     reserved: balance?.reserved ?? 0,
     consumed: balance?.consumed ?? 0,
     frozen,
   };
 
-  if (input.userId) {
-    await db.query(
-      `
-        UPDATE users
-        SET credit_balance_cached = $2,
-            credit_reserved_cached = $3,
-            credit_frozen_cached = $4,
-            credit_frozen_at = $5,
-            credit_frozen_until = $6,
-            updated_at = now()
-        WHERE id = $1
-      `,
-      [
-        input.userId,
-        recomputed.available,
-        recomputed.reserved,
-        recomputed.frozen,
-        recomputed.frozen > 0 ? (balance?.frozen_at ?? null) : null,
-        recomputed.frozen > 0 ? (balance?.frozen_until ?? null) : null,
-      ],
-    );
-    return recomputed;
-  }
-
   await db.query(
     `
-      UPDATE organizations
+      UPDATE users
       SET credit_balance_cached = $2,
           credit_reserved_cached = $3,
           credit_frozen_cached = $4,
@@ -862,7 +830,7 @@ export async function repairCreditBalanceCache(
       WHERE id = $1
     `,
     [
-      input.organizationId,
+      input.userId,
       recomputed.available,
       recomputed.reserved,
       recomputed.frozen,
@@ -877,7 +845,7 @@ export async function repairCreditBalanceCache(
 async function insertLedgerEntry(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    compatibilityOrganizationId: string;
     userId: string | null;
     reservationId: string | null;
     allocationId: string | null;
@@ -894,6 +862,9 @@ async function insertLedgerEntry(
     now: Date;
   },
 ): Promise<{ kind: "inserted" | "reused"; entry: CreditLedgerEntryRecord }> {
+  if (!input.userId) {
+    throw new CreditLedgerConflictError();
+  }
   const row = await queryOne<CreditLedgerEntryRow>(
     db,
     `
@@ -925,7 +896,7 @@ async function insertLedgerEntry(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.compatibilityOrganizationId,
       input.userId,
       input.reservationId,
       input.allocationId,
@@ -951,7 +922,7 @@ async function insertLedgerEntry(
   }
 
   const existing = await findLedgerEntryBySource(db, {
-    organizationId: input.organizationId,
+    compatibilityOrganizationId: input.compatibilityOrganizationId,
     entryType: input.entryType,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
@@ -989,28 +960,17 @@ function resolveCreditWalletUserId(
   return creator || null;
 }
 
+function resolveCompatibilityOrganizationId(
+  input: { compatibilityOrganizationId?: string | null; organizationId?: string | null },
+  walletUserId: string,
+) {
+  return String(input.compatibilityOrganizationId ?? input.organizationId ?? walletUserId).trim();
+}
+
 async function findCreditWalletForUpdate(
   db: SqlDatabase,
-  input: { organizationId: string; userId: string | null },
+  input: { userId: string | null },
 ) {
-  if (input.userId) {
-    return queryOne<{
-      id: string;
-      credit_balance_cached: number;
-      credit_reserved_cached: number;
-      credit_frozen_cached: number;
-    }>(
-      db,
-      `
-        SELECT id, credit_balance_cached, credit_reserved_cached, credit_frozen_cached
-        FROM users
-        WHERE id = $1
-        FOR UPDATE
-      `,
-      [input.userId],
-    );
-  }
-
   return queryOne<{
     id: string;
     credit_balance_cached: number;
@@ -1020,54 +980,39 @@ async function findCreditWalletForUpdate(
     db,
     `
       SELECT id, credit_balance_cached, credit_reserved_cached, credit_frozen_cached
-      FROM organizations
+      FROM users
       WHERE id = $1
       FOR UPDATE
     `,
-    [input.organizationId],
+    [input.userId],
   );
 }
 
 async function incrementCreditWallet(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     userId: string | null;
     availableDelta: number;
     reservedDelta: number;
     now: Date;
   },
 ) {
-  if (input.userId) {
-    await db.query(
-      `
-        UPDATE users
-        SET credit_balance_cached = credit_balance_cached + $2,
-            credit_reserved_cached = credit_reserved_cached + $3,
-            updated_at = $4
-        WHERE id = $1
-      `,
-      [input.userId, input.availableDelta, input.reservedDelta, input.now],
-    );
-    return;
-  }
-
   await db.query(
     `
-      UPDATE organizations
+      UPDATE users
       SET credit_balance_cached = credit_balance_cached + $2,
           credit_reserved_cached = credit_reserved_cached + $3,
           updated_at = $4
       WHERE id = $1
     `,
-    [input.organizationId, input.availableDelta, input.reservedDelta, input.now],
+    [input.userId, input.availableDelta, input.reservedDelta, input.now],
   );
 }
 
 async function appendCreditGrantCreatedOutboxEvent(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    compatibilityOrganizationId: string;
     ledgerEntry: CreditLedgerEntryRecord;
     now: Date;
   },
@@ -1088,7 +1033,7 @@ async function appendCreditGrantCreatedOutboxEvent(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.compatibilityOrganizationId,
       eventTypes.creditGrantCreated,
       JSON.stringify({
         ledger_entry_id: input.ledgerEntry.id,
@@ -1172,7 +1117,7 @@ async function markReservationManualReviewRequired(
 async function findLedgerEntryBySource(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    compatibilityOrganizationId: string;
     entryType: CreditLedgerEntryType;
     sourceType: string;
     sourceId: string;
@@ -1190,7 +1135,7 @@ async function findLedgerEntryBySource(
       LIMIT 1
     `,
     [
-      input.organizationId,
+      input.compatibilityOrganizationId,
       input.entryType,
       input.sourceType,
       input.sourceId,
@@ -1215,19 +1160,19 @@ async function findLedgerEntryById(
 
 async function findReservationBySource(
   db: SqlDatabase,
-  input: { organizationId: string; sourceType: string; sourceId: string },
+  input: { userId: string; sourceType: string; sourceId: string },
 ): Promise<CreditReservationRecord | undefined> {
   const row = await queryOne<CreditReservationRow>(
     db,
     `
       SELECT *
       FROM credit_reservations
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND source_type = $2
         AND source_id = $3
       LIMIT 1
     `,
-    [input.organizationId, input.sourceType, input.sourceId],
+    [input.userId, input.sourceType, input.sourceId],
   );
 
   return row ? reservationFromRow(row) : undefined;

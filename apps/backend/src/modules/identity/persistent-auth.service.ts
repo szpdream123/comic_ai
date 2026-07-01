@@ -68,6 +68,7 @@ export type PersistentLoginVerifyResult =
       user: { id: string; phone: string; displayName?: string | null };
       session: AuthSession;
       token: string;
+      isNewUser: boolean;
     })
   | Exclude<VerifyLoginChallengeResult, { kind: "verified" }>
   | { kind: "challenge_not_found" }
@@ -397,7 +398,8 @@ export async function verifyPersistentLoginChallenge(
       return classifyUnconsumedChallenge(current);
     }
 
-    const user = await findOrCreateUserByPhone(db, phone);
+    const found = await findOrCreateUserByPhone(db, phone);
+    const user = found.user;
 
     if (user.status !== "active") {
       await db.query("COMMIT");
@@ -462,6 +464,7 @@ export async function verifyPersistentLoginChallenge(
       },
       session: createdSession.session,
       token: createdSession.token,
+      isNewUser: found.created,
     };
   } catch (error) {
     await db.query("ROLLBACK");
@@ -821,24 +824,38 @@ export async function expireIssuedLoginChallenges(
 async function findOrCreateUserByPhone(
   db: SqlDatabase,
   phoneE164: string,
-): Promise<UserRow> {
+): Promise<{ user: UserRow; created: boolean }> {
   const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone(phoneE164));
-  const user = await queryOne<UserRow>(
+  const inserted = await queryOne<UserRow>(
     db,
     `
       INSERT INTO users (id, phone_e164, password_hash, status)
       VALUES ($1, $2, $3, 'active')
       ON CONFLICT (phone_e164)
-      DO UPDATE SET
-        phone_e164 = EXCLUDED.phone_e164,
-        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash)
+      DO NOTHING
       RETURNING id, phone_e164, status, password_hash
                 , display_name
     `,
     [randomUUID(), phoneE164, passwordHash],
   );
 
-  return user!;
+  if (inserted) {
+    return { user: inserted, created: true };
+  }
+
+  const user = await queryOne<UserRow>(
+    db,
+    `
+      UPDATE users
+      SET password_hash = COALESCE(password_hash, $2)
+      WHERE phone_e164 = $1
+      RETURNING id, phone_e164, status, password_hash
+                , display_name
+    `,
+    [phoneE164, passwordHash],
+  );
+
+  return { user: user!, created: false };
 }
 
 async function recordSmsSend(

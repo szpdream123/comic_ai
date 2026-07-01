@@ -14,6 +14,8 @@ const allowedTiers = new Set(["experience", "professional"]);
 const allowedPeriodUnits = new Set(["day", "month", "quarter", "year"]);
 const allowedStatuses = new Set(["active", "inactive", "archived"]);
 const allowedCurrencies = new Set(["CNY"]);
+const allowedVisibilities = new Set(["public", "internal"]);
+const allowedUsageScenes = new Set(["purchase", "invite_new_user", "invite_inviter", "manual_gift", "test"]);
 
 export function createMembershipPlanService(deps: { db: SqlDatabase }) {
   async function listPlans(input: { includeArchived?: boolean; now: Date }) {
@@ -35,6 +37,7 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
         SELECT *
         FROM membership_plans
         WHERE status = 'active'
+          AND visibility = 'public'
           AND (valid_from IS NULL OR valid_from <= $1)
           AND (valid_until IS NULL OR valid_until > $1)
       `,
@@ -120,6 +123,8 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
             entitlements_json,
             priority_rules_json,
             display_metadata_json,
+            visibility,
+            usage_scene,
             status,
             valid_from,
             valid_until,
@@ -146,9 +151,11 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
             $15,
             $16,
             $17,
-            $17,
             $18,
-            $18
+            $19,
+            $19,
+            $20,
+            $20
           )
           ON CONFLICT (id)
           DO UPDATE SET
@@ -164,6 +171,8 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
             entitlements_json = EXCLUDED.entitlements_json,
             priority_rules_json = EXCLUDED.priority_rules_json,
             display_metadata_json = EXCLUDED.display_metadata_json,
+            visibility = EXCLUDED.visibility,
+            usage_scene = EXCLUDED.usage_scene,
             status = EXCLUDED.status,
             valid_from = EXCLUDED.valid_from,
             valid_until = EXCLUDED.valid_until,
@@ -185,6 +194,8 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
           JSON.stringify(parsed.value.entitlements),
           JSON.stringify(parsed.value.priorityRules),
           JSON.stringify(parsed.value.displayMetadata),
+          parsed.value.visibility,
+          parsed.value.usageScene,
           parsed.value.status,
           parsed.value.validFrom,
           parsed.value.validUntil,
@@ -384,6 +395,8 @@ export interface SaveMembershipPlanInput {
   entitlements?: unknown;
   priorityRules?: unknown;
   displayMetadata?: unknown;
+  visibility?: string | null;
+  usageScene?: string | null;
   status: string;
   validFrom?: Date | string | null;
   validUntil?: Date | string | null;
@@ -417,6 +430,8 @@ export interface MembershipPlanView {
   entitlements: string[];
   priorityRules: Record<string, unknown>;
   displayMetadata: Record<string, unknown>;
+  visibility: string;
+  usageScene: string;
   status: string;
   validFrom: string | null;
   validUntil: string | null;
@@ -446,6 +461,8 @@ interface ParsedSaveInput {
   entitlements: string[];
   priorityRules: Record<string, unknown>;
   displayMetadata: Record<string, unknown>;
+  visibility: string;
+  usageScene: string;
   status: string;
   validFrom: Date | null;
   validUntil: Date | null;
@@ -479,6 +496,8 @@ interface MembershipPlanRow {
   entitlements_json: unknown;
   priority_rules_json: unknown;
   display_metadata_json: unknown;
+  visibility: string;
+  usage_scene: string;
   status: string;
   valid_from: Date | string | null;
   valid_until: Date | string | null;
@@ -495,6 +514,8 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   const tier = String(input.tier ?? "").trim();
   const periodUnit = String(input.periodUnit ?? "").trim();
   const currency = String(input.currency ?? "").trim();
+  const visibility = String(input.visibility ?? "public").trim();
+  const usageScene = String(input.usageScene ?? "purchase").trim();
   const status = String(input.status ?? "").trim();
   const reason = String(input.reason ?? "").trim();
   const idempotencyKey = input.idempotencyKey?.trim() || null;
@@ -518,6 +539,12 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   }
   if (!allowedCurrencies.has(currency)) {
     return { error: error(400, "invalid_currency", "membership currency is invalid") };
+  }
+  if (!allowedVisibilities.has(visibility)) {
+    return { error: error(400, "invalid_visibility", "membership plan visibility is invalid") };
+  }
+  if (!allowedUsageScenes.has(usageScene)) {
+    return { error: error(400, "invalid_usage_scene", "membership plan usage scene is invalid") };
   }
   if (!Number.isInteger(input.giftCredits) || input.giftCredits < 0) {
     return { error: error(400, "invalid_gift_credits", "gift credits must be a non-negative integer") };
@@ -550,6 +577,8 @@ function parseSaveInput(input: SaveMembershipPlanInput):
       entitlements: normalizeStringArray(input.entitlements),
       priorityRules: normalizeObject(input.priorityRules),
       displayMetadata: normalizeObject(input.displayMetadata),
+      visibility,
+      usageScene,
       status,
       validFrom: validFrom.value,
       validUntil: validUntil.value,
@@ -615,6 +644,8 @@ function hashMembershipPlanSaveRequest(input: ParsedSaveInput) {
     entitlements: input.entitlements,
     priorityRules: input.priorityRules,
     displayMetadata: input.displayMetadata,
+    visibility: input.visibility,
+    usageScene: input.usageScene,
     status: input.status,
     validFrom: input.validFrom?.toISOString() ?? null,
     validUntil: input.validUntil?.toISOString() ?? null,
@@ -637,6 +668,8 @@ function planFromRow(row: MembershipPlanRow): MembershipPlanView {
     entitlements: normalizeStringArray(normalizeJson(row.entitlements_json)),
     priorityRules: normalizeObject(normalizeJson(row.priority_rules_json)),
     displayMetadata: normalizeObject(normalizeJson(row.display_metadata_json)),
+    visibility: row.visibility ?? "public",
+    usageScene: row.usage_scene ?? "purchase",
     status: row.status,
     validFrom: row.valid_from ? new Date(row.valid_from).toISOString() : null,
     validUntil: row.valid_until ? new Date(row.valid_until).toISOString() : null,

@@ -58,8 +58,8 @@ export interface CreditLotRecord {
 export async function createCreditLotInTransaction(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    compatibilityOrganizationId?: string | null;
+    userId: string;
     sourceType: string;
     sourceId: string;
     grantLedgerEntryId: string;
@@ -96,8 +96,8 @@ export async function createCreditLotInTransaction(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.userId ?? null,
+      input.compatibilityOrganizationId ?? input.userId,
+      input.userId,
       input.sourceType,
       input.sourceId,
       input.grantLedgerEntryId,
@@ -117,14 +117,14 @@ export async function createCreditLotInTransaction(
     `
       SELECT *
       FROM credit_lots
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND source_type = $2
         AND source_id = $3
         AND grant_ledger_entry_id = $4
       LIMIT 1
     `,
     [
-      input.organizationId,
+      input.userId,
       input.sourceType,
       input.sourceId,
       input.grantLedgerEntryId,
@@ -139,8 +139,7 @@ export async function createCreditLotInTransaction(
 export async function allocateCreditLotsForReservation(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    userId: string;
     reservationId: string;
     amount: number;
     now: Date;
@@ -152,15 +151,14 @@ export async function allocateCreditLotsForReservation(
     `
       SELECT *
       FROM credit_lots
-      WHERE organization_id = $1
-        AND user_id IS NOT DISTINCT FROM $2
+      WHERE user_id = $1
         AND available_amount > 0
         AND status = 'active'
-        AND (expires_at IS NULL OR expires_at > $3)
+        AND (expires_at IS NULL OR expires_at > $2)
       ORDER BY expires_at ASC NULLS LAST, created_at ASC
       FOR UPDATE
     `,
-    [input.organizationId, input.userId ?? null, input.now],
+    [input.userId, input.now],
   );
 
   for (const lot of lots.rows) {
@@ -172,16 +170,15 @@ export async function allocateCreditLotsForReservation(
       db,
       `
         UPDATE credit_lots
-        SET available_amount = available_amount - $4,
-            reserved_amount = reserved_amount + $4,
-            updated_at = $5
-        WHERE organization_id = $1
+        SET available_amount = available_amount - $3,
+            reserved_amount = reserved_amount + $3,
+            updated_at = $4
+        WHERE user_id = $1
           AND id = $2
-          AND user_id IS NOT DISTINCT FROM $3
-          AND available_amount >= $4
+          AND available_amount >= $3
         RETURNING id
       `,
-      [input.organizationId, lot.id, input.userId ?? null, amount, input.now],
+      [input.userId, lot.id, amount, input.now],
     );
     if (!updated) {
       continue;
@@ -209,8 +206,8 @@ export async function allocateCreditLotsForReservation(
       `,
       [
         randomUUID(),
-        input.organizationId,
-        input.userId ?? null,
+        input.userId,
+        input.userId,
         input.reservationId,
         lot.id,
         amount,
@@ -230,8 +227,7 @@ export async function allocateCreditLotsForReservation(
 export async function applyLotSettlement(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    userId: string;
     reservationId: string;
     amount: number;
     outcome: "consumed" | "released";
@@ -250,17 +246,15 @@ export async function applyLotSettlement(
         lot.reserved_amount AS lot_reserved_amount
       FROM credit_reservation_lot_allocations allocation
       JOIN credit_lots lot
-        ON lot.organization_id = allocation.organization_id
+        ON lot.user_id = allocation.user_id
        AND lot.id = allocation.credit_lot_id
-      WHERE allocation.organization_id = $1
+      WHERE allocation.user_id = $1
         AND allocation.reservation_id = $2
-        AND allocation.user_id IS NOT DISTINCT FROM $3
-        AND lot.user_id IS NOT DISTINCT FROM $3
         AND lot.reserved_amount > 0
       ORDER BY allocation.created_at ASC
       FOR UPDATE OF allocation, lot
     `,
-    [input.organizationId, input.reservationId, input.userId ?? null],
+    [input.userId, input.reservationId],
   );
 
   for (const allocation of allocations.rows) {
@@ -272,29 +266,27 @@ export async function applyLotSettlement(
       await db.query(
         `
           UPDATE credit_lots
-          SET reserved_amount = reserved_amount - $4,
-              consumed_amount = consumed_amount + $4,
-              updated_at = $5
-          WHERE organization_id = $1
+          SET reserved_amount = reserved_amount - $3,
+              consumed_amount = consumed_amount + $3,
+              updated_at = $4
+          WHERE user_id = $1
             AND id = $2
-            AND user_id IS NOT DISTINCT FROM $3
-            AND reserved_amount >= $4
+            AND reserved_amount >= $3
         `,
-        [input.organizationId, allocation.credit_lot_id, input.userId ?? null, amount, input.now],
+        [input.userId, allocation.credit_lot_id, amount, input.now],
       );
     } else {
       await db.query(
         `
           UPDATE credit_lots
-          SET reserved_amount = reserved_amount - $4,
-              available_amount = available_amount + $4,
-              updated_at = $5
-          WHERE organization_id = $1
+          SET reserved_amount = reserved_amount - $3,
+              available_amount = available_amount + $3,
+              updated_at = $4
+          WHERE user_id = $1
             AND id = $2
-            AND user_id IS NOT DISTINCT FROM $3
-            AND reserved_amount >= $4
+            AND reserved_amount >= $3
         `,
-        [input.organizationId, allocation.credit_lot_id, input.userId ?? null, amount, input.now],
+        [input.userId, allocation.credit_lot_id, amount, input.now],
       );
     }
 
@@ -309,7 +301,7 @@ export async function applyLotSettlement(
 export async function expireAvailableCreditLots(
   db: SqlDatabase,
   input: {
-    organizationId?: string;
+    userId?: string;
     now: Date;
     limit: number;
   },
@@ -328,27 +320,25 @@ export async function expireAvailableCreditLots(
 export async function expireAvailableCreditLotsInTransaction(
   db: SqlDatabase,
   input: {
-    organizationId?: string;
+    userId?: string;
     now: Date;
     limit: number;
   },
 ) {
-  const organizationWhere = input.organizationId ? "AND organization_id = $3" : "";
-  const params = input.organizationId
-    ? [input.now, input.limit, input.organizationId]
-    : [input.now, input.limit];
+  const userWhere = input.userId ? "AND user_id = $3" : "";
+  const params = input.userId ? [input.now, input.limit, input.userId] : [input.now, input.limit];
   const lots = await db.query<CreditLotRow>(
     `
       SELECT *
-      FROM credit_lots
-      WHERE available_amount > 0
-        AND status = 'active'
-        AND expires_at IS NOT NULL
-        AND expires_at <= $1
-        ${organizationWhere}
-      ORDER BY expires_at ASC, created_at ASC
-      LIMIT $2
-      FOR UPDATE
+        FROM credit_lots
+        WHERE available_amount > 0
+          AND status = 'active'
+          AND expires_at IS NOT NULL
+          AND expires_at <= $1
+        ${userWhere}
+        ORDER BY expires_at ASC, created_at ASC
+        LIMIT $2
+        FOR UPDATE
     `,
     params,
   );
@@ -379,14 +369,14 @@ export async function expireAvailableCreditLotsInTransaction(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, ($4::int * -1), 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
-        ON CONFLICT (organization_id, source_type, source_id, entry_type)
-        DO NOTHING
-        RETURNING id
-      `,
+      VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, ($4::int * -1), 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
+      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      DO NOTHING
+      RETURNING id
+    `,
       [
         randomUUID(),
-        lot.organization_id,
+        lot.user_id,
         lot.user_id,
         amount,
         lot.id,
@@ -405,31 +395,24 @@ export async function expireAvailableCreditLotsInTransaction(
 
     await db.query(
       `
-        UPDATE credit_lots
-        SET available_amount = available_amount - $3,
-            expired_amount = expired_amount + $3,
-            updated_at = $4
-        WHERE organization_id = $1
+      UPDATE credit_lots
+      SET available_amount = available_amount - $3,
+          expired_amount = expired_amount + $3,
+          updated_at = $4
+      WHERE user_id = $1
           AND id = $2
           AND available_amount >= $3
       `,
-      [lot.organization_id, lot.id, amount, input.now],
+      [lot.user_id, lot.id, amount, input.now],
     );
     await db.query(
-      lot.user_id
-        ? `
-          UPDATE users
-          SET credit_balance_cached = credit_balance_cached - $2,
-              updated_at = $3
-          WHERE id = $1
-        `
-        : `
-          UPDATE organizations
-          SET credit_balance_cached = credit_balance_cached - $2,
-              updated_at = $3
-          WHERE id = $1
-        `,
-      [lot.user_id ?? lot.organization_id, amount, input.now],
+      `
+        UPDATE users
+        SET credit_balance_cached = credit_balance_cached - $2,
+            updated_at = $3
+        WHERE id = $1
+      `,
+      [lot.user_id, amount, input.now],
     );
     expiredAmount += amount;
     expiredLotIds.push(lot.id);
@@ -441,11 +424,11 @@ export async function expireAvailableCreditLotsInTransaction(
 export async function freezeOrganizationWalletCreditsInTransaction(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     now: Date;
   },
 ) {
-  const organization = await queryOne<{
+  const wallet = await queryOne<{
     credit_balance_cached: number;
     credit_reserved_cached: number;
     credit_frozen_cached: number;
@@ -453,14 +436,14 @@ export async function freezeOrganizationWalletCreditsInTransaction(
     db,
     `
       SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached
-      FROM organizations
+      FROM users
       WHERE id = $1
       FOR UPDATE
     `,
-    [input.organizationId],
+    [input.userId],
   );
-  const amount = Number(organization?.credit_balance_cached ?? 0);
-  if (!organization || amount <= 0 || Number(organization.credit_frozen_cached ?? 0) > 0) {
+  const amount = Number(wallet?.credit_balance_cached ?? 0);
+  if (!wallet || amount <= 0 || Number(wallet.credit_frozen_cached ?? 0) > 0) {
     return { frozenAmount: 0 };
   }
 
@@ -492,7 +475,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.userId,
       amount,
       JSON.stringify({
         frozenAt: input.now.toISOString(),
@@ -513,15 +496,15 @@ export async function freezeOrganizationWalletCreditsInTransaction(
           frozen_at = $2,
           frozen_until = $3,
           updated_at = $2
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND status = 'active'
         AND available_amount > 0
     `,
-    [input.organizationId, input.now, frozenUntil],
+    [input.userId, input.now, frozenUntil],
   );
   await db.query(
     `
-      UPDATE organizations
+      UPDATE users
       SET credit_balance_cached = credit_balance_cached - $2,
           credit_frozen_cached = credit_frozen_cached + $2,
           credit_frozen_at = $3,
@@ -529,7 +512,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
           updated_at = $3
       WHERE id = $1
     `,
-    [input.organizationId, amount, input.now, frozenUntil],
+    [input.userId, amount, input.now, frozenUntil],
   );
 
   return { frozenAmount: amount };
@@ -538,8 +521,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
 export async function restoreOrganizationWalletCreditsInTransaction(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    userId?: string | null;
+    userId: string;
     sourceType?: string;
     sourceId?: string;
     reason?: string;
@@ -552,20 +534,13 @@ export async function restoreOrganizationWalletCreditsInTransaction(
     credit_frozen_until: Date | string | null;
   }>(
     db,
-    input.userId
-      ? `
-        SELECT credit_frozen_cached, credit_frozen_until
-        FROM users
-        WHERE id = $1
-        FOR UPDATE
-      `
-      : `
-        SELECT credit_frozen_cached, credit_frozen_until
-        FROM organizations
-        WHERE id = $1
-        FOR UPDATE
-      `,
-    [input.userId ?? input.organizationId],
+    `
+      SELECT credit_frozen_cached, credit_frozen_until
+      FROM users
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [input.userId],
   );
   const amount = Number(wallet?.credit_frozen_cached ?? 0);
   if (!wallet || amount <= 0) {
@@ -607,7 +582,7 @@ export async function restoreOrganizationWalletCreditsInTransaction(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.userId,
       amount,
       JSON.stringify({
         restoredAt: input.now.toISOString(),
@@ -632,35 +607,24 @@ export async function restoreOrganizationWalletCreditsInTransaction(
           frozen_at = NULL,
           frozen_until = NULL,
           updated_at = $2
-      WHERE organization_id = $1
-        AND user_id IS NOT DISTINCT FROM $3
+      WHERE user_id = $1
         AND status = 'frozen'
         AND available_amount > 0
         AND (frozen_until IS NULL OR frozen_until > $2)
     `,
-    [input.organizationId, input.now, input.userId ?? null],
+    [input.userId, input.now],
   );
   await db.query(
-    input.userId
-      ? `
-        UPDATE users
-        SET credit_balance_cached = credit_balance_cached + $2,
-            credit_frozen_cached = 0,
-            credit_frozen_at = NULL,
-            credit_frozen_until = NULL,
-            updated_at = $3
-        WHERE id = $1
-      `
-      : `
-        UPDATE organizations
-        SET credit_balance_cached = credit_balance_cached + $2,
-            credit_frozen_cached = 0,
-            credit_frozen_at = NULL,
-            credit_frozen_until = NULL,
-            updated_at = $3
-        WHERE id = $1
-      `,
-    [input.userId ?? input.organizationId, amount, input.now],
+    `
+      UPDATE users
+      SET credit_balance_cached = credit_balance_cached + $2,
+          credit_frozen_cached = 0,
+          credit_frozen_at = NULL,
+          credit_frozen_until = NULL,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.userId, amount, input.now],
   );
 
   return { restoredAmount: amount };
@@ -670,14 +634,14 @@ export async function expireFrozenWalletCreditsInTransaction(
   db: SqlDatabase,
   input: { now: Date; limit: number },
 ) {
-  const organizations = await db.query<{
+  const users = await db.query<{
     id: string;
     credit_frozen_cached: number;
     credit_frozen_until: Date | string;
   }>(
     `
       SELECT id, credit_frozen_cached, credit_frozen_until
-      FROM organizations
+      FROM users
       WHERE credit_frozen_cached > 0
         AND credit_frozen_until IS NOT NULL
         AND credit_frozen_until <= $1
@@ -689,8 +653,8 @@ export async function expireFrozenWalletCreditsInTransaction(
   );
   let expiredAmount = 0;
 
-  for (const organization of organizations.rows) {
-    const amount = Number(organization.credit_frozen_cached ?? 0);
+  for (const user of users.rows) {
+    const amount = Number(user.credit_frozen_cached ?? 0);
     if (amount <= 0) continue;
     const ledger = await queryOne<{ id: string }>(
       db,
@@ -719,10 +683,10 @@ export async function expireFrozenWalletCreditsInTransaction(
       `,
       [
         randomUUID(),
-        organization.id,
+        user.id,
         amount,
         JSON.stringify({
-          frozenUntil: new Date(organization.credit_frozen_until).toISOString(),
+          frozenUntil: new Date(user.credit_frozen_until).toISOString(),
         }),
         input.now,
         randomUUID(),
@@ -741,23 +705,23 @@ export async function expireFrozenWalletCreditsInTransaction(
             frozen_at = NULL,
             frozen_until = NULL,
             updated_at = $2
-        WHERE organization_id = $1
+        WHERE user_id = $1
           AND status = 'frozen'
           AND available_amount > 0
           AND frozen_until <= $2
       `,
-      [organization.id, input.now],
+      [user.id, input.now],
     );
     await db.query(
       `
-        UPDATE organizations
+        UPDATE users
         SET credit_frozen_cached = 0,
             credit_frozen_at = NULL,
             credit_frozen_until = NULL,
             updated_at = $2
         WHERE id = $1
       `,
-      [organization.id, input.now],
+      [user.id, input.now],
     );
     expiredAmount += amount;
   }

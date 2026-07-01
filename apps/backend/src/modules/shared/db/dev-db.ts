@@ -237,25 +237,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await constraintAllowsValue(db, "ai_model_configs", "ai_model_configs_provider_protocol_check", "lingdong_api"))) {
       await applySqlMigration(db, process.cwd(), "0047_lingdong_api_provider_protocol.sql");
     }
-    if (!(await seedanceModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0020_seedance_video_model_configs.sql");
-    }
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
       await applySqlMigration(db, process.cwd(), "0021_aliyun_bailian_happyhorse_video_model.sql");
     }
     if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
       await applySqlMigration(db, process.cwd(), "0025_jimeng_image_model_configs.sql");
     }
-    if (!(await gptImageReferenceModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0027_gpt_image_reference_model_config.sql");
-    }
-    if (!(await lingdongModelConfigsCurrent(db))) {
-      await applySqlMigration(db, process.cwd(), "0049_lingdong_model_configs.sql");
-    }
-    await ensureHappyHorseResolutionConfig(db);
-    await ensureVideoModelCategories(db);
   }
-  await ensureMembershipPriorityModelMetadata(db);
 
   if (!(await tableExists(db, "ai_generation_task_snapshots"))) {
     await applySqlMigration(db, process.cwd(), "0008_ai_generation_task_snapshots.sql");
@@ -329,6 +317,16 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await constraintAllowsNumericValue(db, "membership_plans", "membership_plans_seat_limit_check", "seat_limit", 0))) {
     await applySqlMigration(db, process.cwd(), "0042_membership_plan_zero_seats.sql");
+  }
+
+  if (
+    !(await columnExists(db, "membership_plans", "visibility")) ||
+    !(await columnExists(db, "membership_plans", "usage_scene")) ||
+    !(await tableExists(db, "invite_reward_configs")) ||
+    !(await tableExists(db, "user_invite_bindings")) ||
+    !(await tableExists(db, "invite_reward_grants"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0066_user_invite_rewards.sql");
   }
 
   if (
@@ -715,34 +713,6 @@ async function ensurePaymentProviderConstraints(db: SqlDatabase) {
     constraintName: "payment_reconciliation_runs_provider_check",
     allowedProviders: ["paylab", "wechat_pay", "alipay", "all"],
   });
-}
-
-async function ensureMembershipPriorityModelMetadata(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return;
-  }
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET capabilities_json =
-      capabilities_json
-      || CASE
-        WHEN capabilities_json->>'modelFamily' IS NULL
-        THEN '{"modelFamily":"seedance"}'::jsonb
-        ELSE '{}'::jsonb
-      END
-      || CASE
-        WHEN capabilities_json->>'membershipPriorityEligible' IS NULL
-        THEN '{"membershipPriorityEligible":true}'::jsonb
-        ELSE '{}'::jsonb
-      END,
-      updated_at = now()
-    WHERE model_code = 'seedance-i2v-pro'
-      AND (
-        capabilities_json->>'modelFamily' IS NULL
-        OR capabilities_json->>'membershipPriorityEligible' IS NULL
-      )
-  `);
 }
 
 async function ensureProviderConstraint(
@@ -1138,27 +1108,6 @@ async function aiModelConfigExists(db: SqlDatabase, modelCode: string) {
   return result.rows[0]?.exists === true;
 }
 
-async function seedanceModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return false;
-  }
-
-  const result = await db.query<{ count: number }>(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE status = 'active'
-        AND (
-          (model_code = 'Doubao-Seedance-2.0-fast' AND provider_model = 'doubao-seedance-2-0-fast-260128')
-          OR (model_code = 'Doubao-Seedance-2.0' AND provider_model = 'doubao-seedance-2-0-260128')
-          OR (model_code = 'doubao-seedance-1-0-pro-250528' AND provider_model = 'doubao-seedance-1-0-pro-250528')
-        )
-    `,
-  );
-
-  return result.rows[0]?.count === 3;
-}
-
 async function needsTeamMemberResourceProjectNullabilityUpdate(db: SqlDatabase) {
   if (!(await tableExists(db, "team_member_scripts")) || !(await tableExists(db, "team_member_canvases"))) {
     return false;
@@ -1183,150 +1132,6 @@ async function needsTeamMemberResourceProjectNullabilityUpdate(db: SqlDatabase) 
     `,
   );
   return scriptColumn.rows[0]?.is_nullable === "NO" || canvasColumn.rows[0]?.is_nullable === "NO";
-}
-
-async function gptImageReferenceModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return false;
-  }
-
-  const result = await db.query<{ count: number }>(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE status = 'active'
-        AND (
-          (
-            model_code = 'gpt-image-2-cn'
-            AND provider_protocol = 'openai_images'
-            AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
-          )
-          OR (
-            model_code = 'gpt-image-2-reference-cn'
-            AND provider_protocol = 'openai_images'
-            AND provider_model = 'gpt-image-2'
-            AND provider_config_json->>'editEndpoint' = 'https://image.shoestravel.xin/v1/images/edits'
-            AND provider_config_json->>'baseURL' = 'https://image.shoestravel.xin'
-          )
-        )
-    `,
-  );
-
-  return result.rows[0]?.count === 2;
-}
-
-async function lingdongModelConfigsCurrent(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return false;
-  }
-
-  const result = await db.query<{ count: number }>(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM ai_model_configs
-      WHERE provider_protocol = 'lingdong_api'
-        AND model_code = ANY($1::text[])
-    `,
-    [[
-      "gpt-image-2",
-      "gpt-image-2pro",
-      "sd-2-1",
-      "sd-2-2",
-      "sd-2-fast",
-      "sd-2-4",
-      "sd-2-5",
-      "sd-2-6",
-      "sd-2-7",
-      "sd-2-8",
-      "sd-2-9",
-      "sd-2-10",
-      "sd-2-11",
-      "sd-2-12",
-      "sd-2-13",
-      "sd-2-14",
-      "sd-2-15",
-      "sd-2-16",
-      "omni_flash",
-      "omni_flash-v2v",
-      "omni_flash_nowater",
-      "omni_flash_nowater-v2v",
-      "sora-2",
-      "sora-2-openai-12s",
-      "sora-2-openai-4s",
-      "sora-2-openai-8s",
-    ]],
-  );
-
-  return result.rows[0]?.count === 26;
-}
-
-async function ensureVideoModelCategories(db: SqlDatabase) {
-  if (!(await tableExists(db, "ai_model_configs"))) {
-    return;
-  }
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["Doubao-Seedance-2.0-fast", "doubao-seedance-1-0-pro-250528"], "first_frame", "首帧视频"]);
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["Doubao-Seedance-2.0"], "first_last_frame", "首尾帧"]);
-
-  await db.query(`
-    UPDATE ai_model_configs
-    SET ui_config_json = jsonb_set(
-          jsonb_set(COALESCE(ui_config_json, '{}'::jsonb), '{videoCategory}', to_jsonb($2::text), true),
-          '{videoCategoryLabel}',
-          to_jsonb($3::text),
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = ANY($1::text[])
-  `, [["happyhorse-1.0-r2v"], "reference", "全能参考"]);
-}
-
-async function ensureHappyHorseResolutionConfig(db: SqlDatabase) {
-  await db.query(`
-    UPDATE ai_model_configs
-    SET parameter_schema_json = jsonb_set(
-          COALESCE(parameter_schema_json, '{}'::jsonb),
-          '{resolution,options}',
-          '["720P"]'::jsonb,
-          true
-        ),
-        default_params_json = jsonb_set(
-          COALESCE(default_params_json, '{}'::jsonb),
-          '{resolution}',
-          to_jsonb('720P'::text),
-          true
-        ),
-        limits_json = jsonb_set(
-          COALESCE(limits_json, '{}'::jsonb),
-          '{supportedResolutions}',
-          '["720P"]'::jsonb,
-          true
-        ),
-        updated_at = now()
-    WHERE model_code = 'happyhorse-1.0-r2v'
-  `);
 }
 
 async function currentSchemaName(db: SqlDatabase) {

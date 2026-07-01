@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { settleReservationAllocation } from "../credit-billing/credit-ledger.service.ts";
@@ -54,6 +54,15 @@ function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
+function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<string, unknown>) {
+  const reserved = Number(row.amount_reserved ?? 0);
+  if (Number.isFinite(reserved) && reserved > 0) {
+    return reserved;
+  }
+  const snapshotAmount = Number(snapshot.cost ?? snapshot.estimatedCredits ?? snapshot.amount ?? 0);
+  return Number.isFinite(snapshotAmount) && snapshotAmount > 0 ? snapshotAmount : 0;
+}
+
 async function refundTeamMemberGenerationCredits(
   db: SqlDatabase,
   input: {
@@ -71,16 +80,21 @@ async function refundTeamMemberGenerationCredits(
   }
   await db.query("BEGIN");
   try {
-    await db.query(
+    const updatedMember = await queryOne<{ user_id: string }>(
+      db,
       `
         UPDATE team_members
-        SET member_credits = member_credits + $3,
-            updated_at = $4
+        SET member_credits = member_credits + $2,
+            updated_at = $3
         WHERE id = $1
           AND status <> 'deleted'
+        RETURNING user_id
       `,
-      [input.teamMemberId, input.amount, input.amount, input.now],
+      [input.teamMemberId, input.amount, input.now],
     );
+    if (!updatedMember) {
+      throw new Error("team_member_refund_target_missing");
+    }
     await queryOne<{ id: string }>(
       db,
       `
@@ -102,13 +116,13 @@ async function refundTeamMemberGenerationCredits(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, $3, $8)
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
         RETURNING id
       `,
       [
         randomUUID(),
         input.organizationId,
-        input.teamMemberId,
+        updatedMember.user_id,
         input.amount,
         input.sourceId,
         input.reason,
@@ -264,7 +278,7 @@ export async function processGptImageSubmitJob(
         ...(apiKeyEnv ? { apiKeyEnv } : {}),
       },
       creditSummary: {
-        released: Number(row.amount_reserved ?? 0),
+        released: resolveGptImageBillingAmount(row, snapshot),
         settledAt: input.now.toISOString(),
       },
       now: input.now,
@@ -392,7 +406,7 @@ export async function finalizeGptImageArtifactJob(
         errorMessage: error instanceof Error ? error.message : String(error),
       },
       creditSummary: {
-        released: Number(row.amount_reserved ?? 0),
+        released: resolveGptImageBillingAmount(row, snapshot),
         settledAt: input.now.toISOString(),
       },
       now: input.now,
@@ -605,7 +619,8 @@ async function markGptImageTaskManualReview(
     });
     await aggregateWorkflowStatus(db, input.row.workflow_id);
   }
-  const amount = Number(input.row.amount_reserved ?? 0);
+  const snapshot = parseSnapshot(input.row.input_snapshot_json);
+  const amount = resolveGptImageBillingAmount(input.row, snapshot);
   if (input.row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
       reservationId: input.row.reservation_id,
@@ -620,7 +635,6 @@ async function markGptImageTaskManualReview(
     });
   }
   if (!input.row.reservation_id && amount > 0) {
-    const snapshot = parseSnapshot(input.row.input_snapshot_json);
     const memberId = readSnapshotTeamMemberId(snapshot);
     if (memberId) {
       await refundTeamMemberGenerationCredits(db, {
@@ -814,7 +828,8 @@ async function failGptImageTask(
     });
     await aggregateWorkflowStatus(db, input.row.workflow_id);
   }
-  const amount = Number(input.row.amount_reserved ?? 0);
+  const snapshot = parseSnapshot(input.row.input_snapshot_json);
+  const amount = resolveGptImageBillingAmount(input.row, snapshot);
   if (input.row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
       reservationId: input.row.reservation_id,
@@ -827,6 +842,20 @@ async function failGptImageTask(
       metadata: input.metadata,
       now: input.now,
     });
+  }
+  if (!input.row.reservation_id && amount > 0) {
+    const memberId = readSnapshotTeamMemberId(snapshot);
+    if (memberId) {
+      await refundTeamMemberGenerationCredits(db, {
+        organizationId: input.row.organization_id,
+        teamMemberId: memberId,
+        amount,
+        sourceId: input.row.task_id,
+        reason: "生成失败返还积分",
+        metadata: input.metadata,
+        now: input.now,
+      });
+    }
   }
 }
 
@@ -923,7 +952,7 @@ function buildWorkerBillingMetadata(
     targetType: readString(snapshot.targetType),
     targetId: readString(snapshot.targetId),
     canvasNodeId: readString(snapshot.canvasNodeId),
-    amount: Number(row.amount_reserved ?? 0),
+    amount: resolveGptImageBillingAmount(row, snapshot),
     requestedAt,
     settledAt,
     durationMs,

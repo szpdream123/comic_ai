@@ -239,6 +239,55 @@ describe("createDevDb", () => {
     });
   });
 
+  it("preserves admin-edited model config values across dev database startup repair", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET status = 'active',
+              provider_config_json = provider_config_json || '{"endpoint":"/custom/images"}'::jsonb,
+              pricing_json = '{"unit":"image","baseCredits":321}'::jsonb
+          WHERE model_code = 'gpt-image-2'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET status = 'disabled'
+          WHERE model_code = 'gpt-image-2-cn'
+        `,
+      );
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const models = await repairedDb.query<{
+        model_code: string;
+        status: string;
+        endpoint: string | null;
+        base_credits: number | string | null;
+      }>(
+        `
+          SELECT
+            model_code,
+            status,
+            provider_config_json->>'endpoint' AS endpoint,
+            pricing_json->>'baseCredits' AS base_credits
+          FROM ai_model_configs
+          WHERE model_code IN ('gpt-image-2', 'gpt-image-2-cn')
+          ORDER BY model_code
+        `,
+      );
+      await repairedDb.close();
+
+      const byCode = new Map(models.rows.map((row) => [row.model_code, row]));
+      assert.equal(byCode.get("gpt-image-2")?.status, "active");
+      assert.equal(byCode.get("gpt-image-2")?.endpoint, "/custom/images");
+      assert.equal(Number(byCode.get("gpt-image-2")?.base_credits), 321);
+      assert.equal(byCode.get("gpt-image-2-cn")?.status, "disabled");
+    });
+  });
+
   it("repairs existing PostgreSQL databases missing team collaboration tables", async () => {
     await withIsolatedDevSchema(async () => {
       const db = await createDevDb();

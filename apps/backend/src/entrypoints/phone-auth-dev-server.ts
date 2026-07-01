@@ -64,6 +64,7 @@ import {
   verifyPersistentTeamMemberPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
+import { bindInviteForNewUser } from "../modules/invite-rewards/invite-reward.service.ts";
 import { createAuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import {
@@ -1649,7 +1650,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
     }
 
     const creditGrant = await grantCreditsInTransaction(input.db, {
-      organizationId: order.organization_id,
+      compatibilityOrganizationId: order.organization_id,
       userId: order.created_by_user_id,
       amount: order.credits,
       sourceType: "payment_order",
@@ -2106,9 +2107,12 @@ function coalesceCreatorCreditLedgerRows<
 }
 
 function isInternalCreatorLedgerEntry(
-  row: Pick<AdminCreatorCreditLedgerRow, "source_type">,
+  row: Pick<AdminCreatorCreditLedgerRow, "source_type" | "entry_type">,
 ) {
-  return String(row.source_type ?? "").trim().toLowerCase() === "credit_reservation_allocation";
+  return (
+    String(row.source_type ?? "").trim().toLowerCase() === "credit_reservation_allocation" &&
+    String(row.entry_type ?? "").trim().toLowerCase() !== "release"
+  );
 }
 
 function creatorCreditLedgerDeductionKey(
@@ -2809,7 +2813,7 @@ function generationCostFromModelConfig(
 ) {
   const baseCredits = Number(modelConfig?.pricing.baseCredits);
   return Number.isFinite(baseCredits) && baseCredits >= 0
-    ? Math.round(baseCredits)
+    ? (baseCredits > 0 && baseCredits < 1 ? 1 : Math.round(baseCredits))
     : fallbackCost;
 }
 
@@ -2872,7 +2876,6 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
   return verifyMembershipAndConsumeCredits(db, {
     userId: input.createdByUserId,
     requiredCredits: amount,
-    organizationId: input.organizationId,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
     idempotencyKey: input.idempotencyKey,
@@ -2989,7 +2992,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
           created_at
         )
         VALUES (
-          $1, $2, $3, NULL, NULL, 'consume', $4, 0, 0, $4,
+          $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0,
           'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
         )
         RETURNING id
@@ -3053,16 +3056,21 @@ async function releaseSimpleTeamMemberCredits(
   }
   await db.query("BEGIN");
   try {
-    await db.query(
+    const updatedMember = await queryOne<{ user_id: string }>(
+      db,
       `
         UPDATE team_members
-        SET member_credits = member_credits + $3,
-            updated_at = $4
+        SET member_credits = member_credits + $2,
+            updated_at = $3
         WHERE id = $1
           AND status <> 'deleted'
+        RETURNING user_id
       `,
-      [input.teamMemberId, input.amount, input.amount, input.now],
+      [input.teamMemberId, input.amount, input.now],
     );
+    if (!updatedMember) {
+      throw new Error("team_member_refund_target_missing");
+    }
     await queryOne<{ id: string }>(
       db,
       `
@@ -3084,13 +3092,13 @@ async function releaseSimpleTeamMemberCredits(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, $3, $8)
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
         RETURNING id
       `,
       [
         randomUUID(),
         input.organizationId,
-        input.teamMemberId,
+        updatedMember.user_id,
         input.amount,
         input.sourceId,
         input.reason,
@@ -3111,22 +3119,22 @@ async function releaseSimpleTeamMemberCredits(
 
 async function hasActiveGenerationMembership(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; now: Date },
+  input: { userId: string; now: Date },
 ) {
-  const activePeriod = await queryOne<{ id: string }>(
+  const activeMembership = await queryOne<{ id: string }>(
     db,
     `
       SELECT id
-      FROM membership_periods
-      WHERE organization_id = $1
+      FROM memberships
+      WHERE user_id = $1
         AND status = 'active'
-        AND period_start_at <= $2
-        AND period_end_at > $2
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId, input.now],
   );
-  return Boolean(activePeriod);
+  return Boolean(activeMembership);
 }
 
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
@@ -3541,20 +3549,6 @@ function normalizeProjectDetailForEpisodeContract(detail: Record<string, unknown
       };
     }),
   };
-}
-
-async function getOrganizationCreditBalance(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  organizationId: string,
-) {
-  const row = await queryOne<{
-    credit_balance_cached: number | string;
-  }>(
-    db,
-    "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-    [organizationId],
-  );
-  return Number(row?.credit_balance_cached ?? 0);
 }
 
 async function resolveCreditBalanceScope(
@@ -4181,6 +4175,16 @@ async function mapGenerationTaskResponse(
     typeof (snapshot.parameters as Record<string, unknown>).lipSyncConfig === "object"
       ? (snapshot.parameters as Record<string, unknown>).lipSyncConfig as Record<string, unknown>
       : null;
+  const snapshotParameters =
+    snapshot.parameters && typeof snapshot.parameters === "object"
+      ? snapshot.parameters as Record<string, unknown>
+      : null;
+  const selectionContext =
+    snapshot.selectionContext && typeof snapshot.selectionContext === "object"
+      ? snapshot.selectionContext
+      : snapshotParameters?.selectionContext && typeof snapshotParameters.selectionContext === "object"
+        ? snapshotParameters.selectionContext
+        : null;
   const generatedAudioItems =
     kind === "video" &&
     (snapshot.lipSyncEnabled === true || String((snapshot.parameters as Record<string, unknown> | undefined)?.mode ?? "") === "lip-sync") &&
@@ -4284,6 +4288,11 @@ async function mapGenerationTaskResponse(
     projectId: row.project_id,
     targetType: snapshot.targetType ?? row.target_entity_type,
     targetId: snapshot.targetId ?? row.target_entity_id,
+    assetId:
+      readString(snapshot.assetId) ||
+      (readString(snapshot.targetType) === "asset" ? readString(snapshot.targetId) : null) ||
+      (row.target_entity_type === "asset" ? row.target_entity_id : null),
+    selectionContext,
     model: snapshot.model ?? null,
     prompt: snapshot.prompt ?? null,
     parameters: snapshot.parameters ?? {},
@@ -4640,6 +4649,10 @@ function generationProviderFailureDisplayMessage(value: string): string {
   if (translated) {
     return translated;
   }
+  const contentSafetyMessage = generationContentSafetyFailureDisplayMessage(code);
+  if (contentSafetyMessage) {
+    return contentSafetyMessage;
+  }
   if (code === "provider_submission_ambiguous") {
     return generationFailureDisplayMessageByCode("provider_submission_ambiguous");
   }
@@ -4688,6 +4701,13 @@ function generationProviderFailureDisplayMessage(value: string): string {
   }
   if (openAiImagesStatus && Number(openAiImagesStatus) >= 500) {
     return `GPT Image 2 \u4f9b\u5e94\u5546\u8fd4\u56de HTTP ${openAiImagesStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
+  }
+  return "";
+}
+
+function generationContentSafetyFailureDisplayMessage(value: string): string {
+  if (/(血腥|残肢|尸体|断肢|头颅破碎|重度暴力|明显的血|不适合生成|内容安全|安全策略|审核拒绝|违规|敏感内容|content policy|safety|moderation)/i.test(value)) {
+    return "提示词包含血腥、残肢或重度暴力内容，请改成非血腥的战后遗迹、诡异荒城或氛围场景后重试。";
   }
   return "";
 }
@@ -4756,6 +4776,9 @@ function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
 }
 
 function parseContentLength(value: string | null) {
+  if (value == null) {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }
@@ -5558,15 +5581,10 @@ async function createEpisodeGenerationTask(
     fallbackQueueName: fallbackSubmitQueueName,
   });
   if (estimatedCost > 0) {
-    const hasMembership = context.actor.teamMember
-      ? await hasActiveGenerationMembership(db, {
-          organizationId: context.actor.organizationId,
-          now: input.now,
-        })
-      : await hasActiveGenerationMembership(db, {
-          organizationId: context.actor.organizationId,
-          now: input.now,
-        });
+    const hasMembership = await hasActiveGenerationMembership(db, {
+      userId: context.actor.actorId,
+      now: input.now,
+    });
     if (!hasMembership) {
       throw new GenerationMembershipRequiredError();
     }
@@ -5660,10 +5678,9 @@ async function createEpisodeGenerationTask(
     targetEntityType === "shot" && isUuid(requestSnapshot.targetId)
       ? requestSnapshot.targetId
       : input.episodeId;
-  const snapshotTargetId =
-    requestSnapshot.targetType === "canvas" && !isUuid(requestSnapshot.targetId)
-      ? input.episodeId
-      : requestSnapshot.targetId;
+  const snapshotTargetId = isUuid(requestSnapshot.targetId)
+    ? requestSnapshot.targetId
+    : input.episodeId;
   const timeoutMs = input.kind === "video" ? videoGenerationTaskTimeoutMs : imageGenerationTaskTimeoutMs;
   const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
@@ -5812,11 +5829,11 @@ async function createEpisodeGenerationTask(
             source_id,
             reason,
             metadata_json,
-            created_by_user_id,
-            created_at
-          )
-          VALUES (
-            $1, $2, $3, NULL, NULL, 'consume', $4, 0, 0, $4,
+          created_by_user_id,
+          created_at
+        )
+        VALUES (
+            $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0,
             'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
           )
           RETURNING id
@@ -5851,7 +5868,7 @@ async function createEpisodeGenerationTask(
     }
   } else {
     const reservation = await reserveCredits(db, {
-      organizationId: context.actor.organizationId,
+      compatibilityOrganizationId: context.actor.organizationId,
       userId: context.userId,
       workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
@@ -9225,10 +9242,15 @@ function normalizeAssetConversationMessageInput(item: unknown, index: number) {
   const statusRaw = String((item as { status?: unknown }).status ?? "running").trim().toLowerCase();
   const status: AssetConversationStatus =
     statusRaw === "queued" ||
+    statusRaw === "running" ||
     statusRaw === "completed" ||
     statusRaw === "failed" ||
     statusRaw === "canceled"
       ? statusRaw
+      : statusRaw === "succeeded"
+        ? "completed"
+        : statusRaw === "manual_review_required" || statusRaw === "result_unknown"
+          ? "failed"
       : "running";
   const payload =
     (item as { payload?: unknown }).payload && typeof (item as { payload?: unknown }).payload === "object"
@@ -14538,6 +14560,7 @@ export function createPhoneAuthDevServer(
           challengeId: string;
           phone: string;
           code: string;
+          inviteCode?: string;
           remember?: boolean;
         };
         const now = new Date();
@@ -14575,6 +14598,15 @@ export function createPhoneAuthDevServer(
                     ? 403
                     : 409,
             body: { error },
+          });
+        }
+
+        if (verified.isNewUser && String(body.inviteCode ?? "").trim()) {
+          await bindInviteForNewUser(db, {
+            invitedUserId: verified.user.id,
+            inviteCode: body.inviteCode,
+            now,
+            metadata: { source: "code_verify" },
           });
         }
 
@@ -15912,7 +15944,12 @@ export function createPhoneAuthDevServer(
               capability: null,
               context,
             }),
-            getOrganizationCreditBalance(db, episode.organization_id),
+            authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id
+              ? getSimpleTeamMemberCreditBalance(db, {
+                  userId: authenticated.user.id,
+                  memberId: authenticated.user.teamMember.id,
+                })
+              : getUserCreditBalance(db, authenticated.user.id),
           ]);
           const assetsByType = {
             role: roleAssets ?? [],
@@ -16282,6 +16319,9 @@ export function createPhoneAuthDevServer(
             }
             if (error instanceof GenerationMembershipRequiredError) {
               return writeJson(response, envelopedError(403, error.code, error.message));
+            }
+            if (error instanceof GenerationModelRequestValidationError || error instanceof GenerationRequestValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
             }
             throw error;
           }

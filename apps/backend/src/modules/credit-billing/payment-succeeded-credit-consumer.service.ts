@@ -102,7 +102,7 @@ export async function consumePaymentSucceededCreditGrant(
         }
 
         const grant = await grantCreditsInTransaction(db, {
-          organizationId: order.organization_id,
+          compatibilityOrganizationId: order.organization_id,
           userId: order.created_by_user_id,
           amount: order.credits,
           sourceType: "payment_order",

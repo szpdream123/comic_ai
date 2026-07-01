@@ -289,7 +289,8 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       });
       assert.equal(firstResult.kind, "applied");
       await grantCredits(db, {
-        organizationId,
+        compatibilityOrganizationId: organizationId,
+        userId,
         amount: 800,
         sourceType: "membership_gift",
         sourceId: firstResult.period.id,

@@ -1056,7 +1056,7 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
     return historyEntries;
   }
   const taskId = resolveGenerationTaskId(generationResult);
-  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+  if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
     return historyEntries;
   }
   return [...historyEntries, generationResult];
@@ -1073,7 +1073,7 @@ function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, med
     return historyEntries;
   }
   const taskId = resolveGenerationTaskId(generationResult);
-  if (historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+  if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
     return historyEntries;
   }
   return [...historyEntries, generationResult];
@@ -1124,21 +1124,21 @@ function resolveGenerationTaskId(generationResult) {
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
-    "local-asset-fixed-image-task"
+    null
   );
 }
 
 function buildAssetGenerationUserMeta(generationResult) {
   const taskId = resolveGenerationTaskId(generationResult);
   const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
   const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
   return [
-    `任务ID：${taskId}`,
+    taskId ? `任务ID：${taskId}` : null,
     modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
     workflowStatus && workflowStatus !== "completed" && workflowStatus !== "succeeded"
       ? `状态：${resolveWorkflowStatusLabel(workflowStatus)}`
@@ -1157,14 +1157,14 @@ function renderAssetResultPanel(generationResult, quickReferenceItems = [], sele
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
-    "local-asset-fixed-image-task";
+    null;
   const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
   const extraMeta = [
     modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
   ]
     .filter(Boolean)
@@ -1178,7 +1178,7 @@ function renderAssetResultPanel(generationResult, quickReferenceItems = [], sele
         </div>
         <div class="episode-replica-task-meta">
           <div class="episode-replica-task-line">
-            <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
+            <strong class="episode-replica-task-id">${taskId ? `任务ID：${escapeHtml(String(taskId))}` : "任务ID：待创建"}</strong>
             <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(resolveWorkflowStatusLabel(workflowStatus))}</span>
           </div>
           <div class="episode-replica-task-line muted">
@@ -1419,12 +1419,12 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
     generationResult?.id ??
     "local-fixed-image-task";
   const modelLabel = resolveGenerationModelLabel(generationResult?.selectedModelId);
-  const ratioLabel = generationResult?.aspectRatio ?? "16:9";
-  const resolutionLabel = generationResult?.resolution ?? "2K";
+  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
+  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
   const extraMeta = [
     modelLabel,
-    `比例：${ratioLabel}`,
-    `清晰度：${resolutionLabel}`,
+    ratioLabel ? `比例：${ratioLabel}` : null,
+    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
     generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
     generationResult?.mediaKind === "video" && generationResult?.durationSec
       ? `时长：${generationResult.durationSec}秒`
@@ -1769,6 +1769,34 @@ function resolveGenerationFailureMessage(status, failureCode) {
   return "生成失败，请重新编辑后再试，失败记录会保留在当前结果区。";
 }
 
+function isProviderDiagnosticLikeMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return false;
+  }
+  if (/模型供应商返回失败[:：]/.test(value)) {
+    return true;
+  }
+  if (/[A-Za-z]{3,}/.test(value)) {
+    return true;
+  }
+  if (/[a-z0-9_.-]+:[a-z0-9_.-]+/i.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+function resolveContentSafetyFailureMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/(血腥|残肢|尸体|断肢|头颅破碎|重度暴力|明显的血|不适合生成|内容安全|安全策略|审核拒绝|违规|敏感内容|content policy|safety|moderation)/i.test(value)) {
+    return "提示词包含血腥、残肢或重度暴力内容，请改成非血腥的战后遗迹、诡异荒城或氛围场景后重试。";
+  }
+  return "";
+}
+
 function resolveGenerationResultFailureMessage(generationResult, statusOverride = null) {
   const workflowStatus = String(
     statusOverride ??
@@ -1779,24 +1807,23 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
   if (!["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus)) {
     return "";
   }
-  const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
-  if (displayMessage) {
-    return displayMessage;
-  }
-  const providerMessage = String(generationResult?.failure?.providerMessage ?? "").trim();
-  if (providerMessage) {
-    return providerMessage;
-  }
-  const providerErrorCode = String(generationResult?.failure?.providerErrorCode ?? "").trim();
-  if (providerErrorCode) {
-    return providerErrorCode;
-  }
   const failureCode = String(
     generationResult?.failureCode ??
       generationResult?.failure?.failureCode ??
       generationResult?.result?.failureCode ??
       "",
   );
+  const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
+  const providerMessage = String(generationResult?.failure?.providerMessage ?? generationResult?.failure?.errorMessage ?? "").trim();
+  const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
+  if (contentSafetyMessage) {
+    return contentSafetyMessage;
+  }
+  if (displayMessage) {
+    return isProviderDiagnosticLikeMessage(displayMessage)
+      ? resolveGenerationFailureMessage(workflowStatus, failureCode)
+      : displayMessage;
+  }
   return resolveGenerationFailureMessage(workflowStatus, failureCode);
 }
 
@@ -2015,10 +2042,7 @@ export function renderPromptDock({
   const nonAudioAttachmentCards = attachmentCards.filter((card) => !card.includes('episode-replica-ref-card attachment audio'));
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
-  const generateCost =
-    scopeMode === "assets" && mediaMode === "image"
-      ? 50
-      : resolveGenerateCost(mediaMode, generationControls, selectedModel);
+  const generateCost = resolveGenerateCost(mediaMode, generationControls, selectedModel);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -2552,7 +2576,9 @@ function buildModelParameterControls({
   const entries = Object.entries(schema)
     .filter(([key, parameter]) => shouldRenderModelParameterControl(key, parameter));
   if (!entries.length) {
-    return buildFallbackParameterControls({
+    return Object.keys(schema).length
+      ? []
+      : buildFallbackParameterControls({
       selectedModel,
       isVideoMode,
       generationControls,
@@ -2584,7 +2610,7 @@ function buildFallbackParameterControls({
   generationControls = {},
   openGenerationSelectMenu,
 }) {
-  const aspectRatio = generationControls.imageAspectRatio ?? "16:9";
+  const aspectRatio = generationControls.imageAspectRatio ?? "";
   const resolution = isVideoMode
     ? (generationControls.videoResolution ?? "1080p")
     : (generationControls.imageResolution ?? "2K");
@@ -2599,7 +2625,7 @@ function buildFallbackParameterControls({
   );
   const durationOptions = optionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
   return [
-    renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions),
+    aspectRatio ? renderControlMenu("imageAspectRatio", aspectRatio, openGenerationSelectMenu, ratioOptions) : "",
     renderControlMenu(isVideoMode ? "videoResolution" : "imageResolution", resolution, openGenerationSelectMenu, qualityOptions),
     isVideoMode ? renderControlMenu("videoDurationSec", `${duration}秒`, openGenerationSelectMenu, durationOptions) : "",
   ].filter(Boolean);
@@ -3237,6 +3263,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
   const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
+  const hasAspectRatioParameter = Boolean(selectedImageModel?.parameterSchema?.aspectRatio);
   const ratioOptions = buildBatchImageOptionItems(selectedImageModel?.supportedRatios, ["16:9", "9:16", "1:1"]);
   const clarityOptions = buildBatchImageOptionItems(
     [...(selectedImageModel?.supportedQuality ?? []), ...(selectedImageModel?.supportedResolutions ?? [])],
@@ -3268,7 +3295,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
       <section class="episode-batch-config-panel">
         <div class="episode-batch-section-title">其他配置</div>
         <div class="episode-batch-config-grid">
-          ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions)}
+          ${hasAspectRatioParameter ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions) : ""}
           ${renderEpisodeBatchInfoCard("清晰度", modal.imageClarity ?? "2K", modal.openField === "imageClarity", "imageClarity", clarityOptions)}
         </div>
       </section>
@@ -3290,7 +3317,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
       <div class="episode-batch-video-config-grid">
         ${renderEpisodeBatchInfoCard("视频模型", resolveBatchVideoModelLabel(modal.videoModelId), modal.openField === "videoModelId", "videoModelId", options)}
         ${renderEpisodeBatchInfoCard("预设", "无预设", false)}
-        ${renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "16:9")}
+        ${modal.imageAspectRatio ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio) : ""}
         ${renderEpisodeBatchInfoCard("分辨率", modal.videoResolution ?? "720P", modal.openField === "videoResolution", "videoResolution", [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }])}
       </div>
       <div class="episode-batch-selection-grid compact">
@@ -3388,6 +3415,7 @@ function normalizeBatchImageModelOptions(options) {
         supportedRatios: normalizeOptionValues(option?.supportedRatios),
         supportedQuality: normalizeOptionValues(option?.supportedQuality),
         supportedResolutions: normalizeOptionValues(option?.supportedResolutions),
+        parameterSchema: normalizeParameterSchema(option?.parameterSchema),
       };
     })
     .filter(Boolean);

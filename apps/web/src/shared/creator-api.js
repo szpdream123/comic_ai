@@ -80,13 +80,24 @@ async function fetchJson(url, options = {}) {
     }
 
     if (!response.ok) {
+      const errorPayload =
+        payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+          ? payload.data
+          : payload;
       const error = new Error(
-        payload.message ?? payload.error ?? payload.errorCode ?? `request_failed:${response.status}`,
+        errorPayload.message ?? errorPayload.error ?? errorPayload.errorCode ?? `request_failed:${response.status}`,
       );
       error.status = response.status;
-      error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
-      error.details = payload.details ?? null;
+      error.errorCode = errorPayload.errorCode ?? errorPayload.error ?? `request_failed:${response.status}`;
+      error.details = errorPayload.details ?? null;
       error.requestId = payload.requestId ?? null;
+      error.data = errorPayload;
+      error.taskId =
+        typeof errorPayload.taskId === "string" && errorPayload.taskId.trim()
+          ? errorPayload.taskId.trim()
+          : typeof errorPayload.details?.taskId === "string" && errorPayload.details.taskId.trim()
+            ? errorPayload.details.taskId.trim()
+            : null;
       throw error;
     }
 

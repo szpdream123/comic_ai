@@ -11981,7 +11981,6 @@ describe("production workbench project tab", () => {
   });
 
   it("restores generation task results without reposting conversation messages", () => {
-    const saveCalls = [];
     const workbench = {
       ui: {
         projectPanelMode: "episode-workbench",
@@ -12629,6 +12628,61 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-task-1");
     assert.equal(workbench.ui.generationPollingActive, true);
     assert.equal(collectedEvents.find((event) => event.eventType === "generation.submit")?.payload?.payload?.model, "jimeng-4-5");
+  });
+
+  it("avoids re-sending fallback ratio and resolution when the configured image model already provides an explicit size", () => {
+    const payload = buildImageGenerationPayload({
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "9:16", resolution: "1080p" },
+      },
+      ui: buildProjectUi({
+        museScopeMode: "assets",
+        imageGenerationMode: "single-image",
+        selectedModelId: "gpt-image-2-cn",
+        imageResolution: "1080p",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "1080p",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+          count: 1,
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                quality: { label: "质量", type: "enum", options: ["1080p"] },
+                resolution: { label: "清晰度", type: "enum", options: ["1080p"] },
+                aspectRatio: { label: "比例", type: "enum", options: ["16:9", "9:16"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                quality: "1080p",
+                resolution: "1080p",
+                aspectRatio: "16:9",
+                count: 1,
+              },
+              pricing: { baseCredits: 20 },
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.equal(payload.parameters.size, "1280x720");
+    assert.equal(payload.parameters.count, 1);
+    assert.equal("quality" in payload.parameters, false);
+    assert.equal("resolution" in payload.parameters, false);
+    assert.equal("aspectRatio" in payload.parameters, false);
   });
 
   it("restores the previous asset prompt and quick references when re-editing a saved result", async () => {
@@ -15984,6 +16038,90 @@ describe("production workbench project tab", () => {
     } finally {
       globalThis.document = previousDocument;
       globalThis.window = previousWindow;
+    }
+  });
+
+  it("preserves structured backend failure details for batch image submissions", async () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+      body: {
+        classList: {
+          toggle() {},
+        },
+      },
+    };
+    const saveCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createImageTask() {
+          const error = new Error("服务内部错误");
+          error.taskId = "backend-batch-image-task-1";
+          error.errorCode = "provider_result_unknown";
+          error.requestId = "req-batch-1";
+          error.providerStatus = "failed";
+          error.providerErrorCode = "upstream_timeout";
+          error.providerMessage = "provider timeout";
+          error.details = { raw: "timeout", traceId: "trace-1" };
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedEpisodeAssetIds: ["character-1"],
+        selectedEpisodeCardId: "character-1",
+        selectedEpisodeAssetId: "character-1",
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小草", kind: "character" }],
+          scene: [],
+          prop: [],
+        },
+        episodeBatchModal: {
+          show: true,
+          scope: "asset",
+          mode: "image",
+          imageModelId: "gpt-image-2-cn",
+          imageAspectRatio: "1:1",
+          imageClarity: "2K",
+          items: [
+            { id: "character-1", name: "任小草", kind: "character", description: "角色固定图。" },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-episode-batch-modal" },
+      });
+
+      const failedTaskId = workbench.ui.episodeBatchResults?.["character-1"]?.taskId;
+      assert.equal(failedTaskId, "backend-batch-image-task-1");
+      assert.doesNotMatch(failedTaskId, /^local-/);
+      assert.equal(workbench.ui.imageGenerationResult?.taskId, failedTaskId);
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failureCode, "provider_result_unknown");
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.providerRequestId, "req-batch-1");
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.providerErrorCode, "upstream_timeout");
+      assert.deepEqual(workbench.ui.episodeBatchResults?.["character-1"]?.failure?.details, {
+        raw: "timeout",
+        traceId: "trace-1",
+      });
+    } finally {
+      globalThis.document = previousDocument;
     }
   });
 
@@ -25245,6 +25383,346 @@ describe("production workbench project tab", () => {
     assert.match(html, /placeholder="请输入您的生图要求"/);
   });
 
+  it("uses configured model credits and explicit image size in asset generation snapshots", async () => {
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        customEpisodes: [
+          {
+            id: "episode-2",
+            title: "真实剧集",
+            status: "Draft",
+            storyboardCount: 0,
+          },
+        ],
+        projectAssetTab: "character",
+        museScopeMode: "assets",
+        selectedEpisodeCardId: "character-2",
+        selectedEpisodeAssetId: "character-2",
+        selectedModelId: "gpt-image-2-cn",
+        imageGenerationMode: "single-image",
+        imageResolution: "1080p",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "1080p",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+          count: 1,
+        },
+        prompt: "旧提示词，不应该发送",
+        imageGenerationResult: null,
+        episodeBatchResults: {},
+        importedAssets: {
+          character: [
+            {
+              id: "character-2",
+              name: "叙言",
+              description: "中年男性，深色皮甲。",
+              previewUrl: "https://example.com/character-2.png",
+            },
+          ],
+          scene: [],
+          prop: [],
+        },
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "旧提示词，不应该发送",
+          quickReferenceItems: [],
+          mentionReferences: [],
+          selectionContext: {
+            assetTab: "character",
+            selectedAssetId: "character-2",
+            selectedAssetName: "叙言",
+          },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                quality: { label: "质量", type: "enum", options: ["1080p"] },
+                resolution: { label: "清晰度", type: "enum", options: ["1080p"] },
+                aspectRatio: { label: "画面比例", type: "enum", options: ["16:9", "9:16"] },
+                count: { label: "生成数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                quality: "1080p",
+                resolution: "1080p",
+                aspectRatio: "16:9",
+                count: 1,
+              },
+              pricing: { baseCredits: 20 },
+              displayBaseCost: 20,
+            },
+          ],
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "episode-2",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 0,
+              createdAt: "2026-05-31T08:00:00.000Z",
+            },
+          ],
+          shots: [],
+        },
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async collectEpisodeEvent() {},
+        async createImageTask(_episodeId, payload) {
+          return {
+            taskId: "asset-image-task-credit",
+            status: "queued",
+            workflowStatus: "queued",
+            cost: 20,
+            parameters: payload.parameters,
+            result: {},
+            platform: {
+              workflowStatus: "queued",
+              tasks: [{ taskId: "asset-image-task-credit", status: "queued" }],
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === "#video-prompt-input") {
+            return { value: "框内最新提示词，必须发送给所选模型。" };
+          }
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        return { callback, delayMs };
+      },
+      clearTimeout() {},
+    };
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "generate-images" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.imageGenerationResult?.creditCost, 20);
+    assert.equal(workbench.ui.imageGenerationResult?.resolution, "1280x720");
+    assert.equal(workbench.ui.imageGenerationResult?.aspectRatio, "16:9");
+  });
+
+  it("does not display image ratio when the selected backend model has no ratio parameter", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "gpt-image-2",
+        imageResolution: "1024x1024",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1024x1024",
+        },
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小草", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        imageGenerationResult: {
+          taskId: "task-no-ratio-1",
+          status: "queued",
+          mediaKind: "image",
+          promptPreview: "角色设计展示图",
+          selectedModelId: "gpt-image-2",
+          resolution: "1024x1024",
+          creditCost: 20,
+          selectionContext: {
+            assetTab: "character",
+            selectedAssetId: "character-1",
+            selectedAssetName: "任小草",
+          },
+        },
+        episodeBatchModal: {
+          show: true,
+          scope: "asset",
+          mode: "image",
+          imageModelId: "gpt-image-2",
+          imageModelOptions: [
+            {
+              value: "gpt-image-2",
+              label: "gpt-image-2",
+              supportedResolutions: ["1024x1024"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1024x1024"] },
+              },
+            },
+          ],
+          imageAspectRatio: "",
+          imageClarity: "1024x1024",
+          publicStyles: [],
+          customStyles: [],
+          items: [{ id: "character-1", name: "任小草", kind: "character" }],
+          totalCredits: 20,
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2",
+          models: [
+            {
+              modelCode: "gpt-image-2",
+              modelLabel: "gpt-image-2",
+              mediaType: "image",
+              supportedModes: ["image.generate", "multi-image"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1024x1024"] },
+              },
+              defaultParams: {
+                size: "1024x1024",
+              },
+              displayBaseCost: 20,
+            },
+          ],
+        },
+      }),
+    });
+
+    assert.doesNotMatch(html, /比例：16:9/);
+    assert.doesNotMatch(html, /data-field="imageAspectRatio"/);
+    assert.doesNotMatch(html, /<span>比例<\/span>/);
+    assert.match(html, /1024x1024/);
+  });
+
+  it("updates asset prompt dock display when switching image models", async () => {
+    const storyboards = createStoryboardList(buildProjectState());
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0].id,
+        storyboards,
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "gpt-image-2-cn",
+        imageGenerationMode: "single-image",
+        imageResolution: "2K",
+        imageAspectRatio: "16:9",
+        generationParameterValues: {
+          size: "1280x720",
+          quality: "2K",
+          aspectRatio: "16:9",
+          count: 1,
+        },
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小野", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                size: "1280x720",
+                count: 1,
+              },
+              displayBaseCost: 20,
+            },
+            {
+              modelCode: "jimeng-5-0",
+              modelLabel: "即梦 5.0",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                quality: { label: "清晰度", type: "enum", options: ["720x1280", "1280x720"] },
+                aspectRatio: { label: "比例", type: "enum", options: ["9:16", "16:9"] },
+                count: { label: "数量", type: "integer", minimum: 1, maximum: 4 },
+              },
+              defaultParams: {
+                quality: "720x1280",
+                aspectRatio: "9:16",
+                count: 1,
+              },
+              displayBaseCost: 50,
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-video-model",
+        modelId: "jimeng-5-0",
+        modelName: "即梦 5.0",
+      },
+    });
+
+    assert.equal(workbench.ui.selectedModelId, "jimeng-5-0");
+    assert.equal(workbench.ui.imageResolution, "720x1280");
+    assert.equal(workbench.ui.imageAspectRatio, "9:16");
+    assert.equal(workbench.ui.generationParameterValues?.size, undefined);
+
+    const html = renderProductionWorkbench(workbench);
+    assert.match(html, /即梦 5\.0/);
+    assert.match(html, /720x1280/);
+    assert.match(html, /9:16/);
+    assert.match(html, /<span>50<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+  });
+
   it("renders all repeated asset generation conversations as an ordered list", () => {
     const html = renderProductionWorkbench({
       state: {
@@ -25452,6 +25930,62 @@ describe("production workbench project tab", () => {
     assert.match(html, /错误原因:生成任务超过 15 分钟未完成/);
     assert.match(html, /data-result-action="delete" data-task-id="asset-image-failed-1"/);
     assert.doesNotMatch(html, /episode-replica-task-failure/);
+  });
+
+  it("shows actionable content safety guidance without provider codes", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          museScopeMode: "assets",
+          episodeMediaMode: "image",
+          selectedEpisodeId: "episode-primary",
+          selectedEpisodeAssetId: "character-1",
+          selectedEpisodeCardId: "character-1",
+          importedAssets: {
+            character: [{ id: "character-1", name: "白野", kind: "character" }],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          assetConversationHistory: {
+            "image:character-1": [
+              {
+                taskId: "asset-image-failed-provider-1",
+                status: "failed",
+                failureCode: "provider_failed",
+                failure: {
+                  failureCode: "provider_failed",
+                  displayMessage: "模型供应商返回失败：lingdong api image 400:api error:",
+                  providerMessage: "lingdong api image 400:api error:这个描述包含明显的血腥残肢与破碎尸体等重度暴力细节，不适合生成此类画面。",
+                  providerErrorCode: "api_error",
+                },
+                promptPreview: "角色设定图",
+                selectedModelId: "gpt-image-2-cn",
+                aspectRatio: "16:9",
+                resolution: "1024x1024",
+                creditCost: 20,
+                selectionContext: {
+                  assetTab: "character",
+                  selectedAssetId: "character-1",
+                  selectedAssetName: "白野",
+                },
+                fixedImages: [],
+              },
+            ],
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /错误原因:提示词包含血腥、残肢或重度暴力内容/);
+    assert.match(html, /战后遗迹、诡异荒城或氛围场景/);
+    assert.doesNotMatch(html, /lingdong/i);
+    assert.doesNotMatch(html, /api error/i);
+    assert.doesNotMatch(html, /api_error/i);
   });
 
   it("renders repeated storyboard generation conversations as a vertical history list", () => {

@@ -1463,6 +1463,9 @@ function readArray(value: unknown) {
 }
 
 function parseContentLength(value: string | null) {
+  if (value == null) {
+    return null;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }

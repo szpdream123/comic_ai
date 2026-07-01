@@ -1,5 +1,6 @@
 import { eventTypes } from "../../../../../packages/contracts/domain/event-types.ts";
 import { consumePaymentSucceededCreditGrant } from "../credit-billing/payment-succeeded-credit-consumer.service.ts";
+import { consumeInviteRebateForPaymentSucceeded } from "../invite-rewards/invite-reward.service.ts";
 import { consumeMembershipPeriodCreditGrant } from "../membership/membership-period-credit-consumer.service.ts";
 import { consumePaymentSucceededMembershipActivation } from "../membership/payment-succeeded-membership-consumer.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
@@ -30,6 +31,10 @@ export async function dispatchPaymentOutboxBatch(
         now: input.now,
       });
       await consumePaymentSucceededCreditGrant(db, {
+        event,
+        now: input.now,
+      });
+      await consumeInviteRebateForPaymentSucceeded(db, {
         event,
         now: input.now,
       });

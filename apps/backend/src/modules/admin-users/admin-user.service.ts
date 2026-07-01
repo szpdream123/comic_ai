@@ -820,7 +820,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     let ledger = existingLedger;
     if (!existingLedger) {
       const reservation = await reserveCredits(deps.db, {
-        organizationId: target.organizationId,
+        compatibilityOrganizationId: target.organizationId,
         userId: input.userId,
         workspaceId: target.workspaceId,
         amount,

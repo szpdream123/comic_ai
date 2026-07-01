@@ -13,6 +13,7 @@ import { createDevDb } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createScopedStorageObject } from "../../storage/storage.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
+import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
   finalizeGptImageArtifactJob,
   processGptImageSubmitJob,
@@ -280,6 +281,326 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.ok(uploadRecords.rows[0]?.actor_user_id);
       assert.equal(uploadRecords.rows[0]?.actor_display_name, "用户13800138000");
       assert.equal(uploadRecords.rows[0]?.actor_phone_e164, "13800138000");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uploads provider image urls without forcing contentLength to zero when the download is chunked", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"url"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const providerImageUrl = "https://image-gateway.example.test/content/generated-image";
+    const uploadInputs: Array<{
+      body: unknown;
+      contentLength: number | null | undefined;
+      contentType: string | null | undefined;
+    }> = [];
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject(input) {
+          uploadInputs.push({
+            body: input.body,
+            contentLength: input.contentLength,
+            contentType: input.contentType,
+          });
+          return { eTag: "gpt-image-worker-url-etag" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+    };
+    const fetchImpl = (async (url, init) => {
+      if (String(url) === providerImageUrl) {
+        return new Response(new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]), {
+          status: 200,
+          headers: {
+            "content-type": "image/jpeg",
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          created: 1_717_200_000,
+          data: [
+            {
+              url: providerImageUrl,
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": "gpt-image-request-url-1",
+          },
+        },
+      );
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const created = await createProjectAndEpisode(server.origin, cookie);
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "gpt-image-worker-url-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            prompt: "draw the chunked image result",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "1080p",
+              responseFormat: "url",
+            },
+          }),
+        },
+      );
+      const imageTask = (await imageTaskResponse.json()).data;
+
+      const submitResult = await processGptImageSubmitJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-30T09:08:40.000Z"),
+      });
+      const finalizeResult = await finalizeGptImageArtifactJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-30T09:08:45.000Z"),
+      });
+      const storedObject = await db.query<{
+        status: string;
+        content_type: string;
+        size_bytes: number | string | null;
+      }>(
+        `
+          SELECT status, content_type, size_bytes
+          FROM storage_objects
+          WHERE metadata_json->>'taskId' = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [imageTask.taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.deepEqual(submitResult, { status: "submitted" });
+      assert.deepEqual(finalizeResult, { status: "succeeded" });
+      assert.equal(uploadInputs.length, 1);
+      assert.equal(uploadInputs[0]?.contentLength ?? "missing", null);
+      assert.equal(uploadInputs[0]?.contentType, "image/jpeg");
+      assert.equal(uploadInputs[0]?.body instanceof Uint8Array, false);
+      assert.equal(storedObject.rows[0]?.status, "available");
+      assert.equal(storedObject.rows[0]?.content_type, "image/jpeg");
+      assert.equal(Number(storedObject.rows[0]?.size_bytes ?? -1), 8);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails image finalization when the uploaded storage object is still zero bytes", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"url"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const providerImageUrl = "https://image-gateway.example.test/content/generated-image";
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "gpt-image-worker-empty-etag" };
+        },
+        async headObject() {
+          return {
+            exists: true,
+            contentType: "image/jpeg",
+            contentLength: 0,
+            eTag: "d41d8cd98f00b204e9800998ecf8427e",
+          };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url) === providerImageUrl) {
+        return new Response(new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]), {
+          status: 200,
+          headers: {
+            "content-type": "image/jpeg",
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          created: 1_717_200_000,
+          data: [
+            {
+              url: providerImageUrl,
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": "gpt-image-request-empty-1",
+          },
+        },
+      );
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const created = await createProjectAndEpisode(server.origin, cookie);
+      const imageTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "gpt-image-worker-empty-upload-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            prompt: "draw the empty uploaded image result",
+            model: "gpt-image-2-cn",
+            parameters: {
+              aspectRatio: "16:9",
+              quality: "1080p",
+              responseFormat: "url",
+            },
+          }),
+        },
+      );
+      const imageTask = (await imageTaskResponse.json()).data;
+
+      const submitResult = await processGptImageSubmitJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-30T09:18:40.000Z"),
+      });
+      const finalizeResult = await finalizeGptImageArtifactJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-30T09:18:45.000Z"),
+      });
+      const taskRow = await db.query<{
+        status: string;
+        failure_code: string | null;
+      }>(
+        `
+          SELECT status, failure_code
+          FROM tasks
+          WHERE id = $1
+        `,
+        [imageTask.taskId],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string | null;
+        failure_json: { failureCode?: string; displayMessage?: string } | null;
+      }>(
+        `
+          SELECT status, progress_stage, failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+          LIMIT 1
+        `,
+        [imageTask.taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.deepEqual(submitResult, { status: "submitted" });
+      assert.deepEqual(finalizeResult, { status: "failed", failureCode: "provider_output_upload_failed" });
+      assert.equal(taskRow.rows[0]?.status, "failed");
+      assert.equal(taskRow.rows[0]?.failure_code, "provider_output_upload_failed");
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_output_upload_failed");
     } finally {
       await server.close();
     }
@@ -732,6 +1053,145 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
+  it("refunds team member credits when GPT Image 2 submit fails in the worker", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+    const fetchImpl = (async () => {
+      throw new Error("provider submit failed for team member");
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      seedTeamEntitlements: true,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138000");
+      const created = await createProjectAndEpisode(server.origin, ownerCookie);
+      const projectScope = await db.query<{ organization_id: string; workspace_id: string; created_by_user_id: string }>(
+        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+        [created.projectId],
+      );
+      const memberId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id,
+            user_id,
+            member_account,
+            member_account_suffix,
+            member_login_account,
+            member_name,
+            member_password_hash,
+            member_credits,
+            status
+          )
+          VALUES ($1, $2, 'worker_refund_member', 'worker', 'worker_refund_member@worker', 'Worker Refund Member', $3, 0, 'active')
+        `,
+        [memberId, projectScope.rows[0]!.created_by_user_id, await createUserPasswordHash("worker-refund-secret")],
+      );
+      const taskSnapshot = {
+        kind: "image",
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        prompt: "draw the team member refund image",
+        model: "gpt-image-2-cn",
+        parameters: {
+          aspectRatio: "9:16",
+          quality: "high",
+        },
+        providerExecutor: "gpt-image-2",
+        requestedAt: "2026-06-30T13:00:00.000Z",
+        cost: 77,
+        teamMemberId: memberId,
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        organizationId: projectScope.rows[0]!.organization_id,
+        workspaceId: projectScope.rows[0]!.workspace_id,
+        projectId: created.projectId,
+        workflowType: "episode_image_generation",
+        inputSnapshot: taskSnapshot,
+        createdByUserId: projectScope.rows[0]!.created_by_user_id,
+        tasks: [
+          {
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "episode",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const taskId = workflow.tasks[0]!.id;
+
+      const submitResult = await processGptImageSubmitJob(db, {
+        taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-30T13:05:00.000Z"),
+      });
+      const member = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [memberId],
+      );
+      const refundLedger = await db.query<{ amount: number | string; source_type: string }>(
+        `
+          SELECT amount, source_type
+          FROM credit_ledger_entries
+          WHERE source_type = 'team_member_generation_refund'
+            AND source_id = $1
+        `,
+        [taskId],
+      );
+
+      assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
+      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 77);
+      assert.equal(Number(refundLedger.rows[0]?.amount ?? -1), 77);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects GPT Image 2 reference asset versions over the configured maxReferences limit", async () => {
     const db = await createMigratedTestDb();
     await db.query(
@@ -1133,6 +1593,16 @@ async function login(origin: string, phone: string) {
   } finally {
     await fallbackDb?.close();
   }
+}
+
+async function loginTeamMemberAccount(origin: string, account: string, password: string) {
+  const response = await fetch(`${origin}/api/auth/team-member/password/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account, password, remember: true }),
+  });
+  assert.equal(response.status, 200);
+  return response.headers.get("set-cookie") ?? "";
 }
 
 async function ensurePasswordLoginUser(

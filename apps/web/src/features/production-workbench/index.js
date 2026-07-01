@@ -9603,16 +9603,58 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           // Keep the submitted task visible if conversation persistence is temporarily unavailable.
         }
         return { itemId: item.id, result };
-      } catch (error) {
-        const failedResult = {
-          ...submission,
-          status: "failed",
-          failureCode: "batch_image_task_failed",
-          failure: {
-            displayMessage: friendlyError(error),
-          },
-          fixedImages: [],
-        };
+        } catch (error) {
+          const failureCode =
+            typeof error?.errorCode === "string" && error.errorCode.trim()
+              ? error.errorCode.trim()
+              : typeof error?.code === "string" && error.code.trim()
+                ? error.code.trim()
+                : "batch_image_task_failed";
+          const failedResult = {
+            ...submission,
+            status: "failed",
+            taskId:
+              (typeof error?.taskId === "string" && error.taskId.trim()
+                ? error.taskId.trim()
+                : typeof error?.details?.taskId === "string" && error.details.taskId.trim()
+                  ? error.details.taskId.trim()
+                  : typeof error?.data?.taskId === "string" && error.data.taskId.trim()
+                    ? error.data.taskId.trim()
+                    : typeof error?.data?.details?.taskId === "string" && error.data.details.taskId.trim()
+                      ? error.data.details.taskId.trim()
+                      : null),
+            failureCode,
+            failure: {
+              displayMessage: friendlyError(error),
+              failureCode,
+              code: failureCode,
+              noticeType:
+                typeof error?.noticeType === "string" && error.noticeType.trim()
+                  ? error.noticeType.trim()
+                  : null,
+              providerRequestId:
+                typeof error?.requestId === "string" && error.requestId.trim()
+                  ? error.requestId.trim()
+                  : null,
+              providerStatus:
+                typeof error?.providerStatus === "string" && error.providerStatus.trim()
+                  ? error.providerStatus.trim()
+                  : null,
+              providerErrorCode:
+                typeof error?.providerErrorCode === "string" && error.providerErrorCode.trim()
+                  ? error.providerErrorCode.trim()
+                  : null,
+              providerMessage:
+                typeof error?.providerMessage === "string" && error.providerMessage.trim()
+                  ? error.providerMessage.trim()
+                  : null,
+              details:
+                error?.details && typeof error.details === "object" && !Array.isArray(error.details)
+                  ? error.details
+                  : null,
+            },
+            fixedImages: [],
+          };
         batchResults[item.id] = failedResult;
         appendAssetConversationHistoryEntry(workbench, failedResult);
         if (workbench.ui.selectedEpisodeAssetId === item.id || workbench.ui.selectedEpisodeCardId === item.id) {
@@ -9626,6 +9668,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         const errorCode = String(error?.errorCode ?? "");
         if (!batchErrorToast && (errorCode === "insufficient_credits" || errorCode === "generation_membership_required")) {
           batchErrorToast = friendlyError(error);
+        }
+        try {
+          await persistAssetConversationEntry(workbench, failedResult, { includeUserRequest: true });
+          render(workbench);
+        } catch {
+          // Keep the failed task visible even if conversation persistence is temporarily unavailable.
         }
         return { itemId: item.id, result: failedResult, error };
       }
@@ -20013,10 +20061,7 @@ function applyGenerationModelDefaults(workbench, model, mediaKind = "") {
   const quality = firstGenerationValue(defaults.quality, defaults.resolution, qualities[0]);
   const count = Number(defaults.count);
 
-  workbench.ui.generationParameterValues = {
-    ...(workbench.ui.generationParameterValues ?? {}),
-    ...defaults,
-  };
+  workbench.ui.generationParameterValues = { ...defaults };
 
   if (aspectRatio) {
     workbench.ui.imageAspectRatio = aspectRatio;
@@ -20128,7 +20173,7 @@ function assetGeneratorEpisodeAssetType(assetKind) {
 function buildAssetGeneratorImageTaskPayload(workbench, input) {
   const model = String(workbench.ui.assetGeneratorModelCode ?? "").trim()
     || resolveConfiguredImageModelCode(workbench, "image", "gpt-image-2-cn");
-  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
@@ -22527,10 +22572,11 @@ export function buildImageGenerationPayload(workbench) {
     workbench.ui.imageGenerationMode,
     workbench.ui.selectedModelId ?? "gpt-image-2-cn",
   );
-  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
+  const explicitImageSize = hasExplicitImageSizeParameter(configuredParameters);
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     promptOverride: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
@@ -22539,9 +22585,15 @@ export function buildImageGenerationPayload(workbench) {
       ...configuredParameters,
       mode: workbench.ui.imageGenerationMode,
       count: clampCount(configuredParameters.count ?? workbench.ui.imageCount ?? 1, 1, 4),
-      ...(qualityVisible ? { quality: configuredParameters.quality ?? workbench.ui.imageResolution ?? "2K" } : {}),
-      ...(resolutionVisible ? { resolution: configuredParameters.resolution ?? workbench.ui.imageResolution ?? "2K" } : {}),
-      ...(aspectRatioVisible ? { aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16" } : {}),
+      ...(qualityVisible && (configuredParameters.quality !== undefined || !explicitImageSize)
+        ? { quality: configuredParameters.quality ?? workbench.ui.imageResolution ?? "2K" }
+        : {}),
+      ...(resolutionVisible && (configuredParameters.resolution !== undefined || !explicitImageSize)
+        ? { resolution: configuredParameters.resolution ?? workbench.ui.imageResolution ?? "2K" }
+        : {}),
+      ...(aspectRatioVisible && (configuredParameters.aspectRatio !== undefined || !explicitImageSize)
+        ? { aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16" }
+        : {}),
       strategy: workbench.ui.multiImageStrategy ?? "spatial-multi-view",
       references: selectedStoryboard?.references ?? [],
       quickReferences: generationState.quickReferenceItems ?? [],
@@ -22587,7 +22639,7 @@ function isConfiguredGenerationParameterVisible(workbench, modelCode, key) {
     ? model.parameterSchema
     : {};
   const parameter = schema[key];
-  return !parameter || typeof parameter !== "object" || Array.isArray(parameter) || parameter.visible !== false;
+  return Boolean(parameter && typeof parameter === "object" && !Array.isArray(parameter) && parameter.visible !== false);
 }
 
 function firstGenerationParameterCandidate(...candidates) {
@@ -22620,6 +22672,18 @@ function uiGenerationParameterFallback(workbench, key) {
     return workbench.ui.videoDurationSec;
   }
   return undefined;
+}
+
+function filterExplicitImageSizeParameters(parameters) {
+  if (!hasExplicitImageSizeParameter(parameters)) {
+    return parameters;
+  }
+  const next = { ...parameters };
+  delete next.quality;
+  delete next.resolution;
+  delete next.aspectRatio;
+  delete next.imageAspectRatio;
+  return next;
 }
 
 function resolveConfiguredGenerationParameterValue(parameter, selectedValue, defaultValue) {
@@ -22666,6 +22730,48 @@ function generationParameterOptionValues(parameter) {
     values.push(String(value));
   }
   return values;
+}
+
+function readGenerationString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function hasExplicitImageSizeParameter(parameters) {
+  const size = readGenerationString(parameters?.size) || readGenerationString(parameters?.imageSize);
+  return /^\d+x\d+$/i.test(size);
+}
+
+function resolveGenerationDisplayResolution(parameterSource, fallbackValue) {
+  const explicitSize = readGenerationString(parameterSource?.size) || readGenerationString(parameterSource?.imageSize);
+  if (/^\d+x\d+$/i.test(explicitSize)) {
+    return explicitSize;
+  }
+  return (
+    readGenerationString(parameterSource?.resolution) ||
+    readGenerationString(parameterSource?.quality) ||
+    readGenerationString(fallbackValue)
+  );
+}
+
+function resolveGenerationDisplayAspectRatio(parameterSource, fallbackValue) {
+  return readGenerationString(parameterSource?.aspectRatio) || readGenerationString(fallbackValue);
+}
+
+function resolveGenerationDisplayCreditCost(task, submission) {
+  const candidates = [
+    task?.cost,
+    task?.credit?.consumed,
+    task?.credit?.reserved,
+    task?.credit?.released,
+    submission?.creditCost,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return Math.round(value);
+    }
+  }
+  return null;
 }
 
 export function buildVideoGenerationPayload(workbench) {
@@ -23375,6 +23481,15 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
         status: "ready",
       }]
     : [];
+  const selectedModelId = resolveGenerationSubmissionModelCode(workbench, mediaKind);
+  const imagePayload = !isVideo ? buildImageGenerationPayload(workbench) : null;
+  const imageParameters =
+    imagePayload?.parameters && typeof imagePayload.parameters === "object"
+      ? imagePayload.parameters
+      : {};
+  const selectedImageModel = !isVideo ? findConfiguredGenerationModel(workbench, selectedModelId) : null;
+  const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
+  const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
     mediaKind,
     storyboardId: storyboard?.id ?? null,
@@ -23387,15 +23502,27 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     imageReference: generationState.imageReference ?? null,
     referenceUploads: Array.isArray(generationState.referenceUploads) ? [...generationState.referenceUploads] : [],
     selectionContext: resolveEpisodeAssetSelectionContext(workbench),
-    selectedModelId: resolveGenerationSubmissionModelCode(workbench, mediaKind),
+    selectedModelId,
     resolution: isVideo
       ? workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p"
-      : workbench.ui.imageResolution ?? "2K",
+      : resolveGenerationDisplayResolution(
+          imageParameters,
+          imageResolutionFallback,
+        ) || null,
     aspectRatio: isVideo
       ? workbench.state?.project?.aspectRatio ?? "9:16"
-      : workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
+      : resolveGenerationDisplayAspectRatio(
+          imageParameters,
+          imageAspectRatioFallback,
+        ) || null,
     durationSec: isVideo ? Number(workbench.ui.videoDurationSec ?? 5) : null,
-    creditCost: isLipSync ? calculateLipSyncCreditCost(scopePrompt) : isVideo ? 4500 : 4500,
+    creditCost: isLipSync
+      ? calculateLipSyncCreditCost(scopePrompt)
+      : isVideo
+        ? 4500
+        : selectedImageModel
+          ? resolveCanvasRunCreditCost(selectedImageModel, "image")
+          : 4500,
     generatedAudioItems,
     createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     status: "running",
@@ -23420,6 +23547,15 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
         )
       : (workbench.ui.selectedModelId ?? null);
   const scopePrompt = String(getCurrentScopePrompt(workbench) ?? "");
+  const imagePayload = mediaKind === "image" ? buildImageGenerationPayload(workbench) : null;
+  const imageParameters =
+    imagePayload?.parameters && typeof imagePayload.parameters === "object"
+      ? imagePayload.parameters
+      : {};
+  const selectedImageModel =
+    mediaKind === "image" ? findConfiguredGenerationModel(workbench, selectedModelId) : null;
+  const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
+  const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
     mediaKind,
     assetId: asset?.id ?? null,
@@ -23436,9 +23572,18 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
         asset?.previewUrl ?? asset?.preview ?? asset?.sourceUrl ?? selectionContext.selectedAssetPreview,
     },
     selectedModelId,
-    resolution: workbench.ui.imageResolution ?? "2K",
-    aspectRatio: workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
-    creditCost: mediaKind === "image" ? 50 : 90,
+    resolution: resolveGenerationDisplayResolution(
+      imageParameters,
+      imageResolutionFallback,
+    ) || null,
+    aspectRatio: resolveGenerationDisplayAspectRatio(
+      imageParameters,
+      imageAspectRatioFallback,
+    ) || null,
+    creditCost:
+      mediaKind === "image"
+        ? (selectedImageModel ? resolveCanvasRunCreditCost(selectedImageModel, "image") : 50)
+        : 90,
     createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     status: "running",
   };
@@ -24255,7 +24400,7 @@ function buildEpisodeBatchModal(workbench, { scope = "asset", mode = "image", it
     openField: null,
     imageModelId: defaultImageModelId,
     imageModelOptions,
-    imageAspectRatio: resolveEpisodeBatchModelRatio(defaultImageModel) ?? workbench.state?.project?.aspectRatio ?? "16:9",
+    imageAspectRatio: resolveEpisodeBatchModelRatio(defaultImageModel) ?? "",
     imageClarity: resolveEpisodeBatchModelClarity(defaultImageModel) ?? "2K",
     styleTab: "public",
     publicStyles,
@@ -24307,7 +24452,7 @@ function syncEpisodeBatchModal(modal) {
       imageAspectRatio: resolveEpisodeBatchAllowedValue(
         modal?.imageAspectRatio,
         normalizeGenerationOptionValues(imageModel?.supportedRatios),
-        resolveEpisodeBatchModelRatio(imageModel) || "16:9",
+        resolveEpisodeBatchModelRatio(imageModel) || "",
       ),
       imageClarity: resolveEpisodeBatchAllowedValue(
         modal?.imageClarity,
@@ -24458,6 +24603,9 @@ function resolveEpisodeBatchImageModelOptions(workbench) {
         supportedRatios: normalizeGenerationOptionValues(model?.supportedRatios),
         supportedQuality: normalizeGenerationOptionValues(model?.supportedQuality),
         supportedResolutions: normalizeGenerationOptionValues(model?.supportedResolutions),
+        parameterSchema: model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
+          ? model.parameterSchema
+          : {},
         defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {},
         pricing: model?.pricing,
         pricingJson: model?.pricingJson,
@@ -24527,6 +24675,15 @@ function resolveDefaultBatchPromptPresetId(options, fallbackId) {
 }
 
 function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind, promptPreview, selectionContext, createdAt) {
+  const selectedModel = (modal?.imageModelOptions ?? []).find((option) => {
+    return String(option?.value ?? option?.id ?? "").trim() === String(modal?.imageModelId ?? "gpt-image-2-cn").trim();
+  }) ?? null;
+  const configuredParameters =
+    selectedModel ? filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, String(selectedModel.value ?? selectedModel.id ?? ""))) : {};
+  const selectedModelCode = String(selectedModel?.value ?? selectedModel?.id ?? modal?.imageModelId ?? "gpt-image-2-cn").trim();
+  const selectedModelConfig = findConfiguredGenerationModel(workbench, selectedModelCode);
+  const imageResolutionFallback = modal?.imageClarity ?? selectedModelConfig?.defaultParams?.quality ?? selectedModelConfig?.defaultParams?.resolution;
+  const imageAspectRatioFallback = selectedModelConfig?.defaultParams?.aspectRatio;
   return {
     mediaKind: "image",
     assetId: item?.id ?? null,
@@ -24535,8 +24692,11 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
     attachmentItems: [],
     selectionContext,
     selectedModelId: modal?.imageModelId ?? "gpt-image-2-cn",
-    resolution: modal?.imageClarity ?? "2K",
-    aspectRatio: modal?.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
+    resolution: resolveGenerationDisplayResolution(configuredParameters, imageResolutionFallback) || null,
+    aspectRatio: resolveGenerationDisplayAspectRatio(
+      configuredParameters,
+      imageAspectRatioFallback,
+    ) || null,
     creditCost: resolveEpisodeBatchUnitCredit(modal),
     createdAt,
     status: "running",
@@ -24545,10 +24705,11 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
 
 function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission) {
   const model = String(modal?.imageModelId ?? "gpt-image-2-cn").trim() || "gpt-image-2-cn";
-  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
+  const explicitImageSize = hasExplicitImageSizeParameter(configuredParameters);
   return {
     shotId: null,
     promptOverride: submission?.promptPreview ?? "",
@@ -24557,9 +24718,15 @@ function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, su
       ...configuredParameters,
       mode: "multi-image",
       count: 1,
-      ...(qualityVisible ? { quality: modal?.imageClarity ?? "2K" } : {}),
-      ...(resolutionVisible ? { resolution: modal?.imageClarity ?? "2K" } : {}),
-      ...(aspectRatioVisible ? { aspectRatio: modal?.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9" } : {}),
+      ...(qualityVisible && (configuredParameters.quality !== undefined || !explicitImageSize)
+        ? { quality: configuredParameters.quality ?? modal?.imageClarity ?? "2K" }
+        : {}),
+      ...(resolutionVisible && (configuredParameters.resolution !== undefined || !explicitImageSize)
+        ? { resolution: configuredParameters.resolution ?? modal?.imageClarity ?? "2K" }
+        : {}),
+      ...(aspectRatioVisible && (configuredParameters.aspectRatio !== undefined || !explicitImageSize)
+        ? { aspectRatio: configuredParameters.aspectRatio ?? modal?.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9" }
+        : {}),
       strategy: workbench.ui.multiImageStrategy ?? "spatial-multi-view",
       references: [],
       quickReferences: [],
@@ -24860,7 +25027,7 @@ async function refreshCanvasGenerationCreditContext(workbench) {
   }
 }
 
-const GENERATION_POLL_INTERVAL_MS = 30000;
+const GENERATION_POLL_INTERVAL_MS = 20_000;
 const IMAGE_GENERATION_CLIENT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
 const VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
@@ -25569,16 +25736,45 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
   const result = task?.result ?? {};
   const mediaUrl = mediaKind === "video" ? result.videoUrl : result.imageUrl;
   const isLipSync = mediaKind === "video" && isLipSyncTaskLike(task);
+  const selectionContext =
+    task?.selectionContext && typeof task.selectionContext === "object"
+      ? task.selectionContext
+      : submission?.selectionContext && typeof submission.selectionContext === "object"
+        ? submission.selectionContext
+        : {};
+  const targetType = task?.targetType ?? submission?.targetType ?? null;
+  const targetId = task?.targetId ?? submission?.targetId ?? null;
+  const taskParameters =
+    task?.parameters && typeof task.parameters === "object"
+      ? task.parameters
+      : result?.parameters && typeof result.parameters === "object"
+        ? result.parameters
+        : {};
+  const assetId =
+    task?.assetId ??
+    result?.assetId ??
+    (targetType === "asset" ? targetId : null) ??
+    submission?.assetId ??
+    selectionContext?.selectedAssetId ??
+    null;
   const generatedAudioItems = Array.isArray(task?.generatedAudioItems)
     ? task.generatedAudioItems
     : Array.isArray(result.generatedAudioItems)
       ? result.generatedAudioItems
       : submission?.generatedAudioItems ?? [];
+  const resolvedResolution = mediaKind === "image"
+    ? (resolveGenerationDisplayResolution(taskParameters, submission?.resolution) || submission?.resolution || null)
+    : (readGenerationString(taskParameters?.resolution) || readGenerationString(submission?.resolution) || null);
+  const resolvedAspectRatio = resolveGenerationDisplayAspectRatio(taskParameters, submission?.aspectRatio) || submission?.aspectRatio || null;
+  const resolvedCreditCost = resolveGenerationDisplayCreditCost(task, submission);
   return {
     ...task,
     ...submission,
     status: task?.status === "succeeded" ? "completed" : task?.status ?? "running",
     mediaKind,
+    assetId,
+    targetType,
+    targetId,
     taskId: task?.taskId ?? null,
     platform: {
       workflowId: task?.workflowId ?? null,
@@ -25606,6 +25802,10 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
       : [],
     generatedAudioItems,
     result,
+    selectionContext,
+    resolution: resolvedResolution,
+    aspectRatio: resolvedAspectRatio,
+    creditCost: resolvedCreditCost,
     failure: task?.failure ?? submission?.failure ?? null,
     failureCode: task?.failureCode ?? task?.failure?.failureCode ?? submission?.failureCode ?? null,
     noticeType: task?.failure?.noticeType ?? task?.noticeType ?? submission?.noticeType ?? null,

@@ -360,11 +360,47 @@ function isAssetGeneratorFailureStatus(status) {
   return ["failed", "canceled", "manual_review_required", "result_unknown"].includes(String(status ?? "").trim().toLowerCase());
 }
 
+function isProviderDiagnosticLikeMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return false;
+  }
+  if (/模型供应商返回失败[:：]/.test(value)) {
+    return true;
+  }
+  if (/[A-Za-z]{3,}/.test(value)) {
+    return true;
+  }
+  if (/[a-z0-9_.-]+:[a-z0-9_.-]+/i.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+function resolveContentSafetyFailureMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/(血腥|残肢|尸体|断肢|头颅破碎|重度暴力|明显的血|不适合生成|内容安全|安全策略|审核拒绝|违规|敏感内容|content policy|safety|moderation)/i.test(value)) {
+    return "提示词包含血腥、残肢或重度暴力内容，请改成非血腥的战后遗迹、诡异荒城或氛围场景后重试。";
+  }
+  return "";
+}
+
 function resolveAssetGeneratorTaskFailureMessage(asset) {
   const task = asset?.generationResult ?? asset ?? null;
   const apiKeyEnv = String(task?.failure?.apiKeyEnv ?? task?.details?.apiKeyEnv ?? "").trim();
   const displayMessage = String(task?.failure?.displayMessage ?? "").trim();
+  const providerMessage = String(task?.failure?.providerMessage ?? task?.failure?.errorMessage ?? "").trim();
+  const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
+  if (contentSafetyMessage) {
+    return contentSafetyMessage;
+  }
   if (displayMessage) {
+    if (isProviderDiagnosticLikeMessage(displayMessage)) {
+      return "任务失败，请稍后重试";
+    }
     return apiKeyEnv ? `${displayMessage} 缺失项：${apiKeyEnv}` : displayMessage;
   }
   const failureCode = String(task?.failureCode ?? task?.failure?.failureCode ?? "").trim();
@@ -377,14 +413,6 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
   );
   if (finalizeMessage) {
     return finalizeMessage;
-  }
-  const providerMessage = String(task?.failure?.providerMessage ?? "").trim();
-  if (providerMessage) {
-    return providerMessage;
-  }
-  const providerErrorCode = String(task?.failure?.providerErrorCode ?? "").trim();
-  if (providerErrorCode) {
-    return providerErrorCode;
   }
   return failureCode || "任务失败，请稍后重试";
 }

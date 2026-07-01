@@ -11,7 +11,7 @@ import {
   expireFrozenWalletCreditsInTransaction,
 } from "../credit-lot.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000050001";
+const userId = "10000000-0000-4000-8000-000000050001";
 const lotSoon = "90000000-0000-4000-8000-000000050001";
 const lotLater = "90000000-0000-4000-8000-000000050002";
 const lotOnly = "90000000-0000-4000-8000-000000050003";
@@ -37,7 +37,7 @@ describe("credit lots", { concurrency: false }, () => {
       });
 
       const reserved = await reserveCredits(db, {
-        organizationId,
+        userId,
         amount: 90,
         sourceType: "generation_task",
         sourceId: reservationSourceId,
@@ -98,7 +98,7 @@ describe("credit lots", { concurrency: false }, () => {
       });
 
       const reserved = await reserveCredits(db, {
-        organizationId,
+        userId,
         amount: 50,
         sourceType: "generation_task",
         sourceId: reservationSourceId,
@@ -143,12 +143,12 @@ describe("credit lots", { concurrency: false }, () => {
       });
 
       const first = await expireAvailableCreditLots(db, {
-        organizationId,
+        userId,
         now: new Date("2026-06-09T00:00:00.000Z"),
         limit: 20,
       });
       const replay = await expireAvailableCreditLots(db, {
-        organizationId,
+        userId,
         now: new Date("2026-06-09T00:00:00.000Z"),
         limit: 20,
       });
@@ -156,9 +156,9 @@ describe("credit lots", { concurrency: false }, () => {
       const ledger = await db.query<{ entry_type: string; amount: number }>(
         "SELECT entry_type, amount FROM credit_ledger_entries WHERE entry_type = 'expire'",
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
 
       assert.equal(first.expiredAmount, 100);
@@ -166,7 +166,7 @@ describe("credit lots", { concurrency: false }, () => {
       assert.equal(lot.available_amount, 0);
       assert.equal(lot.expired_amount, 100);
       assert.deepEqual(ledger.rows, [{ entry_type: "expire", amount: 100 }]);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(user.rows[0]?.credit_balance_cached, 0);
     } finally {
       await db.close();
     }
@@ -184,7 +184,7 @@ describe("credit lots", { concurrency: false }, () => {
       });
 
       await expireAvailableCreditLots(db, {
-        organizationId,
+        userId,
         now: new Date("2026-06-09T00:00:00.000Z"),
         limit: 20,
       });
@@ -205,14 +205,14 @@ describe("credit lots", { concurrency: false }, () => {
       await seedOrganization(db, 0);
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_frozen_cached = 80,
               credit_frozen_at = $2,
               credit_frozen_until = $3
           WHERE id = $1
         `,
         [
-          organizationId,
+          userId,
           new Date("2026-06-01T00:00:00.000Z"),
           new Date("2026-06-08T00:00:00.000Z"),
         ],
@@ -245,10 +245,17 @@ async function seedOrganization(
 ) {
   await db.query(
     `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Credit Lot Org', 'active', $2)
+      INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached, credit_frozen_cached)
+      VALUES ($1, 'Credit Lot Org', 'active', 0, 0, 0)
     `,
-    [organizationId, balance],
+    [userId],
+  );
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, status, credit_balance_cached, credit_reserved_cached, credit_frozen_cached)
+      VALUES ($1, '13800138000', 'active', $2, 0, 0)
+    `,
+    [userId, balance],
   );
 }
 
@@ -262,11 +269,13 @@ async function seedLot(
   },
 ) {
   const grantLedgerEntryId = input.id.replace("90000000", "91000000");
+  const organizationId = userId;
   await db.query(
     `
       INSERT INTO credit_ledger_entries (
         id,
         organization_id,
+        user_id,
         reservation_id,
         allocation_id,
         entry_type,
@@ -281,15 +290,16 @@ async function seedLot(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'seed_lot', $4, 'seed lot', '{}'::jsonb, NULL, '2026-06-01T00:00:00.000Z')
+      VALUES ($1, $2, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'seed_lot', $4, 'seed lot', '{}'::jsonb, $2, '2026-06-01T00:00:00.000Z')
     `,
-    [grantLedgerEntryId, organizationId, input.amount, input.id],
+    [grantLedgerEntryId, userId, input.amount, input.id],
   );
   await db.query(
     `
       INSERT INTO credit_lots (
         id,
         organization_id,
+        user_id,
         source_type,
         source_id,
         grant_ledger_entry_id,
@@ -303,11 +313,11 @@ async function seedLot(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, 'seed_lot', $1, $3, $4, $4, 0, 0, 0, $5, $6::jsonb, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
+      VALUES ($1, $2, $2, 'seed_lot', $1, $3, $4, $4, 0, 0, 0, $5, $6::jsonb, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
     `,
     [
       input.id,
-      organizationId,
+      userId,
       grantLedgerEntryId,
       input.amount,
       input.expiresAt,
@@ -330,6 +340,7 @@ async function seedFrozenLot(
       INSERT INTO credit_ledger_entries (
         id,
         organization_id,
+        user_id,
         reservation_id,
         allocation_id,
         entry_type,
@@ -344,15 +355,16 @@ async function seedFrozenLot(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, NULL, '2026-06-01T00:00:00.000Z')
+      VALUES ($1, $2, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, $2, '2026-06-01T00:00:00.000Z')
     `,
-    [grantLedgerEntryId, organizationId, input.amount, input.id],
+    [grantLedgerEntryId, userId, input.amount, input.id],
   );
   await db.query(
     `
       INSERT INTO credit_lots (
         id,
         organization_id,
+        user_id,
         source_type,
         source_id,
         grant_ledger_entry_id,
@@ -368,9 +380,9 @@ async function seedFrozenLot(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, 'membership_gift', $1, $3, $4, $4, 0, 0, 0, 'frozen', '2026-06-01T00:00:00.000Z', $5, '{}'::jsonb, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
+      VALUES ($1, $2, $2, 'membership_gift', $1, $3, $4, $4, 0, 0, 0, 'frozen', '2026-06-01T00:00:00.000Z', $5, '{}'::jsonb, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
     `,
-    [input.id, organizationId, grantLedgerEntryId, input.amount, input.frozenUntil],
+    [input.id, userId, grantLedgerEntryId, input.amount, input.frozenUntil],
   );
 }
 

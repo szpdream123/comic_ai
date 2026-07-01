@@ -22,7 +22,6 @@ export async function verifyMembershipAndConsumeCredits(
   input: {
     userId: string;
     requiredCredits: number;
-    organizationId?: string | null;
     workspaceId?: string | null;
     projectId?: string | null;
     idempotencyKey?: string | null;
@@ -39,16 +38,6 @@ export async function verifyMembershipAndConsumeCredits(
     return null;
   }
 
-  const scope = input.organizationId
-    ? {
-        organizationId: input.organizationId,
-        workspaceId: input.workspaceId ?? null,
-      }
-    : await resolveUserCreditScope(db, input.userId);
-  if (!scope) {
-    throw new MembershipCreditGateError("membership_required", "请充值会员。", 403);
-  }
-
   const membershipStatus = await resolveMembershipStatus(db, {
     userId: input.userId,
     now: input.now,
@@ -62,9 +51,8 @@ export async function verifyMembershipAndConsumeCredits(
 
   try {
     const reservation = await reserveCredits(db, {
-      organizationId: scope.organizationId,
       userId: input.userId,
-      workspaceId: scope.workspaceId,
+      workspaceId: input.workspaceId ?? null,
       projectId: input.projectId ?? null,
       amount: Math.round(amount),
       sourceType: input.sourceType,
@@ -89,32 +77,6 @@ export async function verifyMembershipAndConsumeCredits(
     }
     throw error;
   }
-}
-
-async function resolveUserCreditScope(db: SqlDatabase, userId: string) {
-  const row = await queryOne<{
-    organization_id: string;
-    workspace_id: string | null;
-  }>(
-    db,
-    `
-      SELECT m.organization_id, m.workspace_id
-      FROM memberships m
-      WHERE m.user_id = $1
-        AND m.status = 'active'
-      ORDER BY
-        CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END,
-        m.created_at ASC
-      LIMIT 1
-    `,
-    [userId],
-  );
-  return row
-    ? {
-        organizationId: row.organization_id,
-        workspaceId: row.workspace_id,
-      }
-    : null;
 }
 
 async function resolveMembershipStatus(
